@@ -2,6 +2,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
+/// Result emitted after a lifecycle hook runs.
+///
+/// Original:
+///   packages/kimi-code-sdk/src/types/events.ts
+///   HookResultEvent
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookResultEvent {
+    pub hook_event: String,
+    pub content: String,
+    pub blocked: bool,
+}
+
 /// Provider-defined thinking effort. Known values include `off` and `on`, but
 /// providers may expose arbitrary named effort levels.
 ///

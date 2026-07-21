@@ -5,6 +5,7 @@ pub mod event_payload;
 pub mod export_markdown;
 pub mod foreground_task;
 pub mod goal_completion;
+pub mod hook_result_format;
 pub mod image_attachment_store;
 pub mod image_placeholder;
 pub mod mcp_oauth;

@@ -1,6 +1,8 @@
 use serde::Serialize;
 use serde_json::Value;
 
+pub use crate::sdk::types::HookResultEvent;
+
 use super::options::PromptOutputFormat;
 
 pub trait PromptOutput {
@@ -9,13 +11,6 @@ pub trait PromptOutput {
     }
 
     fn write(&mut self, chunk: &str) -> bool;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HookResultEvent {
-    pub hook_event: String,
-    pub content: String,
-    pub blocked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
