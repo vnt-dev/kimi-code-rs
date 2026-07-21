@@ -5,6 +5,7 @@ pub mod errors;
 pub mod flow;
 pub mod identity;
 pub mod managed_feedback;
+pub mod managed_feedback_upload;
 pub mod managed_usage;
 pub mod manager;
 pub mod storage;
