@@ -1,10 +1,15 @@
 use std::{collections::HashMap, error::Error, fmt};
 
+use async_trait::async_trait;
 use chrono::DateTime;
+use serde_json::{Map, Value, json};
 
 use super::{
     prompt::CHANGELOG_URL,
-    types::{InstallSource, NPM_PACKAGE_NAME, UpdateDecision, UpdateInstallState, UpdateTarget},
+    types::{
+        InstallSource, NPM_PACKAGE_NAME, UpdateDecision, UpdateInstallState, UpdateInstallSuccess,
+        UpdateTarget,
+    },
 };
 
 pub const KIMI_CODE_CDN_BASE: &str = "https://code.kimi.com/kimi-code";
@@ -47,6 +52,43 @@ impl fmt::Display for UnsupportedInstallSource {
 }
 
 impl Error for UnsupportedInstallSource {}
+
+#[derive(Debug)]
+pub struct UpdateNoticeError(Box<dyn Error + Send + Sync>);
+
+impl UpdateNoticeError {
+    pub fn new(error: impl Error + Send + Sync + 'static) -> Self {
+        Self(Box::new(error))
+    }
+}
+
+impl fmt::Display for UpdateNoticeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl Error for UpdateNoticeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+#[async_trait]
+pub trait UpdateNoticeRuntime: Send + Sync {
+    fn now_iso(&self) -> String;
+    fn write_stdout(&self, text: &str);
+    fn track(&self, event: &str, properties: &Map<String, Value>) -> Result<(), UpdateNoticeError>;
+    fn log_info(
+        &self,
+        message: &str,
+        properties: &Map<String, Value>,
+    ) -> Result<(), UpdateNoticeError>;
+    async fn write_install_state(
+        &self,
+        state: &UpdateInstallState,
+    ) -> Result<(), UpdateNoticeError>;
+}
 
 // Original:
 //   apps/kimi-code/src/cli/update/preflight.ts
@@ -185,6 +227,80 @@ pub fn render_background_install_success_notice(version: &str) -> String {
 
 // Original:
 //   apps/kimi-code/src/cli/update/preflight.ts
+//   showPendingBackgroundInstallNotice()
+pub async fn show_pending_background_install_notice(
+    runtime: &dyn UpdateNoticeRuntime,
+    state: &UpdateInstallState,
+    current_version: &str,
+) -> UpdateInstallState {
+    if let Some(success) = &state.last_success
+        && success.notified_at.is_none()
+        && success.version == current_version
+    {
+        runtime.write_stdout(&render_background_install_success_notice(&success.version));
+        record_success_notice(runtime, &success.version, false);
+        let next_state = UpdateInstallState {
+            active: None,
+            last_failure: None,
+            last_success: Some(UpdateInstallSuccess {
+                version: success.version.clone(),
+                installed_at: success.installed_at.clone(),
+                notified_at: Some(runtime.now_iso()),
+            }),
+        };
+        let _ = runtime.write_install_state(&next_state).await;
+        return next_state;
+    }
+
+    let Some(active) = &state.active else {
+        return state.clone();
+    };
+    if active.version != current_version
+        || state.last_success.as_ref().is_some_and(|success| {
+            success.version == current_version && success.notified_at.is_some()
+        })
+    {
+        return state.clone();
+    }
+
+    let notified_at = runtime.now_iso();
+    runtime.write_stdout(&render_background_install_success_notice(&active.version));
+    record_success_notice(runtime, &active.version, true);
+    let next_state = UpdateInstallState {
+        active: None,
+        last_failure: None,
+        last_success: Some(UpdateInstallSuccess {
+            version: active.version.clone(),
+            installed_at: notified_at.clone(),
+            notified_at: Some(notified_at),
+        }),
+    };
+    let _ = runtime.write_install_state(&next_state).await;
+    next_state
+}
+
+fn record_success_notice(runtime: &dyn UpdateNoticeRuntime, version: &str, inferred: bool) {
+    let telemetry = object([
+        ("version", json!(version)),
+        ("inferred_from_active", json!(inferred)),
+    ]);
+    let log = object([
+        ("version", json!(version)),
+        ("inferredFromActive", json!(inferred)),
+    ]);
+    let _ = runtime.track("update_success_notice_shown", &telemetry);
+    let _ = runtime.log_info("background update success notice shown", &log);
+}
+
+fn object<const N: usize>(entries: [(&str, Value); N]) -> Map<String, Value> {
+    entries
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect()
+}
+
+// Original:
+//   apps/kimi-code/src/cli/update/preflight.ts
 //   failureAttemptsFor()
 pub fn failure_attempts_for(state: &UpdateInstallState, target: &UpdateTarget) -> u64 {
     state.last_failure.as_ref().map_or(0, |failure| {
@@ -245,11 +361,61 @@ pub fn decide_update_action(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use chrono::{TimeZone, Utc};
 
     use super::*;
 
     const VERSION: &str = "0.5.0";
+
+    struct NoticeRuntimeMock {
+        fail_write: bool,
+        stdout: Mutex<String>,
+        tracks: Mutex<Vec<Map<String, Value>>>,
+        writes: Mutex<Vec<UpdateInstallState>>,
+    }
+
+    impl NoticeRuntimeMock {
+        fn new() -> Self {
+            Self {
+                fail_write: false,
+                stdout: Mutex::new(String::new()),
+                tracks: Mutex::new(Vec::new()),
+                writes: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl UpdateNoticeRuntime for NoticeRuntimeMock {
+        fn now_iso(&self) -> String {
+            "2026-07-21T12:00:00.000Z".to_owned()
+        }
+        fn write_stdout(&self, text: &str) {
+            self.stdout.lock().expect("stdout").push_str(text);
+        }
+        fn track(&self, _: &str, properties: &Map<String, Value>) -> Result<(), UpdateNoticeError> {
+            self.tracks.lock().expect("tracks").push(properties.clone());
+            Ok(())
+        }
+        fn log_info(&self, _: &str, _: &Map<String, Value>) -> Result<(), UpdateNoticeError> {
+            Ok(())
+        }
+        async fn write_install_state(
+            &self,
+            state: &UpdateInstallState,
+        ) -> Result<(), UpdateNoticeError> {
+            self.writes.lock().expect("writes").push(state.clone());
+            if self.fail_write {
+                Err(UpdateNoticeError::new(std::io::Error::other(
+                    "write failed",
+                )))
+            } else {
+                Ok(())
+            }
+        }
+    }
 
     #[test]
     fn builds_manual_commands_for_every_install_source() {
@@ -522,5 +688,100 @@ mod tests {
             ),
             UpdateDecision::ManualCommand
         );
+    }
+
+    #[tokio::test]
+    async fn unnotified_success_is_shown_once_and_marked_notified() {
+        let runtime = NoticeRuntimeMock::new();
+        let state = UpdateInstallState {
+            active: None,
+            last_failure: None,
+            last_success: Some(UpdateInstallSuccess {
+                version: VERSION.to_owned(),
+                installed_at: "2026-07-21T10:00:00.000Z".to_owned(),
+                notified_at: None,
+            }),
+        };
+        let next = show_pending_background_install_notice(&runtime, &state, VERSION).await;
+        assert_eq!(
+            next.last_success,
+            Some(UpdateInstallSuccess {
+                version: VERSION.to_owned(),
+                installed_at: "2026-07-21T10:00:00.000Z".to_owned(),
+                notified_at: Some("2026-07-21T12:00:00.000Z".to_owned()),
+            })
+        );
+        assert!(
+            runtime
+                .stdout
+                .lock()
+                .expect("stdout")
+                .contains("updated to v0.5.0")
+        );
+        assert_eq!(
+            runtime.tracks.lock().expect("tracks")[0]["inferred_from_active"],
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn running_active_version_is_inferred_as_success() {
+        let runtime = NoticeRuntimeMock::new();
+        let state = UpdateInstallState {
+            active: Some(super::super::types::UpdateInstallActive {
+                version: VERSION.to_owned(),
+                source: InstallSource::Native,
+                started_at: "2026-07-21T10:00:00.000Z".to_owned(),
+            }),
+            last_failure: None,
+            last_success: None,
+        };
+        let next = show_pending_background_install_notice(&runtime, &state, VERSION).await;
+        assert_eq!(next.active, None);
+        assert_eq!(next.last_failure, None);
+        assert_eq!(
+            runtime.tracks.lock().expect("tracks")[0]["inferred_from_active"],
+            true
+        );
+        let success = next.last_success.expect("success");
+        assert_eq!(success.installed_at, success.notified_at.expect("notified"));
+    }
+
+    #[tokio::test]
+    async fn already_notified_or_other_version_leaves_state_unchanged() {
+        let runtime = NoticeRuntimeMock::new();
+        let state = UpdateInstallState {
+            active: None,
+            last_failure: None,
+            last_success: Some(UpdateInstallSuccess {
+                version: VERSION.to_owned(),
+                installed_at: "2026-07-21T10:00:00.000Z".to_owned(),
+                notified_at: Some("2026-07-21T11:00:00.000Z".to_owned()),
+            }),
+        };
+        assert_eq!(
+            show_pending_background_install_notice(&runtime, &state, VERSION).await,
+            state
+        );
+        assert!(runtime.stdout.lock().expect("stdout").is_empty());
+        assert!(runtime.writes.lock().expect("writes").is_empty());
+    }
+
+    #[tokio::test]
+    async fn notice_state_write_is_best_effort() {
+        let mut runtime = NoticeRuntimeMock::new();
+        runtime.fail_write = true;
+        let state = UpdateInstallState {
+            active: None,
+            last_failure: None,
+            last_success: Some(UpdateInstallSuccess {
+                version: VERSION.to_owned(),
+                installed_at: "2026-07-21T10:00:00.000Z".to_owned(),
+                notified_at: None,
+            }),
+        };
+        let next = show_pending_background_install_notice(&runtime, &state, VERSION).await;
+        assert!(next.last_success.expect("success").notified_at.is_some());
+        assert!(runtime.stdout.lock().expect("stdout").contains("updated"));
     }
 }
