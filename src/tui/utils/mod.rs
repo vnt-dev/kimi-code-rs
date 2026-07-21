@@ -1,3 +1,5 @@
+pub mod background_agent_status;
+pub mod background_task_status;
 pub mod foreground_task;
 pub mod goal_completion;
 pub mod paging;
