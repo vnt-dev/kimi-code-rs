@@ -1,3 +1,4 @@
+pub mod background_install;
 pub mod cache;
 pub mod cdn;
 pub mod install_lock;
