@@ -179,7 +179,7 @@ pub fn resolve_kimi_code_login_auth(options: LoginAuthOptions<'_>) -> ManagedKim
     }
 }
 
-fn default_base_url(base_url: Option<&str>) -> String {
+pub(crate) fn default_base_url(base_url: Option<&str>) -> String {
     base_url
         .map_or_else(kimi_code_base_url, str::to_owned)
         .trim_end_matches('/')
@@ -200,7 +200,7 @@ fn persisted_oauth_host(key: &str, oauth_host: Option<&str>) -> Option<String> {
         .then_some(normalized)
 }
 
-fn managed_oauth_ref(
+pub(crate) fn managed_oauth_ref(
     key: &str,
     oauth_host: Option<&str>,
     storage: Option<OAuthStorageBackend>,
