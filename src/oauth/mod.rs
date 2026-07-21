@@ -16,4 +16,5 @@ pub mod model_alias_merge;
 pub mod open_platform;
 pub mod storage;
 pub mod token_state;
+pub mod toolkit;
 pub mod types;
