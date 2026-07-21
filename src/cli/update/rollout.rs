@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,10 @@ use super::{
     select::select_update_target,
     types::{RolloutBatch, UpdateManifest, UpdateTarget},
 };
-use crate::utils::{paths::get_update_rollout_log_file, persistence::append_jsonl_line};
+use crate::utils::{
+    paths::{get_data_dir, get_update_rollout_log_file},
+    persistence::append_jsonl_line,
+};
 
 pub const MAX_ROLLOUT_DELAY_SECONDS: u64 = 86_400;
 const ROLLOUT_LOG_MAX_BYTES: u64 = 256 * 1024;
@@ -137,6 +140,31 @@ pub fn is_rollout_bypassed_by_experimental_env(env: &HashMap<String, String>) ->
             "1" | "true" | "yes" | "on"
         )
     })
+}
+
+// Original:
+//   apps/kimi-code/src/cli/update/rollout.ts
+//   resolveUpdateDeviceId()
+//
+// Rust adaptation:
+//   This remains synchronous like the original because it is one small,
+//   best-effort identity read during startup. A missing id is deliberately
+//   not persisted; telemetry owns first-launch id creation.
+pub fn resolve_update_device_id() -> String {
+    get_data_dir().map_or_else(
+        |_| uuid::Uuid::new_v4().to_string(),
+        |data_dir| resolve_update_device_id_at(&data_dir),
+    )
+}
+
+pub fn resolve_update_device_id_at(data_dir: &Path) -> String {
+    read_update_device_id_at(data_dir).unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
+pub fn read_update_device_id_at(data_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(data_dir.join("device_id")).ok()?;
+    let device_id = text.trim();
+    (!device_id.is_empty()).then(|| device_id.to_owned())
 }
 
 // Original:
@@ -279,6 +307,14 @@ mod tests {
             .join(format!("kimi-rollout-log-{}-{id}", std::process::id()))
             .join("updates")
             .join("rollout.log")
+    }
+
+    fn temp_data_dir() -> PathBuf {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "kimi-rollout-device-id-{}-{id}",
+            std::process::id()
+        ))
     }
 
     async fn cleanup(file: &Path) {
@@ -444,6 +480,38 @@ mod tests {
             let env = HashMap::from([("KIMI_CODE_EXPERIMENTAL_FLAG".to_owned(), value.to_owned())]);
             assert!(!is_rollout_bypassed_by_experimental_env(&env));
         }
+    }
+
+    #[test]
+    fn update_device_id_reuses_trimmed_identity_without_rewriting_it() {
+        let data_dir = temp_data_dir();
+        std::fs::create_dir_all(&data_dir).expect("data dir");
+        let file = data_dir.join("device_id");
+        std::fs::write(&file, "  existing-device-id\r\n").expect("device id");
+
+        assert_eq!(
+            read_update_device_id_at(&data_dir).as_deref(),
+            Some("existing-device-id")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("unchanged device id"),
+            "  existing-device-id\r\n"
+        );
+        std::fs::remove_dir_all(data_dir).expect("cleanup");
+    }
+
+    #[test]
+    fn missing_or_blank_update_device_id_is_ephemeral_and_never_written() {
+        let data_dir = temp_data_dir();
+        std::fs::create_dir_all(&data_dir).expect("data dir");
+        assert_eq!(read_update_device_id_at(&data_dir), None);
+        let generated = resolve_update_device_id_at(&data_dir);
+        assert!(uuid::Uuid::parse_str(&generated).is_ok());
+        assert!(!data_dir.join("device_id").exists());
+
+        std::fs::write(data_dir.join("device_id"), " \n").expect("blank id");
+        assert_eq!(read_update_device_id_at(&data_dir), None);
+        std::fs::remove_dir_all(data_dir).expect("cleanup");
     }
 
     #[tokio::test]
