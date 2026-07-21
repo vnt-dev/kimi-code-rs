@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod components;
 pub mod config;
+pub mod constant;
 pub mod easter_eggs;
 pub mod fuzzy;
 pub mod goal_queue_store;
