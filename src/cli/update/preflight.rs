@@ -42,6 +42,64 @@ pub struct SpawnCommand {
     pub arguments: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnUpdateRequest {
+    pub command: String,
+    pub arguments: Vec<String>,
+    pub inherit_stdio: bool,
+    pub shell: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnUpdateExit {
+    pub code: Option<i32>,
+    pub signal: Option<String>,
+}
+
+#[async_trait]
+pub trait ForegroundInstallerRuntime: Send + Sync {
+    async fn spawn_and_wait(
+        &self,
+        request: SpawnUpdateRequest,
+    ) -> Result<SpawnUpdateExit, UpdateInstallError>;
+}
+
+#[derive(Debug)]
+pub struct UpdateInstallError(Box<dyn Error + Send + Sync>);
+
+impl UpdateInstallError {
+    pub fn new(error: impl Error + Send + Sync + 'static) -> Self {
+        Self(Box::new(error))
+    }
+
+    fn message(message: impl Into<String>) -> Self {
+        Self(Box::new(UpdateInstallMessage(message.into())))
+    }
+}
+
+impl fmt::Display for UpdateInstallError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl Error for UpdateInstallError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+#[derive(Debug)]
+struct UpdateInstallMessage(String);
+
+impl fmt::Display for UpdateInstallMessage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Error for UpdateInstallMessage {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnsupportedInstallSource;
 
@@ -174,6 +232,44 @@ pub fn spawn_for_source(
         InstallSource::Unsupported => return Err(UnsupportedInstallSource),
     };
     Ok(command)
+}
+
+// Original:
+//   apps/kimi-code/src/cli/update/preflight.ts
+//   installUpdate()
+pub async fn install_update(
+    runtime: &dyn ForegroundInstallerRuntime,
+    source: InstallSource,
+    version: &str,
+    platform: UpdatePlatform,
+) -> Result<(), UpdateInstallError> {
+    let spawn = spawn_for_source(source, version, platform)
+        .map_err(|error| UpdateInstallError::message(error.to_string()))?;
+    let exit = runtime
+        .spawn_and_wait(SpawnUpdateRequest {
+            command: spawn.command.clone(),
+            arguments: spawn.arguments,
+            inherit_stdio: true,
+            shell: platform == UpdatePlatform::Windows,
+        })
+        .await?;
+    if exit.code == Some(0) {
+        return Ok(());
+    }
+    let detail = exit.signal.map_or_else(
+        || {
+            format!(
+                "code {}",
+                exit.code
+                    .map_or_else(|| "null".to_owned(), |code| code.to_string())
+            )
+        },
+        |signal| format!("signal {signal}"),
+    );
+    Err(UpdateInstallError::message(format!(
+        "{} exited with {detail}",
+        spawn.command
+    )))
 }
 
 fn with_cmd_suffix(base: &str, platform: UpdatePlatform) -> String {
@@ -374,6 +470,22 @@ mod tests {
         stdout: Mutex<String>,
         tracks: Mutex<Vec<Map<String, Value>>>,
         writes: Mutex<Vec<UpdateInstallState>>,
+    }
+
+    struct InstallerRuntimeMock {
+        exit: SpawnUpdateExit,
+        requests: Mutex<Vec<SpawnUpdateRequest>>,
+    }
+
+    #[async_trait]
+    impl ForegroundInstallerRuntime for InstallerRuntimeMock {
+        async fn spawn_and_wait(
+            &self,
+            request: SpawnUpdateRequest,
+        ) -> Result<SpawnUpdateExit, UpdateInstallError> {
+            self.requests.lock().expect("requests").push(request);
+            Ok(self.exit.clone())
+        }
     }
 
     impl NoticeRuntimeMock {
@@ -783,5 +895,71 @@ mod tests {
         let next = show_pending_background_install_notice(&runtime, &state, VERSION).await;
         assert!(next.last_success.expect("success").notified_at.is_some());
         assert!(runtime.stdout.lock().expect("stdout").contains("updated"));
+    }
+
+    #[tokio::test]
+    async fn foreground_install_inherits_stdio_and_uses_windows_shell() {
+        let runtime = InstallerRuntimeMock {
+            exit: SpawnUpdateExit {
+                code: Some(0),
+                signal: None,
+            },
+            requests: Mutex::new(Vec::new()),
+        };
+        install_update(
+            &runtime,
+            InstallSource::NpmGlobal,
+            VERSION,
+            UpdatePlatform::Windows,
+        )
+        .await
+        .expect("install");
+        assert_eq!(
+            runtime.requests.lock().expect("requests").as_slice(),
+            [SpawnUpdateRequest {
+                command: "npm.cmd".to_owned(),
+                arguments: vec![
+                    "install".to_owned(),
+                    "-g".to_owned(),
+                    "@moonshot-ai/kimi-code@0.5.0".to_owned(),
+                ],
+                inherit_stdio: true,
+                shell: true,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_install_formats_exit_code_and_signal_failures() {
+        for (exit, expected) in [
+            (
+                SpawnUpdateExit {
+                    code: Some(7),
+                    signal: None,
+                },
+                "npm exited with code 7",
+            ),
+            (
+                SpawnUpdateExit {
+                    code: None,
+                    signal: Some("SIGTERM".to_owned()),
+                },
+                "npm exited with signal SIGTERM",
+            ),
+        ] {
+            let runtime = InstallerRuntimeMock {
+                exit,
+                requests: Mutex::new(Vec::new()),
+            };
+            let error = install_update(
+                &runtime,
+                InstallSource::NpmGlobal,
+                VERSION,
+                UpdatePlatform::Other,
+            )
+            .await
+            .expect_err("failure");
+            assert_eq!(error.to_string(), expected);
+        }
     }
 }
