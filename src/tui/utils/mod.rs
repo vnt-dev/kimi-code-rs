@@ -14,6 +14,7 @@ pub mod mcp_tool_name;
 pub mod media_url;
 pub mod message_replay;
 pub mod paging;
+pub mod plugin_source_label;
 pub mod printable_key;
 pub mod searchable_list;
 pub mod session_picker_rows;

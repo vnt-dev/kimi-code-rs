@@ -15,6 +15,83 @@ pub struct HookResultEvent {
     pub blocked: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginSource {
+    LocalPath,
+    ZipUrl,
+    Github,
+}
+
+impl PluginSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalPath => "local-path",
+            Self::ZipUrl => "zip-url",
+            Self::Github => "github",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginState {
+    Ok,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginGithubRefKind {
+    Branch,
+    Tag,
+    Sha,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginGithubRef {
+    pub kind: PluginGithubRefKind,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginGithubMetadata {
+    pub owner: String,
+    pub repo: String,
+    #[serde(rename = "ref")]
+    pub reference: PluginGithubRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_sha: Option<String>,
+}
+
+/// Plugin metadata projected by the SDK for list views.
+///
+/// Original:
+///   packages/agent-core-v2/src/app/plugin/types.ts
+///   PluginSummary
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSummary {
+    pub id: String,
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub enabled: bool,
+    pub state: PluginState,
+    pub skill_count: usize,
+    pub mcp_server_count: usize,
+    pub enabled_mcp_server_count: usize,
+    pub hook_count: usize,
+    pub command_count: usize,
+    pub has_errors: bool,
+    pub source: PluginSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github: Option<PluginGithubMetadata>,
+}
+
 /// Provider-defined thinking effort. Known values include `off` and `on`, but
 /// providers may expose arbitrary named effort levels.
 ///
