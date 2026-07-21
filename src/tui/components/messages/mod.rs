@@ -8,6 +8,7 @@ pub mod goal_format;
 pub mod goal_markers;
 pub mod goal_panel;
 pub mod mcp_status_panel;
+pub mod plan_box;
 pub mod plugin_command;
 pub mod plugins_status_panel;
 pub mod shell_execution;
