@@ -1,8 +1,10 @@
-use std::{error::Error, fmt};
+use std::{collections::HashMap, error::Error, fmt};
+
+use chrono::DateTime;
 
 use super::{
     prompt::CHANGELOG_URL,
-    types::{InstallSource, NPM_PACKAGE_NAME, UpdateTarget},
+    types::{InstallSource, NPM_PACKAGE_NAME, UpdateDecision, UpdateInstallState, UpdateTarget},
 };
 
 pub const KIMI_CODE_CDN_BASE: &str = "https://code.kimi.com/kimi-code";
@@ -10,6 +12,8 @@ pub const NATIVE_INSTALL_COMMAND_UNIX: &str =
     "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash";
 pub const NATIVE_INSTALL_COMMAND_WIN: &str =
     "irm https://code.kimi.com/kimi-code/install.ps1 | iex";
+pub const AUTO_INSTALL_FAILURE_PROMPT_THRESHOLD: u64 = 2;
+pub const AUTO_INSTALL_ACTIVE_TTL_MS: i64 = 6 * 60 * 60 * 1_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdatePlatform {
@@ -179,8 +183,70 @@ pub fn render_background_install_success_notice(version: &str) -> String {
     format!("Kimi Code updated to {display_version}\nChangelog: {CHANGELOG_URL}\n")
 }
 
+// Original:
+//   apps/kimi-code/src/cli/update/preflight.ts
+//   failureAttemptsFor()
+pub fn failure_attempts_for(state: &UpdateInstallState, target: &UpdateTarget) -> u64 {
+    state.last_failure.as_ref().map_or(0, |failure| {
+        if failure.version == target.version {
+            failure.attempts
+        } else {
+            0
+        }
+    })
+}
+
+// Original: hasFreshActiveInstall()
+pub fn has_fresh_active_install_at(
+    state: &UpdateInstallState,
+    target: &UpdateTarget,
+    now_millis: i64,
+) -> bool {
+    let Some(active) = &state.active else {
+        return false;
+    };
+    if active.version != target.version {
+        return false;
+    }
+    let Ok(started_at) = DateTime::parse_from_rfc3339(&active.started_at) else {
+        return false;
+    };
+    now_millis - started_at.timestamp_millis() < AUTO_INSTALL_ACTIVE_TTL_MS
+}
+
+// Original: isAutoUpdateDisabledByEnv()
+pub fn is_auto_update_disabled_by_env(environment: &HashMap<String, String>) -> bool {
+    ["KIMI_CODE_NO_AUTO_UPDATE", "KIMI_CLI_NO_AUTO_UPDATE"]
+        .into_iter()
+        .filter_map(|name| environment.get(name))
+        .any(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+// Original: decideUpdateAction()
+pub fn decide_update_action(
+    target: Option<&UpdateTarget>,
+    is_interactive: bool,
+    source: InstallSource,
+    platform: UpdatePlatform,
+) -> UpdateDecision {
+    if target.is_none() || !is_interactive {
+        UpdateDecision::None
+    } else if can_auto_install(source, platform) {
+        UpdateDecision::PromptInstall
+    } else {
+        UpdateDecision::ManualCommand
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
+
     use super::*;
 
     const VERSION: &str = "0.5.0";
@@ -323,5 +389,138 @@ mod tests {
             format!("Kimi Code updated to v0.5.0\nChangelog: {CHANGELOG_URL}\n")
         );
         assert!(render_background_install_success_notice("v0.5.0").contains("to v0.5.0"));
+    }
+
+    #[test]
+    fn failure_attempts_apply_only_to_the_same_target_version() {
+        let mut state = super::super::types::empty_update_install_state();
+        state.last_failure = Some(super::super::types::UpdateInstallFailure {
+            version: "0.5.0".to_owned(),
+            failed_at: "2026-07-21T00:00:00.000Z".to_owned(),
+            attempts: 2,
+        });
+        assert_eq!(
+            failure_attempts_for(
+                &state,
+                &UpdateTarget {
+                    version: "0.5.0".to_owned()
+                }
+            ),
+            2
+        );
+        assert_eq!(
+            failure_attempts_for(
+                &state,
+                &UpdateTarget {
+                    version: "0.6.0".to_owned()
+                }
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn active_install_freshness_checks_version_timestamp_and_strict_ttl() {
+        let started = Utc
+            .with_ymd_and_hms(2026, 7, 21, 0, 0, 0)
+            .single()
+            .expect("date");
+        let target = UpdateTarget {
+            version: "0.5.0".to_owned(),
+        };
+        let mut state = super::super::types::empty_update_install_state();
+        state.active = Some(super::super::types::UpdateInstallActive {
+            version: target.version.clone(),
+            source: InstallSource::NpmGlobal,
+            started_at: started.to_rfc3339(),
+        });
+        assert!(has_fresh_active_install_at(
+            &state,
+            &target,
+            started.timestamp_millis() + AUTO_INSTALL_ACTIVE_TTL_MS - 1
+        ));
+        assert!(!has_fresh_active_install_at(
+            &state,
+            &target,
+            started.timestamp_millis() + AUTO_INSTALL_ACTIVE_TTL_MS
+        ));
+        state.active.as_mut().expect("active").started_at = "not a date".to_owned();
+        assert!(!has_fresh_active_install_at(
+            &state,
+            &target,
+            started.timestamp_millis()
+        ));
+        state.active.as_mut().expect("active").started_at = started.to_rfc3339();
+        state.active.as_mut().expect("active").version = "0.6.0".to_owned();
+        assert!(!has_fresh_active_install_at(
+            &state,
+            &target,
+            started.timestamp_millis()
+        ));
+    }
+
+    #[test]
+    fn recognizes_both_disable_environment_variables_and_truthy_values() {
+        for name in ["KIMI_CODE_NO_AUTO_UPDATE", "KIMI_CLI_NO_AUTO_UPDATE"] {
+            for value in ["1", " true ", "YES", "On"] {
+                assert!(is_auto_update_disabled_by_env(&HashMap::from([(
+                    name.to_owned(),
+                    value.to_owned()
+                )])));
+            }
+        }
+        for value in ["", "0", "false", "disabled"] {
+            assert!(!is_auto_update_disabled_by_env(&HashMap::from([(
+                "KIMI_CODE_NO_AUTO_UPDATE".to_owned(),
+                value.to_owned()
+            )])));
+        }
+    }
+
+    #[test]
+    fn decides_none_prompt_or_manual_from_visibility_and_capability() {
+        let target = UpdateTarget {
+            version: "0.5.0".to_owned(),
+        };
+        assert_eq!(
+            decide_update_action(None, true, InstallSource::NpmGlobal, UpdatePlatform::Other),
+            UpdateDecision::None
+        );
+        assert_eq!(
+            decide_update_action(
+                Some(&target),
+                false,
+                InstallSource::NpmGlobal,
+                UpdatePlatform::Other
+            ),
+            UpdateDecision::None
+        );
+        assert_eq!(
+            decide_update_action(
+                Some(&target),
+                true,
+                InstallSource::NpmGlobal,
+                UpdatePlatform::Other
+            ),
+            UpdateDecision::PromptInstall
+        );
+        assert_eq!(
+            decide_update_action(
+                Some(&target),
+                true,
+                InstallSource::Homebrew,
+                UpdatePlatform::Other
+            ),
+            UpdateDecision::ManualCommand
+        );
+        assert_eq!(
+            decide_update_action(
+                Some(&target),
+                true,
+                InstallSource::Native,
+                UpdatePlatform::Windows
+            ),
+            UpdateDecision::ManualCommand
+        );
     }
 }
