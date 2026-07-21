@@ -118,3 +118,59 @@ pub struct SessionSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub additional_dirs: Option<Vec<String>>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GoalStatus {
+    Active,
+    Paused,
+    Blocked,
+    Complete,
+}
+
+impl GoalStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Blocked => "blocked",
+            Self::Complete => "complete",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalBudgetReport {
+    pub token_budget: Option<u64>,
+    pub turn_budget: Option<u64>,
+    pub wall_clock_budget_ms: Option<u64>,
+    pub remaining_tokens: Option<u64>,
+    pub remaining_turns: Option<u64>,
+    pub remaining_wall_clock_ms: Option<u64>,
+    pub token_budget_reached: bool,
+    pub turn_budget_reached: bool,
+    pub wall_clock_budget_reached: bool,
+    pub over_budget: bool,
+}
+
+/// Public computed view of the current goal.
+///
+/// Original:
+///   packages/protocol/src/events.ts
+///   GoalSnapshot
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalSnapshot {
+    pub goal_id: String,
+    pub objective: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_criterion: Option<String>,
+    pub status: GoalStatus,
+    pub turns_used: u64,
+    pub tokens_used: u64,
+    pub wall_clock_ms: u64,
+    pub budget: GoalBudgetReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
+}
