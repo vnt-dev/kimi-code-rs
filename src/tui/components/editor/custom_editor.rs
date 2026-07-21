@@ -1,3 +1,8 @@
+use std::{collections::HashMap, sync::Arc};
+
+use regex::Regex;
+use unicode_segmentation::UnicodeSegmentation;
+
 use crate::tui::{
     components::render::visible_width,
     theme::{ColorToken, current_theme},
@@ -8,6 +13,462 @@ const CTRL_BIT: u32 = 4;
 const SHIFT_BIT: u32 = 1;
 const EDITOR_LEFT_PADDING: usize = 4;
 const CURSOR_BLOCK: &str = "\u{1b}[7m \u{1b}[0m";
+
+type HistoryFilter = dyn Fn(&str) -> bool + Send + Sync;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EditorBufferState {
+    lines: Vec<String>,
+    cursor_line: usize,
+    cursor_col: usize,
+}
+
+impl Default for EditorBufferState {
+    fn default() -> Self {
+        Self {
+            lines: vec![String::new()],
+            cursor_line: 0,
+            cursor_col: 0,
+        }
+    }
+}
+
+/// Editable text and history state underlying Kimi's custom editor.
+///
+/// Original infrastructure: `packages/pi-tui/src/components/editor.ts` plus
+/// `custom-editor.ts`, `CustomEditor`.
+pub struct CustomEditor {
+    state: EditorBufferState,
+    pastes: HashMap<u64, String>,
+    paste_counter: u64,
+    history: Vec<String>,
+    history_index: isize,
+    history_draft: Option<EditorBufferState>,
+    history_filter: Option<Arc<HistoryFilter>>,
+    undo_stack: Vec<EditorBufferState>,
+}
+
+impl Default for CustomEditor {
+    fn default() -> Self {
+        Self {
+            state: EditorBufferState::default(),
+            pastes: HashMap::new(),
+            paste_counter: 0,
+            history: Vec::new(),
+            history_index: -1,
+            history_draft: None,
+            history_filter: None,
+            undo_stack: Vec::new(),
+        }
+    }
+}
+
+impl CustomEditor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn text(&self) -> String {
+        self.state.lines.join("\n")
+    }
+
+    pub fn expanded_text(&self) -> String {
+        expand_paste_markers(&self.text(), &self.pastes)
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        self.state.lines.clone()
+    }
+
+    pub fn cursor(&self) -> (usize, usize) {
+        (self.state.cursor_line, self.state.cursor_col)
+    }
+
+    pub fn set_cursor(&mut self, line: usize, col: usize) {
+        self.state.cursor_line = line.min(self.state.lines.len().saturating_sub(1));
+        self.state.cursor_col = col.min(line_char_count(&self.state.lines[self.state.cursor_line]));
+    }
+
+    pub fn set_text(&mut self, text: &str) {
+        let normalized = normalize_editor_text(text);
+        self.exit_history_browsing();
+        if self.text() != normalized {
+            self.push_undo_snapshot();
+        }
+        self.set_text_internal(&normalized, CursorPlacement::End);
+    }
+
+    pub fn insert_text_at_cursor(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.push_undo_snapshot();
+        self.exit_history_browsing();
+        self.insert_text_internal(text);
+    }
+
+    /// Inserts terminal paste content, replacing large values with a stable
+    /// marker exactly as pi-tui does.
+    pub fn insert_paste(&mut self, pasted_text: &str) {
+        self.push_undo_snapshot();
+        self.exit_history_browsing();
+        let decoded = decode_paste_control_sequences(pasted_text);
+        let normalized = normalize_editor_text(&decoded);
+        let mut filtered = normalized
+            .chars()
+            .filter(|character| *character == '\n' || u32::from(*character) >= 32)
+            .collect::<String>();
+        if filtered.starts_with(['/', '~', '.']) {
+            let current = &self.state.lines[self.state.cursor_line];
+            let before = char_at(current, self.state.cursor_col.saturating_sub(1));
+            if self.state.cursor_col > 0 && before.is_some_and(is_word_character) {
+                filtered.insert(0, ' ');
+            }
+        }
+        let line_count = filtered.split('\n').count();
+        let character_count = filtered.chars().count();
+        if line_count > 10 || character_count > 1000 {
+            self.paste_counter += 1;
+            let paste_id = self.paste_counter;
+            self.pastes.insert(paste_id, filtered);
+            let marker = if line_count > 10 {
+                format!("[paste #{paste_id} +{line_count} lines]")
+            } else {
+                format!("[paste #{paste_id} {character_count} chars]")
+            };
+            self.insert_text_internal(&marker);
+        } else {
+            self.insert_text_internal(&filtered);
+        }
+    }
+
+    pub fn expand_paste_marker_at_cursor(&mut self) -> bool {
+        let current_line = &self.state.lines[self.state.cursor_line];
+        let cursor_byte = char_to_byte(current_line, self.state.cursor_col);
+        for marker in paste_markers(current_line) {
+            if cursor_byte < marker.start || cursor_byte > marker.end {
+                continue;
+            }
+            let Some(content) = self.pastes.get(&marker.id) else {
+                return false;
+            };
+            let text = self.text();
+            let line_offset = self.state.lines[..self.state.cursor_line]
+                .iter()
+                .map(|line| line.len() + 1)
+                .sum::<usize>();
+            let start = line_offset + marker.start;
+            let end = line_offset + marker.end;
+            let replacement = format!("{}{}{}", &text[..start], content, &text[end..]);
+            self.set_text(&replacement);
+            return true;
+        }
+        false
+    }
+
+    pub fn delete_backward(&mut self) -> bool {
+        self.exit_history_browsing();
+        if self.state.cursor_col > 0 {
+            self.push_undo_snapshot();
+            let line = &self.state.lines[self.state.cursor_line];
+            let cursor_byte = char_to_byte(line, self.state.cursor_col);
+            if let Some(marker) = paste_markers(line)
+                .into_iter()
+                .find(|marker| marker.end == cursor_byte && self.pastes.contains_key(&marker.id))
+            {
+                let next_cursor_col = byte_to_char(line, marker.start);
+                self.state.lines[self.state.cursor_line]
+                    .replace_range(marker.start..marker.end, "");
+                self.state.cursor_col = next_cursor_col;
+            } else {
+                let before = &line[..cursor_byte];
+                let grapheme = UnicodeSegmentation::graphemes(before, true)
+                    .next_back()
+                    .unwrap_or("");
+                let start = cursor_byte.saturating_sub(grapheme.len());
+                let removed_chars = grapheme.chars().count();
+                self.state.lines[self.state.cursor_line].replace_range(start..cursor_byte, "");
+                self.state.cursor_col = self.state.cursor_col.saturating_sub(removed_chars);
+            }
+            true
+        } else if self.state.cursor_line > 0 {
+            self.push_undo_snapshot();
+            let current = self.state.lines.remove(self.state.cursor_line);
+            self.state.cursor_line -= 1;
+            self.state.cursor_col = line_char_count(&self.state.lines[self.state.cursor_line]);
+            self.state.lines[self.state.cursor_line].push_str(&current);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn delete_forward(&mut self) -> bool {
+        self.exit_history_browsing();
+        let line_length = line_char_count(&self.state.lines[self.state.cursor_line]);
+        if self.state.cursor_col < line_length {
+            self.push_undo_snapshot();
+            let line = &self.state.lines[self.state.cursor_line];
+            let start = char_to_byte(line, self.state.cursor_col);
+            let grapheme = UnicodeSegmentation::graphemes(&line[start..], true)
+                .next()
+                .unwrap_or("");
+            let end = start + grapheme.len();
+            self.state.lines[self.state.cursor_line].replace_range(start..end, "");
+            true
+        } else if self.state.cursor_line + 1 < self.state.lines.len() {
+            self.push_undo_snapshot();
+            let next = self.state.lines.remove(self.state.cursor_line + 1);
+            self.state.lines[self.state.cursor_line].push_str(&next);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn move_left(&mut self) {
+        if self.state.cursor_col > 0 {
+            self.state.cursor_col -= 1;
+        } else if self.state.cursor_line > 0 {
+            self.state.cursor_line -= 1;
+            self.state.cursor_col = line_char_count(&self.state.lines[self.state.cursor_line]);
+        }
+    }
+
+    pub fn move_right(&mut self) {
+        let line_length = line_char_count(&self.state.lines[self.state.cursor_line]);
+        if self.state.cursor_col < line_length {
+            self.state.cursor_col += 1;
+        } else if self.state.cursor_line + 1 < self.state.lines.len() {
+            self.state.cursor_line += 1;
+            self.state.cursor_col = 0;
+        }
+    }
+
+    pub fn move_home(&mut self) {
+        self.state.cursor_col = 0;
+    }
+
+    pub fn move_end(&mut self) {
+        self.state.cursor_col = line_char_count(&self.state.lines[self.state.cursor_line]);
+    }
+
+    pub fn add_to_history(&mut self, text: &str) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() || self.history.first().is_some_and(|entry| entry == trimmed) {
+            return;
+        }
+        self.history.insert(0, trimmed.to_owned());
+        self.history.truncate(100);
+    }
+
+    pub fn set_history_filter(&mut self, filter: Option<Arc<HistoryFilter>>) {
+        self.history_filter = filter;
+    }
+
+    pub fn history_previous(&mut self) -> bool {
+        self.navigate_history(-1)
+    }
+
+    pub fn history_next(&mut self) -> bool {
+        self.navigate_history(1)
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.undo_stack.pop() else {
+            return false;
+        };
+        self.state = previous;
+        self.exit_history_browsing();
+        true
+    }
+
+    fn navigate_history(&mut self, direction: isize) -> bool {
+        if self.history.is_empty() {
+            return false;
+        }
+        let entering = self.history_index == -1;
+        let mut new_index = self.history_index;
+        let found = loop {
+            new_index -= direction;
+            if new_index == -1 {
+                break true;
+            }
+            if new_index < -1
+                || usize::try_from(new_index).map_or(true, |index| index >= self.history.len())
+            {
+                break false;
+            }
+            let entry = &self.history[usize::try_from(new_index).unwrap_or_default()];
+            if self
+                .history_filter
+                .as_ref()
+                .is_none_or(|filter| filter(entry))
+            {
+                break true;
+            }
+        };
+        if !found {
+            return false;
+        }
+        if entering && new_index >= 0 {
+            self.push_undo_snapshot();
+            self.history_draft = Some(self.state.clone());
+        }
+        self.history_index = new_index;
+        if new_index == -1 {
+            let draft = self.history_draft.take().unwrap_or_default();
+            self.state = draft;
+        } else {
+            let entry = self.history[usize::try_from(new_index).unwrap_or_default()].clone();
+            let placement = if direction == -1 {
+                CursorPlacement::Start
+            } else {
+                CursorPlacement::End
+            };
+            self.set_text_internal(&entry, placement);
+        }
+        true
+    }
+
+    fn insert_text_internal(&mut self, text: &str) {
+        let normalized = normalize_editor_text(text);
+        let inserted = normalized.split('\n').collect::<Vec<_>>();
+        let current = self.state.lines[self.state.cursor_line].clone();
+        let cursor_byte = char_to_byte(&current, self.state.cursor_col);
+        let before = &current[..cursor_byte];
+        let after = &current[cursor_byte..];
+        if inserted.len() == 1 {
+            self.state.lines[self.state.cursor_line] = format!("{before}{normalized}{after}");
+            self.state.cursor_col += normalized.chars().count();
+            return;
+        }
+        let mut replacement = Vec::new();
+        replacement.push(format!("{before}{}", inserted[0]));
+        replacement.extend(
+            inserted[1..inserted.len() - 1]
+                .iter()
+                .map(|line| (*line).to_owned()),
+        );
+        replacement.push(format!("{}{after}", inserted.last().copied().unwrap_or("")));
+        let added_lines = replacement.len() - 1;
+        self.state
+            .lines
+            .splice(self.state.cursor_line..=self.state.cursor_line, replacement);
+        self.state.cursor_line += added_lines;
+        self.state.cursor_col = inserted.last().map_or(0, |line| line.chars().count());
+    }
+
+    fn set_text_internal(&mut self, text: &str, placement: CursorPlacement) {
+        self.state.lines = text.split('\n').map(str::to_owned).collect();
+        if self.state.lines.is_empty() {
+            self.state.lines.push(String::new());
+        }
+        match placement {
+            CursorPlacement::Start => {
+                self.state.cursor_line = 0;
+                self.state.cursor_col = 0;
+            }
+            CursorPlacement::End => {
+                self.state.cursor_line = self.state.lines.len() - 1;
+                self.state.cursor_col = line_char_count(&self.state.lines[self.state.cursor_line]);
+            }
+        }
+    }
+
+    fn push_undo_snapshot(&mut self) {
+        self.undo_stack.push(self.state.clone());
+    }
+
+    fn exit_history_browsing(&mut self) {
+        self.history_index = -1;
+        self.history_draft = None;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CursorPlacement {
+    Start,
+    End,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PasteMarker {
+    id: u64,
+    start: usize,
+    end: usize,
+}
+
+fn normalize_editor_text(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\t', "    ")
+}
+
+fn decode_paste_control_sequences(text: &str) -> String {
+    let regex = Regex::new(r"\x1b\[(\d+);5u").expect("valid paste control regex");
+    regex
+        .replace_all(text, |captures: &regex::Captures<'_>| {
+            let codepoint = captures[1].parse::<u8>().unwrap_or_default();
+            if codepoint.is_ascii_alphabetic() {
+                char::from(codepoint.to_ascii_lowercase() - b'a' + 1).to_string()
+            } else {
+                captures[0].to_owned()
+            }
+        })
+        .into_owned()
+}
+
+fn expand_paste_markers(text: &str, pastes: &HashMap<u64, String>) -> String {
+    let mut output = text.to_owned();
+    for (id, content) in pastes {
+        let regex = Regex::new(&format!(
+            r"\[paste #{}(?: (?:\+\d+ lines|\d+ chars))?\]",
+            regex::escape(&id.to_string())
+        ))
+        .expect("paste id produces a valid regex");
+        output = regex.replace_all(&output, content.as_str()).into_owned();
+    }
+    output
+}
+
+fn paste_markers(text: &str) -> Vec<PasteMarker> {
+    let regex = Regex::new(r"\[paste #(\d+)(?: (?:\+\d+ lines|\d+ chars))?\]")
+        .expect("valid paste marker regex");
+    regex
+        .captures_iter(text)
+        .filter_map(|captures| {
+            let matched = captures.get(0)?;
+            Some(PasteMarker {
+                id: captures.get(1)?.as_str().parse().ok()?,
+                start: matched.start(),
+                end: matched.end(),
+            })
+        })
+        .collect()
+}
+
+fn line_char_count(line: &str) -> usize {
+    line.chars().count()
+}
+
+fn char_to_byte(text: &str, character_index: usize) -> usize {
+    text.char_indices()
+        .nth(character_index)
+        .map_or(text.len(), |(index, _)| index)
+}
+
+fn byte_to_char(text: &str, byte_index: usize) -> usize {
+    text[..byte_index.min(text.len())].chars().count()
+}
+
+fn char_at(text: &str, index: usize) -> Option<char> {
+    text.chars().nth(index)
+}
+
+fn is_word_character(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
 
 /// Normalizes Kitty CSI-u Ctrl+letter events reported with Caps Lock.
 ///
@@ -459,5 +920,117 @@ mod tests {
         );
         assert!(output[0].contains("↑ 5 more"));
         assert!(!output[0].contains("shell mode"));
+    }
+
+    #[test]
+    fn editor_normalizes_sets_and_inserts_multiline_unicode_text() {
+        let mut editor = CustomEditor::new();
+        editor.set_text("你好\r\nworld\t!");
+        assert_eq!(editor.text(), "你好\nworld    !");
+        assert_eq!(editor.cursor(), (1, 10));
+
+        editor.set_cursor(0, 1);
+        editor.insert_text_at_cursor("X\rY");
+        assert_eq!(editor.text(), "你X\nY好\nworld    !");
+        assert_eq!(editor.cursor(), (1, 1));
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "你好\nworld    !");
+    }
+
+    #[test]
+    fn editor_deletes_graphemes_and_joins_lines() {
+        let mut editor = CustomEditor::new();
+        editor.set_text("ÁB\nnext");
+        editor.set_cursor(0, 2);
+        assert!(editor.delete_backward());
+        assert_eq!(editor.text(), "B\nnext");
+        editor.set_cursor(1, 0);
+        assert!(editor.delete_backward());
+        assert_eq!(editor.text(), "Bnext");
+        editor.set_cursor(0, 1);
+        assert!(editor.delete_forward());
+        assert_eq!(editor.text(), "Bext");
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "Bnext");
+    }
+
+    #[test]
+    fn editor_tracks_expands_and_atomically_deletes_large_pastes() {
+        let content = (1..=11)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut editor = CustomEditor::new();
+        editor.insert_paste(&content);
+        assert_eq!(editor.text(), "[paste #1 +11 lines]");
+        assert_eq!(editor.expanded_text(), content);
+
+        editor.set_cursor(0, editor.text().chars().count());
+        assert!(editor.delete_backward());
+        assert_eq!(editor.text(), "");
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "[paste #1 +11 lines]");
+
+        editor.set_cursor(0, 3);
+        assert!(editor.expand_paste_marker_at_cursor());
+        assert_eq!(editor.text(), content);
+        assert_eq!(editor.cursor(), (10, "line 11".chars().count()));
+    }
+
+    #[test]
+    fn editor_paste_normalizes_controls_paths_and_large_character_markers() {
+        let mut editor = CustomEditor::new();
+        editor.set_text("word");
+        editor.insert_paste("/tmp\r\nfile\tname\u{1}");
+        assert_eq!(editor.text(), "word /tmp\nfile    name");
+
+        let mut large = CustomEditor::new();
+        large.insert_paste(&"x".repeat(1001));
+        assert_eq!(large.text(), "[paste #1 1001 chars]");
+        assert_eq!(large.expanded_text(), "x".repeat(1001));
+
+        let mut encoded = CustomEditor::new();
+        encoded.insert_paste("a\u{1b}[106;5ub");
+        assert_eq!(encoded.text(), "a\nb");
+    }
+
+    #[test]
+    fn editor_history_deduplicates_filters_and_restores_draft() {
+        let mut editor = CustomEditor::new();
+        editor.add_to_history("");
+        editor.add_to_history(" first ");
+        editor.add_to_history("first");
+        editor.add_to_history("!shell");
+        editor.add_to_history("second");
+        editor.set_text("draft");
+        editor.set_cursor(0, 2);
+        editor.set_history_filter(Some(Arc::new(|entry| !entry.starts_with('!'))));
+
+        assert!(editor.history_previous());
+        assert_eq!(editor.text(), "second");
+        assert_eq!(editor.cursor(), (0, 0));
+        assert!(editor.history_previous());
+        assert_eq!(editor.text(), "first");
+        assert!(!editor.history_previous());
+        assert!(editor.history_next());
+        assert_eq!(editor.text(), "second");
+        assert!(editor.history_next());
+        assert_eq!(editor.text(), "draft");
+        assert_eq!(editor.cursor(), (0, 2));
+    }
+
+    #[test]
+    fn editor_cursor_movement_crosses_line_boundaries() {
+        let mut editor = CustomEditor::new();
+        editor.set_text("ab\n你好");
+        editor.set_cursor(1, 0);
+        editor.move_left();
+        assert_eq!(editor.cursor(), (0, 2));
+        editor.move_right();
+        assert_eq!(editor.cursor(), (1, 0));
+        editor.move_end();
+        assert_eq!(editor.cursor(), (1, 2));
+        editor.move_home();
+        assert_eq!(editor.cursor(), (1, 0));
     }
 }
