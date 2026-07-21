@@ -1,3 +1,4 @@
+pub mod foreground_task;
 pub mod goal_completion;
 pub mod paging;
 pub mod session_picker_rows;
