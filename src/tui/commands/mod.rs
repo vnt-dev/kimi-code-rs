@@ -7,6 +7,7 @@ pub mod goal;
 pub mod parse;
 pub mod plugin_commands;
 pub mod registry;
+pub mod reload;
 pub mod resolve;
 pub mod session;
 pub mod skills;
