@@ -2,6 +2,7 @@ pub mod add_dir;
 pub mod auth;
 pub mod btw;
 pub mod complete_args;
+pub mod config;
 pub mod copy;
 pub mod dispatch;
 pub mod experimental_flags;
