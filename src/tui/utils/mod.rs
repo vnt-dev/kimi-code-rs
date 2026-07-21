@@ -6,6 +6,7 @@ pub mod foreground_task;
 pub mod goal_completion;
 pub mod image_attachment_store;
 pub mod image_placeholder;
+pub mod mcp_oauth;
 pub mod mcp_server_status;
 pub mod mcp_tool_name;
 pub mod media_url;
