@@ -4,4 +4,5 @@ pub mod paths;
 pub mod persistence;
 pub mod process;
 pub mod shell_quote;
+pub mod terminal_hyperlink;
 pub mod usage;
