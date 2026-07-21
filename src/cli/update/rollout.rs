@@ -2,14 +2,17 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::{
     select::select_update_target,
     types::{RolloutBatch, UpdateManifest, UpdateTarget},
 };
+use crate::utils::{paths::get_update_rollout_log_file, persistence::append_jsonl_line};
 
 pub const MAX_ROLLOUT_DELAY_SECONDS: u64 = 86_400;
+const ROLLOUT_LOG_MAX_BYTES: u64 = 256 * 1024;
 
 // Original:
 //   apps/kimi-code/src/cli/update/rollout.ts
@@ -136,6 +139,49 @@ pub fn is_rollout_bypassed_by_experimental_env(env: &HashMap<String, String>) ->
     })
 }
 
+// Original:
+//   apps/kimi-code/src/cli/update/rollout.ts
+//   appendRolloutDecisionLog()
+pub async fn append_rollout_decision_log(entry: &Map<String, Value>) {
+    let Ok(file_path) = get_update_rollout_log_file() else {
+        return;
+    };
+    append_rollout_decision_log_to(entry, &file_path).await;
+}
+
+pub async fn append_rollout_decision_log_to(
+    entry: &Map<String, Value>,
+    file_path: &std::path::Path,
+) {
+    let result = async {
+        if let Some(parent) = file_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let size = match tokio::fs::metadata(file_path).await {
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error.into()),
+        };
+        if size > ROLLOUT_LOG_MAX_BYTES {
+            let line = serde_json::to_string(entry)? + "\n";
+            tokio::fs::write(file_path, line).await?;
+        } else {
+            append_jsonl_line(
+                file_path,
+                |value| match value {
+                    Value::Object(_) => Ok(value),
+                    _ => Err("rollout log entry must be an object".to_owned()),
+                },
+                entry,
+            )
+            .await?;
+        }
+        Ok::<(), crate::utils::persistence::PersistenceError>(())
+    }
+    .await;
+    let _ = result;
+}
+
 fn ungated_decision(
     current_version: &str,
     latest: Option<&str>,
@@ -182,9 +228,16 @@ fn parse_javascript_date(value: &str) -> Option<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
     use chrono::TimeZone;
 
     use super::*;
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
     const PUBLISHED_AT: &str = "2026-06-12T00:00:00.000Z";
 
@@ -218,6 +271,20 @@ mod tests {
             .single()
             .expect("valid timestamp")
             + TimeDelta::seconds(seconds)
+    }
+
+    fn temp_file() -> PathBuf {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir()
+            .join(format!("kimi-rollout-log-{}-{id}", std::process::id()))
+            .join("updates")
+            .join("rollout.log")
+    }
+
+    async fn cleanup(file: &Path) {
+        if let Some(root) = file.parent().and_then(Path::parent) {
+            let _ = tokio::fs::remove_dir_all(root).await;
+        }
     }
 
     #[test]
@@ -377,5 +444,63 @@ mod tests {
             let env = HashMap::from([("KIMI_CODE_EXPERIMENTAL_FLAG".to_owned(), value.to_owned())]);
             assert!(!is_rollout_bypassed_by_experimental_env(&env));
         }
+    }
+
+    #[tokio::test]
+    async fn appends_one_compact_json_line_per_rollout_decision() {
+        let file = temp_file();
+        append_rollout_decision_log_to(
+            &serde_json::from_value(serde_json::json!({
+                "phase": "startup-cache", "reason": "held"
+            }))
+            .expect("entry"),
+            &file,
+        )
+        .await;
+        append_rollout_decision_log_to(
+            &serde_json::from_value(serde_json::json!({
+                "phase": "prompt-refresh", "reason": "eligible"
+            }))
+            .expect("entry"),
+            &file,
+        )
+        .await;
+
+        let content = tokio::fs::read_to_string(&file).await.expect("rollout log");
+        let lines = content.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            serde_json::from_str::<Value>(lines[0]).expect("first line")["reason"],
+            "held"
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(lines[1]).expect("second line")["reason"],
+            "eligible"
+        );
+        cleanup(&file).await;
+    }
+
+    #[tokio::test]
+    async fn resets_an_oversized_log_and_swallows_io_failures() {
+        let file = temp_file();
+        tokio::fs::create_dir_all(file.parent().expect("parent"))
+            .await
+            .expect("parent");
+        tokio::fs::write(&file, vec![b'x'; 300 * 1024])
+            .await
+            .expect("oversized log");
+        let entry =
+            serde_json::from_value(serde_json::json!({ "reason": "eligible" })).expect("entry");
+        append_rollout_decision_log_to(&entry, &file).await;
+        let content = tokio::fs::read_to_string(&file).await.expect("reset log");
+        assert!(content.len() < 1_024);
+        assert_eq!(
+            serde_json::from_str::<Value>(content.trim()).expect("reset entry")["reason"],
+            "eligible"
+        );
+
+        let blocked_path = file.join("not-a-directory").join("rollout.log");
+        append_rollout_decision_log_to(&entry, &blocked_path).await;
+        cleanup(&file).await;
     }
 }
