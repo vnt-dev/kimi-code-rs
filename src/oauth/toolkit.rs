@@ -15,10 +15,23 @@ use super::{
     },
     managed_auth::{KIMI_CODE_OAUTH_KEY, KIMI_CODE_PROVIDER_NAME, resolve_kimi_code_oauth_key},
     managed_config::{ManagedKimiCodeApplyOptions, ManagedKimiCodeApplyResult},
+    managed_feedback::{
+        FetchSubmitFeedbackResult, SubmitFeedbackBody, fetch_submit_feedback,
+        kimi_code_feedback_url,
+    },
+    managed_feedback_upload::{
+        CompleteFeedbackUploadBody, CreateFeedbackUploadUrlBody, FetchCompleteFeedbackUploadResult,
+        FetchCreateFeedbackUploadUrlResult, fetch_complete_feedback_upload,
+        fetch_create_feedback_upload_url,
+    },
     managed_provision::{
         ManagedKimiCodeProvisionResult, ManagedKimiConfigAdapter,
         ProvisionManagedKimiCodeConfigOptions, ProvisionManagedKimiCodeError,
         provision_managed_kimi_code_config,
+    },
+    managed_usage::{
+        BoosterWalletInfo, FetchManagedUsageResult, UsageRow, fetch_managed_usage,
+        kimi_code_usage_url,
     },
     manager::{
         DeviceCodeObserver, LoginAbortSignal, LoginOptions, OAuthManager, OAuthManagerError,
@@ -226,6 +239,25 @@ pub struct KimiOAuthLogoutResult {
     pub ok: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct AuthenticatedServiceOptions<'a> {
+    pub oauth_ref: Option<&'a KimiOAuthTokenRef>,
+    pub base_url: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuthManagedUsageResult {
+    Ok {
+        summary: Option<UsageRow>,
+        limits: Vec<UsageRow>,
+        extra_usage: Option<BoosterWalletInfo>,
+    },
+    Error {
+        status: Option<u16>,
+        message: String,
+    },
+}
+
 #[derive(Clone)]
 pub struct BearerTokenProvider {
     manager: Arc<OAuthManager>,
@@ -365,6 +397,97 @@ impl<A> KimiOAuthToolkit<A> {
         })
     }
 
+    // Original: KimiOAuthToolkit.getManagedUsage()
+    pub async fn get_managed_usage(
+        &self,
+        provider_name: Option<&str>,
+        options: AuthenticatedServiceOptions<'_>,
+    ) -> AuthManagedUsageResult {
+        let access_token = match self.service_access_token(provider_name, &options).await {
+            Ok(token) => token,
+            Err(message) => {
+                return AuthManagedUsageResult::Error {
+                    status: None,
+                    message,
+                };
+            }
+        };
+        let url = managed_usage_url(options.base_url);
+        match fetch_managed_usage(&url, &access_token, None).await {
+            FetchManagedUsageResult::Ok { parsed } => AuthManagedUsageResult::Ok {
+                summary: parsed.summary,
+                limits: parsed.limits,
+                extra_usage: parsed.extra_usage,
+            },
+            FetchManagedUsageResult::Error { status, message } => {
+                AuthManagedUsageResult::Error { status, message }
+            }
+        }
+    }
+
+    // Original: KimiOAuthToolkit.submitFeedback()
+    pub async fn submit_feedback(
+        &self,
+        body: &SubmitFeedbackBody,
+        provider_name: Option<&str>,
+        options: AuthenticatedServiceOptions<'_>,
+    ) -> FetchSubmitFeedbackResult {
+        let access_token = match self.service_access_token(provider_name, &options).await {
+            Ok(token) => token,
+            Err(message) => {
+                return FetchSubmitFeedbackResult::Error {
+                    status: None,
+                    message,
+                };
+            }
+        };
+        fetch_submit_feedback(
+            &kimi_code_feedback_url(options.base_url),
+            &access_token,
+            body,
+            None,
+        )
+        .await
+    }
+
+    // Original: KimiOAuthToolkit.createFeedbackUploadUrl()
+    pub async fn create_feedback_upload_url(
+        &self,
+        body: &CreateFeedbackUploadUrlBody,
+        provider_name: Option<&str>,
+        options: AuthenticatedServiceOptions<'_>,
+    ) -> FetchCreateFeedbackUploadUrlResult {
+        let access_token = match self.service_access_token(provider_name, &options).await {
+            Ok(token) => token,
+            Err(message) => {
+                return FetchCreateFeedbackUploadUrlResult::Error {
+                    status: None,
+                    message,
+                };
+            }
+        };
+        fetch_create_feedback_upload_url(&access_token, body, None, options.base_url).await
+    }
+
+    // Original: KimiOAuthToolkit.completeFeedbackUpload()
+    pub async fn complete_feedback_upload(
+        &self,
+        body: &CompleteFeedbackUploadBody,
+        provider_name: Option<&str>,
+        options: AuthenticatedServiceOptions<'_>,
+    ) -> FetchCompleteFeedbackUploadResult {
+        let access_token = match self.service_access_token(provider_name, &options).await {
+            Ok(token) => token,
+            Err(message) => {
+                return FetchCompleteFeedbackUploadResult::Error {
+                    status: None,
+                    message,
+                };
+            }
+        };
+        fetch_complete_feedback_upload(&access_token, body, None, options.base_url).await
+    }
+
     // Original: KimiOAuthToolkit.managerFor()
     pub fn manager_for(
         &self,
@@ -419,6 +542,31 @@ impl<A> KimiOAuthToolkit<A> {
             .and_then(|reference| reference.oauth_host.clone())
             .or_else(|| oauth_host.map(str::to_owned))
             .unwrap_or_else(|| self.flow_config.oauth_host.clone())
+    }
+
+    fn default_oauth_ref(&self, base_url: Option<&str>) -> KimiOAuthTokenRef {
+        KimiOAuthTokenRef {
+            key: Some(self.default_oauth_key(base_url, &self.flow_config.oauth_host)),
+            oauth_host: Some(self.flow_config.oauth_host.clone()),
+        }
+    }
+
+    async fn service_access_token(
+        &self,
+        provider_name: Option<&str>,
+        options: &AuthenticatedServiceOptions<'_>,
+    ) -> Result<String, String> {
+        let default_reference;
+        let oauth_ref = match options.oauth_ref {
+            Some(reference) => reference,
+            None => {
+                default_reference = self.default_oauth_ref(options.base_url);
+                &default_reference
+            }
+        };
+        self.ensure_fresh(provider_name, false, Some(oauth_ref))
+            .await
+            .map_err(|error| error.to_string())
     }
 
     fn identity_headers(
@@ -665,6 +813,12 @@ fn is_unauthorized_provision_error<E>(error: &ProvisionManagedKimiCodeError<E>) 
 
 fn normalize_oauth_host(oauth_host: &str) -> String {
     oauth_host.trim().trim_end_matches('/').to_owned()
+}
+
+fn managed_usage_url(base_url: Option<&str>) -> String {
+    base_url.map_or_else(kimi_code_usage_url, |base_url| {
+        format!("{}/usages", base_url.trim_end_matches('/'))
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1008,8 +1162,19 @@ mod tests {
                         break;
                     }
                     bytes.extend_from_slice(&buffer[..count]);
-                    if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-                        break;
+                    let text = String::from_utf8_lossy(&bytes);
+                    if let Some(header_end) = text.find("\r\n\r\n") {
+                        let content_length = text[..header_end]
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|value| value.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if bytes.len() >= header_end + 4 + content_length {
+                            break;
+                        }
                     }
                 }
                 recorded
@@ -1199,6 +1364,131 @@ mod tests {
         assert!(written["providers"].get("custom").is_some());
         assert!(written["models"].get("kimi-code/kimi").is_none());
         assert!(written["models"].get("custom/model").is_some());
+    }
+
+    #[tokio::test]
+    async fn authenticated_service_methods_share_token_resolution_and_preserve_results() {
+        let (base_url, requests, server) = sequence_models_server(vec![
+            (200, r#"{"usage":{"used":40,"limit":1000}}"#),
+            (200, r#"{"feedback_id":7}"#),
+            (
+                200,
+                r#"{"upload":{"id":9,"parts":[{"part_number":1,"url":"https://upload.example/1","method":"PUT","size":12}]}}"#,
+            ),
+            (200, r#"{}"#),
+        ]);
+        let storage = Arc::new(MemoryTokenStorage::default());
+        storage
+            .save("service-slot", &token("service-access"))
+            .await
+            .expect("save service token");
+        let toolkit = KimiOAuthToolkit::new(toolkit_options(storage)).expect("toolkit");
+        let oauth_ref = KimiOAuthTokenRef {
+            key: Some("oauth/service-slot".to_owned()),
+            oauth_host: None,
+        };
+
+        let usage = toolkit
+            .get_managed_usage(
+                None,
+                AuthenticatedServiceOptions {
+                    oauth_ref: Some(&oauth_ref),
+                    base_url: Some(&base_url),
+                },
+            )
+            .await;
+        let AuthManagedUsageResult::Ok { summary, .. } = usage else {
+            panic!("expected usage success")
+        };
+        assert_eq!(summary.expect("usage summary").used, 40.0);
+
+        let feedback = toolkit
+            .submit_feedback(
+                &SubmitFeedbackBody {
+                    session_id: "session".to_owned(),
+                    content: "feedback".to_owned(),
+                    version: "1.0.0".to_owned(),
+                    os: "Windows".to_owned(),
+                    model: Some("kimi-code/kimi".to_owned()),
+                    contact: None,
+                    info: None,
+                },
+                None,
+                AuthenticatedServiceOptions {
+                    oauth_ref: Some(&oauth_ref),
+                    base_url: Some(&base_url),
+                },
+            )
+            .await;
+        assert_eq!(feedback, FetchSubmitFeedbackResult::Ok { feedback_id: 7.0 });
+
+        let created = toolkit
+            .create_feedback_upload_url(
+                &CreateFeedbackUploadUrlBody {
+                    file_hash: "sha256".to_owned(),
+                    file_name: "report.zip".to_owned(),
+                    file_size: 12,
+                    feedback_id: 7,
+                },
+                None,
+                AuthenticatedServiceOptions {
+                    oauth_ref: Some(&oauth_ref),
+                    base_url: Some(&base_url),
+                },
+            )
+            .await;
+        assert!(matches!(
+            created,
+            FetchCreateFeedbackUploadUrlResult::Ok { upload_id: 9, .. }
+        ));
+
+        let completed = toolkit
+            .complete_feedback_upload(
+                &CompleteFeedbackUploadBody {
+                    upload_id: 9,
+                    parts: Vec::new(),
+                },
+                None,
+                AuthenticatedServiceOptions {
+                    oauth_ref: Some(&oauth_ref),
+                    base_url: Some(&base_url),
+                },
+            )
+            .await;
+        assert_eq!(completed, FetchCompleteFeedbackUploadResult::Ok);
+        server.join().expect("service server thread");
+
+        let requests = requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(requests.len(), 4);
+        for request in requests.iter() {
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer service-access")
+            );
+        }
+        assert!(requests[0].starts_with("GET /coding/v1/usages HTTP/1.1"));
+        assert!(requests[1].starts_with("POST /coding/v1/feedback HTTP/1.1"));
+        assert!(requests[2].starts_with("POST /coding/v1/feedback/upload_url HTTP/1.1"));
+        assert!(requests[3].starts_with("POST /coding/v1/feedback/upload_complete HTTP/1.1"));
+    }
+
+    #[tokio::test]
+    async fn authenticated_services_convert_token_failures_to_result_errors() {
+        let toolkit =
+            KimiOAuthToolkit::new(toolkit_options(Arc::new(MemoryTokenStorage::default())))
+                .expect("toolkit");
+
+        let result = toolkit
+            .get_managed_usage(None, AuthenticatedServiceOptions::default())
+            .await;
+        let AuthManagedUsageResult::Error { status, message } = result else {
+            panic!("expected token error")
+        };
+        assert_eq!(status, None);
+        assert!(!message.is_empty());
     }
 
     #[tokio::test]
