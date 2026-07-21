@@ -3,10 +3,9 @@ use std::ffi::OsString;
 use clap::{ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use super::options::{CliOptions, PromptOutputFormat};
+use super::sub::web::shared::{DEFAULT_LAN_HOST, DEFAULT_SERVER_PORT};
 
 pub const CLI_COMMAND_NAME: &str = "kimi";
-pub const DEFAULT_SERVER_PORT: &str = "58627";
-pub const DEFAULT_LAN_HOST: &str = "0.0.0.0";
 
 #[derive(Debug, Parser)]
 #[command(
