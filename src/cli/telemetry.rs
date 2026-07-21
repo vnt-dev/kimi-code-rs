@@ -1,9 +1,10 @@
-use std::{error::Error, fmt, fs, future::Future, io::Write, path::Path, pin::Pin, sync::Arc};
+use std::{error::Error, fmt, future::Future, path::Path, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 
 use super::{prompt_session::PromptConfig, version::CLI_USER_AGENT_PRODUCT};
+use crate::oauth::identity::create_kimi_device_id_with_status;
 use crate::utils::paths::{HomeDirectoryUnavailable, get_data_dir};
 
 pub const WEB_UI_MODE: &str = "web";
@@ -158,11 +159,11 @@ pub fn create_cli_telemetry_bootstrap() -> Result<CliTelemetryBootstrap, CliTele
 }
 
 pub fn create_cli_telemetry_bootstrap_at(home_dir: &Path) -> CliTelemetryBootstrap {
-    let (device_id, first_launch) = create_kimi_device_id_at(home_dir);
+    let created = create_kimi_device_id_with_status(home_dir);
     CliTelemetryBootstrap {
         home_dir: home_dir.to_path_buf(),
-        device_id,
-        first_launch,
+        device_id: created.id,
+        first_launch: created.first_launch,
     }
 }
 
@@ -232,56 +233,14 @@ pub fn initialize_server_telemetry(
     Ok(runtime.telemetry_client())
 }
 
-fn create_kimi_device_id_at(home_dir: &Path) -> (String, bool) {
-    if let Some(device_id) = read_kimi_device_id_at(home_dir) {
-        return (device_id, false);
-    }
-
-    let device_id = uuid::Uuid::new_v4().to_string();
-    let _ = write_private_device_id(home_dir, &device_id);
-    (device_id, true)
-}
-
-fn read_kimi_device_id_at(home_dir: &Path) -> Option<String> {
-    let text = fs::read_to_string(home_dir.join("device_id")).ok()?;
-    let device_id = text.trim();
-    (!device_id.is_empty()).then(|| device_id.to_owned())
-}
-
-fn write_private_device_id(home_dir: &Path, device_id: &str) -> std::io::Result<()> {
-    create_private_directory(home_dir)?;
-    let file_path = home_dir.join("device_id");
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(file_path)?;
-    file.write_all(device_id.as_bytes())
-}
-
-fn create_private_directory(home_dir: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    let already_existed = home_dir.exists();
-    fs::create_dir_all(home_dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        if !already_existed {
-            fs::set_permissions(home_dir, fs::Permissions::from_mode(0o700))?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
+    use std::{
+        fs,
+        sync::{
+            Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
     };
 
     use super::*;
