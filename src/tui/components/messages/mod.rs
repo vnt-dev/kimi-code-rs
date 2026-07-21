@@ -5,6 +5,7 @@ pub mod cron_message;
 pub mod goal_format;
 pub mod mcp_status_panel;
 pub mod plugin_command;
+pub mod plugins_status_panel;
 pub mod shell_execution;
 pub mod shell_run;
 pub mod skill_activation;
