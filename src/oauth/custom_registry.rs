@@ -1,9 +1,12 @@
 use std::{error::Error, fmt};
 
 use indexmap::IndexMap;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use super::api_error::read_api_error_message;
+use super::{
+    api_error::read_api_error_message,
+    model_alias_merge::{CUSTOM_REGISTRY_MODEL_FIELDS, merge_refreshed_model_alias},
+};
 
 pub const CUSTOM_REGISTRY_DEFAULT_MAX_CONTEXT: u64 = 131_072;
 pub const CUSTOM_REGISTRY_DEFAULT_CAPABILITIES: [&str; 1] = ["tool_use"];
@@ -218,6 +221,200 @@ pub fn capabilities_from_custom_entry(model: &CustomRegistryModelEntry) -> Vec<S
     capabilities
 }
 
+// Original:
+//   packages/oauth/src/custom-registry.ts
+//   applyCustomRegistryProvider()
+pub fn apply_custom_registry_provider(
+    config: &mut Map<String, Value>,
+    entry: &CustomRegistryProviderEntry,
+    source: &CustomRegistrySource,
+) {
+    let provider_key = &entry.id;
+    let providers = config
+        .entry("providers")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(providers) = providers.as_object_mut() {
+        providers.insert(
+            provider_key.clone(),
+            serde_json::json!({
+                "type": entry.provider_type.as_str(),
+                "baseUrl": entry.api,
+                "apiKey": source.api_key,
+                "source": {
+                    "kind": "apiJson",
+                    "url": source.url,
+                    "apiKey": source.api_key,
+                }
+            }),
+        );
+    }
+
+    let mut existing_models = config
+        .remove("models")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let upstream_keys = entry
+        .models
+        .keys()
+        .map(|model_key| format!("{provider_key}/{model_key}"))
+        .collect::<std::collections::HashSet<_>>();
+    existing_models.retain(|key, alias| {
+        alias
+            .get("provider")
+            .and_then(Value::as_str)
+            .is_none_or(|provider| provider != provider_key || upstream_keys.contains(key))
+    });
+
+    for (model_key, model) in &entry.models {
+        let alias_key = format!("{provider_key}/{model_key}");
+        let mut remote = Map::from_iter([
+            ("provider".to_owned(), Value::String(provider_key.clone())),
+            ("model".to_owned(), Value::String(model.id.clone())),
+            (
+                "maxContextSize".to_owned(),
+                Value::from(resolve_max_context_size(model)),
+            ),
+            (
+                "capabilities".to_owned(),
+                Value::Array(
+                    resolve_capabilities(model)
+                        .into_iter()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            ),
+            (
+                "displayName".to_owned(),
+                Value::String(model.name.clone().unwrap_or_else(|| model.id.clone())),
+            ),
+        ]);
+        if let Some(efforts) = &model.support_efforts {
+            remote.insert(
+                "supportEfforts".to_owned(),
+                Value::Array(efforts.iter().cloned().map(Value::String).collect()),
+            );
+        }
+        if let Some(default_effort) = &model.default_effort {
+            remote.insert(
+                "defaultEffort".to_owned(),
+                Value::String(default_effort.clone()),
+            );
+        }
+        let merged = merge_refreshed_model_alias(
+            existing_models.get(&alias_key).unwrap_or(&Value::Null),
+            &remote,
+            &CUSTOM_REGISTRY_MODEL_FIELDS,
+        );
+        existing_models.insert(alias_key, Value::Object(merged));
+    }
+    config.insert("models".to_owned(), Value::Object(existing_models));
+}
+
+// Original: removeCustomRegistryProvider()
+pub fn remove_custom_registry_provider(config: &mut Map<String, Value>, provider_id: &str) {
+    if let Some(providers) = config.get_mut("providers").and_then(Value::as_object_mut) {
+        providers.remove(provider_id);
+    }
+
+    let current_default = config
+        .get("defaultModel")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let mut removed_default = false;
+    let mut models = config
+        .remove("models")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    models.retain(|key, alias| {
+        let remove = alias.get("provider").and_then(Value::as_str) == Some(provider_id);
+        if remove && current_default.as_deref() == Some(key) {
+            removed_default = true;
+        }
+        !remove
+    });
+    config.insert("models".to_owned(), Value::Object(models));
+    if removed_default {
+        config.remove("defaultModel");
+    }
+    if config.get("defaultProvider").and_then(Value::as_str) == Some(provider_id) {
+        config.remove("defaultProvider");
+    }
+}
+
+// Original: applyCustomRegistryEntries()
+pub fn apply_custom_registry_entries(
+    config: &mut Map<String, Value>,
+    entries: &IndexMap<String, CustomRegistryProviderEntry>,
+    source: &CustomRegistrySource,
+) {
+    let surviving = entries
+        .values()
+        .map(|entry| entry.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let disappeared = config
+        .get("providers")
+        .and_then(Value::as_object)
+        .map(|providers| {
+            providers
+                .iter()
+                .filter(|(provider_id, provider)| {
+                    !surviving.contains(provider_id.as_str())
+                        && provider
+                            .get("source")
+                            .and_then(Value::as_object)
+                            .is_some_and(|existing_source| {
+                                existing_source.get("kind").and_then(Value::as_str)
+                                    == Some("apiJson")
+                                    && existing_source.get("url").and_then(Value::as_str)
+                                        == Some(source.url.as_str())
+                            })
+                })
+                .map(|(provider_id, _)| provider_id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for provider_id in disappeared {
+        remove_custom_registry_provider(config, &provider_id);
+    }
+
+    for entry in entries.values() {
+        let exists = config
+            .get("providers")
+            .and_then(Value::as_object)
+            .is_some_and(|providers| providers.contains_key(&entry.id));
+        if exists {
+            remove_custom_registry_provider(config, &entry.id);
+        }
+        apply_custom_registry_provider(config, entry, source);
+    }
+}
+
+fn has_rich_capability_hints(model: &CustomRegistryModelEntry) -> bool {
+    model.tool_call.is_some()
+        || model.reasoning.is_some()
+        || model.modalities.is_some()
+        || model.support_efforts.is_some()
+}
+
+fn resolve_max_context_size(model: &CustomRegistryModelEntry) -> u64 {
+    model
+        .limit
+        .as_ref()
+        .and_then(|limit| limit.context.or(limit.output))
+        .unwrap_or(CUSTOM_REGISTRY_DEFAULT_MAX_CONTEXT)
+}
+
+fn resolve_capabilities(model: &CustomRegistryModelEntry) -> Vec<String> {
+    if has_rich_capability_hints(model) {
+        capabilities_from_custom_entry(model)
+    } else {
+        CUSTOM_REGISTRY_DEFAULT_CAPABILITIES
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+}
+
 fn parse_provider_entry(value: &Value) -> Option<CustomRegistryProviderEntry> {
     let record = value.as_object()?;
     let id = nonempty_string(record.get("id"))?;
@@ -359,6 +556,36 @@ mod tests {
         (format!("http://{address}/api.json"), request, handle)
     }
 
+    fn model(id: &str) -> CustomRegistryModelEntry {
+        CustomRegistryModelEntry {
+            id: id.to_owned(),
+            name: None,
+            limit: None,
+            tool_call: None,
+            reasoning: None,
+            modalities: None,
+            support_efforts: None,
+            default_effort: None,
+        }
+    }
+
+    fn provider(
+        id: &str,
+        models: &[(&str, CustomRegistryModelEntry)],
+    ) -> CustomRegistryProviderEntry {
+        CustomRegistryProviderEntry {
+            id: id.to_owned(),
+            name: format!("Provider {id}"),
+            api: format!("https://{id}.example/v1"),
+            provider_type: CustomRegistryProviderType::OpenAi,
+            environment: None,
+            models: models
+                .iter()
+                .map(|(key, model)| ((*key).to_owned(), model.clone()))
+                .collect(),
+        }
+    }
+
     #[test]
     fn parses_valid_entries_skips_invalid_providers_and_models() {
         let entries = parse_custom_registry_payload(
@@ -495,5 +722,178 @@ mod tests {
             error.to_string(),
             "Unexpected custom registry response at https://registry.example/api.json: expected a JSON object keyed by provider id."
         );
+    }
+
+    #[test]
+    fn applies_provider_with_fallbacks_and_preserves_user_fields() {
+        let mut config = serde_json::json!({
+            "providers": { "other": { "type": "kimi" } },
+            "models": {
+                "registry/model": {
+                    "provider": "registry",
+                    "model": "old",
+                    "maxContextSize": 1,
+                    "userNote": "keep",
+                    "overrides": { "maxContextSize": 4096 },
+                    "supportEfforts": ["stale"],
+                    "defaultEffort": "stale"
+                },
+                "registry/stale": { "provider": "registry", "model": "stale" },
+                "other/model": { "provider": "other", "model": "model" }
+            }
+        });
+        let entry = provider("registry", &[("model", model("upstream-id"))]);
+        let source = CustomRegistrySource {
+            url: "https://registry.example/api.json".to_owned(),
+            api_key: "secret".to_owned(),
+        };
+
+        apply_custom_registry_provider(
+            config.as_object_mut().expect("config object"),
+            &entry,
+            &source,
+        );
+
+        assert_eq!(
+            config["providers"]["registry"],
+            serde_json::json!({
+                "type": "openai",
+                "baseUrl": "https://registry.example/v1",
+                "apiKey": "secret",
+                "source": {
+                    "kind": "apiJson",
+                    "url": "https://registry.example/api.json",
+                    "apiKey": "secret"
+                }
+            })
+        );
+        let alias = &config["models"]["registry/model"];
+        assert_eq!(alias["model"], "upstream-id");
+        assert_eq!(alias["maxContextSize"], 131_072);
+        assert_eq!(alias["capabilities"], serde_json::json!(["tool_use"]));
+        assert_eq!(alias["displayName"], "upstream-id");
+        assert_eq!(alias["userNote"], "keep");
+        assert_eq!(
+            alias["overrides"],
+            serde_json::json!({ "maxContextSize": 4096 })
+        );
+        assert!(alias.get("supportEfforts").is_none());
+        assert!(alias.get("defaultEffort").is_none());
+        assert!(config["models"].get("registry/stale").is_none());
+        assert!(config["models"].get("other/model").is_some());
+    }
+
+    #[test]
+    fn rich_hints_and_limits_control_alias_fields() {
+        let mut rich = model("rich-id");
+        rich.name = Some("Rich Model".to_owned());
+        rich.limit = Some(CustomRegistryLimit {
+            context: None,
+            output: Some(65_536),
+        });
+        rich.tool_call = Some(false);
+        rich.reasoning = Some(true);
+        rich.modalities = Some(CustomRegistryModalities {
+            input: Some(vec!["image".to_owned()]),
+            output: None,
+        });
+        rich.support_efforts = Some(vec!["low".to_owned(), "high".to_owned()]);
+        rich.default_effort = Some("high".to_owned());
+        let entry = provider("registry", &[("rich", rich)]);
+        let mut config = serde_json::json!({ "providers": {} });
+
+        apply_custom_registry_provider(
+            config.as_object_mut().expect("config object"),
+            &entry,
+            &CustomRegistrySource {
+                url: "https://registry.example/api.json".to_owned(),
+                api_key: String::new(),
+            },
+        );
+
+        let alias = &config["models"]["registry/rich"];
+        assert_eq!(alias["maxContextSize"], 65_536);
+        assert_eq!(alias["displayName"], "Rich Model");
+        assert_eq!(
+            alias["capabilities"],
+            serde_json::json!(["thinking", "image_in"])
+        );
+        assert_eq!(alias["supportEfforts"], serde_json::json!(["low", "high"]));
+        assert_eq!(alias["defaultEffort"], "high");
+    }
+
+    #[test]
+    fn remove_provider_clears_only_matching_defaults_and_aliases() {
+        let mut config = serde_json::json!({
+            "providers": { "registry": {}, "other": {} },
+            "models": {
+                "registry/model": { "provider": "registry" },
+                "other/model": { "provider": "other" }
+            },
+            "defaultModel": "registry/model",
+            "defaultProvider": "registry"
+        });
+        remove_custom_registry_provider(config.as_object_mut().expect("config object"), "registry");
+        assert!(config["providers"].get("registry").is_none());
+        assert!(config["providers"].get("other").is_some());
+        assert!(config["models"].get("registry/model").is_none());
+        assert!(config["models"].get("other/model").is_some());
+        assert!(config.get("defaultModel").is_none());
+        assert!(config.get("defaultProvider").is_none());
+    }
+
+    #[test]
+    fn batch_reimport_keeps_all_survivors_and_removes_disappeared_same_source() {
+        let source = CustomRegistrySource {
+            url: "https://registry.example/api.json".to_owned(),
+            api_key: "rotated".to_owned(),
+        };
+        let old_source = serde_json::json!({
+            "kind": "apiJson",
+            "url": "https://registry.example/api.json",
+            "apiKey": "old"
+        });
+        let mut config = serde_json::json!({
+            "providers": {
+                "first": { "source": old_source },
+                "removed": { "source": old_source },
+                "foreign": {
+                    "source": { "kind": "apiJson", "url": "https://other.example/api.json", "apiKey": "old" }
+                }
+            },
+            "models": {
+                "first/old": { "provider": "first" },
+                "removed/model": { "provider": "removed" },
+                "foreign/model": { "provider": "foreign" }
+            },
+            "defaultModel": "removed/model"
+        });
+        let entries = IndexMap::from([
+            (
+                "one".to_owned(),
+                provider("first", &[("new", model("new"))]),
+            ),
+            (
+                "two".to_owned(),
+                provider("second", &[("model", model("model"))]),
+            ),
+        ]);
+
+        apply_custom_registry_entries(
+            config.as_object_mut().expect("config object"),
+            &entries,
+            &source,
+        );
+
+        assert!(config["providers"].get("first").is_some());
+        assert!(config["providers"].get("second").is_some());
+        assert!(config["providers"].get("removed").is_none());
+        assert!(config["providers"].get("foreign").is_some());
+        assert!(config["models"].get("first/new").is_some());
+        assert!(config["models"].get("second/model").is_some());
+        assert!(config["models"].get("first/old").is_none());
+        assert!(config["models"].get("removed/model").is_none());
+        assert!(config["models"].get("foreign/model").is_some());
+        assert!(config.get("defaultModel").is_none());
     }
 }
