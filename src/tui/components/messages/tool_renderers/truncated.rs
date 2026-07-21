@@ -3,9 +3,12 @@ use std::any::Any;
 use crate::tui::{
     components::{Component, ComponentRole, Text, render::truncate_to_width},
     theme::{ColorToken, current_theme},
+    types::{ToolCallBlockData, ToolResultBlockData},
 };
 
-pub const PREVIEW_LINES: usize = 3;
+pub use super::types::PREVIEW_LINES;
+use super::types::{RenderedComponents, RendererContext};
+
 const DEFAULT_INDENT: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -107,6 +110,25 @@ impl Component for TruncatedOutputComponent {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+// Original: tool-renderers/truncated.ts renderTruncated()
+pub fn render_truncated(
+    _tool_call: &ToolCallBlockData,
+    result: &ToolResultBlockData,
+    context: RendererContext,
+) -> RenderedComponents {
+    if result.output.is_empty() {
+        return Vec::new();
+    }
+    vec![Box::new(TruncatedOutputComponent::new(
+        &result.output,
+        TruncatedOutputOptions {
+            expanded: context.expanded,
+            is_error: result.is_error.unwrap_or(false),
+            ..TruncatedOutputOptions::default()
+        },
+    ))]
 }
 
 #[cfg(test)]
