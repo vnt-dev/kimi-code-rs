@@ -5,6 +5,7 @@ pub mod easter_eggs;
 pub mod fuzzy;
 pub mod goal_queue_store;
 pub mod keys;
+pub mod reverse_rpc;
 pub mod theme;
 pub mod types;
 pub mod utils;

@@ -9,6 +9,7 @@ pub mod goal_start_permission_prompt;
 pub mod help_panel;
 pub mod permission_selector;
 pub mod platform_selector;
+pub mod question_dialog;
 pub mod settings_selector;
 pub mod start_permission_prompt;
 pub mod swarm_start_permission_prompt;
@@ -34,6 +35,7 @@ pub use goal_start_permission_prompt::{
 pub use help_panel::{HelpPanelCommand, HelpPanelComponent, KeyboardShortcut};
 pub use permission_selector::PermissionSelectorComponent;
 pub use platform_selector::PlatformSelectorComponent;
+pub use question_dialog::QuestionDialogComponent;
 pub use settings_selector::{SettingsSelection, SettingsSelectorComponent};
 pub use start_permission_prompt::{
     StartPermissionOption, StartPermissionPromptComponent, StartPermissionPromptOptions,
