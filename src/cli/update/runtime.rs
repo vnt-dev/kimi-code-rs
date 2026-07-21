@@ -4,16 +4,26 @@ use std::{
     io::{IsTerminal, Write},
     path::PathBuf,
     process::Stdio,
+    sync::Arc,
     time::SystemTime,
 };
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
+use serde_json::{Map, Value};
 use tokio::process::Command;
+use tokio::sync::oneshot;
 
 use super::{
+    background_install::{
+        BackgroundInstallError, BackgroundInstallLock, BackgroundInstallerRuntime,
+    },
     cache::{UpdateCacheWriteError, write_update_cache},
     cdn::{CdnError, CdnFetch, CdnResponse, fetch_latest_from_cdn},
+    install_lock::{
+        UpdateInstallLockHandle, UpdateInstallLockRequest, try_acquire_update_install_lock,
+    },
+    install_state::{read_update_install_state, write_update_install_state},
     preflight::{
         ForegroundInstallerRuntime, SpawnUpdateExit, SpawnUpdateRequest, UpdateInstallError,
         UpdatePlatform,
@@ -21,8 +31,9 @@ use super::{
     prompt::{InstallPromptRuntime, PromptKey},
     refresh::RefreshUpdateCacheDeps,
     source::{DetectInstallSourceDeps, InstallPlatform},
-    types::{FetchLatestResult, UpdateCache},
+    types::{FetchLatestResult, UpdateCache, UpdateInstallState},
 };
+use crate::tui::config::load_default_tui_config;
 use crate::utils::shell_quote::{ShellPlatform, quote_shell_arg_for};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -94,6 +105,161 @@ fn command_for_request(request: &SpawnUpdateRequest) -> Command {
         command
     }
 }
+
+pub trait BackgroundInstallObserver: Send + Sync {
+    fn track(
+        &self,
+        event: &str,
+        properties: &Map<String, Value>,
+    ) -> Result<(), BackgroundInstallError>;
+    fn log_info(
+        &self,
+        message: &str,
+        properties: &Map<String, Value>,
+    ) -> Result<(), BackgroundInstallError>;
+    fn log_warn(
+        &self,
+        message: &str,
+        properties: &Map<String, Value>,
+    ) -> Result<(), BackgroundInstallError>;
+}
+
+pub struct SystemBackgroundInstallerRuntime {
+    observer: Arc<dyn BackgroundInstallObserver>,
+}
+
+impl SystemBackgroundInstallerRuntime {
+    pub fn new(observer: Arc<dyn BackgroundInstallObserver>) -> Self {
+        Self { observer }
+    }
+}
+
+#[async_trait]
+impl BackgroundInstallerRuntime for SystemBackgroundInstallerRuntime {
+    // Original:
+    //   apps/kimi-code/src/cli/update/preflight.ts
+    //   startBackgroundInstall() system boundaries
+    async fn try_acquire_lock(
+        &self,
+        version: &str,
+    ) -> Result<Option<BackgroundInstallLock>, BackgroundInstallError> {
+        let request = UpdateInstallLockRequest {
+            version: version.to_owned(),
+            now: None,
+        };
+        Ok(try_acquire_update_install_lock(&request)
+            .await
+            .map_err(BackgroundInstallError::new)?
+            .map(|lock| BackgroundInstallLock {
+                file_path: lock.file_path,
+            }))
+    }
+
+    async fn release_lock(
+        &self,
+        lock: BackgroundInstallLock,
+    ) -> Result<(), BackgroundInstallError> {
+        UpdateInstallLockHandle {
+            file_path: lock.file_path,
+        }
+        .release()
+        .await
+        .map_err(BackgroundInstallError::new)
+    }
+
+    async fn read_install_state(&self) -> Result<UpdateInstallState, BackgroundInstallError> {
+        Ok(read_update_install_state().await)
+    }
+
+    async fn write_install_state(
+        &self,
+        state: &UpdateInstallState,
+    ) -> Result<(), BackgroundInstallError> {
+        write_update_install_state(state)
+            .await
+            .map_err(BackgroundInstallError::new)
+    }
+
+    async fn should_auto_install(&self) -> Result<bool, BackgroundInstallError> {
+        Ok(load_default_tui_config()
+            .await
+            .map(|config| config.upgrade.auto_install)
+            .unwrap_or(true))
+    }
+
+    async fn spawn_background(
+        &self,
+        request: SpawnUpdateRequest,
+    ) -> Result<oneshot::Receiver<bool>, BackgroundInstallError> {
+        let mut command = command_for_request(&request);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_detached_process(&mut command);
+        let mut child = command.spawn().map_err(BackgroundInstallError::new)?;
+        let (completion, receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let succeeded = child.wait().await.is_ok_and(|status| status.success());
+            let _ = completion.send(succeeded);
+        });
+        Ok(receiver)
+    }
+
+    fn now_iso(&self) -> String {
+        DateTime::<Utc>::from(SystemTime::now()).to_rfc3339_opts(SecondsFormat::Millis, true)
+    }
+
+    fn now_millis(&self) -> i64 {
+        DateTime::<Utc>::from(SystemTime::now()).timestamp_millis()
+    }
+
+    fn track(
+        &self,
+        event: &str,
+        properties: &Map<String, Value>,
+    ) -> Result<(), BackgroundInstallError> {
+        self.observer.track(event, properties)
+    }
+
+    fn log_info(
+        &self,
+        message: &str,
+        properties: &Map<String, Value>,
+    ) -> Result<(), BackgroundInstallError> {
+        self.observer.log_info(message, properties)
+    }
+
+    fn log_warn(
+        &self,
+        message: &str,
+        properties: &Map<String, Value>,
+    ) -> Result<(), BackgroundInstallError> {
+        self.observer.log_warn(message, properties)
+    }
+}
+
+#[cfg(windows)]
+fn configure_detached_process(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command
+        .as_std_mut()
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+}
+
+#[cfg(unix)]
+fn configure_detached_process(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.as_std_mut().process_group(0);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn configure_detached_process(_: &mut Command) {}
 
 #[cfg(unix)]
 fn exit_signal_name(status: &std::process::ExitStatus) -> Option<String> {
@@ -384,10 +550,53 @@ mod tests {
     use std::{
         io::{Read, Write},
         net::TcpListener,
+        sync::Mutex,
         thread,
     };
 
     use super::*;
+
+    #[derive(Default)]
+    struct BackgroundObserverMock {
+        events: Mutex<Vec<(String, Map<String, Value>)>>,
+        info: Mutex<Vec<String>>,
+        warnings: Mutex<Vec<String>>,
+    }
+
+    impl BackgroundInstallObserver for BackgroundObserverMock {
+        fn track(
+            &self,
+            event: &str,
+            properties: &Map<String, Value>,
+        ) -> Result<(), BackgroundInstallError> {
+            self.events
+                .lock()
+                .expect("events")
+                .push((event.to_owned(), properties.clone()));
+            Ok(())
+        }
+
+        fn log_info(
+            &self,
+            message: &str,
+            _: &Map<String, Value>,
+        ) -> Result<(), BackgroundInstallError> {
+            self.info.lock().expect("info").push(message.to_owned());
+            Ok(())
+        }
+
+        fn log_warn(
+            &self,
+            message: &str,
+            _: &Map<String, Value>,
+        ) -> Result<(), BackgroundInstallError> {
+            self.warnings
+                .lock()
+                .expect("warnings")
+                .push(message.to_owned());
+            Ok(())
+        }
+    }
 
     fn exit_request(code: i32, shell: bool) -> SpawnUpdateRequest {
         if cfg!(windows) {
@@ -436,6 +645,47 @@ mod tests {
             .await
             .expect_err("missing command");
         assert!(!error.to_string().is_empty());
+    }
+
+    #[tokio::test]
+    async fn background_runtime_reports_detached_process_completion() {
+        let runtime =
+            SystemBackgroundInstallerRuntime::new(Arc::new(BackgroundObserverMock::default()));
+        for (code, expected) in [(0, true), (7, false)] {
+            let completion = runtime
+                .spawn_background(exit_request(code, cfg!(windows)))
+                .await
+                .expect("spawn detached command");
+            assert_eq!(
+                tokio::time::timeout(std::time::Duration::from_secs(10), completion)
+                    .await
+                    .expect("background process timeout")
+                    .expect("completion sender"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn background_runtime_forwards_observer_payloads() {
+        let observer = Arc::new(BackgroundObserverMock::default());
+        let runtime = SystemBackgroundInstallerRuntime::new(observer.clone());
+        let properties =
+            Map::from_iter([("source".to_owned(), Value::String("native".to_owned()))]);
+
+        runtime.track("event", &properties).expect("track");
+        runtime.log_info("info", &properties).expect("info");
+        runtime.log_warn("warn", &properties).expect("warn");
+
+        assert_eq!(
+            observer.events.lock().expect("events").as_slice(),
+            [("event".to_owned(), properties)]
+        );
+        assert_eq!(observer.info.lock().expect("info").as_slice(), ["info"]);
+        assert_eq!(
+            observer.warnings.lock().expect("warnings").as_slice(),
+            ["warn"]
+        );
     }
 
     #[tokio::test]
