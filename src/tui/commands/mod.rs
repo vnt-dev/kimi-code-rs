@@ -7,5 +7,6 @@ pub mod plugin_commands;
 pub mod registry;
 pub mod resolve;
 pub mod skills;
+pub mod swarm;
 pub mod types;
 pub mod web;
