@@ -1,5 +1,6 @@
 mod activation_preview;
 
+pub mod agent_group;
 pub mod agent_swarm_progress;
 pub mod agent_swarm_progress_estimator;
 pub mod assistant_message;
