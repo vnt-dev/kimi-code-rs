@@ -79,6 +79,14 @@ impl Theme {
         style_hex(&self.color(token), text, 38, None)
     }
 
+    pub fn fg_hex(&self, hex: &str, text: &str) -> String {
+        style_hex(hex, text, 38, None)
+    }
+
+    pub fn bold_fg_hex(&self, hex: &str, text: &str) -> String {
+        style_hex(hex, text, 38, Some(("1", "22")))
+    }
+
     pub fn bold_fg(&self, token: ColorToken, text: &str) -> String {
         style_hex(&self.color(token), text, 38, Some(("1", "22")))
     }
