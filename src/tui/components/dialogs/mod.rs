@@ -16,6 +16,7 @@ pub mod question_dialog;
 pub mod settings_selector;
 pub mod start_permission_prompt;
 pub mod swarm_start_permission_prompt;
+pub mod task_output_viewer;
 pub mod theme_selector;
 pub mod undo_selector;
 pub mod update_preference_selector;
@@ -51,6 +52,7 @@ pub use start_permission_prompt::{
 pub use swarm_start_permission_prompt::{
     SwarmStartPermissionChoice, SwarmStartPermissionPromptComponent,
 };
+pub use task_output_viewer::{TaskOutputViewer, TaskOutputViewerProps};
 pub use theme_selector::ThemeSelectorComponent;
 pub use undo_selector::{UndoChoice, UndoSelectorComponent};
 pub use update_preference_selector::UpdatePreferenceSelectorComponent;
