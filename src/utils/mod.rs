@@ -3,6 +3,7 @@ pub mod history;
 pub mod open_url;
 pub mod paths;
 pub mod persistence;
+pub mod plugin_marketplace;
 pub mod process;
 pub mod shell_quote;
 pub mod terminal_hyperlink;
