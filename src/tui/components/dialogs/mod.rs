@@ -15,6 +15,7 @@ pub mod help_panel;
 pub mod model_selector;
 pub mod permission_selector;
 pub mod platform_selector;
+pub mod plugin_confirm;
 pub mod plugin_mcp_selector;
 pub mod provider_manager;
 pub mod question_dialog;
@@ -61,6 +62,10 @@ pub use model_selector::{
 };
 pub use permission_selector::PermissionSelectorComponent;
 pub use platform_selector::PlatformSelectorComponent;
+pub use plugin_confirm::{
+    PluginInstallTrustConfirmComponent, PluginInstallTrustConfirmResult,
+    PluginRemoveConfirmComponent, PluginRemoveConfirmResult,
+};
 pub use plugin_mcp_selector::{
     PluginMcpSelection, PluginMcpSelectorComponent, PluginMcpSelectorOptions,
 };
