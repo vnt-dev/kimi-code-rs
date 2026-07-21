@@ -5,6 +5,7 @@ edition = "2024"
 autobins = false
 
 [dependencies]
+async-trait = "0.1.91"
 clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
 if-addrs = "0.15"

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 /// Provider-defined thinking effort. Known values include `off` and `on`, but
 /// providers may expose arbitrary named effort levels.
@@ -173,4 +174,85 @@ pub struct GoalSnapshot {
     pub budget: GoalBudgetReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionMode {
+    Manual,
+    Yolo,
+    Auto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsage {
+    pub input: u64,
+    pub input_cache_read: u64,
+    pub input_cache_creation: u64,
+    pub input_other: u64,
+    pub output: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by_model: Option<BTreeMap<String, TokenUsage>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_turn: Option<TokenUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<TokenUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub thinking_effort: String,
+    pub permission: PermissionMode,
+    pub plan_mode: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swarm_mode: Option<bool>,
+    pub context_tokens: u64,
+    pub max_context_tokens: u64,
+    pub context_usage: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<SessionUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PromptPart {
+    Text {
+        text: String,
+    },
+    ImageUrl {
+        #[serde(rename = "imageUrl")]
+        image_url: MediaUrl,
+    },
+    VideoUrl {
+        #[serde(rename = "videoUrl")]
+        video_url: MediaUrl,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaUrl {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CronTaskSnapshot {
+    pub id: String,
+    pub cron: String,
+    pub recurring: bool,
+    pub created_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_fired_at: Option<u64>,
+    pub next_fire_at: Option<u64>,
 }
