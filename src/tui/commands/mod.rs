@@ -12,6 +12,7 @@ pub mod parse;
 pub mod plugin_commands;
 pub mod plugins;
 pub mod prompts;
+pub mod provider;
 pub mod registry;
 pub mod reload;
 pub mod resolve;
