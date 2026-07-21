@@ -4,6 +4,7 @@ pub mod complete_args;
 pub mod copy;
 pub mod experimental_flags;
 pub mod goal;
+pub mod info;
 pub mod parse;
 pub mod plugin_commands;
 pub mod prompts;
