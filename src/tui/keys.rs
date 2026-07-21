@@ -39,6 +39,10 @@ pub enum EditorKey {
     Down,
     Left,
     Right,
+    WordLeft,
+    WordRight,
+    AltBackspace,
+    AltDelete,
     Home,
     End,
     Ctrl(char),
@@ -62,16 +66,20 @@ pub fn matches_editor_key(data: &str, key: EditorKey) -> bool {
     match key {
         EditorKey::Escape => modifiers == 0 && matches!(codepoint, 27 | -5),
         EditorKey::Backspace => modifiers == 0 && codepoint == 127,
-        EditorKey::Delete => modifiers == 0 && codepoint == -6,
+        EditorKey::Delete => modifiers == 0 && codepoint == -10,
         EditorKey::Enter => modifiers == 0 && matches!(codepoint, 10 | 13),
         EditorKey::Tab => modifiers == 0 && codepoint == 9,
         EditorKey::ShiftTab => modifiers == SHIFT && codepoint == 9,
         EditorKey::Up => modifiers == 0 && codepoint == -1,
         EditorKey::Down => modifiers == 0 && codepoint == -2,
-        EditorKey::Left => modifiers == 0 && codepoint == -3,
-        EditorKey::Right => modifiers == 0 && codepoint == -4,
-        EditorKey::Home => modifiers == 0 && codepoint == -7,
-        EditorKey::End => modifiers == 0 && codepoint == -8,
+        EditorKey::Left => modifiers == 0 && codepoint == -4,
+        EditorKey::Right => modifiers == 0 && codepoint == -3,
+        EditorKey::WordLeft => matches!(modifiers, ALT | CTRL) && codepoint == -4,
+        EditorKey::WordRight => matches!(modifiers, ALT | CTRL) && codepoint == -3,
+        EditorKey::AltBackspace => modifiers == ALT && codepoint == 127,
+        EditorKey::AltDelete => modifiers == ALT && codepoint == -10,
+        EditorKey::Home => modifiers == 0 && codepoint == -14,
+        EditorKey::End => modifiers == 0 && codepoint == -15,
         EditorKey::Ctrl(character) => {
             modifiers == CTRL && codepoint == i64::from(u32::from(character.to_ascii_lowercase()))
         }
@@ -99,6 +107,16 @@ fn matches_legacy_editor_key(data: &str, key: EditorKey) -> bool {
         EditorKey::Down => matches!(data, "\u{1b}[B" | "\u{1b}OB"),
         EditorKey::Left => matches!(data, "\u{1b}[D" | "\u{1b}OD"),
         EditorKey::Right => matches!(data, "\u{1b}[C" | "\u{1b}OC"),
+        EditorKey::WordLeft => matches!(
+            data,
+            "\u{1b}[1;3D" | "\u{1b}[1;5D" | "\u{1b}[3D" | "\u{1b}[5D"
+        ),
+        EditorKey::WordRight => matches!(
+            data,
+            "\u{1b}[1;3C" | "\u{1b}[1;5C" | "\u{1b}[3C" | "\u{1b}[5C"
+        ),
+        EditorKey::AltBackspace => matches!(data, "\u{1b}\u{7f}" | "\u{1b}\u{8}"),
+        EditorKey::AltDelete => data == "\u{1b}[3;3~",
         EditorKey::Home => matches!(data, "\u{1b}[H" | "\u{1b}OH" | "\u{1b}[1~"),
         EditorKey::End => matches!(data, "\u{1b}[F" | "\u{1b}OF" | "\u{1b}[4~"),
         EditorKey::Ctrl(character) if character.is_ascii_alphabetic() => {
@@ -308,6 +326,10 @@ mod tests {
         assert!(matches_editor_key("\u{1b}[Z", EditorKey::ShiftTab));
         assert!(matches_editor_key("\u{1b}[D", EditorKey::Left));
         assert!(matches_editor_key("\u{1b}[C", EditorKey::Right));
+        assert!(matches_editor_key("\u{1b}[1;5D", EditorKey::WordLeft));
+        assert!(matches_editor_key("\u{1b}[1;3C", EditorKey::WordRight));
+        assert!(matches_editor_key("\u{1b}\u{7f}", EditorKey::AltBackspace));
+        assert!(matches_editor_key("\u{1b}[3;3~", EditorKey::AltDelete));
         assert!(matches_editor_key("\u{1b}[H", EditorKey::Home));
         assert!(matches_editor_key("\u{1b}[F", EditorKey::End));
         assert!(matches_editor_key("\u{3}", EditorKey::Ctrl('c')));
@@ -321,8 +343,15 @@ mod tests {
         assert!(matches_editor_key("\u{1b}[99;5u", EditorKey::Ctrl('c')));
         assert!(matches_editor_key("\u{1b}[115;3u", EditorKey::Alt('s')));
         assert!(matches_editor_key("\u{1b}[9;2u", EditorKey::ShiftTab));
-        assert!(matches_editor_key("\u{1b}[57417u", EditorKey::Right));
+        assert!(matches_editor_key("\u{1b}[57417u", EditorKey::Left));
+        assert!(matches_editor_key("\u{1b}[57417;5u", EditorKey::WordLeft));
+        assert!(matches_editor_key("\u{1b}[57418;3u", EditorKey::WordRight));
+        assert!(matches_editor_key("\u{1b}[127;3u", EditorKey::AltBackspace));
         assert!(matches_editor_key("\u{1b}[127u", EditorKey::Backspace));
+        assert!(matches_editor_key("\u{1b}[57426u", EditorKey::Delete));
+        assert!(matches_editor_key("\u{1b}[57426;3u", EditorKey::AltDelete));
+        assert!(matches_editor_key("\u{1b}[57423u", EditorKey::Home));
+        assert!(matches_editor_key("\u{1b}[57424u", EditorKey::End));
         assert!(is_key_release("\u{1b}[99;5:3u"));
         assert!(!matches_editor_key("\u{1b}[99;5:3u", EditorKey::Ctrl('c')));
         assert!(!is_key_release("\u{1b}[99;5u"));
