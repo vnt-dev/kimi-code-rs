@@ -1,6 +1,7 @@
 pub mod background_agent_status;
 pub mod background_task_status;
 pub mod dead_terminal;
+pub mod errors;
 pub mod event_payload;
 pub mod export_markdown;
 pub mod foreground_task;
