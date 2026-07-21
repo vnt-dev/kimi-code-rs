@@ -1,6 +1,6 @@
 use url::Url;
 
-use crate::sdk::types::{PluginSource, PluginSummary};
+use crate::sdk::types::{PluginInfo, PluginSource, PluginSummary};
 
 pub const OFFICIAL_BADGE: &str = "official";
 pub const CURATED_BADGE: &str = "curated";
@@ -11,6 +11,31 @@ pub enum PluginTrustLabel {
     Official,
     Curated,
     ThirdParty,
+}
+
+pub trait PluginTrustMetadata {
+    fn source(&self) -> PluginSource;
+    fn original_source(&self) -> Option<&str>;
+}
+
+impl PluginTrustMetadata for PluginSummary {
+    fn source(&self) -> PluginSource {
+        self.source
+    }
+
+    fn original_source(&self) -> Option<&str> {
+        self.original_source.as_deref()
+    }
+}
+
+impl PluginTrustMetadata for PluginInfo {
+    fn source(&self) -> PluginSource {
+        self.source
+    }
+
+    fn original_source(&self) -> Option<&str> {
+        self.original_source.as_deref()
+    }
 }
 
 impl PluginTrustLabel {
@@ -46,11 +71,11 @@ pub fn format_plugin_source_label(plugin: &PluginSummary) -> String {
 /// Original:
 ///   apps/kimi-code/src/tui/utils/plugin-source-label.ts
 ///   pluginTrustLabel()
-pub fn plugin_trust_label(plugin: &PluginSummary) -> PluginTrustLabel {
-    if plugin.source != PluginSource::ZipUrl {
+pub fn plugin_trust_label(plugin: &impl PluginTrustMetadata) -> PluginTrustLabel {
+    if plugin.source() != PluginSource::ZipUrl {
         return PluginTrustLabel::ThirdParty;
     }
-    let Some(url) = plugin.original_source.as_deref().and_then(parse_url) else {
+    let Some(url) = plugin.original_source().and_then(parse_url) else {
         return PluginTrustLabel::ThirdParty;
     };
     if url.scheme() != "https" || url.host_str() != Some("code.kimi.com") {

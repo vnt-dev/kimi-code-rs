@@ -92,6 +92,153 @@ pub struct PluginSummary {
     pub github: Option<PluginGithubMetadata>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginDiagnosticSeverity {
+    Error,
+    Warn,
+    Info,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginDiagnostic {
+    pub severity: PluginDiagnosticSeverity,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PluginAuthor {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSessionStart {
+    pub skill: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInterface {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub long_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub developer_name: Option<String>,
+    #[serde(rename = "websiteURL", skip_serializing_if = "Option::is_none")]
+    pub website_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginCommandEntry {
+    pub path: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginManifest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<PluginAuthor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_start: Option<PluginSessionStart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<BTreeMap<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commands: Option<Vec<PluginCommandEntry>>,
+    #[serde(rename = "interface", skip_serializing_if = "Option::is_none")]
+    pub interface_config: Option<PluginInterface>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_instructions: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginManifestKind {
+    KimiPluginRoot,
+    KimiPluginDir,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginMcpServerInfo {
+    pub name: String,
+    pub runtime_name: String,
+    pub enabled: bool,
+    pub transport: McpServerTransport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_keys: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header_keys: Option<Vec<String>>,
+}
+
+/// Original:
+///   packages/agent-core-v2/src/app/plugin/types.ts
+///   PluginInfo
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInfo {
+    pub id: String,
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub enabled: bool,
+    pub state: PluginState,
+    pub skill_count: usize,
+    pub mcp_server_count: usize,
+    pub enabled_mcp_server_count: usize,
+    pub hook_count: usize,
+    pub command_count: usize,
+    pub has_errors: bool,
+    pub source: PluginSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github: Option<PluginGithubMetadata>,
+    pub root: String,
+    pub installed_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_kind: Option<PluginManifestKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<PluginManifest>,
+    pub mcp_servers: Vec<PluginMcpServerInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadowed_manifest_path: Option<String>,
+    pub diagnostics: Vec<PluginDiagnostic>,
+}
+
 /// Provider-defined thinking effort. Known values include `off` and `on`, but
 /// providers may expose arbitrary named effort levels.
 ///
@@ -537,4 +684,60 @@ pub struct CronTaskSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_fired_at: Option<u64>,
     pub next_fire_at: Option<u64>,
+}
+
+#[cfg(test)]
+mod plugin_info_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_plugin_info_wire_names_and_nested_manifest_data() {
+        let value = serde_json::json!({
+            "id": "demo",
+            "displayName": "Demo",
+            "enabled": true,
+            "state": "ok",
+            "skillCount": 1,
+            "mcpServerCount": 1,
+            "enabledMcpServerCount": 1,
+            "hookCount": 0,
+            "commandCount": 0,
+            "hasErrors": false,
+            "source": "zip-url",
+            "root": "/plugins/demo",
+            "installedAt": "2026-01-01T00:00:00Z",
+            "manifestKind": "kimi-plugin-root",
+            "manifest": {
+                "name": "demo",
+                "interface": {
+                    "displayName": "Demo",
+                    "websiteURL": "https://example.com"
+                },
+                "mcpServers": { "server": { "type": "http" } },
+                "hooks": [{ "event": "stop" }],
+                "commands": [{ "path": "deploy.md", "name": "deploy" }]
+            },
+            "mcpServers": [{
+                "name": "server",
+                "runtimeName": "plugin:demo:server",
+                "enabled": true,
+                "transport": "http",
+                "url": "https://example.com/mcp"
+            }],
+            "diagnostics": []
+        });
+        let info = serde_json::from_value::<PluginInfo>(value).ok();
+        assert!(info.is_some());
+        let encoded = info.and_then(|value| serde_json::to_value(value).ok());
+        assert_eq!(
+            encoded
+                .as_ref()
+                .and_then(|value| value.pointer("/manifest/interface/websiteURL")),
+            Some(&Value::String("https://example.com".to_owned()))
+        );
+        assert_eq!(
+            encoded.as_ref().and_then(|value| value.get("manifestKind")),
+            Some(&Value::String("kimi-plugin-root".to_owned()))
+        );
+    }
 }
