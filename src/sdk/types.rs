@@ -199,6 +199,33 @@ pub struct ShellEnvironment {
     pub shell: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillSource {
+    Project,
+    User,
+    Extra,
+    Builtin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSummary {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<SkillSource>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub skill_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_model_invocation: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_sub_skill: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
