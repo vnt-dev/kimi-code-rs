@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
@@ -37,6 +38,35 @@ pub struct SlashCommandMetadata {
     pub argument_hint: Option<String>,
 }
 
+type ArgumentCompleter = dyn Fn(&str) -> Option<Vec<AutocompleteItem>> + Send + Sync;
+type InputModeReader = dyn Fn() -> InputMode + Send + Sync;
+
+#[derive(Clone)]
+pub struct SlashAutocompleteCommand {
+    pub metadata: SlashCommandMetadata,
+    pub complete_arguments: Option<Arc<ArgumentCompleter>>,
+}
+
+impl SlashAutocompleteCommand {
+    pub fn new(metadata: SlashCommandMetadata) -> Self {
+        Self {
+            metadata,
+            complete_arguments: None,
+        }
+    }
+
+    pub fn with_argument_completer(mut self, completer: Arc<ArgumentCompleter>) -> Self {
+        self.complete_arguments = Some(completer);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Prompt,
+    Bash,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionEdit {
     pub lines: Vec<String>,
@@ -56,6 +86,233 @@ struct FsMentionCandidate {
     path: String,
     absolute_path: String,
     is_directory: bool,
+}
+
+/// Kimi autocomplete provider for slash commands, paths, and `@` mentions.
+///
+/// Original: `file-mention-provider.ts`, `FileMentionProvider`.
+pub struct FileMentionProvider {
+    slash_commands: Vec<SlashAutocompleteCommand>,
+    work_dir: PathBuf,
+    fd_path: Option<String>,
+    additional_dirs: Vec<PathBuf>,
+    get_input_mode: Arc<InputModeReader>,
+}
+
+impl FileMentionProvider {
+    pub fn new(
+        slash_commands: Vec<SlashAutocompleteCommand>,
+        work_dir: PathBuf,
+        fd_path: Option<String>,
+        additional_dirs: Vec<PathBuf>,
+        get_input_mode: Arc<InputModeReader>,
+    ) -> Self {
+        let additional_dirs = additional_dirs
+            .into_iter()
+            .map(|directory| resolved_root(&work_dir, &directory))
+            .collect();
+        Self {
+            slash_commands,
+            work_dir,
+            fd_path,
+            additional_dirs,
+            get_input_mode,
+        }
+    }
+
+    pub async fn get_suggestions(
+        &self,
+        lines: &[String],
+        cursor_line: usize,
+        cursor_col: usize,
+        force: bool,
+        cancelled: Arc<AtomicBool>,
+    ) -> Option<AutocompleteSuggestions> {
+        if cancelled.load(AtomicOrdering::Relaxed) {
+            return None;
+        }
+        let current_line = lines.get(cursor_line).map_or("", String::as_str);
+        let text_before_cursor = char_prefix(current_line, cursor_col);
+
+        if let Some(at_prefix) = extract_at_prefix(text_before_cursor) {
+            if let Some(fd_path) = self.fd_path.as_deref()
+                && is_executable_fd(fd_path)
+                && let Ok(result) = self
+                    .get_fd_mention_suggestions(fd_path, at_prefix, Arc::clone(&cancelled))
+                    .await
+            {
+                return result;
+            }
+            return get_fs_mention_suggestions(
+                self.work_dir.clone(),
+                self.additional_dirs.clone(),
+                at_prefix.to_owned(),
+                cancelled,
+            )
+            .await;
+        }
+
+        if should_suppress_leading_whitespace_slash_path(text_before_cursor, force)
+            || should_suppress_slash_argument_completion(
+                text_before_cursor,
+                char_suffix(current_line, cursor_col),
+                force,
+            )
+        {
+            return None;
+        }
+
+        if !force && text_before_cursor.starts_with('/') && !text_before_cursor.contains(' ') {
+            return self.slash_name_suggestions(text_before_cursor);
+        }
+
+        if (self.get_input_mode)() == InputMode::Prompt
+            && let Some(result) = self.slash_argument_suggestions(text_before_cursor)
+        {
+            return Some(result);
+        }
+
+        let prefix = extract_path_prefix(text_before_cursor, force)?;
+        let work_dir = self.work_dir.clone();
+        let prefix_for_scan = prefix.to_owned();
+        let mut result =
+            tokio::task::spawn_blocking(move || get_file_suggestions(&work_dir, &prefix_for_scan))
+                .await
+                .ok()
+                .flatten()?;
+        if (self.get_input_mode)() == InputMode::Bash {
+            result.items.retain(|item| !is_dot_prefixed_entry(item));
+        }
+        (!result.items.is_empty()).then_some(result)
+    }
+
+    pub fn apply_completion(
+        &self,
+        lines: &[String],
+        cursor_line: usize,
+        cursor_col: usize,
+        item: &AutocompleteItem,
+        prefix: &str,
+    ) -> CompletionEdit {
+        if (self.get_input_mode)() == InputMode::Bash && prefix.starts_with('/') {
+            return apply_path_completion(lines, cursor_line, cursor_col, item, prefix);
+        }
+        apply_inner_completion(lines, cursor_line, cursor_col, item, prefix)
+    }
+
+    fn slash_name_suggestions(&self, text_before_cursor: &str) -> Option<AutocompleteSuggestions> {
+        let tokens = text_before_cursor[1..]
+            .split_whitespace()
+            .filter(|token| !token.is_empty())
+            .collect::<Vec<_>>();
+        let mut matches = Vec::new();
+        for command in &self.slash_commands {
+            if let Some(score) = score_tokens(&tokens, &command.metadata.name) {
+                matches.push((command, score, false, command.metadata.name.clone()));
+                continue;
+            }
+            let best_alias_score = command
+                .metadata
+                .aliases
+                .iter()
+                .filter_map(|alias| score_tokens(&tokens, alias))
+                .min_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+            if let Some(score) = best_alias_score {
+                matches.push((
+                    command,
+                    score,
+                    true,
+                    format!(
+                        "{} ({})",
+                        command.metadata.name,
+                        command.metadata.aliases.join(", ")
+                    ),
+                ));
+            }
+        }
+        matches.sort_by(|left, right| {
+            left.1
+                .partial_cmp(&right.1)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        let items = matches
+            .into_iter()
+            .map(|(command, _, _, label)| AutocompleteItem {
+                value: command.metadata.name.clone(),
+                label,
+                description: format_slash_command_description(&command.metadata),
+            })
+            .collect::<Vec<_>>();
+        (!items.is_empty()).then_some(AutocompleteSuggestions {
+            prefix: text_before_cursor.to_owned(),
+            items,
+        })
+    }
+
+    fn slash_argument_suggestions(
+        &self,
+        text_before_cursor: &str,
+    ) -> Option<AutocompleteSuggestions> {
+        let metadata = self
+            .slash_commands
+            .iter()
+            .map(|command| command.metadata.clone())
+            .collect::<Vec<_>>();
+        let parsed = parse_slash_argument_context(text_before_cursor, &metadata)?;
+        let command = self
+            .slash_commands
+            .iter()
+            .find(|command| command.metadata.name == parsed.command.name)?;
+        let items = (command.complete_arguments.as_ref()?)(parsed.argument_prefix)?;
+        (!items.is_empty()).then_some(AutocompleteSuggestions {
+            prefix: parsed.argument_prefix.to_owned(),
+            items,
+        })
+    }
+
+    async fn get_fd_mention_suggestions(
+        &self,
+        fd_path: &str,
+        at_prefix: &str,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<Option<AutocompleteSuggestions>, ()> {
+        let query = at_prefix.strip_prefix('@').unwrap_or(at_prefix);
+        let mut candidates = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (root, additional) in std::iter::once((&self.work_dir, false))
+            .chain(self.additional_dirs.iter().map(|root| (root, true)))
+        {
+            let found = run_fd(fd_path, root, query, Arc::clone(&cancelled)).await?;
+            for (relative, is_directory) in found {
+                let absolute = root.join(&relative);
+                let absolute_path = normalize_path(&absolute);
+                if seen.insert(absolute_path.clone()) {
+                    candidates.push(FsMentionCandidate {
+                        path: if additional {
+                            absolute_path.clone()
+                        } else {
+                            normalize_path(&relative)
+                        },
+                        absolute_path,
+                        is_directory,
+                    });
+                }
+            }
+        }
+        if cancelled.load(AtomicOrdering::Relaxed) {
+            return Ok(None);
+        }
+        let items = rank_fs_mention_candidates(candidates, query)
+            .into_iter()
+            .take(MAX_FALLBACK_SUGGESTIONS)
+            .map(to_mention_item)
+            .collect::<Vec<_>>();
+        Ok((!items.is_empty()).then_some(AutocompleteSuggestions {
+            prefix: at_prefix.to_owned(),
+            items,
+        }))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -397,6 +654,373 @@ fn normalize_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+fn apply_inner_completion(
+    lines: &[String],
+    cursor_line: usize,
+    cursor_col: usize,
+    item: &AutocompleteItem,
+    prefix: &str,
+) -> CompletionEdit {
+    let current_line = lines.get(cursor_line).map_or("", String::as_str);
+    let prefix_start = cursor_col.saturating_sub(prefix.chars().count());
+    let before_prefix = char_prefix(current_line, prefix_start);
+    let mut after_cursor = char_suffix(current_line, cursor_col);
+    let quoted_prefix = prefix.starts_with('"') || prefix.starts_with("@\"");
+    if quoted_prefix && item.value.ends_with('"') && after_cursor.starts_with('"') {
+        after_cursor = char_suffix(after_cursor, 1);
+    }
+
+    let slash_command =
+        prefix.starts_with('/') && before_prefix.trim().is_empty() && !prefix[1..].contains('/');
+    let (new_line, new_cursor) = if slash_command {
+        (
+            format!("{before_prefix}/{} {after_cursor}", item.value),
+            prefix_start + item.value.chars().count() + 2,
+        )
+    } else if prefix.starts_with('@') {
+        let is_directory = item.label.ends_with('/');
+        let suffix = if is_directory { "" } else { " " };
+        let cursor_offset = completion_value_cursor_offset(item, is_directory);
+        (
+            format!("{before_prefix}{}{suffix}{after_cursor}", item.value),
+            prefix_start + cursor_offset + suffix.chars().count(),
+        )
+    } else {
+        let is_directory = item.label.ends_with('/');
+        let cursor_offset = completion_value_cursor_offset(item, is_directory);
+        (
+            format!("{before_prefix}{}{after_cursor}", item.value),
+            prefix_start + cursor_offset,
+        )
+    };
+    let mut new_lines = lines.to_vec();
+    if cursor_line < new_lines.len() {
+        new_lines[cursor_line] = new_line;
+    } else {
+        new_lines.resize(cursor_line, String::new());
+        new_lines.push(new_line);
+    }
+    CompletionEdit {
+        lines: new_lines,
+        cursor_line,
+        cursor_col: new_cursor,
+    }
+}
+
+fn completion_value_cursor_offset(item: &AutocompleteItem, is_directory: bool) -> usize {
+    let length = item.value.chars().count();
+    if is_directory && item.value.ends_with('"') {
+        length.saturating_sub(1)
+    } else {
+        length
+    }
+}
+
+fn extract_path_prefix(text: &str, force: bool) -> Option<&str> {
+    if let Some(quoted) = extract_quoted_prefix(text) {
+        return Some(quoted);
+    }
+    let token_start = text
+        .char_indices()
+        .rev()
+        .find_map(|(index, character)| {
+            is_path_delimiter(character).then_some(index + character.len_utf8())
+        })
+        .unwrap_or(0);
+    let prefix = &text[token_start..];
+    if force
+        || prefix.contains('/')
+        || prefix.starts_with('.')
+        || prefix.starts_with("~/")
+        || (prefix.is_empty() && text.ends_with(' '))
+    {
+        Some(prefix)
+    } else {
+        None
+    }
+}
+
+fn extract_quoted_prefix(text: &str) -> Option<&str> {
+    let mut open_quote = None;
+    for (index, character) in text.char_indices() {
+        if character == '"' {
+            open_quote = if open_quote.is_some() {
+                None
+            } else {
+                Some(index)
+            };
+        }
+    }
+    let quote_start = open_quote?;
+    if quote_start > 0 && text[..quote_start].ends_with('@') {
+        let at_start = quote_start - '@'.len_utf8();
+        if at_start == 0
+            || text[..at_start]
+                .chars()
+                .next_back()
+                .is_some_and(is_path_delimiter)
+        {
+            return Some(&text[at_start..]);
+        }
+        return None;
+    }
+    if quote_start == 0
+        || text[..quote_start]
+            .chars()
+            .next_back()
+            .is_some_and(is_path_delimiter)
+    {
+        Some(&text[quote_start..])
+    } else {
+        None
+    }
+}
+
+fn get_file_suggestions(work_dir: &Path, prefix: &str) -> Option<AutocompleteSuggestions> {
+    let (raw_prefix, is_at_prefix, is_quoted_prefix) = parse_path_prefix(prefix);
+    let expanded_prefix = expand_home_path(raw_prefix);
+    let root_prefix = matches!(raw_prefix, "" | "./" | "../" | "~" | "~/" | "/");
+    let (search_dir, search_prefix) = if root_prefix || ends_with_separator(raw_prefix) {
+        let directory = if raw_prefix.starts_with('~') || Path::new(&expanded_prefix).is_absolute()
+        {
+            PathBuf::from(&expanded_prefix)
+        } else {
+            work_dir.join(&expanded_prefix)
+        };
+        (directory, String::new())
+    } else {
+        let (directory, file) = split_display_path(&expanded_prefix);
+        let directory = if raw_prefix.starts_with('~') || Path::new(&expanded_prefix).is_absolute()
+        {
+            PathBuf::from(directory)
+        } else {
+            work_dir.join(directory)
+        };
+        (directory, file.to_owned())
+    };
+
+    let entries = std::fs::read_dir(&search_dir).ok()?;
+    let mut items = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name
+            .to_lowercase()
+            .starts_with(&search_prefix.to_lowercase())
+        {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let is_directory = file_type.is_dir()
+            || (file_type.is_symlink()
+                && std::fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_dir()));
+        let mut display_path = completion_display_path(raw_prefix, &name);
+        if is_directory {
+            display_path.push('/');
+        }
+        let value =
+            build_completion_value(&display_path, is_directory, is_at_prefix, is_quoted_prefix);
+        items.push(AutocompleteItem {
+            value,
+            label: format!("{name}{}", if is_directory { "/" } else { "" }),
+            description: Some(normalize_path(&entry.path())),
+        });
+    }
+    items.sort_by(|left, right| {
+        right
+            .label
+            .ends_with('/')
+            .cmp(&left.label.ends_with('/'))
+            .then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
+    });
+    (!items.is_empty()).then_some(AutocompleteSuggestions {
+        prefix: prefix.to_owned(),
+        items,
+    })
+}
+
+fn parse_path_prefix(prefix: &str) -> (&str, bool, bool) {
+    if let Some(raw) = prefix.strip_prefix("@\"") {
+        (raw, true, true)
+    } else if let Some(raw) = prefix.strip_prefix('"') {
+        (raw, false, true)
+    } else if let Some(raw) = prefix.strip_prefix('@') {
+        (raw, true, false)
+    } else {
+        (prefix, false, false)
+    }
+}
+
+fn expand_home_path(path: &str) -> String {
+    if path == "~" {
+        return dirs::home_dir().map_or_else(|| path.to_owned(), |home| normalize_path(&home));
+    }
+    if let Some(relative) = path.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        let mut expanded = normalize_path(&home.join(relative));
+        if path.ends_with('/') && !expanded.ends_with('/') {
+            expanded.push('/');
+        }
+        return expanded;
+    }
+    path.to_owned()
+}
+
+fn split_display_path(path: &str) -> (&str, &str) {
+    match path.rfind(['/', '\\']) {
+        Some(0) => (&path[..1], &path[1..]),
+        Some(index) => (&path[..index], &path[index + 1..]),
+        None => (".", path),
+    }
+}
+
+fn ends_with_separator(path: &str) -> bool {
+    path.ends_with('/') || path.ends_with('\\')
+}
+
+fn completion_display_path(raw_prefix: &str, name: &str) -> String {
+    if ends_with_separator(raw_prefix) {
+        format!("{raw_prefix}{name}")
+    } else if let Some(index) = raw_prefix.rfind(['/', '\\']) {
+        format!("{}{name}", &raw_prefix[..=index])
+    } else if raw_prefix == "~" {
+        format!("~/{name}")
+    } else {
+        name.to_owned()
+    }
+}
+
+fn build_completion_value(
+    path: &str,
+    _is_directory: bool,
+    is_at_prefix: bool,
+    is_quoted_prefix: bool,
+) -> String {
+    let prefix = if is_at_prefix { "@" } else { "" };
+    if is_quoted_prefix || path.contains(' ') {
+        format!("{prefix}\"{path}\"")
+    } else {
+        format!("{prefix}{path}")
+    }
+}
+
+fn is_executable_fd(fd_path: &str) -> bool {
+    if !fd_path.contains('/') && !fd_path.contains('\\') {
+        return true;
+    }
+    let Ok(metadata) = std::fs::metadata(fd_path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+async fn run_fd(
+    fd_path: &str,
+    root: &Path,
+    query: &str,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Vec<(PathBuf, bool)>, ()> {
+    use std::process::Stdio;
+
+    if cancelled.load(AtomicOrdering::Relaxed) {
+        return Ok(Vec::new());
+    }
+    let mut command = tokio::process::Command::new(fd_path);
+    command
+        .arg("--base-directory")
+        .arg(root)
+        .args([
+            "--max-results",
+            "50",
+            "--type",
+            "f",
+            "--type",
+            "d",
+            "--follow",
+            "--hidden",
+            "--exclude",
+            ".git",
+            "--exclude",
+            ".git/*",
+            "--exclude",
+            ".git/**",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    if query.contains('/') {
+        command.arg("--full-path");
+    }
+    if !query.is_empty() {
+        command.arg(build_fd_path_query(query));
+    }
+    let child = command.stdout(Stdio::piped()).spawn().map_err(|_| ())?;
+    let output = child.wait_with_output();
+    tokio::pin!(output);
+    let output = loop {
+        tokio::select! {
+            result = &mut output => break result.map_err(|_| ())?,
+            () = tokio::time::sleep(std::time::Duration::from_millis(20)) => {
+                if cancelled.load(AtomicOrdering::Relaxed) {
+                    return Ok(Vec::new());
+                }
+            }
+        }
+    };
+    if !output.status.success() || output.stdout.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut results = Vec::new();
+    for line in stdout.lines().filter(|line| !line.is_empty()) {
+        let display = line.replace('\\', "/");
+        let normalized = display.trim_end_matches('/');
+        if normalized == ".git" || normalized.starts_with(".git/") || normalized.contains("/.git/")
+        {
+            continue;
+        }
+        let path = PathBuf::from(normalized);
+        let is_directory = display.ends_with('/') || root.join(&path).is_dir();
+        results.push((path, is_directory));
+    }
+    Ok(results)
+}
+
+fn build_fd_path_query(query: &str) -> String {
+    let normalized = query.replace('\\', "/");
+    if !normalized.contains('/') {
+        return normalized;
+    }
+    let trailing = normalized.ends_with('/');
+    let segments = normalized
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(regex::escape)
+        .collect::<Vec<_>>();
+    if segments.is_empty() {
+        return normalized;
+    }
+    let mut pattern = segments.join(r"[\\/]");
+    if trailing {
+        pattern.push_str(r"[\\/]");
+    }
+    pattern
+}
+
 fn is_path_delimiter(character: char) -> bool {
     matches!(character, ' ' | '\t' | '"' | '\'' | '=')
 }
@@ -467,6 +1091,24 @@ mod tests {
             description: None,
             argument_hint: None,
         }
+    }
+
+    fn provider(
+        commands: Vec<SlashAutocompleteCommand>,
+        work_dir: &Path,
+        mode: InputMode,
+    ) -> FileMentionProvider {
+        FileMentionProvider::new(
+            commands,
+            work_dir.to_owned(),
+            None,
+            Vec::new(),
+            Arc::new(move || mode),
+        )
+    }
+
+    fn active() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
     }
 
     #[test]
@@ -691,6 +1333,194 @@ mod tests {
             )
             .await
             .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_searches_primary_names_aliases_and_descriptions() {
+        let work = TestDir::new("provider-slash");
+        let mut new = command("new", &["clear"]);
+        new.description = Some("Start a fresh session".to_owned());
+        let mut help = command("help", &["h", "?"]);
+        help.description = Some("Show help".to_owned());
+        help.argument_hint = Some("[topic]".to_owned());
+        let commands = vec![
+            SlashAutocompleteCommand::new(new),
+            SlashAutocompleteCommand::new(command("skill:lark-calendar", &[])),
+            SlashAutocompleteCommand::new(help),
+        ];
+        let provider = provider(commands, work.path(), InputMode::Prompt);
+
+        let clear = provider
+            .get_suggestions(&["/clear".to_owned()], 0, 6, false, active())
+            .await
+            .expect("alias should match");
+        assert_eq!(clear.items[0].value, "new");
+        assert_eq!(clear.items[0].label, "new (clear)");
+
+        let all = provider
+            .get_suggestions(&["/".to_owned()], 0, 1, false, active())
+            .await
+            .expect("bare slash should list commands");
+        assert!(all.items.iter().all(|item| !item.label.contains('(')));
+        let help = all
+            .items
+            .iter()
+            .find(|item| item.value == "help")
+            .expect("help should be listed");
+        assert_eq!(help.description.as_deref(), Some("[topic] — Show help"));
+    }
+
+    #[tokio::test]
+    async fn provider_completes_arguments_only_in_prompt_mode() {
+        let work = TestDir::new("provider-args");
+        let command = SlashAutocompleteCommand::new(command("goal", &["g"]))
+            .with_argument_completer(Arc::new(|prefix| {
+                prefix
+                    .is_empty()
+                    .then(|| vec![AutocompleteItem::new("status", "status")])
+            }));
+        let prompt = provider(vec![command.clone()], work.path(), InputMode::Prompt);
+        let result = prompt
+            .get_suggestions(&["/g ".to_owned()], 0, 3, false, active())
+            .await
+            .expect("alias arguments should complete");
+        assert_eq!(result.prefix, "");
+        assert_eq!(result.items[0].value, "status");
+
+        let bash = provider(vec![command], work.path(), InputMode::Bash);
+        assert!(
+            bash.get_suggestions(&["/goal ".to_owned()], 0, 6, true, active())
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_prioritizes_mentions_inside_slash_text_and_falls_back_without_fd() {
+        let work = TestDir::new("provider-mention");
+        fs::write(work.path().join("README.md"), "readme").expect("readme should be written");
+        let provider = FileMentionProvider::new(
+            vec![SlashAutocompleteCommand::new(command("goal", &[]))],
+            work.path().to_owned(),
+            Some(normalize_path(&work.path().join("missing-fd"))),
+            Vec::new(),
+            Arc::new(|| InputMode::Prompt),
+        );
+        let line = "/goal Fix the @checkout docs";
+        let cursor = "/goal Fix the @".chars().count();
+        let result = provider
+            .get_suggestions(&[line.to_owned()], 0, cursor, false, active())
+            .await
+            .expect("mention should take priority");
+        assert!(result.items.iter().any(|item| item.value == "@README.md"));
+        assert!(
+            provider
+                .get_suggestions(&["email@example".to_owned()], 0, 13, false, active())
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_filters_dot_paths_only_in_bash_mode() {
+        let work = TestDir::new("provider-paths");
+        fs::create_dir(work.path().join(".hidden")).expect("hidden dir should be created");
+        fs::create_dir(work.path().join("visible")).expect("visible dir should be created");
+        fs::write(work.path().join(".dotfile"), "").expect("dotfile should be written");
+        fs::write(work.path().join("normal.txt"), "").expect("normal file should be written");
+
+        let bash = provider(Vec::new(), work.path(), InputMode::Bash);
+        let bash_result = bash
+            .get_suggestions(&[String::new()], 0, 0, true, active())
+            .await
+            .expect("forced bash paths should complete");
+        assert!(
+            bash_result
+                .items
+                .iter()
+                .any(|item| item.label == "visible/")
+        );
+        assert!(
+            bash_result
+                .items
+                .iter()
+                .any(|item| item.label == "normal.txt")
+        );
+        assert!(
+            bash_result
+                .items
+                .iter()
+                .all(|item| !item.label.starts_with('.'))
+        );
+
+        let prompt = provider(Vec::new(), work.path(), InputMode::Prompt);
+        let prompt_result = prompt
+            .get_suggestions(&[String::new()], 0, 0, true, active())
+            .await
+            .expect("forced prompt paths should complete");
+        assert!(
+            prompt_result
+                .items
+                .iter()
+                .any(|item| item.label == ".hidden/")
+        );
+        assert!(
+            prompt_result
+                .items
+                .iter()
+                .any(|item| item.label == ".dotfile")
+        );
+    }
+
+    #[test]
+    fn provider_applies_command_mention_and_bash_path_completions() {
+        let work = TestDir::new("provider-apply");
+        let prompt = provider(Vec::new(), work.path(), InputMode::Prompt);
+        let help = prompt.apply_completion(
+            &["/".to_owned()],
+            0,
+            1,
+            &AutocompleteItem::new("help", "help"),
+            "/",
+        );
+        assert_eq!(help.lines, ["/help "]);
+
+        let file = prompt.apply_completion(
+            &["hey @read".to_owned()],
+            0,
+            9,
+            &AutocompleteItem::new("@README.md", "README.md"),
+            "@read",
+        );
+        assert_eq!(file.lines, ["hey @README.md "]);
+        let directory = prompt.apply_completion(
+            &["hey @sr".to_owned()],
+            0,
+            7,
+            &AutocompleteItem::new("@src/", "src/"),
+            "@sr",
+        );
+        assert_eq!(directory.lines, ["hey @src/"]);
+
+        let bash = provider(Vec::new(), work.path(), InputMode::Bash);
+        let path = bash.apply_completion(
+            &["cd /App".to_owned()],
+            0,
+            7,
+            &AutocompleteItem::new("/Applications/", "Applications/"),
+            "/App",
+        );
+        assert_eq!(path.lines, ["cd /Applications/"]);
+    }
+
+    #[test]
+    fn fd_helpers_preserve_bare_commands_and_scoped_queries() {
+        assert!(is_executable_fd("fd"));
+        assert_eq!(build_fd_path_query("src/button"), r"src[\\/]button");
+        assert_eq!(
+            build_fd_path_query("src/components/"),
+            r"src[\\/]components[\\/]"
         );
     }
 
