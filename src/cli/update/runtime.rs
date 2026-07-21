@@ -1,14 +1,19 @@
-use std::{error::Error, fmt, path::PathBuf, process::Stdio};
+use std::{error::Error, fmt, path::PathBuf, process::Stdio, time::SystemTime};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use tokio::process::Command;
 
 use super::{
+    cache::{UpdateCacheWriteError, write_update_cache},
+    cdn::{CdnError, CdnFetch, CdnResponse, fetch_latest_from_cdn},
     preflight::{
         ForegroundInstallerRuntime, SpawnUpdateExit, SpawnUpdateRequest, UpdateInstallError,
         UpdatePlatform,
     },
+    refresh::RefreshUpdateCacheDeps,
     source::{DetectInstallSourceDeps, InstallPlatform},
+    types::{FetchLatestResult, UpdateCache},
 };
 use crate::utils::shell_quote::{ShellPlatform, quote_shell_arg_for};
 
@@ -220,8 +225,95 @@ impl fmt::Display for CommandFailed {
 
 impl Error for CommandFailed {}
 
+#[derive(Debug, Clone)]
+pub struct SystemCdnFetch {
+    client: reqwest::Client,
+}
+
+impl Default for SystemCdnFetch {
+    fn default() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl CdnFetch for SystemCdnFetch {
+    type Error = reqwest::Error;
+
+    // Original:
+    //   apps/kimi-code/src/cli/update/cdn.ts
+    //   fetchWithTimeout() fetch boundary
+    async fn fetch(&self, url: &str) -> Result<CdnResponse, Self::Error> {
+        let response = self.client.get(url).send().await?;
+        let status = response.status().as_u16();
+        let body = response.text().await?;
+        Ok(CdnResponse { status, body })
+    }
+}
+
+#[derive(Debug)]
+pub enum UpdateRefreshRuntimeError {
+    Cdn(CdnError<reqwest::Error>),
+    Cache(UpdateCacheWriteError),
+}
+
+impl fmt::Display for UpdateRefreshRuntimeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cdn(error) => error.fmt(formatter),
+            Self::Cache(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for UpdateRefreshRuntimeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Cdn(error) => Some(error),
+            Self::Cache(error) => Some(error),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SystemUpdateRefreshRuntime {
+    fetcher: SystemCdnFetch,
+}
+
+#[async_trait]
+impl RefreshUpdateCacheDeps for SystemUpdateRefreshRuntime {
+    type Error = UpdateRefreshRuntimeError;
+
+    // Original:
+    //   apps/kimi-code/src/cli/update/refresh.ts
+    //   refreshUpdateCache() default fetch dependency
+    async fn fetch_latest(&self) -> Result<FetchLatestResult, Self::Error> {
+        fetch_latest_from_cdn(&self.fetcher)
+            .await
+            .map_err(UpdateRefreshRuntimeError::Cdn)
+    }
+
+    async fn write_cache(&self, cache: &UpdateCache) -> Result<(), Self::Error> {
+        write_update_cache(cache)
+            .await
+            .map_err(UpdateRefreshRuntimeError::Cache)
+    }
+
+    fn now(&self) -> DateTime<Utc> {
+        DateTime::<Utc>::from(SystemTime::now())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
     use super::*;
 
     fn exit_request(code: i32, shell: bool) -> SpawnUpdateRequest {
@@ -284,5 +376,32 @@ mod tests {
             super::super::source::detect_install_source(&runtime).await,
             super::super::types::InstallSource::Native
         );
+    }
+
+    #[tokio::test]
+    async fn system_cdn_fetch_returns_status_and_body_without_reclassifying_http_errors() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).expect("read");
+            let body = "release unavailable";
+            write!(
+                stream,
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("response");
+        });
+
+        let response = SystemCdnFetch::default()
+            .fetch(&format!("http://{address}/latest"))
+            .await
+            .expect("HTTP response");
+        server.join().expect("server");
+
+        assert_eq!(response.status, 503);
+        assert_eq!(response.body, "release unavailable");
     }
 }
