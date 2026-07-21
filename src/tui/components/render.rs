@@ -1,6 +1,10 @@
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+mod wrapping;
+
+pub use wrapping::wrap_text_with_ansi;
+
 /// Original:
 ///   packages/pi-tui/src/utils.ts
 ///   visibleWidth()
