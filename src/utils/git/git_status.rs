@@ -138,9 +138,18 @@ impl GitStatusCache {
         let work_dir = self.work_dir.clone();
         let branch = branch.to_owned();
         let thread_branch = branch.clone();
+        let previous = (self.pull_request_branch.as_deref() == Some(branch.as_str()))
+            .then(|| self.pull_request.clone())
+            .flatten();
+        let on_change = self.on_change.clone();
         let (sender, receiver) = mpsc::channel();
         let handle = thread::spawn(move || {
             let result = read_pull_request(&work_dir);
+            if result != previous
+                && let Some(on_change) = on_change
+            {
+                on_change();
+            }
             let _ = sender.send(result);
         });
         self.pending_pull_request = Some(PendingPullRequest {
@@ -159,14 +168,9 @@ impl GitStatusCache {
         };
         let pending = self.pending_pull_request.take().expect("pending PR exists");
         let _ = pending.handle.join();
-        let changed = self.pull_request_branch.as_deref() != Some(&pending.branch)
-            || self.pull_request != value;
         self.pull_request = value;
         self.pull_request_branch = Some(pending.branch);
         self.pull_request_fetched_at = Some(Instant::now());
-        if changed && let Some(on_change) = &self.on_change {
-            on_change();
-        }
     }
 }
 
