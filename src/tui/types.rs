@@ -1,6 +1,29 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BannerDisplay {
+    Always,
+    Once,
+    Cooldown,
+}
+
+/// Optional announcement shown between the welcome panel and transcript.
+///
+/// Original: `apps/kimi-code/src/tui/types.ts`, `BannerState`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BannerState {
+    pub key: String,
+    pub tag: Option<String>,
+    pub main_text: String,
+    pub sub_text: Option<String>,
+    pub display: BannerDisplay,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_hours: Option<f64>,
+}
+
 /// Metadata recorded for a background subagent transcript entry.
 ///
 /// Original:
