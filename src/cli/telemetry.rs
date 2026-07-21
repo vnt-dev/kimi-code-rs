@@ -93,6 +93,29 @@ pub struct TelemetryInitialization {
     pub get_access_token: TelemetryAccessTokenProvider,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ServerTelemetryConfig {
+    pub telemetry: Option<bool>,
+    pub default_model: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitializeServerTelemetryOptions {
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TelemetryContextIds {
+    pub device_id: Option<Option<String>>,
+    pub session_id: Option<Option<String>>,
+}
+
+pub trait TelemetryClient: Send + Sync {
+    fn track(&self, event: &str, properties: &Map<String, Value>);
+    fn set_context(&self, patch: &TelemetryContextIds);
+    fn with_context(&self, patch: &TelemetryContextIds) -> Arc<dyn TelemetryClient>;
+}
+
 #[async_trait]
 pub trait CliTelemetryHarness: Send + Sync + 'static {
     fn home_dir(&self) -> &Path;
@@ -108,6 +131,21 @@ pub trait CliTelemetryRuntime: Send + Sync {
         &self,
         initialization: TelemetryInitialization,
     ) -> Result<(), CliTelemetryError>;
+}
+
+pub trait ServerTelemetryRuntime: CliTelemetryRuntime {
+    fn create_bootstrap(&self) -> Result<CliTelemetryBootstrap, CliTelemetryError>;
+    fn read_server_config(
+        &self,
+        config_path: &Path,
+    ) -> Result<ServerTelemetryConfig, CliTelemetryError>;
+    fn server_access_token_provider(
+        &self,
+        home_dir: &Path,
+        config_path: &Path,
+        version: &str,
+    ) -> TelemetryAccessTokenProvider;
+    fn telemetry_client(&self) -> Arc<dyn TelemetryClient>;
 }
 
 // Original:
@@ -166,6 +204,32 @@ where
         harness.track("first_launch", None);
     }
     Ok(())
+}
+
+// Original:
+//   apps/kimi-code/src/cli/telemetry.ts
+//   initializeServerTelemetry(), readServerTelemetryConfig()
+pub fn initialize_server_telemetry(
+    runtime: &dyn ServerTelemetryRuntime,
+    options: &InitializeServerTelemetryOptions,
+) -> Result<Arc<dyn TelemetryClient>, CliTelemetryError> {
+    let bootstrap = runtime.create_bootstrap()?;
+    let config_path = bootstrap.home_dir.join("config.toml");
+    let config = runtime.read_server_config(&config_path).unwrap_or_default();
+    let get_access_token =
+        runtime.server_access_token_provider(&bootstrap.home_dir, &config_path, &options.version);
+    runtime.initialize_telemetry(TelemetryInitialization {
+        home_dir: bootstrap.home_dir,
+        device_id: bootstrap.device_id,
+        enabled: config.telemetry != Some(false),
+        app_name: CLI_USER_AGENT_PRODUCT.to_owned(),
+        version: options.version.clone(),
+        ui_mode: WEB_UI_MODE.to_owned(),
+        model: config.default_model,
+        session_id: None,
+        get_access_token,
+    })?;
+    Ok(runtime.telemetry_client())
 }
 
 fn create_kimi_device_id_at(home_dir: &Path) -> (String, bool) {
@@ -256,6 +320,75 @@ mod tests {
     #[derive(Default)]
     struct TelemetryRuntimeMock {
         initialization: Mutex<Option<TelemetryInitialization>>,
+    }
+
+    #[derive(Default)]
+    struct TelemetryClientMock {
+        events: Mutex<Vec<String>>,
+        contexts: Mutex<Vec<TelemetryContextIds>>,
+    }
+
+    impl TelemetryClient for TelemetryClientMock {
+        fn track(&self, event: &str, _: &Map<String, Value>) {
+            self.events.lock().expect("events").push(event.to_owned());
+        }
+
+        fn set_context(&self, patch: &TelemetryContextIds) {
+            self.contexts.lock().expect("contexts").push(patch.clone());
+        }
+
+        fn with_context(&self, _: &TelemetryContextIds) -> Arc<dyn TelemetryClient> {
+            Arc::new(Self::default())
+        }
+    }
+
+    struct ServerRuntimeMock {
+        config: Result<ServerTelemetryConfig, &'static str>,
+        initialization: Mutex<Option<TelemetryInitialization>>,
+        token_inputs: Mutex<Vec<(std::path::PathBuf, std::path::PathBuf, String)>>,
+        client: Arc<TelemetryClientMock>,
+    }
+
+    impl CliTelemetryRuntime for ServerRuntimeMock {
+        fn initialize_telemetry(
+            &self,
+            initialization: TelemetryInitialization,
+        ) -> Result<(), CliTelemetryError> {
+            *self.initialization.lock().expect("initialization") = Some(initialization);
+            Ok(())
+        }
+    }
+
+    impl ServerTelemetryRuntime for ServerRuntimeMock {
+        fn create_bootstrap(&self) -> Result<CliTelemetryBootstrap, CliTelemetryError> {
+            Ok(CliTelemetryBootstrap {
+                home_dir: std::path::PathBuf::from("/home/.kimi-code"),
+                device_id: "device-123".to_owned(),
+                first_launch: false,
+            })
+        }
+
+        fn read_server_config(&self, _: &Path) -> Result<ServerTelemetryConfig, CliTelemetryError> {
+            self.config.clone().map_err(CliTelemetryError::message)
+        }
+
+        fn server_access_token_provider(
+            &self,
+            home_dir: &Path,
+            config_path: &Path,
+            version: &str,
+        ) -> TelemetryAccessTokenProvider {
+            self.token_inputs.lock().expect("token inputs").push((
+                home_dir.to_path_buf(),
+                config_path.to_path_buf(),
+                version.to_owned(),
+            ));
+            Arc::new(|| Box::pin(async { Ok(Some("server-token".to_owned())) }))
+        }
+
+        fn telemetry_client(&self) -> Arc<dyn TelemetryClient> {
+            self.client.clone()
+        }
     }
 
     impl CliTelemetryRuntime for TelemetryRuntimeMock {
@@ -447,5 +580,101 @@ mod tests {
         assert_eq!(initialization.model.as_deref(), Some("config-model"));
         assert!(initialization.enabled);
         assert!(harness.events.lock().expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn initializes_server_telemetry_for_web_and_returns_shared_client() {
+        let client = Arc::new(TelemetryClientMock::default());
+        let runtime = ServerRuntimeMock {
+            config: Ok(ServerTelemetryConfig {
+                telemetry: Some(true),
+                default_model: Some("kimi-k2".to_owned()),
+            }),
+            initialization: Mutex::new(None),
+            token_inputs: Mutex::new(Vec::new()),
+            client: client.clone(),
+        };
+
+        let returned = initialize_server_telemetry(
+            &runtime,
+            &InitializeServerTelemetryOptions {
+                version: "1.2.3".to_owned(),
+            },
+        )
+        .expect("server telemetry");
+        returned.track("server_started", &Map::new());
+        assert_eq!(
+            client.events.lock().expect("events").as_slice(),
+            ["server_started"]
+        );
+
+        let initialization = runtime
+            .initialization
+            .lock()
+            .expect("initialization")
+            .take()
+            .expect("captured initialization");
+        assert_eq!(
+            initialization.home_dir,
+            std::path::PathBuf::from("/home/.kimi-code")
+        );
+        assert_eq!(initialization.device_id, "device-123");
+        assert!(initialization.enabled);
+        assert_eq!(initialization.app_name, "kimi-code-cli");
+        assert_eq!(initialization.version, "1.2.3");
+        assert_eq!(initialization.ui_mode, "web");
+        assert_eq!(initialization.model.as_deref(), Some("kimi-k2"));
+        assert_eq!(
+            (initialization.get_access_token)()
+                .await
+                .expect("access token")
+                .as_deref(),
+            Some("server-token")
+        );
+        assert_eq!(
+            runtime
+                .token_inputs
+                .lock()
+                .expect("token inputs")
+                .as_slice(),
+            [(
+                std::path::PathBuf::from("/home/.kimi-code"),
+                std::path::PathBuf::from("/home/.kimi-code/config.toml"),
+                "1.2.3".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn server_config_false_disables_and_read_failure_fails_open_without_model() {
+        for (config, expected_enabled, expected_model) in [
+            (
+                Ok(ServerTelemetryConfig {
+                    telemetry: Some(false),
+                    default_model: Some("kimi-k2".to_owned()),
+                }),
+                false,
+                Some("kimi-k2"),
+            ),
+            (Err("bad config"), true, None),
+        ] {
+            let runtime = ServerRuntimeMock {
+                config,
+                initialization: Mutex::new(None),
+                token_inputs: Mutex::new(Vec::new()),
+                client: Arc::new(TelemetryClientMock::default()),
+            };
+            initialize_server_telemetry(
+                &runtime,
+                &InitializeServerTelemetryOptions {
+                    version: "1.2.3".to_owned(),
+                },
+            )
+            .expect("server telemetry");
+            let guard = runtime.initialization.lock().expect("initialization");
+            let initialization = guard.as_ref().expect("captured initialization");
+            assert_eq!(initialization.enabled, expected_enabled);
+            assert_eq!(initialization.model.as_deref(), expected_model);
+        }
     }
 }
