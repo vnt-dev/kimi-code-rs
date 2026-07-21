@@ -14,3 +14,4 @@ pub mod status_message;
 pub mod step_summary;
 pub mod swarm_markers;
 pub mod tool_renderers;
+pub mod usage_panel;
