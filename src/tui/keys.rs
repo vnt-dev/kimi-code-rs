@@ -42,6 +42,7 @@ pub enum EditorKey {
     Home,
     End,
     Ctrl(char),
+    Alt(char),
     CtrlMinus,
 }
 
@@ -74,6 +75,9 @@ pub fn matches_editor_key(data: &str, key: EditorKey) -> bool {
         EditorKey::Ctrl(character) => {
             modifiers == CTRL && codepoint == i64::from(u32::from(character.to_ascii_lowercase()))
         }
+        EditorKey::Alt(character) => {
+            modifiers == ALT && codepoint == i64::from(u32::from(character.to_ascii_lowercase()))
+        }
         EditorKey::CtrlMinus => modifiers == CTRL && codepoint == i64::from(b'-'),
     }
 }
@@ -101,8 +105,13 @@ fn matches_legacy_editor_key(data: &str, key: EditorKey) -> bool {
             let control = (character.to_ascii_lowercase() as u8) & 0x1f;
             data.as_bytes() == [control]
         }
+        EditorKey::Alt(character) if character.is_ascii() => {
+            let mut sequence = String::from("\u{1b}");
+            sequence.push(character.to_ascii_lowercase());
+            data.eq_ignore_ascii_case(&sequence)
+        }
         EditorKey::CtrlMinus => data == "\u{1f}",
-        EditorKey::Ctrl(_) => false,
+        EditorKey::Ctrl(_) | EditorKey::Alt(_) => false,
     }
 }
 
@@ -302,6 +311,7 @@ mod tests {
         assert!(matches_editor_key("\u{1b}[H", EditorKey::Home));
         assert!(matches_editor_key("\u{1b}[F", EditorKey::End));
         assert!(matches_editor_key("\u{3}", EditorKey::Ctrl('c')));
+        assert!(matches_editor_key("\u{1b}s", EditorKey::Alt('s')));
         assert!(matches_editor_key("\u{1f}", EditorKey::CtrlMinus));
         assert!(!matches_editor_key("c", EditorKey::Ctrl('c')));
     }
@@ -309,6 +319,7 @@ mod tests {
     #[test]
     fn matches_kitty_editor_keys_and_rejects_releases() {
         assert!(matches_editor_key("\u{1b}[99;5u", EditorKey::Ctrl('c')));
+        assert!(matches_editor_key("\u{1b}[115;3u", EditorKey::Alt('s')));
         assert!(matches_editor_key("\u{1b}[9;2u", EditorKey::ShiftTab));
         assert!(matches_editor_key("\u{1b}[57417u", EditorKey::Right));
         assert!(matches_editor_key("\u{1b}[127u", EditorKey::Backspace));
