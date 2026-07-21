@@ -1,3 +1,5 @@
+use crate::tui::theme::{ColorToken, current_theme};
+
 // Original:
 //   apps/kimi-code/src/tui/utils/shell-output.ts
 //   sanitizeShellOutput()
@@ -39,9 +41,39 @@ pub fn sanitize_shell_output(text: &str) -> String {
         index += 1;
     }
 
-    // Every removed sequence is ASCII, so copying the remaining bytes from a
-    // valid `str` cannot invalidate its UTF-8 encoding.
-    String::from_utf8(clean).expect("removing ASCII controls preserves UTF-8")
+    // Every removed sequence is ASCII, so this normally borrows the original
+    // valid UTF-8 unchanged. Lossy recovery keeps the renderer panic-free if
+    // the scanner is changed in the future.
+    String::from_utf8_lossy(&clean).into_owned()
+}
+
+/// Original:
+///   apps/kimi-code/src/tui/utils/shell-output.ts
+///   formatBashOutputForDisplay()
+pub fn format_bash_output_for_display(
+    stdout: &str,
+    stderr: &str,
+    is_error: Option<bool>,
+) -> String {
+    let mut parts = Vec::new();
+    let clean_stdout = sanitize_shell_output(stdout).trim_end().to_owned();
+    if !clean_stdout.is_empty() {
+        parts.push(current_theme().fg(ColorToken::TextDim, &clean_stdout));
+    }
+    let clean_stderr = sanitize_shell_output(stderr).trim_end().to_owned();
+    if !clean_stderr.is_empty() {
+        let color = if is_error.unwrap_or(false) {
+            ColorToken::Error
+        } else {
+            ColorToken::TextDim
+        };
+        parts.push(current_theme().fg(color, &clean_stderr));
+    }
+    if parts.is_empty() {
+        current_theme().fg(ColorToken::TextDim, "(no output)")
+    } else {
+        parts.join("\n")
+    }
 }
 
 fn osc_end(bytes: &[u8], mut index: usize) -> Option<usize> {
@@ -99,7 +131,7 @@ fn is_stripped_c0(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_shell_output;
+    use super::{format_bash_output_for_display, sanitize_shell_output};
 
     const ESC: char = '\u{001b}';
     const BEL: char = '\u{0007}';
@@ -194,5 +226,34 @@ mod tests {
     fn unterminated_sequences_match_the_original_regex_fallback() {
         assert_eq!(sanitize_shell_output(&format!("{ESC}]title")), "title");
         assert_eq!(sanitize_shell_output(&format!("{ESC}[31")), "31");
+    }
+
+    #[test]
+    fn formats_empty_output_and_sanitizes_both_streams() {
+        assert_eq!(
+            crate::tui::components::render::visible_width(&format_bash_output_for_display(
+                "", "", None
+            )),
+            11
+        );
+        let formatted = format_bash_output_for_display(
+            &format!("{ESC}[?1049h{ESC}[31mhi{ESC}[0m\r"),
+            &format!("warning{BEL}\r"),
+            Some(false),
+        );
+        assert_eq!(
+            crate::tui::components::render::visible_width(&formatted),
+            "hiwarning".len()
+        );
+        assert!(formatted.contains("hi"));
+        assert!(formatted.contains("warning"));
+    }
+
+    #[test]
+    fn colors_stderr_as_error_only_when_command_failed() {
+        let success = format_bash_output_for_display("", "warning", Some(false));
+        let failure = format_bash_output_for_display("", "warning", Some(true));
+        assert!(success.contains("38;2;136;136;136"));
+        assert!(failure.contains("38;2;232;84;84"));
     }
 }
