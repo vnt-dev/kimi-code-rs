@@ -1,6 +1,12 @@
-use std::{error::Error, fmt};
+use std::{collections::HashMap, error::Error, fmt};
 
+use indexmap::IndexMap;
 use serde_json::Value;
+
+use super::{
+    api_error::read_api_error_message, identity::parse_kimi_code_custom_headers,
+    managed_usage::kimi_code_base_url,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedKimiCodeProtocol {
@@ -47,6 +53,83 @@ impl fmt::Display for ModelParseError {
 }
 
 impl Error for ModelParseError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialKind {
+    OAuth,
+    ApiKey,
+}
+
+#[derive(Debug)]
+pub enum ManagedModelsError {
+    Unauthorized {
+        status: u16,
+        base_url: String,
+        message: String,
+        credential_kind: CredentialKind,
+    },
+    Api(String),
+    Request(reqwest::Error),
+    Json(reqwest::Error),
+    InvalidHeader(String),
+    Model(ModelParseError),
+    UnexpectedResponse(String),
+}
+
+impl ManagedModelsError {
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Unauthorized { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    pub fn base_url(&self) -> Option<&str> {
+        match self {
+            Self::Unauthorized { base_url, .. } => Some(base_url),
+            _ => None,
+        }
+    }
+
+    pub fn is_unauthorized(&self) -> bool {
+        matches!(self, Self::Unauthorized { .. })
+    }
+}
+
+impl fmt::Display for ManagedModelsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unauthorized {
+                base_url,
+                message,
+                credential_kind,
+                ..
+            } => write!(
+                formatter,
+                "Kimi Code models endpoint {base_url} rejected {}: {message}",
+                match credential_kind {
+                    CredentialKind::ApiKey => "the API key",
+                    CredentialKind::OAuth => "OAuth credentials",
+                }
+            ),
+            Self::Api(message)
+            | Self::InvalidHeader(message)
+            | Self::UnexpectedResponse(message) => formatter.write_str(message),
+            Self::Request(error) | Self::Json(error) => error.fmt(formatter),
+            Self::Model(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for ManagedModelsError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Request(error) | Self::Json(error) => Some(error),
+            Self::Model(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 // Original:
 //   packages/oauth/src/managed-kimi-code.ts
@@ -145,6 +228,89 @@ pub fn parse_model_info(
     }))
 }
 
+// Original: fetchManagedKimiCodeModels()
+pub async fn fetch_managed_kimi_code_models(
+    access_token: &str,
+    base_url: Option<&str>,
+    headers: Option<&IndexMap<String, String>>,
+    credential_kind: CredentialKind,
+) -> Result<Vec<ManagedKimiCodeModelInfo>, ManagedModelsError> {
+    let base_url = base_url
+        .map_or_else(kimi_code_base_url, str::to_owned)
+        .trim_end_matches('/')
+        .to_owned();
+    let environment = std::env::vars().collect::<HashMap<_, _>>();
+    let custom_headers = parse_kimi_code_custom_headers(&environment);
+    let request_headers = build_model_headers(
+        access_token,
+        &custom_headers,
+        headers.unwrap_or(&IndexMap::new()),
+    )?;
+    let response = reqwest::Client::new()
+        .get(format!("{base_url}/models"))
+        .headers(request_headers)
+        .send()
+        .await
+        .map_err(ManagedModelsError::Request)?;
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let fallback = format!("Failed to list Kimi Code models (HTTP {status}).");
+        let message = read_api_error_message(response, &fallback).await;
+        if matches!(status, 401..=403) {
+            return Err(ManagedModelsError::Unauthorized {
+                status,
+                base_url,
+                message,
+                credential_kind,
+            });
+        }
+        return Err(ManagedModelsError::Api(message));
+    }
+    let payload = response
+        .json::<Value>()
+        .await
+        .map_err(ManagedModelsError::Json)?;
+    let Some(data) = payload.get("data").and_then(Value::as_array) else {
+        return Err(ManagedModelsError::UnexpectedResponse(format!(
+            "Unexpected models response for {base_url}."
+        )));
+    };
+    data.iter()
+        .filter_map(|item| match parse_model_info(item, "Kimi Code model") {
+            Ok(Some(model)) => Some(Ok(model)),
+            Ok(None) => None,
+            Err(error) => Some(Err(ManagedModelsError::Model(error))),
+        })
+        .collect()
+}
+
+fn build_model_headers(
+    access_token: &str,
+    custom_headers: &IndexMap<String, String>,
+    supplied_headers: &IndexMap<String, String>,
+) -> Result<reqwest::header::HeaderMap, ManagedModelsError> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    for source in [custom_headers, supplied_headers] {
+        for (name, value) in source {
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|error| ManagedModelsError::InvalidHeader(error.to_string()))?;
+            let value = reqwest::header::HeaderValue::from_str(value)
+                .map_err(|error| ManagedModelsError::InvalidHeader(error.to_string()))?;
+            headers.insert(name, value);
+        }
+    }
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_str(&format!("Bearer {access_token}"))
+            .map_err(|error| ManagedModelsError::InvalidHeader(error.to_string()))?,
+    );
+    headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    Ok(headers)
+}
+
 fn js_positive_integer(value: Option<&Value>) -> Option<u64> {
     let number = match value? {
         Value::Number(number) => number.as_f64()?,
@@ -172,6 +338,13 @@ fn js_boolean(value: Option<&Value>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{Arc, Mutex},
+        thread,
+    };
+
     use super::*;
 
     #[test]
@@ -284,5 +457,128 @@ mod tests {
                 "Kimi Code model \"bad\" must include a positive context_length."
             );
         }
+    }
+
+    fn fake_models_server(
+        status: u16,
+        body: &str,
+    ) -> (String, Arc<Mutex<String>>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind models server");
+        let address = listener.local_addr().expect("models server address");
+        let request = Arc::new(Mutex::new(String::new()));
+        let recorded = Arc::clone(&request);
+        let body = body.to_owned();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept models request");
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            loop {
+                let count = stream.read(&mut buffer).expect("read models request");
+                if count == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..count]);
+                if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            *recorded.lock().expect("request lock") = String::from_utf8_lossy(&bytes).into_owned();
+            let response = format!(
+                "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write models response");
+        });
+        (format!("http://{address}/coding/v1"), request, handle)
+    }
+
+    #[test]
+    fn model_headers_follow_custom_supplied_and_auth_override_order() {
+        let custom = IndexMap::from([
+            ("X-Test".to_owned(), "custom".to_owned()),
+            ("Authorization".to_owned(), "wrong".to_owned()),
+        ]);
+        let supplied = IndexMap::from([
+            ("x-test".to_owned(), "supplied".to_owned()),
+            ("Accept".to_owned(), "text/plain".to_owned()),
+        ]);
+        let headers = build_model_headers("right", &custom, &supplied).expect("headers");
+        assert_eq!(headers["x-test"], "supplied");
+        assert_eq!(headers[reqwest::header::AUTHORIZATION], "Bearer right");
+        assert_eq!(headers[reqwest::header::ACCEPT], "application/json");
+    }
+
+    #[tokio::test]
+    async fn fetches_and_parses_managed_models() {
+        let (base_url, request, handle) = fake_models_server(
+            200,
+            r#"{"data":[{"id":"kimi-for-coding","context_length":262144,"supports_reasoning":true,"supports_image_in":true,"think_efforts":{"support":true,"valid_efforts":["low","high"],"default_effort":"high"}},{"bad":true}]}"#,
+        );
+        let models = fetch_managed_kimi_code_models(
+            "oauth-token",
+            Some(&base_url),
+            None,
+            CredentialKind::OAuth,
+        )
+        .await
+        .expect("models");
+        handle.join().expect("models server thread");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].context_length, 262_144);
+        assert_eq!(
+            models[0].support_efforts,
+            Some(vec!["low".to_owned(), "high".to_owned()])
+        );
+        let request = request.lock().expect("request lock").to_ascii_lowercase();
+        assert!(request.starts_with("get /coding/v1/models http/1.1"));
+        assert!(request.contains("authorization: bearer oauth-token"));
+    }
+
+    #[tokio::test]
+    async fn classifies_auth_statuses_with_credential_specific_messages() {
+        for (status, kind, credential_text) in [
+            (401, CredentialKind::OAuth, "OAuth credentials"),
+            (402, CredentialKind::ApiKey, "the API key"),
+            (403, CredentialKind::OAuth, "OAuth credentials"),
+        ] {
+            let (base_url, _, handle) =
+                fake_models_server(status, r#"{"error":{"message":"membership rejected"}}"#);
+            let error = fetch_managed_kimi_code_models("token", Some(&base_url), None, kind)
+                .await
+                .expect_err("auth error");
+            handle.join().expect("models server thread");
+            assert!(error.is_unauthorized());
+            assert_eq!(error.status(), Some(status));
+            assert_eq!(error.base_url(), Some(base_url.as_str()));
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "Kimi Code models endpoint {base_url} rejected {credential_text}: membership rejected"
+                )
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn surfaces_non_auth_api_errors_and_shape_failures() {
+        let (base_url, _, handle) =
+            fake_models_server(429, r#"{"error":{"message":"quota exceeded"}}"#);
+        let error =
+            fetch_managed_kimi_code_models("token", Some(&base_url), None, CredentialKind::OAuth)
+                .await
+                .expect_err("quota error");
+        handle.join().expect("models server thread");
+        assert!(!error.is_unauthorized());
+        assert_eq!(error.to_string(), "quota exceeded");
+
+        let (base_url, _, handle) = fake_models_server(200, r#"{}"#);
+        let error =
+            fetch_managed_kimi_code_models("token", Some(&base_url), None, CredentialKind::OAuth)
+                .await
+                .expect_err("shape error");
+        handle.join().expect("models server thread");
+        assert!(error.to_string().contains("Unexpected models response"));
     }
 }
