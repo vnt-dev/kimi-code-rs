@@ -1,4 +1,11 @@
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+    },
+};
 
 use regex::Regex;
 use unicode_segmentation::UnicodeSegmentation;
@@ -10,7 +17,12 @@ use crate::tui::{
     utils::printable_key::{is_printable_char, printable_char},
 };
 
-use super::file_mention_provider::InputMode;
+use super::{
+    file_mention_provider::{
+        AutocompleteItem, AutocompleteSuggestions, FileMentionProvider, InputMode,
+    },
+    wrapping_select_list::{SelectItem, SelectListLayout, SelectListTheme, WrappingSelectList},
+};
 
 const CAPS_LOCK_BIT: u32 = 64;
 const CTRL_BIT: u32 = 4;
@@ -19,6 +31,60 @@ const EDITOR_LEFT_PADDING: usize = 4;
 const CURSOR_BLOCK: &str = "\u{1b}[7m \u{1b}[0m";
 
 type HistoryFilter = dyn Fn(&str) -> bool + Send + Sync;
+
+pub struct AutocompleteRequest {
+    request_id: u64,
+    snapshot_lines: Vec<String>,
+    snapshot_cursor_line: usize,
+    snapshot_cursor_col: usize,
+    force: bool,
+    explicit_tab: bool,
+    provider: Arc<FileMentionProvider>,
+    cancelled: Arc<AtomicBool>,
+}
+
+pub struct AutocompleteResponse {
+    request_id: u64,
+    snapshot_lines: Vec<String>,
+    snapshot_cursor_line: usize,
+    snapshot_cursor_col: usize,
+    force: bool,
+    explicit_tab: bool,
+    cancelled: Arc<AtomicBool>,
+    suggestions: Option<AutocompleteSuggestions>,
+}
+
+impl AutocompleteRequest {
+    pub async fn run(self) -> AutocompleteResponse {
+        let suggestions = self
+            .provider
+            .get_suggestions(
+                &self.snapshot_lines,
+                self.snapshot_cursor_line,
+                self.snapshot_cursor_col,
+                self.force,
+                Arc::clone(&self.cancelled),
+            )
+            .await;
+        AutocompleteResponse {
+            request_id: self.request_id,
+            snapshot_lines: self.snapshot_lines,
+            snapshot_cursor_line: self.snapshot_cursor_line,
+            snapshot_cursor_col: self.snapshot_cursor_col,
+            force: self.force,
+            explicit_tab: self.explicit_tab,
+            cancelled: self.cancelled,
+            suggestions,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutocompleteAccept {
+    NotAccepted,
+    Applied,
+    Submitted(String),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditorBufferState {
@@ -56,6 +122,13 @@ pub struct CustomEditor {
     bracket_paste_buffer: Option<String>,
     autocomplete_showing: bool,
     autocomplete_request_pending: bool,
+    autocomplete_provider: Option<Arc<FileMentionProvider>>,
+    autocomplete_list: Option<WrappingSelectList>,
+    autocomplete_prefix: String,
+    autocomplete_force: bool,
+    autocomplete_cancel: Option<Arc<AtomicBool>>,
+    autocomplete_request_id: u64,
+    autocomplete_max_visible: usize,
     terminal_rows: usize,
     scroll_offset: usize,
     focused: bool,
@@ -82,6 +155,13 @@ impl Default for CustomEditor {
             bracket_paste_buffer: None,
             autocomplete_showing: false,
             autocomplete_request_pending: false,
+            autocomplete_provider: None,
+            autocomplete_list: None,
+            autocomplete_prefix: String::new(),
+            autocomplete_force: false,
+            autocomplete_cancel: None,
+            autocomplete_request_id: 0,
+            autocomplete_max_visible: 5,
             terminal_rows: 24,
             scroll_offset: 0,
             focused: false,
@@ -129,6 +209,128 @@ impl CustomEditor {
     pub fn set_autocomplete_activity(&mut self, showing: bool, request_pending: bool) {
         self.autocomplete_showing = showing;
         self.autocomplete_request_pending = request_pending;
+    }
+
+    pub fn set_autocomplete_provider(&mut self, provider: Arc<FileMentionProvider>) {
+        self.cancel_autocomplete();
+        self.autocomplete_provider = Some(provider);
+    }
+
+    pub fn set_autocomplete_max_visible(&mut self, max_visible: usize) {
+        self.autocomplete_max_visible = max_visible.clamp(3, 20);
+    }
+
+    /// Captures a request without holding `&mut CustomEditor` across I/O.
+    /// The host may spawn `AutocompleteRequest::run()` and later feed its
+    /// response to `finish_autocomplete_request()` on the TUI task.
+    pub fn begin_autocomplete_request(
+        &mut self,
+        force: bool,
+        explicit_tab: bool,
+    ) -> Option<AutocompleteRequest> {
+        let provider = Arc::clone(self.autocomplete_provider.as_ref()?);
+        if let Some(cancelled) = self.autocomplete_cancel.take() {
+            cancelled.store(true, AtomicOrdering::Relaxed);
+        }
+        self.autocomplete_request_id = self.autocomplete_request_id.wrapping_add(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.autocomplete_cancel = Some(Arc::clone(&cancelled));
+        self.autocomplete_request_pending = true;
+        Some(AutocompleteRequest {
+            request_id: self.autocomplete_request_id,
+            snapshot_lines: self.state.lines.clone(),
+            snapshot_cursor_line: self.state.cursor_line,
+            snapshot_cursor_col: self.state.cursor_col,
+            force,
+            explicit_tab,
+            provider,
+            cancelled,
+        })
+    }
+
+    /// Applies a completed request only when its buffer/cursor snapshot is
+    /// still current. Stale and cancelled results are ignored.
+    pub fn finish_autocomplete_request(&mut self, response: AutocompleteResponse) -> bool {
+        if response.cancelled.load(AtomicOrdering::Relaxed)
+            || response.request_id != self.autocomplete_request_id
+        {
+            return false;
+        }
+        if response.snapshot_lines != self.state.lines
+            || response.snapshot_cursor_line != self.state.cursor_line
+            || response.snapshot_cursor_col != self.state.cursor_col
+        {
+            self.autocomplete_request_pending = false;
+            self.autocomplete_cancel = None;
+            return false;
+        }
+        self.autocomplete_request_pending = false;
+        self.autocomplete_cancel = None;
+        let Some(suggestions) = response.suggestions.filter(|value| !value.items.is_empty()) else {
+            self.clear_autocomplete_ui();
+            return true;
+        };
+        if response.force && response.explicit_tab && suggestions.items.len() == 1 {
+            let item = suggestions.items[0].clone();
+            self.apply_completion_item(&item, &suggestions.prefix);
+            self.clear_autocomplete_ui();
+            return true;
+        }
+        self.apply_autocomplete_suggestions(suggestions, response.force);
+        true
+    }
+
+    pub fn cancel_autocomplete(&mut self) {
+        if let Some(cancelled) = self.autocomplete_cancel.take() {
+            cancelled.store(true, AtomicOrdering::Relaxed);
+        }
+        self.autocomplete_request_id = self.autocomplete_request_id.wrapping_add(1);
+        self.autocomplete_request_pending = false;
+        self.clear_autocomplete_ui();
+    }
+
+    pub fn move_autocomplete_up(&mut self) -> bool {
+        let Some(list) = &mut self.autocomplete_list else {
+            return false;
+        };
+        list.move_up();
+        true
+    }
+
+    pub fn move_autocomplete_down(&mut self) -> bool {
+        let Some(list) = &mut self.autocomplete_list else {
+            return false;
+        };
+        list.move_down();
+        true
+    }
+
+    pub fn accept_autocomplete(&mut self, submit_slash: bool) -> AutocompleteAccept {
+        let Some(selected) = self
+            .autocomplete_list
+            .as_ref()
+            .and_then(WrappingSelectList::selected)
+            .cloned()
+        else {
+            return AutocompleteAccept::NotAccepted;
+        };
+        let label = selected
+            .label
+            .clone()
+            .unwrap_or_else(|| selected.value.clone());
+        let item = AutocompleteItem {
+            value: selected.value,
+            label,
+            description: selected.description,
+        };
+        let prefix = self.autocomplete_prefix.clone();
+        self.apply_completion_item(&item, &prefix);
+        self.cancel_autocomplete();
+        if submit_slash && prefix.starts_with('/') {
+            AutocompleteAccept::Submitted(self.submit_value())
+        } else {
+            AutocompleteAccept::Applied
+        }
     }
 
     pub fn set_terminal_rows(&mut self, rows: usize) {
@@ -458,6 +660,19 @@ impl CustomEditor {
             return outcome;
         }
 
+        if self.autocomplete_showing && !self.text().is_empty() {
+            if matches_editor_key(&normalized, EditorKey::Up) {
+                self.move_autocomplete_up();
+                outcome.consumed = true;
+                return outcome;
+            }
+            if matches_editor_key(&normalized, EditorKey::Down) {
+                self.move_autocomplete_down();
+                outcome.consumed = true;
+                return outcome;
+            }
+        }
+
         if matches_editor_key(&normalized, EditorKey::Up) && self.text().is_empty() {
             outcome
                 .actions
@@ -474,8 +689,7 @@ impl CustomEditor {
         }
         if is_escape {
             if self.autocomplete_showing || self.autocomplete_request_pending {
-                self.autocomplete_showing = false;
-                self.autocomplete_request_pending = false;
+                self.cancel_autocomplete();
                 outcome.actions.push(EditorAction::AutocompleteCancelled);
             } else {
                 outcome.actions.push(EditorAction::Escape);
@@ -485,7 +699,18 @@ impl CustomEditor {
         }
         if matches_editor_key(&normalized, EditorKey::Tab) {
             if self.autocomplete_showing {
-                outcome.actions.push(EditorAction::AcceptAutocomplete);
+                self.accept_autocomplete(false);
+            }
+            outcome.consumed = true;
+            return outcome;
+        }
+
+        if matches_editor_key(&normalized, EditorKey::Enter) && self.autocomplete_showing {
+            match self.accept_autocomplete(true) {
+                AutocompleteAccept::Submitted(text) => {
+                    outcome.actions.push(EditorAction::Submit(text));
+                }
+                AutocompleteAccept::Applied | AutocompleteAccept::NotAccepted => {}
             }
             outcome.consumed = true;
             return outcome;
@@ -501,6 +726,9 @@ impl CustomEditor {
             return outcome;
         }
 
+        let autocomplete_update_force =
+            self.autocomplete_showing.then_some(self.autocomplete_force);
+        let state_before_input = self.state.clone();
         if matches_editor_key(&normalized, EditorKey::Backspace) {
             self.delete_backward();
         } else if matches_editor_key(&normalized, EditorKey::Delete) {
@@ -522,13 +750,26 @@ impl CustomEditor {
             outcome.actions.push(EditorAction::Submit(submitted));
         } else if is_printable_char(&printable) {
             self.insert_text_at_cursor(&printable);
-            self.append_autocomplete_request(&mut outcome.actions, &printable);
+            if autocomplete_update_force.is_none() {
+                self.append_autocomplete_request(&mut outcome.actions, &printable);
+            }
         } else if normalized.chars().count() > 1 && !normalized.starts_with('\u{1b}') {
             let empty_prompt = self.input_mode == InputMode::Prompt && self.text().is_empty();
             self.insert_paste(&normalized);
             self.enter_bash_from_pasted_bang(empty_prompt, &mut outcome.actions);
         } else {
             return outcome;
+        }
+        if self.state != state_before_input
+            && let Some(force) = autocomplete_update_force
+            && !outcome
+                .actions
+                .iter()
+                .any(|action| matches!(action, EditorAction::RequestAutocomplete { .. }))
+        {
+            outcome
+                .actions
+                .push(EditorAction::RequestAutocomplete { force });
         }
         outcome.consumed = true;
         outcome
@@ -848,6 +1089,13 @@ impl CustomEditor {
             lines.push(paint_border(&"─".repeat(width)));
         }
 
+        if let Some(list) = &mut self.autocomplete_list {
+            for line in list.render(content_width) {
+                let padding = " ".repeat(content_width.saturating_sub(visible_width(&line)));
+                lines.push(format!("{left_padding}{line}{padding}{right_padding}"));
+            }
+        }
+
         let first_content_index = 1;
         let is_bash = self.input_mode == InputMode::Bash;
         if !is_bash
@@ -913,6 +1161,99 @@ impl CustomEditor {
         } else {
             Some(format!(" {hint}"))
         }
+    }
+
+    fn clear_autocomplete_ui(&mut self) {
+        self.autocomplete_showing = false;
+        self.autocomplete_list = None;
+        self.autocomplete_prefix.clear();
+    }
+
+    fn apply_autocomplete_suggestions(
+        &mut self,
+        suggestions: AutocompleteSuggestions,
+        force: bool,
+    ) {
+        let selected_index = best_autocomplete_match_index(&suggestions.items, &suggestions.prefix);
+        let slash_menu = suggestions.prefix.starts_with('/');
+        let items = suggestions
+            .items
+            .into_iter()
+            .map(|item| SelectItem {
+                value: item.value,
+                label: Some(item.label),
+                description: item.description,
+            })
+            .collect();
+        let layout = if slash_menu {
+            SelectListLayout {
+                min_primary_column_width: Some(12),
+                max_primary_column_width: Some(32),
+            }
+        } else {
+            SelectListLayout::default()
+        };
+        let mut list = WrappingSelectList::new(
+            items,
+            self.autocomplete_max_visible,
+            autocomplete_select_theme(),
+            layout,
+        );
+        if let Some(index) = selected_index {
+            list.set_selected_index(index);
+        }
+        self.autocomplete_prefix = suggestions.prefix;
+        self.autocomplete_force = force;
+        self.autocomplete_list = Some(list);
+        self.autocomplete_showing = true;
+    }
+
+    fn apply_completion_item(&mut self, item: &AutocompleteItem, prefix: &str) -> bool {
+        let Some(provider) = self.autocomplete_provider.as_ref() else {
+            return false;
+        };
+        let edit = provider.apply_completion(
+            &self.state.lines,
+            self.state.cursor_line,
+            self.state.cursor_col,
+            item,
+            prefix,
+        );
+        self.push_undo_snapshot();
+        self.state.lines = edit.lines;
+        self.state.cursor_line = edit
+            .cursor_line
+            .min(self.state.lines.len().saturating_sub(1));
+        self.state.cursor_col = edit
+            .cursor_col
+            .min(line_char_count(&self.state.lines[self.state.cursor_line]));
+        self.exit_history_browsing();
+        true
+    }
+}
+
+fn best_autocomplete_match_index(items: &[AutocompleteItem], prefix: &str) -> Option<usize> {
+    if prefix.is_empty() {
+        return None;
+    }
+    let mut first_prefix = None;
+    for (index, item) in items.iter().enumerate() {
+        if item.value == prefix {
+            return Some(index);
+        }
+        if first_prefix.is_none() && item.value.starts_with(prefix) {
+            first_prefix = Some(index);
+        }
+    }
+    first_prefix
+}
+
+fn autocomplete_select_theme() -> SelectListTheme {
+    SelectListTheme {
+        selected_text: Arc::new(|text| current_theme().fg(ColorToken::Primary, text)),
+        description: Arc::new(|text| current_theme().fg(ColorToken::TextMuted, text)),
+        scroll_info: Arc::new(|text| current_theme().fg(ColorToken::TextMuted, text)),
+        no_match: Arc::new(|text| current_theme().fg(ColorToken::TextMuted, text)),
     }
 }
 
@@ -1139,7 +1480,6 @@ pub enum EditorAction {
     PasteImage,
     InputModeChanged(InputMode),
     AutocompleteCancelled,
-    AcceptAutocomplete,
     RequestAutocomplete { force: bool },
     Submit(String),
 }
@@ -1577,6 +1917,30 @@ fn sgr_end(text: &str, start: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::components::editor::file_mention_provider::{
+        SlashAutocompleteCommand, SlashCommandMetadata,
+    };
+
+    fn test_autocomplete_provider() -> Arc<FileMentionProvider> {
+        let commands = ["help", "goal"]
+            .into_iter()
+            .map(|name| {
+                SlashAutocompleteCommand::new(SlashCommandMetadata {
+                    name: name.to_owned(),
+                    aliases: Vec::new(),
+                    description: Some(format!("{name} command")),
+                    argument_hint: None,
+                })
+            })
+            .collect();
+        Arc::new(FileMentionProvider::new(
+            commands,
+            std::path::PathBuf::from("."),
+            None,
+            Vec::new(),
+            Arc::new(|| InputMode::Prompt),
+        ))
+    }
 
     #[test]
     fn normalizes_caps_locked_ctrl_kitty_sequences() {
@@ -1951,11 +2315,135 @@ mod tests {
         editor.set_autocomplete_activity(true, false);
         assert_eq!(
             editor.handle_input_event("\t").actions,
+            [EditorAction::NonEscapeInput]
+        );
+    }
+
+    #[tokio::test]
+    async fn async_autocomplete_request_renders_moves_and_applies_selection() {
+        let mut editor = CustomEditor::new();
+        editor.set_autocomplete_provider(test_autocomplete_provider());
+        editor.set_text("/");
+        let response = editor
+            .begin_autocomplete_request(false, false)
+            .expect("provider")
+            .run()
+            .await;
+        assert!(editor.finish_autocomplete_request(response));
+        assert!(editor.is_showing_autocomplete());
+
+        let rendered = editor.render_editor(60);
+        assert!(rendered.iter().any(|line| strip_sgr(line).contains("help")));
+        assert!(rendered.iter().any(|line| strip_sgr(line).contains("goal")));
+        assert!(rendered.iter().all(|line| visible_width(line) == 60));
+
+        let down = editor.handle_input_event("\u{1b}[B");
+        assert_eq!(down.actions, [EditorAction::NonEscapeInput]);
+        let tab = editor.handle_input_event("\t");
+        assert_eq!(tab.actions, [EditorAction::NonEscapeInput]);
+        assert_eq!(editor.text(), "/goal ");
+        assert!(!editor.is_showing_autocomplete());
+    }
+
+    #[tokio::test]
+    async fn enter_accepts_slash_completion_and_submits_it() {
+        let mut editor = CustomEditor::new();
+        editor.set_autocomplete_provider(test_autocomplete_provider());
+        editor.set_text("/h");
+        let response = editor
+            .begin_autocomplete_request(false, false)
+            .expect("provider")
+            .run()
+            .await;
+        assert!(editor.finish_autocomplete_request(response));
+
+        let enter = editor.handle_input_event("\r");
+        assert_eq!(
+            enter.actions,
             [
                 EditorAction::NonEscapeInput,
-                EditorAction::AcceptAutocomplete
+                EditorAction::Submit("/help".to_owned())
             ]
         );
+        assert_eq!(editor.text(), "");
+    }
+
+    #[tokio::test]
+    async fn stale_and_cancelled_autocomplete_results_do_not_replace_ui() {
+        let mut editor = CustomEditor::new();
+        editor.set_autocomplete_provider(test_autocomplete_provider());
+        editor.set_text("/");
+        let request = editor
+            .begin_autocomplete_request(false, false)
+            .expect("provider");
+        editor.set_text("/changed");
+        let response = request.run().await;
+        assert!(!editor.finish_autocomplete_request(response));
+        assert!(!editor.autocomplete_request_pending);
+        assert!(!editor.is_showing_autocomplete());
+
+        editor.set_text("/");
+        let cancelled = editor
+            .begin_autocomplete_request(false, false)
+            .expect("provider");
+        editor.cancel_autocomplete();
+        assert!(!editor.finish_autocomplete_request(cancelled.run().await));
+        assert!(!editor.is_showing_autocomplete());
+    }
+
+    #[test]
+    fn open_autocomplete_refreshes_with_its_existing_request_mode() {
+        let mut editor = CustomEditor::new();
+        editor.set_autocomplete_provider(test_autocomplete_provider());
+        editor.set_text("path");
+        editor.apply_autocomplete_suggestions(
+            AutocompleteSuggestions {
+                prefix: "path".to_owned(),
+                items: vec![AutocompleteItem::new("path-one", "path-one")],
+            },
+            true,
+        );
+
+        let typed = editor.handle_input_event("x");
+        assert!(
+            typed
+                .actions
+                .contains(&EditorAction::RequestAutocomplete { force: true })
+        );
+        let moved = editor.handle_input_event("\u{1b}[D");
+        assert!(
+            moved
+                .actions
+                .contains(&EditorAction::RequestAutocomplete { force: true })
+        );
+    }
+
+    #[test]
+    fn explicit_forced_single_result_applies_without_opening_a_list() {
+        let mut editor = CustomEditor::new();
+        editor.set_autocomplete_provider(test_autocomplete_provider());
+        editor.set_text("fi");
+        let request = editor
+            .begin_autocomplete_request(true, true)
+            .expect("provider");
+        let response = AutocompleteResponse {
+            request_id: request.request_id,
+            snapshot_lines: request.snapshot_lines,
+            snapshot_cursor_line: request.snapshot_cursor_line,
+            snapshot_cursor_col: request.snapshot_cursor_col,
+            force: true,
+            explicit_tab: true,
+            cancelled: request.cancelled,
+            suggestions: Some(AutocompleteSuggestions {
+                prefix: "fi".to_owned(),
+                items: vec![AutocompleteItem::new("file.txt", "file.txt")],
+            }),
+        };
+        assert!(editor.finish_autocomplete_request(response));
+        assert_eq!(editor.text(), "file.txt");
+        assert!(!editor.is_showing_autocomplete());
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "fi");
     }
 
     #[test]
