@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -20,11 +21,19 @@ fn osc11_response_pattern() -> Option<&'static Regex> {
 ///   apps/kimi-code/src/tui/theme/terminal-background.ts
 ///   parseOsc11BackgroundTheme()
 pub fn parse_osc11_background_theme(data: &str) -> Option<ResolvedTheme> {
+    find_osc11_background_theme(data).map(|(_, theme)| theme)
+}
+
+pub(crate) fn find_osc11_background_theme(data: &str) -> Option<(Range<usize>, ResolvedTheme)> {
     let captures = osc11_response_pattern()?.captures(data)?;
-    Some(theme_from_hex_channels(
-        captures.get(1)?.as_str(),
-        captures.get(2)?.as_str(),
-        captures.get(3)?.as_str(),
+    let complete = captures.get(0)?;
+    Some((
+        complete.start()..complete.end(),
+        theme_from_hex_channels(
+            captures.get(1)?.as_str(),
+            captures.get(2)?.as_str(),
+            captures.get(3)?.as_str(),
+        ),
     ))
 }
 

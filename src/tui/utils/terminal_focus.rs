@@ -7,9 +7,10 @@ pub const TERMINAL_FOCUS_OUT: &str = "\u{1b}[O";
 pub const ENABLE_TERMINAL_FOCUS_REPORTING: &str = "\u{1b}[?1004h";
 pub const DISABLE_TERMINAL_FOCUS_REPORTING: &str = "\u{1b}[?1004l";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalInputResult {
     Consume,
+    Data(String),
 }
 
 pub type TerminalInputListener = Box<dyn FnMut(&str) -> Option<TerminalInputResult>>;

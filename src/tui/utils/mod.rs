@@ -10,4 +10,5 @@ pub mod shell_output;
 pub mod tab_strip;
 pub mod terminal_focus;
 pub mod terminal_notification;
+pub mod terminal_theme;
 pub mod thinking_config;
