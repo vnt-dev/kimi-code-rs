@@ -17,6 +17,7 @@ pub mod permission_selector;
 pub mod platform_selector;
 pub mod plugin_confirm;
 pub mod plugin_mcp_selector;
+pub mod plugins_panel;
 pub mod provider_manager;
 pub mod question_dialog;
 pub mod session_picker;
@@ -68,6 +69,10 @@ pub use plugin_confirm::{
 };
 pub use plugin_mcp_selector::{
     PluginMcpSelection, PluginMcpSelectorComponent, PluginMcpSelectorOptions,
+};
+pub use plugins_panel::{
+    PluginsMarketStatus, PluginsPanelComponent, PluginsPanelOptions, PluginsPanelSelection,
+    PluginsPanelTabId,
 };
 pub use provider_manager::{ProviderManagerComponent, ProviderManagerOptions};
 pub use question_dialog::QuestionDialogComponent;
