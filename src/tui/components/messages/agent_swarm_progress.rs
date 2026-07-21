@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     sync::{Arc, LazyLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -7,7 +8,14 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use super::agent_swarm_progress_estimator::{
-    AgentSwarmProgressEstimator, AgentSwarmProgressEstimatorPhase,
+    AgentSwarmProgressEstimateInput, AgentSwarmProgressEstimator, AgentSwarmProgressEstimatorPhase,
+};
+use crate::tui::{
+    components::{
+        Component, ComponentRole,
+        render::{truncate_to_width, visible_width},
+    },
+    theme::{ColorToken, current_theme},
 };
 
 const TEXT_CELL_PREFERRED_WIDTH: usize = 30;
@@ -17,6 +25,15 @@ const BRAILLE_BAR_MAX_WIDTH: usize = 8;
 const MIN_LABEL_WIDTH: usize = 9;
 const COMPACT_TERMINAL_MARK_WIDTH: usize = 1;
 const AGENT_SWARM_NON_GRID_LINES: usize = 6;
+const BRAILLE_EMPTY: &str = "⠀";
+const BRAILLE_LEVELS: [&str; 7] = ["⡀", "⡄", "⡆", "⡇", "⣇", "⣧", "⣷"];
+const COMPLETE_FILL_MS: f64 = 360.0;
+const CELL_GAP: &str = "  ";
+const LEFT_INDENT: &str = " ";
+const RIGHT_GAP: usize = 1;
+const SUCCESS_MARK: &str = "✓";
+const FAILURE_MARK: &str = "✗";
+const CANCELLED_MARK: &str = "◇";
 
 static PARTIAL_ITEMS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#""items"\s*:\s*\["#).expect("partial AgentSwarm items regex must compile")
@@ -444,6 +461,7 @@ fn parse_agent_swarm_failure_text(block: &str) -> Option<String> {
 pub struct AgentSwarmProgressOptions {
     pub description: String,
     pub request_render: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub available_grid_height: Option<Arc<dyn Fn() -> Option<usize> + Send + Sync>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -486,6 +504,7 @@ pub struct AgentSwarmProgressComponent {
     progress_estimator: AgentSwarmProgressEstimator,
     description: String,
     request_render: Option<Arc<dyn Fn() + Send + Sync>>,
+    available_grid_height: Option<Arc<dyn Fn() -> Option<usize> + Send + Sync>>,
     input_complete: bool,
     failed: bool,
     aborted: bool,
@@ -502,6 +521,7 @@ impl AgentSwarmProgressComponent {
             progress_estimator: AgentSwarmProgressEstimator::default(),
             description: options.description,
             request_render: options.request_render,
+            available_grid_height: options.available_grid_height,
             input_complete: false,
             failed: false,
             aborted: false,
@@ -945,6 +965,578 @@ impl AgentSwarmProgressComponent {
             | AgentSwarmProgressEstimatorPhase::Cancelled => "Aborted.".to_owned(),
         });
     }
+
+    fn render_panel(&mut self, width: usize) -> Vec<String> {
+        let outer_width = width.max(1);
+        let inner_width = outer_width
+            .saturating_sub(visible_width(LEFT_INDENT))
+            .saturating_sub(RIGHT_GAP)
+            .max(1);
+        let mut lines = vec![
+            String::new(),
+            self.render_header(inner_width),
+            String::new(),
+        ];
+        if !self.members.is_empty() {
+            lines.extend(self.render_grid(inner_width, now_ms()));
+            lines.push(String::new());
+        }
+        lines.push(self.render_status_line(inner_width));
+        lines.push(String::new());
+        lines
+            .into_iter()
+            .map(|line| {
+                let content = truncate_to_width(&line, inner_width, "", false);
+                truncate_to_width(&format!("{LEFT_INDENT}{content}"), outer_width, "", false)
+            })
+            .collect()
+    }
+
+    fn render_header(&self, width: usize) -> String {
+        let theme = current_theme();
+        if width <= 3 {
+            return theme.fg(ColorToken::Primary, &"─".repeat(width));
+        }
+        let description = if self.description.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "{}{}",
+                theme.fg(ColorToken::Primary, " ─ "),
+                theme.fg(ColorToken::Text, &self.description)
+            )
+        };
+        let prefix = theme.fg(ColorToken::Primary, "─ ");
+        let title = theme.fg(ColorToken::Accent, "Agent Swarm");
+        let label = truncate_to_width(
+            &format!("{title}{description}"),
+            width.saturating_sub(visible_width(&prefix) + 1).max(1),
+            "…",
+            false,
+        );
+        let suffix_width = width.saturating_sub(visible_width(&prefix) + visible_width(&label));
+        let suffix = if suffix_width == 0 {
+            String::new()
+        } else {
+            format!(" {}", "─".repeat(suffix_width.saturating_sub(1)))
+        };
+        format!("{prefix}{label}{}", theme.fg(ColorToken::Primary, &suffix))
+    }
+
+    fn render_status_line(&self, width: usize) -> String {
+        let status = total_status(&self.members, self.failed, self.aborted);
+        let prefix = if self.tool_call_active {
+            self.activity_spinner_text()
+        } else {
+            Some(terminal_activity_prefix(status))
+        }
+        .unwrap_or_default();
+        let content_width = width.saturating_sub(visible_width(&prefix));
+        let content = if status == TotalStatus::Working && !self.input_complete {
+            self.render_orchestrating_status_line(content_width)
+        } else {
+            self.render_progress_status_line(content_width, status)
+        };
+        truncate_to_width(&format!("{prefix}{content}"), width, "", false)
+    }
+
+    fn render_orchestrating_status_line(&self, width: usize) -> String {
+        let theme = current_theme();
+        if self.items_started {
+            return truncate_to_width(
+                &format!(" {}", theme.fg(ColorToken::Primary, "Orchestrating...")),
+                width,
+                "",
+                false,
+            );
+        }
+        let prompt = collapse_whitespace(&self.prompt_template_text);
+        let label_text = if prompt.is_empty() {
+            "Orchestrating..."
+        } else {
+            "Prompting..."
+        };
+        let label = format!(" {}", theme.fg(ColorToken::Primary, label_text));
+        if prompt.is_empty() || visible_width(&label) >= width {
+            return truncate_to_width(&label, width, "", false);
+        }
+        let prompt_width = width.saturating_sub(visible_width(&label) + 2 + 1);
+        if prompt_width == 0 {
+            return truncate_to_width(&label, width, "", false);
+        }
+        let prompt = truncate_start_to_width(&prompt, prompt_width);
+        truncate_to_width(
+            &format!("{label}  {}", theme.fg(ColorToken::TextDim, &prompt)),
+            width,
+            "",
+            false,
+        )
+    }
+
+    fn render_progress_status_line(&self, width: usize, status: TotalStatus) -> String {
+        let theme = current_theme();
+        let color = total_status_color(status, &self.members);
+        let label = format!(" {}", theme.fg(color, total_status_label(status)));
+        if self.members.is_empty() {
+            return truncate_to_width(&label, width, "", false);
+        }
+        let bar_width = width.saturating_sub(visible_width(&label) + 2);
+        if bar_width == 0 {
+            return truncate_to_width(&label, width, "", false);
+        }
+        let bar = render_status_pip_bar(&self.members, bar_width);
+        truncate_to_width(&format!("{label}  {bar}"), width, "", false)
+    }
+
+    fn render_grid(&mut self, width: usize, now_ms: f64) -> Vec<String> {
+        let height = self
+            .available_grid_height
+            .as_ref()
+            .and_then(|provider| provider())
+            .map_or(f64::INFINITY, |height| height as f64);
+        let layout = calculate_agent_swarm_grid_layout(AgentSwarmGridLayoutInput {
+            width: width as f64,
+            height,
+            count: self.members.len() as f64,
+        });
+        let columns = layout.columns.max(1);
+        (0..layout.rows)
+            .map(|row| {
+                let cells = (0..columns)
+                    .filter_map(|column| {
+                        let index = row * columns + column;
+                        (index < self.members.len()).then(|| {
+                            let cell = self.render_cell(index, layout, now_ms);
+                            pad_ansi(&cell, layout.cell_width)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                truncate_to_width(&cells.join(CELL_GAP), width, "", false)
+            })
+            .collect()
+    }
+
+    fn render_cell(&mut self, index: usize, layout: AgentSwarmGridLayout, now_ms: f64) -> String {
+        let member = self.members[index].clone();
+        if member.phase == AgentSwarmProgressEstimatorPhase::Pending {
+            return render_pending_cell(&member, layout.cell_width);
+        }
+        if member.phase == AgentSwarmProgressEstimatorPhase::Cancelled && member.ticks == 0 {
+            return render_unstarted_cancelled_cell(&member, layout.cell_width);
+        }
+        if layout.render_text
+            && member.phase == AgentSwarmProgressEstimatorPhase::Queued
+            && member.ticks == 0
+        {
+            return render_queued_cell(&member, layout.cell_width);
+        }
+        let estimate_phase = if member.phase == AgentSwarmProgressEstimatorPhase::Pending {
+            AgentSwarmProgressEstimatorPhase::Queued
+        } else {
+            member.phase
+        };
+        let estimate = self
+            .progress_estimator
+            .estimate(&AgentSwarmProgressEstimateInput {
+                member_key: member.id.clone(),
+                phase: estimate_phase,
+                capacity_ticks: (layout.bar_cells * BRAILLE_LEVELS.len()) as f64,
+                now_ms,
+            });
+        let elapsed = terminal_phase_elapsed_ms(&member, now_ms);
+        let id = current_theme().fg(ColorToken::Primary, &member.id);
+        let bar = braille_bar(
+            estimate.display_ticks,
+            member.phase,
+            layout.bar_cells,
+            elapsed,
+        );
+        if !layout.render_text {
+            return format!("{id} {bar}{}", compact_terminal_mark(&member));
+        }
+        let prefix = format!("{id} {bar} ");
+        let label_width = layout
+            .cell_width
+            .saturating_sub(visible_width(&prefix))
+            .max(1);
+        format!("{prefix}{}", render_cell_label(&member, label_width))
+    }
+}
+
+impl Component for AgentSwarmProgressComponent {
+    fn render(&mut self, width: usize) -> Vec<String> {
+        self.render_panel(width)
+    }
+
+    fn invalidate(&mut self) {}
+
+    fn role(&self) -> ComponentRole {
+        ComponentRole::AgentSwarmProgress
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TotalStatus {
+    Working,
+    Completed,
+    Suspended,
+    Failed,
+    Aborted,
+}
+
+fn total_status(
+    members: &[AgentSwarmMember],
+    force_failed: bool,
+    force_aborted: bool,
+) -> TotalStatus {
+    if force_aborted {
+        return TotalStatus::Aborted;
+    }
+    let has_active = members.iter().any(|member| {
+        matches!(
+            member.phase,
+            AgentSwarmProgressEstimatorPhase::Pending
+                | AgentSwarmProgressEstimatorPhase::Queued
+                | AgentSwarmProgressEstimatorPhase::Suspended
+                | AgentSwarmProgressEstimatorPhase::Running
+        )
+    });
+    if !has_active && !members.is_empty() {
+        if members
+            .iter()
+            .any(|member| member.phase == AgentSwarmProgressEstimatorPhase::Cancelled)
+        {
+            return TotalStatus::Aborted;
+        }
+        if members
+            .iter()
+            .any(|member| member.phase == AgentSwarmProgressEstimatorPhase::Completed)
+        {
+            return TotalStatus::Completed;
+        }
+        return TotalStatus::Failed;
+    }
+    if force_failed {
+        return TotalStatus::Failed;
+    }
+    if members
+        .iter()
+        .any(|member| member.phase == AgentSwarmProgressEstimatorPhase::Suspended)
+        && !members
+            .iter()
+            .any(|member| member.phase == AgentSwarmProgressEstimatorPhase::Running)
+    {
+        return TotalStatus::Suspended;
+    }
+    TotalStatus::Working
+}
+
+fn total_status_label(status: TotalStatus) -> &'static str {
+    match status {
+        TotalStatus::Working => "Working...",
+        TotalStatus::Completed => "Completed.",
+        TotalStatus::Suspended => "Rate limited...",
+        TotalStatus::Failed => "Failed.",
+        TotalStatus::Aborted => "Aborted.",
+    }
+}
+
+fn total_status_color(status: TotalStatus, members: &[AgentSwarmMember]) -> ColorToken {
+    match status {
+        TotalStatus::Working
+            if !members
+                .iter()
+                .any(|member| member.phase == AgentSwarmProgressEstimatorPhase::Completed) =>
+        {
+            ColorToken::Primary
+        }
+        TotalStatus::Working | TotalStatus::Completed => ColorToken::Success,
+        TotalStatus::Suspended => ColorToken::TextDim,
+        TotalStatus::Failed => ColorToken::Error,
+        TotalStatus::Aborted => ColorToken::Warning,
+    }
+}
+
+fn terminal_activity_prefix(status: TotalStatus) -> String {
+    let (mark, color) = match status {
+        TotalStatus::Completed => (SUCCESS_MARK, ColorToken::Success),
+        TotalStatus::Failed => (FAILURE_MARK, ColorToken::Error),
+        TotalStatus::Aborted => (CANCELLED_MARK, ColorToken::Warning),
+        TotalStatus::Working | TotalStatus::Suspended => return "  ".to_owned(),
+    };
+    format!(" {}", current_theme().fg(color, mark))
+}
+
+fn render_status_pip_bar(members: &[AgentSwarmMember], width: usize) -> String {
+    let phases = [
+        AgentSwarmProgressEstimatorPhase::Completed,
+        AgentSwarmProgressEstimatorPhase::Running,
+        AgentSwarmProgressEstimatorPhase::Suspended,
+        AgentSwarmProgressEstimatorPhase::Queued,
+        AgentSwarmProgressEstimatorPhase::Pending,
+        AgentSwarmProgressEstimatorPhase::Cancelled,
+        AgentSwarmProgressEstimatorPhase::Failed,
+    ];
+    let counts = phases
+        .into_iter()
+        .filter_map(|phase| {
+            let count = members
+                .iter()
+                .filter(|member| member.phase == phase)
+                .count();
+            (count > 0).then_some((phase, count))
+        })
+        .collect::<Vec<_>>();
+    if counts.is_empty() {
+        return current_theme().fg(ColorToken::TextMuted, &"━".repeat(width.max(1)));
+    }
+    let segment_widths = allocate_segment_widths(
+        &counts.iter().map(|(_, count)| *count).collect::<Vec<_>>(),
+        width.max(1),
+    );
+    counts
+        .iter()
+        .zip(segment_widths)
+        .map(|((phase, _), segment_width)| {
+            current_theme().fg(phase_color(*phase), &"━".repeat(segment_width))
+        })
+        .collect()
+}
+
+fn allocate_segment_widths(counts: &[usize], width: usize) -> Vec<usize> {
+    let total = counts.iter().sum::<usize>();
+    if total == 0 || width == 0 {
+        return vec![0; counts.len()];
+    }
+    let mut widths = counts
+        .iter()
+        .map(|count| count * width / total)
+        .collect::<Vec<_>>();
+    let mut remaining = width.saturating_sub(widths.iter().sum());
+    let mut order = counts
+        .iter()
+        .enumerate()
+        .map(|(index, count)| (index, (count * width) % total))
+        .collect::<Vec<_>>();
+    order.sort_by(|(left_index, left), (right_index, right)| {
+        right.cmp(left).then(left_index.cmp(right_index))
+    });
+    for (index, _) in order {
+        if remaining == 0 {
+            break;
+        }
+        widths[index] += 1;
+        remaining -= 1;
+    }
+    widths
+}
+
+fn phase_color(phase: AgentSwarmProgressEstimatorPhase) -> ColorToken {
+    match phase {
+        AgentSwarmProgressEstimatorPhase::Completed => ColorToken::Success,
+        AgentSwarmProgressEstimatorPhase::Failed => ColorToken::Error,
+        AgentSwarmProgressEstimatorPhase::Cancelled => ColorToken::Warning,
+        AgentSwarmProgressEstimatorPhase::Running => ColorToken::Primary,
+        AgentSwarmProgressEstimatorPhase::Pending
+        | AgentSwarmProgressEstimatorPhase::Queued
+        | AgentSwarmProgressEstimatorPhase::Suspended => ColorToken::TextDim,
+    }
+}
+
+fn render_pending_cell(member: &AgentSwarmMember, width: usize) -> String {
+    let id = current_theme().fg(ColorToken::Primary, &member.id);
+    let prefix = format!("{id} ");
+    let label = if member.item_text.trim().is_empty() {
+        "Queued...".to_owned()
+    } else {
+        collapse_whitespace(&member.item_text)
+    };
+    let label = current_theme().fg(
+        ColorToken::TextDim,
+        &truncate_to_width(
+            &label,
+            width.saturating_sub(visible_width(&prefix)).max(1),
+            "…",
+            false,
+        ),
+    );
+    format!("{prefix}{label}")
+}
+
+fn render_queued_cell(member: &AgentSwarmMember, width: usize) -> String {
+    render_simple_cell_label(member, width, "Queued...", ColorToken::TextDim, "")
+}
+
+fn render_unstarted_cancelled_cell(member: &AgentSwarmMember, width: usize) -> String {
+    let label = member.cancelled_label_text.as_deref().unwrap_or("Aborted.");
+    render_simple_cell_label(member, width, label, ColorToken::Warning, CANCELLED_MARK)
+}
+
+fn render_simple_cell_label(
+    member: &AgentSwarmMember,
+    width: usize,
+    label: &str,
+    color: ColorToken,
+    mark: &str,
+) -> String {
+    let id = current_theme().fg(ColorToken::Primary, &member.id);
+    let prefix = format!("{id} ");
+    let label_width = width.saturating_sub(visible_width(&prefix)).max(1);
+    let text = truncate_to_width(&format!("{mark}{label}"), label_width, "…", false);
+    format!("{prefix}{}", current_theme().fg(color, &text))
+}
+
+fn render_cell_label(member: &AgentSwarmMember, width: usize) -> String {
+    let latest = latest_non_empty_line(&member.latest_model_text);
+    let (mark, text, color) = match member.phase {
+        AgentSwarmProgressEstimatorPhase::Pending | AgentSwarmProgressEstimatorPhase::Queued => {
+            ("", "Queued...".to_owned(), ColorToken::TextDim)
+        }
+        AgentSwarmProgressEstimatorPhase::Suspended => {
+            ("", "Rate limited...".to_owned(), ColorToken::TextDim)
+        }
+        AgentSwarmProgressEstimatorPhase::Running => (
+            "",
+            if latest.is_empty() {
+                "Running".to_owned()
+            } else {
+                latest
+            },
+            ColorToken::TextDim,
+        ),
+        AgentSwarmProgressEstimatorPhase::Completed => (
+            SUCCESS_MARK,
+            member
+                .completed_text
+                .clone()
+                .filter(|text| !text.is_empty())
+                .unwrap_or(latest),
+            ColorToken::Success,
+        ),
+        AgentSwarmProgressEstimatorPhase::Failed => (
+            FAILURE_MARK,
+            member
+                .failure_text
+                .clone()
+                .unwrap_or_else(|| "Failed".to_owned()),
+            ColorToken::Error,
+        ),
+        AgentSwarmProgressEstimatorPhase::Cancelled => (
+            CANCELLED_MARK,
+            member
+                .cancelled_label_text
+                .clone()
+                .unwrap_or_else(|| "Aborted.".to_owned()),
+            ColorToken::Warning,
+        ),
+    };
+    let label = if text.is_empty() {
+        mark.to_owned()
+    } else {
+        format!(
+            "{mark}{}",
+            if mark.is_empty() {
+                text
+            } else {
+                format!(" {text}")
+            }
+        )
+    };
+    current_theme().fg(color, &truncate_to_width(&label, width, "…", false))
+}
+
+fn compact_terminal_mark(member: &AgentSwarmMember) -> String {
+    let (mark, color) = match member.phase {
+        AgentSwarmProgressEstimatorPhase::Completed => (SUCCESS_MARK, ColorToken::Success),
+        AgentSwarmProgressEstimatorPhase::Failed => (FAILURE_MARK, ColorToken::Error),
+        AgentSwarmProgressEstimatorPhase::Cancelled => (CANCELLED_MARK, ColorToken::Warning),
+        _ => return String::new(),
+    };
+    current_theme().fg(color, mark)
+}
+
+fn braille_bar(
+    ticks: f64,
+    phase: AgentSwarmProgressEstimatorPhase,
+    width: usize,
+    phase_elapsed_ms: f64,
+) -> String {
+    let max_ticks = width * BRAILLE_LEVELS.len();
+    let display_ticks = match phase {
+        AgentSwarmProgressEstimatorPhase::Completed | AgentSwarmProgressEstimatorPhase::Failed => {
+            let fill = (phase_elapsed_ms / COMPLETE_FILL_MS).clamp(0.0, 1.0);
+            (ticks + (max_ticks as f64 - ticks) * fill).ceil()
+        }
+        _ => ticks.ceil(),
+    } as usize;
+    let color = phase_color(phase);
+    let cells = accumulated_braille_bar(display_ticks, width);
+    format!(
+        "{}{}{}",
+        current_theme().fg(ColorToken::TextMuted, "["),
+        current_theme().fg(color, &cells),
+        current_theme().fg(ColorToken::TextMuted, "]")
+    )
+}
+
+fn accumulated_braille_bar(ticks: usize, width: usize) -> String {
+    let dots = BRAILLE_LEVELS.len();
+    let cycle = width.max(1) * dots;
+    let completed_cycles = ticks / cycle;
+    let cycle_ticks = ticks % cycle;
+    (0..width)
+        .map(|index| {
+            let count = cycle_ticks.saturating_sub(index * dots).min(dots);
+            if count > 0 {
+                BRAILLE_LEVELS[count - 1]
+            } else if completed_cycles > 0 {
+                BRAILLE_LEVELS[dots - 1]
+            } else {
+                BRAILLE_EMPTY
+            }
+        })
+        .collect()
+}
+
+fn terminal_phase_elapsed_ms(member: &AgentSwarmMember, now_ms: f64) -> f64 {
+    let started_at = match member.phase {
+        AgentSwarmProgressEstimatorPhase::Completed => member.completed_at_ms,
+        AgentSwarmProgressEstimatorPhase::Failed => member.failed_at_ms,
+        _ => None,
+    };
+    started_at.map_or(0.0, |started| (now_ms - started).max(0.0))
+}
+
+fn truncate_start_to_width(text: &str, width: usize) -> String {
+    if visible_width(text) <= width {
+        return text.to_owned();
+    }
+    if width <= 1 {
+        return truncate_to_width("…", width, "", false);
+    }
+    let target_width = width - 1;
+    let mut tail = String::new();
+    let mut tail_width = 0;
+    for character in text.chars().rev() {
+        let segment = character.to_string();
+        let segment_width = visible_width(&segment);
+        if tail_width + segment_width > target_width {
+            break;
+        }
+        tail.insert(0, character);
+        tail_width += segment_width;
+    }
+    format!("…{tail}")
+}
+
+fn pad_ansi(text: &str, width: usize) -> String {
+    let truncated = truncate_to_width(text, width, "", false);
+    let padding = width.saturating_sub(visible_width(&truncated));
+    format!("{truncated}{}", " ".repeat(padding))
 }
 
 fn clear_terminal_state(member: &mut AgentSwarmMember) {
@@ -1153,7 +1745,9 @@ pub fn agent_swarm_grid_height_for_terminal_rows(
 }
 
 fn nonnegative_floor(value: f64) -> usize {
-    if value.is_finite() && value > 0.0 {
+    if value == f64::INFINITY {
+        usize::MAX
+    } else if value.is_finite() && value > 0.0 {
         value.floor() as usize
     } else {
         0
@@ -1245,6 +1839,13 @@ fn compact_fixed_width(id_width: usize) -> usize {
 mod tests {
     use super::*;
 
+    fn strip_terminal(text: &str) -> String {
+        Regex::new(r"\x1b\[[0-9;]*m")
+            .expect("ANSI regex")
+            .replace_all(text, "")
+            .into_owned()
+    }
+
     #[test]
     fn extracts_description_items_and_partial_streaming_items() {
         let args = serde_json::json!({
@@ -1312,6 +1913,7 @@ mod tests {
         AgentSwarmProgressComponent::new(AgentSwarmProgressOptions {
             description: "Review files".to_owned(),
             request_render: None,
+            available_grid_height: None,
         })
     }
 
@@ -1412,6 +2014,70 @@ mod tests {
         assert_eq!(members[0].completed_text.as_deref(), Some("legacy summary"));
         assert_eq!(members[1].failure_text.as_deref(), Some("legacy failure"));
         assert!(!legacy.apply_result("not a swarm result"));
+    }
+
+    #[test]
+    fn component_renders_orchestrating_and_prompting_panels() {
+        let mut progress = new_progress();
+        let initial = strip_terminal(&progress.render(80).join("\n"));
+        assert!(initial.contains("Agent Swarm"));
+        assert!(initial.contains("Review files"));
+        assert!(initial.contains("Orchestrating..."));
+        assert_eq!(progress.role(), ComponentRole::AgentSwarmProgress);
+
+        progress.update_args(
+            serde_json::json!({}).as_object().expect("object"),
+            Some(r#"{"prompt_template":"Review all changed modules""#),
+        );
+        let prompting = strip_terminal(&progress.render(48).join("\n"));
+        assert!(prompting.contains("Prompting..."));
+        assert!(prompting.contains("changed modules"));
+    }
+
+    #[test]
+    fn component_renders_queued_running_and_terminal_rows() {
+        let mut progress = new_progress();
+        let args = serde_json::json!({"items": ["one.ts", "two.ts", "three.ts"]});
+        progress.update_args(args.as_object().expect("object"), None);
+        progress.mark_input_complete();
+        progress.register_subagent("one", Some(1), None);
+        progress.register_subagent("two", Some(2), None);
+        progress.register_subagent("three", Some(3), None);
+        progress.mark_started("one");
+        progress.append_model_delta("one", "Reading one.ts");
+        progress.mark_completed("one", Some("Reviewed one.ts"));
+        progress.mark_failed("two", Some("permission denied"));
+        progress.mark_cancelled("three");
+        progress.mark_tool_call_ended();
+
+        let output = strip_terminal(&progress.render(100).join("\n"));
+        assert!(output.contains("✓ Reviewed"), "{output}");
+        assert!(output.contains("✗ permission"));
+        assert!(output.contains("◇Cancelled."));
+        assert!(output.contains("Aborted."));
+    }
+
+    #[test]
+    fn component_compacts_grid_to_height_and_bounds_every_line() {
+        let mut progress = AgentSwarmProgressComponent::new(AgentSwarmProgressOptions {
+            description: "many agents".to_owned(),
+            available_grid_height: Some(Arc::new(|| Some(1))),
+            ..AgentSwarmProgressOptions::default()
+        });
+        let args = serde_json::json!({"items": ["one", "two", "three", "four"]});
+        progress.update_args(args.as_object().expect("object"), None);
+        progress.mark_input_complete();
+        for (index, agent) in ["one", "two", "three", "four"].into_iter().enumerate() {
+            progress.register_subagent(agent, Some(index + 1), None);
+            progress.mark_started(agent);
+        }
+        let lines = progress.render(40);
+        assert!(lines.iter().all(|line| visible_width(line) <= 40));
+        assert!(
+            lines
+                .iter()
+                .any(|line| strip_terminal(line).contains("001 ["))
+        );
     }
 
     #[test]
