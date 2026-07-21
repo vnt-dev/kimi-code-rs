@@ -1,0 +1,466 @@
+use std::{collections::HashMap, time::SystemTime};
+
+use chrono::DateTime;
+use serde_json::{Map, Value};
+
+const MANAGED_PREFIX: &str = "managed:";
+const KIMI_CODE_PLATFORM_ID: &str = "kimi-code";
+const FIXED_POINT_CENTS: f64 = 1_000_000.0;
+
+pub const DEFAULT_KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageRow {
+    pub label: String,
+    pub used: f64,
+    pub limit: f64,
+    pub reset_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoosterWalletInfo {
+    pub balance_cents: f64,
+    pub total_cents: f64,
+    pub monthly_charge_limit_enabled: bool,
+    pub monthly_charge_limit_cents: f64,
+    pub monthly_used_cents: f64,
+    pub currency: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedManagedUsage {
+    pub summary: Option<UsageRow>,
+    pub limits: Vec<UsageRow>,
+    pub extra_usage: Option<BoosterWalletInfo>,
+}
+
+// Original:
+//   packages/oauth/src/managed-usage.ts
+//   isManagedKimiCode()
+pub fn is_managed_kimi_code(provider_key: Option<&str>) -> bool {
+    provider_key
+        .and_then(|key| key.strip_prefix(MANAGED_PREFIX))
+        .is_some_and(|platform| platform == KIMI_CODE_PLATFORM_ID)
+}
+
+// Original: kimiCodeBaseUrl()
+pub fn kimi_code_base_url() -> String {
+    kimi_code_base_url_from(&std::env::vars().collect())
+}
+
+pub fn kimi_code_base_url_from(environment: &HashMap<String, String>) -> String {
+    environment
+        .get("KIMI_CODE_BASE_URL")
+        .map_or(DEFAULT_KIMI_CODE_BASE_URL, String::as_str)
+        .trim_end_matches('/')
+        .to_owned()
+}
+
+// Original: kimiCodeUsageUrl()
+pub fn kimi_code_usage_url() -> String {
+    format!("{}/usages", kimi_code_base_url())
+}
+
+// Original: isManagedKimiCodeBaseUrl()
+pub fn is_managed_kimi_code_base_url(base_url: Option<&str>) -> bool {
+    is_managed_kimi_code_base_url_for(base_url, &kimi_code_base_url())
+}
+
+pub fn is_managed_kimi_code_base_url_for(base_url: Option<&str>, managed_base_url: &str) -> bool {
+    let managed = parse_normalized_url(managed_base_url);
+    let candidate = base_url.and_then(parse_normalized_url);
+    managed.is_some() && managed == candidate
+}
+
+fn parse_normalized_url(value: &str) -> Option<String> {
+    let url = url::Url::parse(value).ok()?;
+    let origin = url.origin().ascii_serialization().to_lowercase();
+    Some(format!("{origin}{}", url.path().trim_end_matches('/')))
+}
+
+// Original: parseManagedUsagePayload()
+pub fn parse_managed_usage_payload(payload: &Value) -> ParsedManagedUsage {
+    let Some(record) = payload.as_object() else {
+        return ParsedManagedUsage {
+            summary: None,
+            limits: Vec::new(),
+            extra_usage: None,
+        };
+    };
+    let summary = record
+        .get("usage")
+        .and_then(|value| to_usage_row(value, "Weekly limit"));
+    let limits = record
+        .get("limits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let item = item.as_object()?;
+            let detail = item
+                .get("detail")
+                .and_then(Value::as_object)
+                .unwrap_or(item);
+            let empty_window = Map::new();
+            let window = item
+                .get("window")
+                .and_then(Value::as_object)
+                .unwrap_or(&empty_window);
+            let label = limit_label(item, detail, window, index);
+            to_usage_row(&Value::Object(detail.clone()), &label)
+        })
+        .collect();
+    let extra_usage = record.get("boosterWallet").and_then(parse_booster_wallet);
+    ParsedManagedUsage {
+        summary,
+        limits,
+        extra_usage,
+    }
+}
+
+fn to_usage_row(raw: &Value, default_label: &str) -> Option<UsageRow> {
+    let record = raw.as_object()?;
+    let limit = to_int(record.get("limit"));
+    let used = to_int(record.get("used")).or_else(|| {
+        let remaining = to_int(record.get("remaining"))?;
+        Some(limit? - remaining)
+    });
+    if used.is_none() && limit.is_none() {
+        return None;
+    }
+    let label = string_field(record, "name")
+        .or_else(|| string_field(record, "title"))
+        .unwrap_or_else(|| default_label.to_owned());
+    Some(UsageRow {
+        label,
+        used: used.unwrap_or(0.0),
+        limit: limit.unwrap_or(0.0),
+        reset_hint: reset_hint_from(record),
+    })
+}
+
+fn limit_label(
+    item: &Map<String, Value>,
+    detail: &Map<String, Value>,
+    window: &Map<String, Value>,
+    index: usize,
+) -> String {
+    for key in ["name", "title", "scope"] {
+        if let Some(value) = item
+            .get(key)
+            .or_else(|| detail.get(key))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            return value.to_owned();
+        }
+    }
+    let duration = to_int(
+        window
+            .get("duration")
+            .or_else(|| item.get("duration"))
+            .or_else(|| detail.get("duration")),
+    );
+    let time_unit = window
+        .get("timeUnit")
+        .or_else(|| item.get("timeUnit"))
+        .or_else(|| detail.get("timeUnit"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if let Some(duration) = duration {
+        if time_unit.contains("MINUTE") {
+            if duration >= 60.0 && duration % 60.0 == 0.0 {
+                return format!("{}h limit", js_integer_string(duration / 60.0));
+            }
+            return format!("{}m limit", js_integer_string(duration));
+        }
+        if time_unit.contains("HOUR") {
+            return format!("{}h limit", js_integer_string(duration));
+        }
+        if time_unit.contains("DAY") {
+            return format!("{}d limit", js_integer_string(duration));
+        }
+        return format!("{}s limit", js_integer_string(duration));
+    }
+    format!("Limit #{}", index + 1)
+}
+
+fn reset_hint_from(record: &Map<String, Value>) -> Option<String> {
+    for key in ["reset_at", "resetAt", "reset_time", "resetTime"] {
+        if let Some(value) = record
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(format_reset_time(value));
+        }
+    }
+    for key in ["reset_in", "resetIn", "ttl", "window"] {
+        if let Some(seconds) = to_int(record.get(key)).filter(|seconds| *seconds > 0.0) {
+            return Some(format!("resets in {}", format_duration(seconds)));
+        }
+    }
+    None
+}
+
+fn parse_booster_wallet(raw: &Value) -> Option<BoosterWalletInfo> {
+    let record = raw.as_object()?;
+    let balance = record.get("balance")?.as_object()?;
+    if balance.get("type")?.as_str()? != "BOOSTER" {
+        return None;
+    }
+    let amount = to_int(balance.get("amount"))?;
+    if amount <= 0.0 {
+        return None;
+    }
+    let monthly_limit = parse_money(record.get("monthlyChargeLimit"));
+    let monthly_used = parse_money(record.get("monthlyUsed"));
+    let currency = monthly_limit
+        .as_ref()
+        .filter(|money| !money.currency.is_empty())
+        .or_else(|| {
+            monthly_used
+                .as_ref()
+                .filter(|money| !money.currency.is_empty())
+        })
+        .map(|money| money.currency.clone())
+        .unwrap_or_else(|| "USD".to_owned());
+    Some(BoosterWalletInfo {
+        balance_cents: to_int(balance.get("amountLeft"))
+            .map(fixed_point_to_cents)
+            .unwrap_or(0.0),
+        total_cents: fixed_point_to_cents(amount),
+        monthly_charge_limit_enabled: record
+            .get("monthlyChargeLimitEnabled")
+            .and_then(Value::as_bool)
+            == Some(true),
+        monthly_charge_limit_cents: monthly_limit.as_ref().map_or(0.0, |money| money.cents),
+        monthly_used_cents: monthly_used.as_ref().map_or(0.0, |money| money.cents),
+        currency,
+    })
+}
+
+struct Money {
+    cents: f64,
+    currency: String,
+}
+
+fn parse_money(raw: Option<&Value>) -> Option<Money> {
+    let record = raw?.as_object()?;
+    Some(Money {
+        cents: to_int(record.get("priceInCents"))?,
+        currency: string_field(record, "currency").unwrap_or_default(),
+    })
+}
+
+fn fixed_point_to_cents(value: f64) -> f64 {
+    let cents = value / FIXED_POINT_CENTS;
+    if cents > 0.0 && cents < 1.0 {
+        1.0
+    } else {
+        (cents + 0.5).floor()
+    }
+}
+
+// Original: formatResetTime()
+pub fn format_reset_time(value: &str) -> String {
+    let now_millis = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    format_reset_time_at(value, now_millis)
+}
+
+pub fn format_reset_time_at(value: &str, now_millis: i64) -> String {
+    let normalized = trim_iso_fraction_to_millis(value);
+    let Ok(parsed) = DateTime::parse_from_rfc3339(&normalized) else {
+        return format!("resets at {value}");
+    };
+    let diff_seconds = (parsed.timestamp_millis() - now_millis).div_euclid(1_000);
+    if diff_seconds <= 0 {
+        "reset".to_owned()
+    } else {
+        format!("resets in {}", format_duration(diff_seconds as f64))
+    }
+}
+
+fn trim_iso_fraction_to_millis(value: &str) -> String {
+    let Some(without_z) = value.strip_suffix('Z') else {
+        return value.to_owned();
+    };
+    let Some((base, fraction)) = without_z.split_once('.') else {
+        return value.to_owned();
+    };
+    format!("{base}.{}Z", fraction.chars().take(3).collect::<String>())
+}
+
+// Original: formatDuration()
+pub fn format_duration(total_seconds: f64) -> String {
+    if !total_seconds.is_finite() || total_seconds <= 0.0 {
+        return "0s".to_owned();
+    }
+    let seconds = total_seconds.floor();
+    let days = (seconds / 86_400.0).floor();
+    let hours = ((seconds % 86_400.0) / 3_600.0).floor();
+    let minutes = ((seconds % 3_600.0) / 60.0).floor();
+    let secs = seconds % 60.0;
+    let mut parts = Vec::new();
+    if days != 0.0 {
+        parts.push(format!("{}d", js_integer_string(days)));
+    }
+    if hours != 0.0 {
+        parts.push(format!("{}h", js_integer_string(hours)));
+    }
+    if minutes != 0.0 {
+        parts.push(format!("{}m", js_integer_string(minutes)));
+    }
+    if secs != 0.0 && parts.is_empty() {
+        parts.push(format!("{}s", js_integer_string(secs)));
+    }
+    if parts.is_empty() {
+        "0s".to_owned()
+    } else {
+        parts.join(" ")
+    }
+}
+
+fn to_int(value: Option<&Value>) -> Option<f64> {
+    let number = match value? {
+        Value::Number(number) => number.as_f64()?,
+        Value::String(value) if value.trim().is_empty() => 0.0,
+        Value::String(value) => value.trim().parse().ok()?,
+        _ => return None,
+    };
+    number.is_finite().then(|| number.trunc())
+}
+
+fn string_field(record: &Map<String, Value>, key: &str) -> Option<String> {
+    record.get(key)?.as_str().map(str::to_owned)
+}
+
+fn js_integer_string(value: f64) -> String {
+    format!("{value:.0}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn managed_provider_and_base_url_matching_is_strict() {
+        assert!(is_managed_kimi_code(Some("managed:kimi-code")));
+        for value in [None, Some(""), Some("managed:moonshot-ai"), Some("openai")] {
+            assert!(!is_managed_kimi_code(value));
+        }
+        let environment = HashMap::from([(
+            "KIMI_CODE_BASE_URL".to_owned(),
+            "https://GW.example.com/coding/v1///".to_owned(),
+        )]);
+        assert_eq!(
+            kimi_code_base_url_from(&environment),
+            "https://GW.example.com/coding/v1"
+        );
+        assert!(is_managed_kimi_code_base_url_for(
+            Some("https://gw.EXAMPLE.com/coding/v1/"),
+            &kimi_code_base_url_from(&environment)
+        ));
+        assert!(!is_managed_kimi_code_base_url_for(
+            Some("https://gw.example.com/CODING/v1"),
+            "https://gw.example.com/coding/v1"
+        ));
+        assert!(!is_managed_kimi_code_base_url_for(
+            Some("not a url"),
+            DEFAULT_KIMI_CODE_BASE_URL
+        ));
+    }
+
+    #[test]
+    fn parses_summary_remaining_limits_and_reset_hints() {
+        let parsed = parse_managed_usage_payload(&serde_json::json!({
+            "usage": { "remaining": "200", "limit": 1000, "resetIn": 3661 },
+            "limits": [
+                { "detail": { "used": 1, "limit": 100 }, "window": { "duration": 300, "timeUnit": "MINUTE" } },
+                { "name": "Daily cap", "detail": { "used": 2, "limit": 50 }, "window": { "duration": 24, "timeUnit": "HOUR" } },
+                { "detail": { "used": 3 } }
+            ]
+        }));
+        assert_eq!(
+            parsed.summary,
+            Some(UsageRow {
+                label: "Weekly limit".to_owned(),
+                used: 800.0,
+                limit: 1_000.0,
+                reset_hint: Some("resets in 1h 1m".to_owned())
+            })
+        );
+        assert_eq!(
+            parsed
+                .limits
+                .iter()
+                .map(|row| row.label.as_str())
+                .collect::<Vec<_>>(),
+            ["5h limit", "Daily cap", "Limit #3"]
+        );
+    }
+
+    #[test]
+    fn parses_booster_wallet_fixed_point_money_and_currency_priority() {
+        let parsed = parse_managed_usage_payload(&serde_json::json!({
+            "boosterWallet": {
+                "balance": { "type": "BOOSTER", "amount": "20000000000", "amountLeft": "500000" },
+                "monthlyChargeLimitEnabled": true,
+                "monthlyChargeLimit": { "currency": "CNY", "priceInCents": "20000" },
+                "monthlyUsed": { "currency": "USD", "priceInCents": 5000 }
+            }
+        }));
+        assert_eq!(
+            parsed.extra_usage,
+            Some(BoosterWalletInfo {
+                balance_cents: 1.0,
+                total_cents: 20_000.0,
+                monthly_charge_limit_enabled: true,
+                monthly_charge_limit_cents: 20_000.0,
+                monthly_used_cents: 5_000.0,
+                currency: "CNY".to_owned()
+            })
+        );
+        for payload in [
+            serde_json::json!({}),
+            serde_json::json!({ "boosterWallet": { "balance": { "type": "OTHER", "amount": 100 } } }),
+            serde_json::json!({ "boosterWallet": { "balance": { "type": "BOOSTER", "amount": 0 } } }),
+        ] {
+            assert_eq!(parse_managed_usage_payload(&payload).extra_usage, None);
+        }
+    }
+
+    #[test]
+    fn formats_durations_like_the_original_display() {
+        for (seconds, expected) in [
+            (f64::NAN, "0s"),
+            (0.0, "0s"),
+            (45.9, "45s"),
+            (60.0, "1m"),
+            (3_661.0, "1h 1m"),
+            (90_061.0, "1d 1h 1m"),
+        ] {
+            assert_eq!(format_duration(seconds), expected);
+        }
+    }
+
+    #[test]
+    fn formats_reset_times_and_trims_nanosecond_precision() {
+        let now = DateTime::parse_from_rfc3339("2026-07-21T00:00:00Z")
+            .expect("test timestamp")
+            .timestamp_millis();
+        assert_eq!(
+            format_reset_time_at("2026-07-21T01:01:01.123456789Z", now),
+            "resets in 1h 1m"
+        );
+        assert_eq!(format_reset_time_at("2026-07-20T23:00:00Z", now), "reset");
+        assert_eq!(
+            format_reset_time_at("not-a-date", now),
+            "resets at not-a-date"
+        );
+    }
+}
