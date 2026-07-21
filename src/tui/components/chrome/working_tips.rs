@@ -71,6 +71,43 @@ pub const WORKING_TIPS: &[ToolbarTip] = &[
     ToolbarTip::new("! to run a shell command", false, 2),
 ];
 
+pub const ADDITIONAL_TIPS: &[ToolbarTip] = &[
+    ToolbarTip::new("shift+enter: newline", false, 1),
+    ToolbarTip::new("ctrl+c: cancel", false, 1),
+    ToolbarTip::new("/theme to switch the terminal UI theme", false, 1),
+    ToolbarTip::new(
+        "/auto when you want Kimi to handle approvals and keep going unattended",
+        false,
+        1,
+    ),
+    ToolbarTip::new(
+        "/yolo to skip most approvals for trusted batch work, only use it in repos you trust",
+        false,
+        1,
+    ),
+    ToolbarTip::new("/help: show commands", false, 1),
+    ToolbarTip::new("/compact compresses context when it gets long", false, 2),
+    ToolbarTip::new(
+        "ctrl-o to hide or reveal tool output switching between a clean chat view and full execution details",
+        false,
+        2,
+    ),
+    ToolbarTip::new(
+        "shift-tab to Plan mode to review the approach before Kimi edits files.",
+        false,
+        2,
+    ),
+    ToolbarTip::new("/model: switch model", false, 2),
+];
+
+pub static ALL_TIPS: LazyLock<Vec<ToolbarTip>> = LazyLock::new(|| {
+    WORKING_TIPS
+        .iter()
+        .chain(ADDITIONAL_TIPS)
+        .copied()
+        .collect()
+});
+
 static WORKING_TIP_ROTATION: LazyLock<Vec<ToolbarTip>> =
     LazyLock::new(|| build_weighted_tips(WORKING_TIPS));
 
