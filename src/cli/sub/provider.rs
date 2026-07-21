@@ -5,6 +5,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::cli::commands::{CatalogCommand, ProviderCommand};
+
 #[derive(Debug)]
 pub struct ProviderError(Box<dyn Error + Send + Sync>);
 
@@ -589,6 +591,78 @@ pub trait ProviderCatalogRuntime: ProviderRuntime {
     async fn fetch_catalog(&self, url: &str) -> Result<Catalog, CatalogFetchError>;
 }
 
+pub trait FullProviderRuntime: ProviderRegistryRuntime + ProviderCatalogRuntime {}
+
+impl<T> FullProviderRuntime for T where T: ProviderRegistryRuntime + ProviderCatalogRuntime {}
+
+// Original:
+//   apps/kimi-code/src/cli/sub/provider.ts
+//   registerProviderCommand(), runAction()
+//
+// Rust adaptation:
+//   Clap performs registration declaratively in cli/commands.rs. This method
+//   preserves the original action routing and last-resort error boundary.
+pub async fn run_provider_command<R>(
+    runtime: &R,
+    command: &ProviderCommand,
+    environment_api_key: Option<&str>,
+) -> i32
+where
+    R: FullProviderRuntime,
+{
+    let result = match command {
+        ProviderCommand::Add { url, api_key } => {
+            handle_provider_add(runtime, url, api_key.as_deref(), environment_api_key).await
+        }
+        ProviderCommand::Remove { provider_id } => {
+            handle_provider_remove(runtime, provider_id).await
+        }
+        ProviderCommand::List { json } => handle_provider_list(runtime, *json).await,
+        ProviderCommand::Catalog { command } => match command {
+            CatalogCommand::List {
+                provider_id,
+                filter,
+                url,
+                json,
+            } => {
+                handle_catalog_list(
+                    runtime,
+                    provider_id.as_deref(),
+                    *json,
+                    filter.as_deref(),
+                    url.as_deref(),
+                )
+                .await
+            }
+            CatalogCommand::Add {
+                provider_id,
+                api_key,
+                default_model,
+                url,
+            } => {
+                handle_catalog_add(
+                    runtime,
+                    provider_id,
+                    api_key.as_deref(),
+                    environment_api_key,
+                    default_model.as_deref(),
+                    url.as_deref(),
+                )
+                .await
+            }
+        },
+    };
+
+    match result {
+        Ok(()) => 0,
+        Err(ProviderCommandError::Exit(code)) => code,
+        Err(ProviderCommandError::Runtime(error)) => {
+            runtime.write_stderr(&format!("{error}\n"));
+            1
+        }
+    }
+}
+
 // Original:
 //   apps/kimi-code/src/cli/sub/provider.ts
 //   handleCatalogAdd()
@@ -1167,6 +1241,7 @@ mod tests {
         catalog: Mutex<Catalog>,
         catalog_error: Mutex<Option<(String, Option<u16>)>>,
         catalog_urls: Mutex<Vec<String>>,
+        get_error: bool,
         ensure_calls: Mutex<usize>,
         remove_calls: Mutex<Vec<String>>,
         set_calls: Mutex<Vec<ProviderConfigPatch>>,
@@ -1183,6 +1258,7 @@ mod tests {
                 catalog: Mutex::new(Catalog::new()),
                 catalog_error: Mutex::new(None),
                 catalog_urls: Mutex::new(Vec::new()),
+                get_error: false,
                 ensure_calls: Mutex::new(0),
                 remove_calls: Mutex::new(Vec::new()),
                 set_calls: Mutex::new(Vec::new()),
@@ -1235,6 +1311,11 @@ mod tests {
         }
 
         async fn get_config(&self) -> Result<ProviderConfig, ProviderError> {
+            if self.get_error {
+                return Err(ProviderError::new(std::io::Error::other(
+                    "Cannot change settings while config.toml is invalid",
+                )));
+            }
             Ok(self.config.lock().expect("config").clone())
         }
 
@@ -1404,6 +1485,89 @@ mod tests {
                 },
             ),
         ])
+    }
+
+    #[tokio::test]
+    async fn command_dispatch_routes_provider_and_catalog_arguments() {
+        let runtime = RuntimeMock::new(ProviderConfig::default());
+        *runtime.registry_entries.lock().expect("entries") = vec![registry_entry("kohub", "model")];
+        let code = run_provider_command(
+            &runtime,
+            &ProviderCommand::Add {
+                url: "https://registry.test".to_owned(),
+                api_key: None,
+            },
+            Some("environment-key"),
+        )
+        .await;
+        assert_eq!(code, 0);
+        assert_eq!(
+            runtime.config.lock().expect("config").providers["kohub"]
+                .api_key
+                .as_deref(),
+            Some("environment-key")
+        );
+
+        runtime.stdout.lock().expect("stdout").clear();
+        *runtime.catalog.lock().expect("catalog") = catalog_fixture();
+        let code = run_provider_command(
+            &runtime,
+            &ProviderCommand::Catalog {
+                command: CatalogCommand::List {
+                    provider_id: Some("openai".to_owned()),
+                    filter: Some("ignored-for-provider-view".to_owned()),
+                    url: Some("https://catalog.test".to_owned()),
+                    json: false,
+                },
+            },
+            None,
+        )
+        .await;
+        assert_eq!(code, 0);
+        assert!(
+            runtime
+                .stdout
+                .lock()
+                .expect("stdout")
+                .starts_with("OpenAI (openai)")
+        );
+        assert_eq!(
+            runtime
+                .catalog_urls
+                .lock()
+                .expect("catalog URLs")
+                .last()
+                .map(String::as_str),
+            Some("https://catalog.test")
+        );
+    }
+
+    #[tokio::test]
+    async fn command_dispatch_converts_expected_and_unexpected_failures_to_exit_one() {
+        let runtime = RuntimeMock::new(ProviderConfig::default());
+        let code = run_provider_command(
+            &runtime,
+            &ProviderCommand::Remove {
+                provider_id: "missing".to_owned(),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(code, 1);
+        assert_eq!(
+            runtime.stderr.lock().expect("stderr").as_str(),
+            "Provider \"missing\" not found.\n"
+        );
+
+        let mut runtime = RuntimeMock::new(ProviderConfig::default());
+        runtime.get_error = true;
+        let code =
+            run_provider_command(&runtime, &ProviderCommand::List { json: false }, None).await;
+        assert_eq!(code, 1);
+        assert_eq!(
+            runtime.stderr.lock().expect("stderr").as_str(),
+            "Cannot change settings while config.toml is invalid\n"
+        );
     }
 
     #[tokio::test]
