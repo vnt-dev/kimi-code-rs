@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 //   apps/kimi-code/src/cli/update/types.ts
 pub const NPM_PACKAGE_NAME: &str = "@moonshot-ai/kimi-code";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum InstallSource {
     NpmGlobal,
