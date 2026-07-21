@@ -9,18 +9,20 @@ use std::{
 };
 
 use tokio::{
-    sync::mpsc,
+    sync::{mpsc, oneshot, watch},
     task::{JoinError, JoinHandle},
 };
 
 use super::{
-    options::PromptOutputFormat,
+    options::{CliOptions, PromptOutputFormat},
     prompt_render::{PromptJsonWriter, PromptOutput, PromptTranscriptWriter, PromptTurnWriter},
     prompt_session::{
-        PrintTurnAction, PromptEvent, PromptEventKind, PromptInput, PromptSession,
-        PromptSessionError,
+        ApprovalDecision, ApprovalResponse, CreateSessionOptions, ListSessionsOptions,
+        PrintTurnAction, PromptEvent, PromptEventKind, PromptHarness, PromptInput, PromptSession,
+        PromptSessionError, ResumeSessionInput,
     },
 };
+use crate::sdk::types::PermissionMode;
 
 pub const PROMPT_CLEANUP_TIMEOUT: Duration = Duration::from_millis(8_000);
 
@@ -473,6 +475,272 @@ pub async fn run_prompt_turn(
     result
 }
 
+#[derive(Clone)]
+pub struct PermissionRestore {
+    session: Option<Arc<dyn PromptSession>>,
+    previous_permission: PermissionMode,
+    override_completed: Option<watch::Receiver<bool>>,
+    restored: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PermissionRestore {
+    fn noop() -> Self {
+        Self {
+            session: None,
+            previous_permission: PermissionMode::Auto,
+            override_completed: None,
+            restored: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub async fn restore(mut self) -> Result<(), PromptSessionError> {
+        if self.restored.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        if let Some(completed) = &mut self.override_completed {
+            while !*completed.borrow() {
+                if completed.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+        if self.previous_permission != PermissionMode::Auto
+            && let Some(session) = self.session
+        {
+            session.set_permission(self.previous_permission).await?;
+        }
+        Ok(())
+    }
+}
+
+// Original: forcePromptPermission()
+pub async fn force_prompt_permission<F>(
+    session: Arc<dyn PromptSession>,
+    previous_permission: PermissionMode,
+    set_restore_permission: F,
+) -> Result<PermissionRestore, PromptSessionError>
+where
+    F: FnOnce(PermissionRestore) + Send,
+{
+    if previous_permission == PermissionMode::Auto {
+        let restore = PermissionRestore::noop();
+        set_restore_permission(restore.clone());
+        return Ok(restore);
+    }
+
+    let (completed_tx, completed_rx) = watch::channel(false);
+    let (result_tx, result_rx) = oneshot::channel();
+    let override_session = Arc::clone(&session);
+    tokio::spawn(async move {
+        let result = override_session.set_permission(PermissionMode::Auto).await;
+        let _ = completed_tx.send(true);
+        let _ = result_tx.send(result);
+    });
+    let restore = PermissionRestore {
+        session: Some(session),
+        previous_permission,
+        override_completed: Some(completed_rx),
+        restored: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+    set_restore_permission(restore.clone());
+    result_rx
+        .await
+        .map_err(|_| std::io::Error::other("permission override task stopped"))??;
+    Ok(restore)
+}
+
+fn install_headless_handlers(session: &Arc<dyn PromptSession>) {
+    session.set_approval_handler(Some(Arc::new(|_| ApprovalResponse {
+        decision: ApprovalDecision::Approved,
+        scope: None,
+        feedback: None,
+        selected_label: None,
+    })));
+    session.set_question_handler(Some(Arc::new(|_| None)));
+}
+
+pub struct ResolvedPromptSession {
+    pub session: Arc<dyn PromptSession>,
+    pub resumed: bool,
+    pub restore_permission: PermissionRestore,
+    pub telemetry_model: Option<String>,
+    pub goal_model: Option<String>,
+}
+
+// Original: resolvePromptSession()
+pub async fn resolve_prompt_session<F>(
+    harness: &dyn PromptHarness,
+    options: &CliOptions,
+    work_dir: &str,
+    default_model: Option<&str>,
+    stderr: &mut dyn PromptOutput,
+    set_restore_permission: F,
+) -> Result<ResolvedPromptSession, PromptSessionError>
+where
+    F: Fn(PermissionRestore) + Send,
+{
+    if let Some(session_id) = &options.session {
+        let sessions = harness
+            .list_sessions(ListSessionsOptions {
+                work_dir: Some(work_dir.to_owned()),
+                session_id: Some(session_id.clone()),
+            })
+            .await?;
+        let target = sessions.first().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Session \"{session_id}\" not found."),
+            )
+        })?;
+        if !paths_equivalent(&target.work_dir, work_dir) {
+            stderr.write(&format!(
+                "Session \"{session_id}\" was created under a different directory.\n  cd \"{}\" && kimi -r {session_id}\n\n",
+                target.work_dir
+            ));
+            return Err(std::io::Error::other(format!(
+                "Session \"{session_id}\" was created under a different directory."
+            ))
+            .into());
+        }
+        return resume_prompt_session(
+            harness,
+            options,
+            session_id,
+            default_model,
+            set_restore_permission,
+        )
+        .await;
+    }
+
+    if options.continue_previous {
+        let sessions = harness
+            .list_sessions(ListSessionsOptions {
+                work_dir: Some(work_dir.to_owned()),
+                session_id: None,
+            })
+            .await?;
+        if let Some(previous) = sessions.first() {
+            return resume_prompt_session(
+                harness,
+                options,
+                &previous.id,
+                default_model,
+                set_restore_permission,
+            )
+            .await;
+        }
+        stderr.write(&format!(
+            "No sessions to continue under \"{work_dir}\"; starting a fresh session.\n"
+        ));
+    }
+
+    let model = require_configured_model([options.model.as_deref(), default_model])?.to_owned();
+    let session = harness
+        .create_session(CreateSessionOptions {
+            work_dir: work_dir.to_owned(),
+            model: Some(model.clone()),
+            permission: Some(PermissionMode::Auto),
+            additional_dirs: non_empty_directories(&options.add_dirs),
+            drain_agent_tasks_on_stop: true,
+        })
+        .await?;
+    install_headless_handlers(&session);
+    let restore_permission = PermissionRestore::noop();
+    set_restore_permission(restore_permission.clone());
+    Ok(ResolvedPromptSession {
+        session,
+        resumed: false,
+        restore_permission,
+        telemetry_model: Some(model.clone()),
+        goal_model: Some(model),
+    })
+}
+
+async fn resume_prompt_session<F>(
+    harness: &dyn PromptHarness,
+    options: &CliOptions,
+    session_id: &str,
+    default_model: Option<&str>,
+    set_restore_permission: F,
+) -> Result<ResolvedPromptSession, PromptSessionError>
+where
+    F: Fn(PermissionRestore) + Send,
+{
+    let session = harness
+        .resume_session(ResumeSessionInput {
+            id: session_id.to_owned(),
+            additional_dirs: non_empty_directories(&options.add_dirs),
+        })
+        .await?;
+    let status = session.get_status().await?;
+    let restore_permission = force_prompt_permission(
+        Arc::clone(&session),
+        status.permission,
+        set_restore_permission,
+    )
+    .await?;
+    if let Some(model) = &options.model {
+        session.set_model(model).await?;
+    }
+    install_headless_handlers(&session);
+    Ok(ResolvedPromptSession {
+        session,
+        resumed: true,
+        restore_permission,
+        telemetry_model: configured_model([
+            options.model.as_deref(),
+            status.model.as_deref(),
+            default_model,
+        ])
+        .map(str::to_owned),
+        goal_model: configured_model([options.model.as_deref(), status.model.as_deref()])
+            .map(str::to_owned),
+    })
+}
+
+fn non_empty_directories(directories: &[String]) -> Option<Vec<String>> {
+    (!directories.is_empty()).then(|| directories.to_vec())
+}
+
+fn paths_equivalent(left: &str, right: &str) -> bool {
+    normalize_comparison_path(left) == normalize_comparison_path(right)
+}
+
+fn normalize_comparison_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let has_windows_drive = path.as_bytes().get(1) == Some(&b':');
+    let prefix = if has_windows_drive {
+        path[..2].to_ascii_lowercase()
+    } else if path.starts_with('/') {
+        "/".to_owned()
+    } else {
+        String::new()
+    };
+    let start = if has_windows_drive { 2 } else { 0 };
+    let mut parts = Vec::new();
+    for part in path[start..].split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    let normalized = if prefix == "/" {
+        format!("/{0}", parts.join("/"))
+    } else if prefix.is_empty() {
+        parts.join("/")
+    } else {
+        format!("{prefix}/{}", parts.join("/"))
+    };
+    if has_windows_drive {
+        normalized.to_ascii_lowercase()
+    } else {
+        normalized
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -486,12 +754,15 @@ mod tests {
         cli::{
             prompt_render::{PromptOutput, PromptValue, RetryingEvent},
             prompt_session::{
-                ApprovalHandler, CreateGoalInput, EventListener, PrintTurnAction, PromptEvent,
-                PromptEventKind, PromptInput, PromptSession, PromptSessionError, QuestionHandler,
-                Unsubscribe,
+                ApprovalHandler, ConfigDiagnostics, CreateGoalInput, CreateSessionOptions,
+                EventListener, ListSessionsOptions, PrintTurnAction, PromptConfig, PromptEvent,
+                PromptEventKind, PromptHarness, PromptInput, PromptSession, PromptSessionError,
+                QuestionHandler, ResumeSessionInput, TelemetryProperties, Unsubscribe,
             },
         },
-        sdk::types::{CronTaskSnapshot, GoalSnapshot, PermissionMode, SessionStatus},
+        sdk::types::{
+            CronTaskSnapshot, GoalSnapshot, PermissionMode, SessionStatus, SessionSummary,
+        },
     };
 
     use super::*;
@@ -512,6 +783,12 @@ mod tests {
         listener: Mutex<Option<EventListener>>,
         events: Vec<PromptEvent>,
         prompted: Mutex<Vec<PromptInput>>,
+        status: SessionStatus,
+        permissions: Mutex<Vec<PermissionMode>>,
+        models: Mutex<Vec<String>>,
+        approval_handler: Mutex<Option<ApprovalHandler>>,
+        question_handler: Mutex<Option<QuestionHandler>>,
+        auto_permission_gate: Option<Arc<tokio::sync::Notify>>,
     }
 
     impl PrintSessionMock {
@@ -520,7 +797,34 @@ mod tests {
                 listener: Mutex::new(None),
                 events,
                 prompted: Mutex::new(Vec::new()),
+                status: SessionStatus {
+                    model: Some("k2".to_owned()),
+                    thinking_effort: "on".to_owned(),
+                    permission: PermissionMode::Manual,
+                    plan_mode: false,
+                    swarm_mode: None,
+                    context_tokens: 0,
+                    max_context_tokens: 0,
+                    context_usage: 0.0,
+                    usage: None,
+                },
+                permissions: Mutex::new(Vec::new()),
+                models: Mutex::new(Vec::new()),
+                approval_handler: Mutex::new(None),
+                question_handler: Mutex::new(None),
+                auto_permission_gate: None,
             }
+        }
+
+        fn with_status(mut self, permission: PermissionMode, model: Option<&str>) -> Self {
+            self.status.permission = permission;
+            self.status.model = model.map(str::to_owned);
+            self
+        }
+
+        fn with_auto_permission_gate(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
+            self.auto_permission_gate = Some(gate);
+            self
         }
     }
 
@@ -535,20 +839,31 @@ mod tests {
         }
 
         async fn get_status(&self) -> Result<SessionStatus, PromptSessionError> {
-            Err(std::io::Error::other("unused").into())
+            Ok(self.status.clone())
         }
 
-        async fn set_model(&self, _: &str) -> Result<(), PromptSessionError> {
+        async fn set_model(&self, model: &str) -> Result<(), PromptSessionError> {
+            self.models.lock().expect("models").push(model.to_owned());
             Ok(())
         }
 
-        async fn set_permission(&self, _: PermissionMode) -> Result<(), PromptSessionError> {
+        async fn set_permission(&self, mode: PermissionMode) -> Result<(), PromptSessionError> {
+            self.permissions.lock().expect("permissions").push(mode);
+            if mode == PermissionMode::Auto
+                && let Some(gate) = &self.auto_permission_gate
+            {
+                gate.notified().await;
+            }
             Ok(())
         }
 
-        fn set_approval_handler(&self, _: Option<ApprovalHandler>) {}
+        fn set_approval_handler(&self, handler: Option<ApprovalHandler>) {
+            *self.approval_handler.lock().expect("approval handler") = handler;
+        }
 
-        fn set_question_handler(&self, _: Option<QuestionHandler>) {}
+        fn set_question_handler(&self, handler: Option<QuestionHandler>) {
+            *self.question_handler.lock().expect("question handler") = handler;
+        }
 
         fn on_event(&self, listener: EventListener) -> Unsubscribe {
             *self.listener.lock().expect("listener") = Some(listener);
@@ -598,6 +913,93 @@ mod tests {
             session_id: "ses_prompt".to_owned(),
             agent_id: agent_id.to_owned(),
             kind,
+        }
+    }
+
+    struct HarnessMock {
+        sessions: Vec<SessionSummary>,
+        session: Arc<PrintSessionMock>,
+        listed: Mutex<Vec<ListSessionsOptions>>,
+        created: Mutex<Vec<CreateSessionOptions>>,
+        resumed: Mutex<Vec<ResumeSessionInput>>,
+    }
+
+    impl HarnessMock {
+        fn new(sessions: Vec<SessionSummary>, session: Arc<PrintSessionMock>) -> Self {
+            Self {
+                sessions,
+                session,
+                listed: Mutex::new(Vec::new()),
+                created: Mutex::new(Vec::new()),
+                resumed: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PromptHarness for HarnessMock {
+        fn home_dir(&self) -> &str {
+            "/home"
+        }
+
+        fn track(&self, _: &str, _: Option<&TelemetryProperties>) {}
+
+        async fn ensure_config_file(&self) -> Result<(), PromptSessionError> {
+            Ok(())
+        }
+
+        async fn get_config(&self) -> Result<PromptConfig, PromptSessionError> {
+            Ok(PromptConfig {
+                default_model: Some("default".to_owned()),
+                telemetry: true,
+            })
+        }
+
+        async fn get_config_diagnostics(&self) -> Result<ConfigDiagnostics, PromptSessionError> {
+            Ok(ConfigDiagnostics::default())
+        }
+
+        async fn list_sessions(
+            &self,
+            options: ListSessionsOptions,
+        ) -> Result<Vec<SessionSummary>, PromptSessionError> {
+            self.listed.lock().expect("listed").push(options);
+            Ok(self.sessions.clone())
+        }
+
+        async fn create_session(
+            &self,
+            options: CreateSessionOptions,
+        ) -> Result<Arc<dyn PromptSession>, PromptSessionError> {
+            self.created.lock().expect("created").push(options);
+            Ok(Arc::clone(&self.session) as Arc<dyn PromptSession>)
+        }
+
+        async fn resume_session(
+            &self,
+            input: ResumeSessionInput,
+        ) -> Result<Arc<dyn PromptSession>, PromptSessionError> {
+            self.resumed.lock().expect("resumed").push(input);
+            Ok(Arc::clone(&self.session) as Arc<dyn PromptSession>)
+        }
+
+        async fn close(&self) -> Result<(), PromptSessionError> {
+            Ok(())
+        }
+    }
+
+    fn summary(id: &str, work_dir: &str) -> SessionSummary {
+        SessionSummary {
+            id: id.to_owned(),
+            title: None,
+            last_prompt: None,
+            work_dir: work_dir.to_owned(),
+            session_dir: "/sessions/one".to_owned(),
+            created_at: Some(1.0),
+            updated_at: Some(2.0),
+            archived: None,
+            metadata: None,
+            additional_dirs: None,
         }
     }
 
@@ -906,6 +1308,232 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "Provider safety policy blocked the response."
+        );
+    }
+
+    #[tokio::test]
+    async fn resumes_explicit_session_across_windows_path_separators() {
+        let session = Arc::new(
+            PrintSessionMock::new(Vec::new())
+                .with_status(PermissionMode::Manual, Some("session-model")),
+        );
+        let harness = HarnessMock::new(
+            vec![summary("ses_existing", "C:/Users/kimi/project")],
+            Arc::clone(&session),
+        );
+        let options = CliOptions {
+            session: Some("ses_existing".to_owned()),
+            model: Some("cli-model".to_owned()),
+            add_dirs: vec!["../shared".to_owned()],
+            ..CliOptions::default()
+        };
+        let mut stderr = Capture::default();
+
+        let resolved = resolve_prompt_session(
+            &harness,
+            &options,
+            r"C:\Users\kimi\project",
+            Some("default-model"),
+            &mut stderr,
+            |_| {},
+        )
+        .await
+        .expect("resume session");
+
+        assert!(resolved.resumed);
+        assert_eq!(resolved.telemetry_model.as_deref(), Some("cli-model"));
+        assert_eq!(resolved.goal_model.as_deref(), Some("cli-model"));
+        assert_eq!(
+            harness.resumed.lock().expect("resumed").as_slice(),
+            [ResumeSessionInput {
+                id: "ses_existing".to_owned(),
+                additional_dirs: Some(vec!["../shared".to_owned()]),
+            }]
+        );
+        assert_eq!(
+            session.models.lock().expect("models").as_slice(),
+            ["cli-model"]
+        );
+        assert_eq!(
+            session.permissions.lock().expect("permissions").as_slice(),
+            [PermissionMode::Auto]
+        );
+        let approval = session
+            .approval_handler
+            .lock()
+            .expect("approval handler")
+            .clone()
+            .expect("approval handler installed");
+        let response = approval(super::super::prompt_session::ApprovalRequest {
+            turn_id: Some(1),
+            tool_call_id: "tc".to_owned(),
+            tool_name: "Shell".to_owned(),
+            action: "run".to_owned(),
+            display: serde_json::json!({}),
+        });
+        assert_eq!(response.decision, ApprovalDecision::Approved);
+        let question = session
+            .question_handler
+            .lock()
+            .expect("question handler")
+            .clone()
+            .expect("question handler installed");
+        assert_eq!(
+            question(super::super::prompt_session::QuestionRequest {
+                turn_id: Some(1),
+                tool_call_id: None,
+                questions: Vec::new(),
+            }),
+            None
+        );
+
+        resolved
+            .restore_permission
+            .restore()
+            .await
+            .expect("restore permission");
+        assert_eq!(
+            session.permissions.lock().expect("permissions").as_slice(),
+            [PermissionMode::Auto, PermissionMode::Manual]
+        );
+        assert!(stderr.text.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rejects_an_explicit_session_from_another_directory() {
+        let session = Arc::new(PrintSessionMock::new(Vec::new()));
+        let harness = HarnessMock::new(vec![summary("ses_elsewhere", "/other/project")], session);
+        let options = CliOptions {
+            session: Some("ses_elsewhere".to_owned()),
+            ..CliOptions::default()
+        };
+        let mut stderr = Capture::default();
+
+        let error = resolve_prompt_session(
+            &harness,
+            &options,
+            "/current/project",
+            Some("model"),
+            &mut stderr,
+            |_| {},
+        )
+        .await
+        .err()
+        .expect("directory mismatch");
+
+        assert!(error.to_string().contains("different directory"));
+        assert!(
+            stderr
+                .text
+                .contains("cd \"/other/project\" && kimi -r ses_elsewhere")
+        );
+        assert!(harness.resumed.lock().expect("resumed").is_empty());
+    }
+
+    #[tokio::test]
+    async fn continue_without_history_creates_a_fresh_auto_session() {
+        let session = Arc::new(PrintSessionMock::new(Vec::new()));
+        let harness = HarnessMock::new(Vec::new(), Arc::clone(&session));
+        let options = CliOptions {
+            continue_previous: true,
+            add_dirs: vec!["/extra".to_owned()],
+            ..CliOptions::default()
+        };
+        let mut stderr = Capture::default();
+
+        let resolved = resolve_prompt_session(
+            &harness,
+            &options,
+            "/work",
+            Some("default-model"),
+            &mut stderr,
+            |_| {},
+        )
+        .await
+        .expect("fresh session");
+
+        assert!(!resolved.resumed);
+        assert_eq!(resolved.telemetry_model.as_deref(), Some("default-model"));
+        assert_eq!(
+            harness.created.lock().expect("created").as_slice(),
+            [CreateSessionOptions {
+                work_dir: "/work".to_owned(),
+                model: Some("default-model".to_owned()),
+                permission: Some(PermissionMode::Auto),
+                additional_dirs: Some(vec!["/extra".to_owned()]),
+                drain_agent_tasks_on_stop: true,
+            }]
+        );
+        assert!(stderr.text.contains("No sessions to continue"));
+        assert!(
+            session
+                .approval_handler
+                .lock()
+                .expect("approval handler")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn refuses_to_create_a_session_without_any_configured_model() {
+        let session = Arc::new(PrintSessionMock::new(Vec::new()));
+        let harness = HarnessMock::new(Vec::new(), session);
+        let mut stderr = Capture::default();
+
+        let error = resolve_prompt_session(
+            &harness,
+            &CliOptions::default(),
+            "/work",
+            None,
+            &mut stderr,
+            |_| {},
+        )
+        .await
+        .err()
+        .expect("missing model");
+
+        assert!(error.to_string().contains("No model configured"));
+        assert!(harness.created.lock().expect("created").is_empty());
+    }
+
+    #[tokio::test]
+    async fn cleanup_waits_for_pending_auto_override_before_restoring() {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let session = Arc::new(
+            PrintSessionMock::new(Vec::new())
+                .with_status(PermissionMode::Manual, None)
+                .with_auto_permission_gate(Arc::clone(&gate)),
+        );
+        let session_trait: Arc<dyn PromptSession> = session.clone();
+        let restore_slot = Arc::new(Mutex::new(None));
+        let restore_slot_for_callback = Arc::clone(&restore_slot);
+        let force =
+            force_prompt_permission(session_trait, PermissionMode::Manual, move |restore| {
+                *restore_slot_for_callback.lock().expect("restore slot") = Some(restore);
+            });
+        tokio::pin!(force);
+        assert!(futures_util::poll!(&mut force).is_pending());
+        tokio::task::yield_now().await;
+        assert_eq!(
+            session.permissions.lock().expect("permissions").as_slice(),
+            [PermissionMode::Auto]
+        );
+
+        let restore = restore_slot
+            .lock()
+            .expect("restore slot")
+            .take()
+            .expect("restore registered before await");
+        let restoring = restore.restore();
+        tokio::pin!(restoring);
+        assert!(futures_util::poll!(&mut restoring).is_pending());
+        gate.notify_waiters();
+        force.await.expect("override permission");
+        restoring.await.expect("restore permission");
+
+        assert_eq!(
+            session.permissions.lock().expect("permissions").as_slice(),
+            [PermissionMode::Auto, PermissionMode::Manual]
         );
     }
 }
