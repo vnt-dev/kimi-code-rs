@@ -366,6 +366,44 @@ pub enum GoalStatus {
     Complete,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GoalActor {
+    User,
+    Model,
+    Runtime,
+    System,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GoalChangeKind {
+    Lifecycle,
+    Completion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalChangeStats {
+    pub turns_used: u64,
+    pub tokens_used: u64,
+    pub wall_clock_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalChange {
+    pub kind: GoalChangeKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<GoalStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<GoalChangeStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor: Option<GoalActor>,
+}
+
 impl GoalStatus {
     pub fn as_str(self) -> &'static str {
         match self {
