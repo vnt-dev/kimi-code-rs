@@ -216,6 +216,7 @@ mod tests {
             description: None,
             streaming_arguments: None,
             streaming_started_at_ms: None,
+            subagent: None,
             step: None,
             turn_id: None,
             truncated: None,

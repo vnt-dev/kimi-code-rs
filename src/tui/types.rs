@@ -167,11 +167,37 @@ pub struct ToolCallBlockData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub streaming_started_at_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<SubagentReplayBlockData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentReplayToolCallData {
+    pub id: String,
+    pub name: String,
+    pub args: Map<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<ToolResultBlockData>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentReplayBlockData {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<SubagentReplayToolCallData>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,4 +208,41 @@ pub struct ToolResultBlockData {
     pub is_error: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub synthetic: Option<bool>,
+}
+
+#[cfg(test)]
+mod tool_call_replay_tests {
+    use super::*;
+
+    #[test]
+    fn round_trips_subagent_replay_state_with_external_field_names() {
+        let value = serde_json::json!({
+            "id": "parent",
+            "name": "Agent",
+            "args": {"description": "inspect"},
+            "subagent": {
+                "id": "agent-1",
+                "name": "explorer",
+                "text": "done",
+                "toolCalls": [{
+                    "id": "child-1",
+                    "name": "Read",
+                    "args": {"path": "src/main.rs"},
+                    "result": {
+                        "tool_call_id": "child-1",
+                        "output": "content",
+                        "is_error": false
+                    }
+                }]
+            }
+        });
+        let call: ToolCallBlockData = serde_json::from_value(value).expect("valid tool call");
+        let subagent = call.subagent.as_ref().expect("subagent replay");
+        assert_eq!(subagent.id, "agent-1");
+        assert_eq!(subagent.tool_calls.as_ref().map(Vec::len), Some(1));
+
+        let encoded = serde_json::to_value(call).expect("serializable tool call");
+        assert_eq!(encoded["subagent"]["toolCalls"][0]["name"], "Read");
+        assert!(encoded["subagent"].get("tool_calls").is_none());
+    }
 }

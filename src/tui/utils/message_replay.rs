@@ -180,6 +180,7 @@ pub fn tool_call_from_replay_message(
         description: None,
         streaming_arguments: None,
         streaming_started_at_ms: None,
+        subagent: None,
         step: Some(context.step_index),
         turn_id: context.current_turn_id.clone(),
         truncated: None,
