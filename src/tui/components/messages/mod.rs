@@ -12,6 +12,7 @@ pub mod shell_execution;
 pub mod shell_run;
 pub mod skill_activation;
 pub mod status_message;
+pub mod status_panel;
 pub mod step_summary;
 pub mod swarm_markers;
 pub mod tool_renderers;
