@@ -288,6 +288,84 @@ pub struct MediaUrl {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text {
+        text: String,
+    },
+    Think {
+        think: String,
+    },
+    ImageUrl {
+        #[serde(rename = "imageUrl")]
+        image_url: MediaUrl,
+    },
+    AudioUrl {
+        #[serde(rename = "audioUrl")]
+        audio_url: MediaUrl,
+    },
+    VideoUrl {
+        #[serde(rename = "videoUrl")]
+        video_url: MediaUrl,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCall {
+    #[serde(rename = "type", default = "function_tool_call_type")]
+    pub tool_type: String,
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
+}
+
+fn function_tool_call_type() -> String {
+    "function".to_owned()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptOriginKind {
+    Injection,
+    SystemTrigger,
+    CompactionSummary,
+    HookResult,
+    CronJob,
+    CronMissed,
+    User,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptOrigin {
+    pub kind: PromptOriginKind,
+    #[serde(flatten)]
+    pub fields: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContextMessageRole {
+    User,
+    Assistant,
+    Tool,
+    System,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextMessage {
+    pub role: ContextMessageRole,
+    pub content: Vec<ContentPart>,
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCall>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<PromptOrigin>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CronTaskSnapshot {
     pub id: String,
