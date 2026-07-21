@@ -1,12 +1,5 @@
-use std::{
-    collections::HashSet,
-    error::Error,
-    fmt,
-    io::{self, Write},
-    path::Path,
-};
+use std::{collections::HashSet, error::Error, fmt, path::Path};
 
-use atomic_write_file::AtomicWriteFile;
 use chrono::{DateTime, NaiveDate};
 use semver::Version;
 use serde_json::{Map, Value};
@@ -14,23 +7,22 @@ use serde_json::{Map, Value};
 use super::types::{
     RolloutBatch, UpdateCache, UpdateCacheSource, UpdateManifest, empty_update_cache,
 };
-use crate::utils::paths::{HomeDirectoryUnavailable, get_update_state_file};
+use crate::utils::{
+    paths::{HomeDirectoryUnavailable, get_update_state_file},
+    persistence::{PersistenceError, read_json_file, write_json_file},
+};
 
 #[derive(Debug)]
 pub enum UpdateCacheWriteError {
-    Invalid(String),
     Path(HomeDirectoryUnavailable),
-    Io(io::Error),
-    Join(tokio::task::JoinError),
+    Persistence(PersistenceError),
 }
 
 impl fmt::Display for UpdateCacheWriteError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Invalid(message) => write!(formatter, "invalid update cache: {message}"),
             Self::Path(error) => error.fmt(formatter),
-            Self::Io(error) => write!(formatter, "failed to write update cache: {error}"),
-            Self::Join(error) => write!(formatter, "update cache write task failed: {error}"),
+            Self::Persistence(error) => write!(formatter, "failed to write update cache: {error}"),
         }
     }
 }
@@ -38,10 +30,8 @@ impl fmt::Display for UpdateCacheWriteError {
 impl Error for UpdateCacheWriteError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Invalid(_) => None,
             Self::Path(error) => Some(error),
-            Self::Io(error) => Some(error),
-            Self::Join(error) => Some(error),
+            Self::Persistence(error) => Some(error),
         }
     }
 }
@@ -57,23 +47,19 @@ pub async fn read_update_cache() -> UpdateCache {
 }
 
 pub async fn read_update_cache_from(file_path: &Path) -> UpdateCache {
-    let Ok(raw) = tokio::fs::read_to_string(file_path).await else {
-        return empty_update_cache();
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
-        return empty_update_cache();
-    };
-    parse_update_cache(value).unwrap_or_else(empty_update_cache)
+    read_json_file(
+        file_path,
+        |value| parse_update_cache(value).ok_or_else(|| "invalid update cache".to_owned()),
+        empty_update_cache(),
+    )
+    .await
+    .unwrap_or_else(|_| empty_update_cache())
 }
 
 // Original:
 //   apps/kimi-code/src/cli/update/cache.ts
 //   writeUpdateCache()
 //
-// Rust adaptation:
-//   AtomicWriteFile performs the temporary-file replacement on a blocking
-//   thread, including Windows replacement semantics, so async runtime workers
-//   never execute blocking filesystem calls.
 pub async fn write_update_cache(value: &UpdateCache) -> Result<(), UpdateCacheWriteError> {
     let file_path = get_update_state_file().map_err(UpdateCacheWriteError::Path)?;
     write_update_cache_to(value, &file_path).await
@@ -83,35 +69,17 @@ pub async fn write_update_cache_to(
     value: &UpdateCache,
     file_path: &Path,
 ) -> Result<(), UpdateCacheWriteError> {
-    let serialized_value = serde_json::to_value(value)
-        .map_err(|error| UpdateCacheWriteError::Invalid(error.to_string()))?;
-    parse_update_cache(serialized_value)
-        .ok_or_else(|| UpdateCacheWriteError::Invalid("schema validation failed".to_owned()))?;
-    let content = serde_json::to_string_pretty(value)
-        .map_err(|error| UpdateCacheWriteError::Invalid(error.to_string()))?
-        + "\n";
-    let file_path = file_path.to_path_buf();
-    tokio::task::spawn_blocking(move || write_atomic(&file_path, content.as_bytes()))
-        .await
-        .map_err(UpdateCacheWriteError::Join)?
-        .map_err(UpdateCacheWriteError::Io)
-}
-
-fn write_atomic(file_path: &Path, content: &[u8]) -> io::Result<()> {
-    if file_path
-        .file_name()
-        .is_some_and(|name| name == "config.toml")
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "CLI persistence helpers must not write config.toml; use core/SDK config APIs.",
-        ));
-    }
-    let parent = file_path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let mut file = AtomicWriteFile::open(file_path)?;
-    file.write_all(content)?;
-    file.commit()
+    write_json_file(
+        file_path,
+        |serialized| {
+            let parsed = parse_update_cache(serialized)
+                .ok_or_else(|| "invalid update cache: schema validation failed".to_owned())?;
+            serde_json::to_value(parsed).map_err(|error| error.to_string())
+        },
+        value,
+    )
+    .await
+    .map_err(UpdateCacheWriteError::Persistence)
 }
 
 fn parse_update_cache(value: Value) -> Option<UpdateCache> {
