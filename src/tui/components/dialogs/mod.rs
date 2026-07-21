@@ -2,6 +2,7 @@ pub mod choice_picker;
 pub mod editor_selector;
 pub mod effort_selector;
 pub mod goal_start_permission_prompt;
+pub mod help_panel;
 pub mod permission_selector;
 pub mod platform_selector;
 pub mod settings_selector;
@@ -19,6 +20,7 @@ pub use goal_start_permission_prompt::{
     GoalStartMode, GoalStartPermissionChoice, GoalStartPermissionPromptComponent,
     goal_start_options,
 };
+pub use help_panel::{HelpPanelCommand, HelpPanelComponent, KeyboardShortcut};
 pub use permission_selector::PermissionSelectorComponent;
 pub use platform_selector::PlatformSelectorComponent;
 pub use settings_selector::{SettingsSelection, SettingsSelectorComponent};
