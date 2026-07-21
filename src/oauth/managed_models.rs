@@ -228,6 +228,81 @@ pub fn parse_model_info(
     }))
 }
 
+pub fn model_capabilities(model: &ManagedKimiCodeModelInfo) -> Option<Vec<String>> {
+    let mut capabilities = Vec::new();
+    match model.supports_thinking_type {
+        Some(SupportsThinkingType::Only) => {
+            capabilities.push("thinking".to_owned());
+            capabilities.push("always_thinking".to_owned());
+        }
+        Some(SupportsThinkingType::Both) => capabilities.push("thinking".to_owned()),
+        Some(SupportsThinkingType::No) => {}
+        None if model.supports_reasoning => capabilities.push("thinking".to_owned()),
+        None => {}
+    }
+    if model.supports_image_in {
+        capabilities.push("image_in".to_owned());
+    }
+    if model.supports_video_in {
+        capabilities.push("video_in".to_owned());
+    }
+    if model.supports_tool_use {
+        capabilities.push("tool_use".to_owned());
+    }
+    (!capabilities.is_empty()).then_some(capabilities)
+}
+
+// Original: toManagedModelAlias()
+pub fn to_managed_model_alias(
+    provider_id: &str,
+    model: &ManagedKimiCodeModelInfo,
+) -> serde_json::Map<String, Value> {
+    let capabilities = model_capabilities(model);
+    let supports_adaptive_thinking = model.protocol == Some(ManagedKimiCodeProtocol::Anthropic)
+        && capabilities.as_ref().is_some_and(|capabilities| {
+            capabilities
+                .iter()
+                .any(|capability| matches!(capability.as_str(), "thinking" | "always_thinking"))
+        });
+    let mut alias = serde_json::Map::from_iter([
+        ("provider".to_owned(), Value::String(provider_id.to_owned())),
+        ("model".to_owned(), Value::String(model.id.clone())),
+        (
+            "maxContextSize".to_owned(),
+            Value::Number(model.context_length.into()),
+        ),
+    ]);
+    if let Some(capabilities) = capabilities {
+        alias.insert("capabilities".to_owned(), serde_json::json!(capabilities));
+    }
+    if let Some(display_name) = &model.display_name {
+        alias.insert(
+            "displayName".to_owned(),
+            Value::String(display_name.clone()),
+        );
+    }
+    if let Some(support_efforts) = &model.support_efforts {
+        alias.insert(
+            "supportEfforts".to_owned(),
+            serde_json::json!(support_efforts),
+        );
+    }
+    if let Some(default_effort) = &model.default_effort {
+        alias.insert(
+            "defaultEffort".to_owned(),
+            Value::String(default_effort.clone()),
+        );
+    }
+    if model.protocol == Some(ManagedKimiCodeProtocol::Anthropic) {
+        alias.insert("protocol".to_owned(), Value::String("anthropic".to_owned()));
+        alias.insert("betaApi".to_owned(), Value::Bool(true));
+    }
+    if supports_adaptive_thinking {
+        alias.insert("adaptiveThinking".to_owned(), Value::Bool(true));
+    }
+    alias
+}
+
 // Original: fetchManagedKimiCodeModels()
 pub async fn fetch_managed_kimi_code_models(
     access_token: &str,
@@ -508,6 +583,53 @@ mod tests {
         assert_eq!(headers["x-test"], "supplied");
         assert_eq!(headers[reqwest::header::AUTHORIZATION], "Bearer right");
         assert_eq!(headers[reqwest::header::ACCEPT], "application/json");
+    }
+
+    #[test]
+    fn managed_alias_writes_remote_fields_and_anthropic_routing_conditionally() {
+        let mut anthropic = parse_model_info(
+            &serde_json::json!({
+                "id": "kimi-for-coding",
+                "context_length": 262144,
+                "supports_reasoning": true,
+                "supports_image_in": true,
+                "protocol": "anthropic",
+                "display_name": "Kimi for Coding",
+                "think_efforts": {
+                    "support": true,
+                    "valid_efforts": ["low", "high"],
+                    "default_effort": "high"
+                }
+            }),
+            "Kimi Code model",
+        )
+        .expect("model parse")
+        .expect("model");
+        let alias = to_managed_model_alias("managed:kimi-code", &anthropic);
+        assert_eq!(alias["provider"], "managed:kimi-code");
+        assert_eq!(
+            alias["capabilities"],
+            serde_json::json!(["thinking", "image_in", "tool_use"])
+        );
+        assert_eq!(alias["protocol"], "anthropic");
+        assert_eq!(alias["betaApi"], true);
+        assert_eq!(alias["adaptiveThinking"], true);
+        assert_eq!(alias["supportEfforts"], serde_json::json!(["low", "high"]));
+        assert_eq!(alias["defaultEffort"], "high");
+
+        anthropic.supports_reasoning = false;
+        anthropic.supports_image_in = false;
+        anthropic.supports_tool_use = false;
+        let alias = to_managed_model_alias("provider", &anthropic);
+        assert_eq!(alias["protocol"], "anthropic");
+        assert_eq!(alias["betaApi"], true);
+        assert!(!alias.contains_key("adaptiveThinking"));
+
+        anthropic.protocol = None;
+        let alias = to_managed_model_alias("provider", &anthropic);
+        assert!(!alias.contains_key("protocol"));
+        assert!(!alias.contains_key("betaApi"));
+        assert!(!alias.contains_key("adaptiveThinking"));
     }
 
     #[tokio::test]

@@ -6,7 +6,7 @@ use super::{
     api_error::read_api_error_message,
     identity::parse_kimi_code_custom_headers,
     managed_models::{
-        ManagedKimiCodeModelInfo, ModelParseError, SupportsThinkingType, parse_model_info,
+        ManagedKimiCodeModelInfo, ModelParseError, model_capabilities, parse_model_info,
     },
     model_alias_merge::{MANAGED_KIMI_MODEL_FIELDS, merge_refreshed_model_alias},
 };
@@ -98,27 +98,7 @@ pub fn is_open_platform_id(id: &str) -> bool {
 
 // Original: capabilitiesForModel()
 pub fn capabilities_for_model(model: &ManagedKimiCodeModelInfo) -> Option<Vec<String>> {
-    let mut capabilities = Vec::new();
-    match model.supports_thinking_type {
-        Some(SupportsThinkingType::Only) => {
-            capabilities.push("thinking".to_owned());
-            capabilities.push("always_thinking".to_owned());
-        }
-        Some(SupportsThinkingType::Both) => capabilities.push("thinking".to_owned()),
-        Some(SupportsThinkingType::No) => {}
-        None if model.supports_reasoning => capabilities.push("thinking".to_owned()),
-        None => {}
-    }
-    if model.supports_image_in {
-        capabilities.push("image_in".to_owned());
-    }
-    if model.supports_video_in {
-        capabilities.push("video_in".to_owned());
-    }
-    if model.supports_tool_use {
-        capabilities.push("tool_use".to_owned());
-    }
-    (!capabilities.is_empty()).then_some(capabilities)
+    model_capabilities(model)
 }
 
 // Original: filterModelsByPrefix()
@@ -337,7 +317,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::oauth::managed_models::ManagedKimiCodeProtocol;
+    use crate::oauth::managed_models::{ManagedKimiCodeProtocol, SupportsThinkingType};
 
     fn model(id: &str) -> ManagedKimiCodeModelInfo {
         ManagedKimiCodeModelInfo {
