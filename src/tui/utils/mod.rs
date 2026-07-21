@@ -8,5 +8,6 @@ pub mod searchable_list;
 pub mod session_picker_rows;
 pub mod shell_output;
 pub mod tab_strip;
+pub mod terminal_focus;
 pub mod terminal_notification;
 pub mod thinking_config;
