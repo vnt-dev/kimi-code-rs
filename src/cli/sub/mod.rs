@@ -5,6 +5,7 @@ pub mod login_flow;
 pub mod plugin_run_node;
 pub mod provider;
 pub mod provider_config;
+pub mod provider_runtime;
 pub mod upgrade;
 pub mod vis;
 pub mod web;
