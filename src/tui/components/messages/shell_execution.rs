@@ -9,6 +9,7 @@ use crate::tui::{
 use super::tool_renderers::truncated::{
     PREVIEW_LINES, TruncatedOutputComponent, TruncatedOutputOptions,
 };
+use super::tool_renderers::types::{RenderedComponents, RendererContext};
 
 #[derive(Debug, Clone, Default)]
 pub struct ShellExecutionOptions {
@@ -117,13 +118,13 @@ impl Component for ShellExecutionComponent {
 /// Original: shell-execution.ts shellExecutionResultRenderer()
 pub fn shell_execution_result_renderer(
     _tool_call: &ToolCallBlockData,
-    result: ToolResultBlockData,
-    expanded: bool,
-) -> Vec<Box<dyn Component>> {
+    result: &ToolResultBlockData,
+    context: RendererContext,
+) -> RenderedComponents {
     vec![Box::new(ShellExecutionComponent::new(
         ShellExecutionOptions {
-            result: Some(result),
-            expanded,
+            result: Some(result.clone()),
+            expanded: context.expanded,
             ..ShellExecutionOptions::default()
         },
     ))]
@@ -249,7 +250,9 @@ mod tests {
             turn_id: None,
             truncated: None,
         };
-        let mut components = shell_execution_result_renderer(&tool_call, result("ok"), false);
+        let result = result("ok");
+        let mut components =
+            shell_execution_result_renderer(&tool_call, &result, RendererContext::default());
         let rendered = components
             .iter_mut()
             .flat_map(|component| component.render(100))
