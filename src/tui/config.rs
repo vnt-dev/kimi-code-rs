@@ -104,6 +104,26 @@ impl Error for TuiConfigValidationError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TuiConfigValidationIssue {
+    pub path: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Debug)]
+pub struct TuiConfigIssuesError {
+    pub issues: Vec<TuiConfigValidationIssue>,
+    message: String,
+}
+
+impl fmt::Display for TuiConfigIssuesError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl Error for TuiConfigIssuesError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuiConfigParseError {
     pub fallback: TuiConfig,
 }
@@ -201,6 +221,105 @@ pub fn parse_tui_config(toml_text: &str) -> Result<TuiConfig, TuiConfigValidatio
     }
     let raw = toml::from_str::<TuiConfigFile>(toml_text).map_err(TuiConfigValidationError)?;
     Ok(normalize_tui_config(raw))
+}
+
+// Exposes the multi-issue validation surface used by `kimi doctor`. Zod in
+// the original reports every shape error rather than stopping after the first.
+pub fn validate_tui_config_toml(toml_text: &str) -> Result<(), TuiConfigIssuesError> {
+    let table = toml_text
+        .parse::<toml::Table>()
+        .map_err(|error| TuiConfigIssuesError {
+            issues: Vec::new(),
+            message: error.to_string(),
+        })?;
+    let mut issues = Vec::new();
+    validate_optional_string(&table, "theme", &mut issues, &["theme"]);
+    validate_optional_bool(
+        &table,
+        "disable_paste_burst",
+        &mut issues,
+        &["disable_paste_burst"],
+    );
+    validate_optional_section(&table, "editor", &mut issues, |section, issues| {
+        validate_optional_string(section, "command", issues, &["editor", "command"]);
+    });
+    validate_optional_section(&table, "notifications", &mut issues, |section, issues| {
+        validate_optional_bool(section, "enabled", issues, &["notifications", "enabled"]);
+        if let Some(value) = section.get("notification_condition")
+            && !matches!(value.as_str(), Some("unfocused") | Some("always"))
+        {
+            issues.push(TuiConfigValidationIssue {
+                path: vec![
+                    "notifications".to_owned(),
+                    "notification_condition".to_owned(),
+                ],
+                message: "Expected one of: unfocused, always".to_owned(),
+            });
+        }
+    });
+    validate_optional_section(&table, "upgrade", &mut issues, |section, issues| {
+        validate_optional_bool(
+            section,
+            "auto_install",
+            issues,
+            &["upgrade", "auto_install"],
+        );
+    });
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(TuiConfigIssuesError {
+            message: format!("{} TUI config validation issue(s)", issues.len()),
+            issues,
+        })
+    }
+}
+
+fn validate_optional_section(
+    table: &toml::Table,
+    key: &str,
+    issues: &mut Vec<TuiConfigValidationIssue>,
+    validate: impl FnOnce(&toml::Table, &mut Vec<TuiConfigValidationIssue>),
+) {
+    let Some(value) = table.get(key) else {
+        return;
+    };
+    let Some(section) = value.as_table() else {
+        issues.push(TuiConfigValidationIssue {
+            path: vec![key.to_owned()],
+            message: "Expected a table".to_owned(),
+        });
+        return;
+    };
+    validate(section, issues);
+}
+
+fn validate_optional_string(
+    table: &toml::Table,
+    key: &str,
+    issues: &mut Vec<TuiConfigValidationIssue>,
+    path: &[&str],
+) {
+    if table.get(key).is_some_and(|value| !value.is_str()) {
+        issues.push(TuiConfigValidationIssue {
+            path: path.iter().map(|segment| (*segment).to_owned()).collect(),
+            message: "Expected a string".to_owned(),
+        });
+    }
+}
+
+fn validate_optional_bool(
+    table: &toml::Table,
+    key: &str,
+    issues: &mut Vec<TuiConfigValidationIssue>,
+    path: &[&str],
+) {
+    if table.get(key).is_some_and(|value| !value.is_bool()) {
+        issues.push(TuiConfigValidationIssue {
+            path: path.iter().map(|segment| (*segment).to_owned()).collect(),
+            message: "Expected a boolean".to_owned(),
+        });
+    }
 }
 
 fn normalize_tui_config(raw: TuiConfigFile) -> TuiConfig {
@@ -378,6 +497,26 @@ auto_install = false
         assert!(parse_tui_config("disable_paste_burst = \"yes\"").is_err());
         assert!(
             parse_tui_config("[notifications]\nnotification_condition = \"sometimes\"").is_err()
+        );
+    }
+
+    #[test]
+    fn doctor_validation_collects_multiple_field_paths() {
+        let error = validate_tui_config_toml(
+            "editor = 123\n[notifications]\nenabled = \"yes\"\nnotification_condition = \"sometimes\"",
+        )
+        .expect_err("issues");
+        assert_eq!(
+            error
+                .issues
+                .iter()
+                .map(|issue| issue.path.join("."))
+                .collect::<Vec<_>>(),
+            [
+                "editor",
+                "notifications.enabled",
+                "notifications.notification_condition"
+            ]
         );
     }
 
