@@ -10,6 +10,7 @@ pub mod experiments_selector;
 pub mod feedback_input_dialog;
 pub mod goal_start_permission_prompt;
 pub mod help_panel;
+pub mod model_selector;
 pub mod permission_selector;
 pub mod platform_selector;
 pub mod question_dialog;
@@ -42,6 +43,9 @@ pub use goal_start_permission_prompt::{
     goal_start_options,
 };
 pub use help_panel::{HelpPanelCommand, HelpPanelComponent, KeyboardShortcut};
+pub use model_selector::{
+    ModelSelection, ModelSelectorComponent, ModelSelectorOptions, ThinkingAvailability,
+};
 pub use permission_selector::PermissionSelectorComponent;
 pub use platform_selector::PlatformSelectorComponent;
 pub use question_dialog::QuestionDialogComponent;
