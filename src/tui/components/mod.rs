@@ -1,5 +1,6 @@
 pub mod basic;
 pub mod core;
+pub mod media;
 pub mod messages;
 pub mod render;
 
