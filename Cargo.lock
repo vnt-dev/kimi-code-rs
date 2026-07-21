@@ -279,6 +279,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -296,12 +306,19 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "futures-util",
+ "if-addrs",
  "regex",
  "serde",
  "serde_json",
  "tokio",
  "url",
 ]
+
+[[package]]
+name = "libc"
+version = "0.2.188"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22053b6a34f84abc97f9129e61334f40174659a1b9bd18c970b83db6a9a6348b"
 
 [[package]]
 name = "litemap"
