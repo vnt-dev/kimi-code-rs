@@ -9,7 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 
-use super::acp::{CLI_USER_AGENT_PRODUCT, HostIdentity};
+use crate::cli::version::{CLI_USER_AGENT_PRODUCT, HostIdentity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginUiMode {

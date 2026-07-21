@@ -1,3 +1,4 @@
+pub mod build_info;
 pub mod commands;
 pub mod experimental_v2;
 pub mod goal_prompt;
@@ -10,3 +11,4 @@ pub mod run_prompt;
 pub mod startup_error;
 pub mod sub;
 pub mod update;
+pub mod version;

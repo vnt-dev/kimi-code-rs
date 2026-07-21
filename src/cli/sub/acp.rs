@@ -3,18 +3,12 @@ use std::{collections::BTreeMap, error::Error, fmt};
 use async_trait::async_trait;
 
 use crate::{
+    cli::version::{CLI_USER_AGENT_PRODUCT, HostIdentity},
     sdk::types::SkillSummary,
     tui::commands::skills::{SkillSlashCommands, build_skill_slash_commands},
 };
 
 pub const KIMI_CODE_HOME_ENV: &str = "KIMI_CODE_HOME";
-pub const CLI_USER_AGENT_PRODUCT: &str = "kimi-code-cli";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostIdentity {
-    pub user_agent_product: String,
-    pub version: String,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HarnessUiMode {
