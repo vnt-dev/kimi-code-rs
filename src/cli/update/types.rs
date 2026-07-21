@@ -33,6 +33,7 @@ pub struct RolloutBatch {
 pub struct UpdateManifest {
     pub version: String,
     pub published_at: String,
+    #[serde(default)]
     pub rollout: Vec<RolloutBatch>,
 }
 
