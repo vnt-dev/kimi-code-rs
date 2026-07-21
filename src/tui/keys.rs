@@ -27,6 +27,111 @@ pub enum ListKey {
     Backspace,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorKey {
+    Escape,
+    Backspace,
+    Delete,
+    Enter,
+    Tab,
+    ShiftTab,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    Ctrl(char),
+    CtrlMinus,
+}
+
+/// Editor-oriented subset of pi-tui `matchesKey()`.
+pub fn matches_editor_key(data: &str, key: EditorKey) -> bool {
+    if matches_legacy_editor_key(data, key) {
+        return true;
+    }
+    let Some(event) = parse_kitty_event(data) else {
+        return false;
+    };
+    if event.event_type == Some(3) {
+        return false;
+    }
+    let modifiers = event.modifiers & !LOCK_MASK;
+    let codepoint = normalize_kitty_functional_codepoint(event.codepoint);
+    match key {
+        EditorKey::Escape => modifiers == 0 && matches!(codepoint, 27 | -5),
+        EditorKey::Backspace => modifiers == 0 && codepoint == 127,
+        EditorKey::Delete => modifiers == 0 && codepoint == -6,
+        EditorKey::Enter => modifiers == 0 && matches!(codepoint, 10 | 13),
+        EditorKey::Tab => modifiers == 0 && codepoint == 9,
+        EditorKey::ShiftTab => modifiers == SHIFT && codepoint == 9,
+        EditorKey::Up => modifiers == 0 && codepoint == -1,
+        EditorKey::Down => modifiers == 0 && codepoint == -2,
+        EditorKey::Left => modifiers == 0 && codepoint == -3,
+        EditorKey::Right => modifiers == 0 && codepoint == -4,
+        EditorKey::Home => modifiers == 0 && codepoint == -7,
+        EditorKey::End => modifiers == 0 && codepoint == -8,
+        EditorKey::Ctrl(character) => {
+            modifiers == CTRL && codepoint == i64::from(u32::from(character.to_ascii_lowercase()))
+        }
+        EditorKey::CtrlMinus => modifiers == CTRL && codepoint == i64::from(b'-'),
+    }
+}
+
+/// Kitty event type `3` is a key release and must never become editor text.
+pub fn is_key_release(data: &str) -> bool {
+    parse_kitty_event(data).is_some_and(|event| event.event_type == Some(3))
+}
+
+fn matches_legacy_editor_key(data: &str, key: EditorKey) -> bool {
+    match key {
+        EditorKey::Escape => data == "\u{1b}",
+        EditorKey::Backspace => matches!(data, "\u{7f}" | "\u{8}"),
+        EditorKey::Delete => data == "\u{1b}[3~",
+        EditorKey::Enter => matches!(data, "\r" | "\n"),
+        EditorKey::Tab => data == "\t",
+        EditorKey::ShiftTab => data == "\u{1b}[Z",
+        EditorKey::Up => matches!(data, "\u{1b}[A" | "\u{1b}OA"),
+        EditorKey::Down => matches!(data, "\u{1b}[B" | "\u{1b}OB"),
+        EditorKey::Left => matches!(data, "\u{1b}[D" | "\u{1b}OD"),
+        EditorKey::Right => matches!(data, "\u{1b}[C" | "\u{1b}OC"),
+        EditorKey::Home => matches!(data, "\u{1b}[H" | "\u{1b}OH" | "\u{1b}[1~"),
+        EditorKey::End => matches!(data, "\u{1b}[F" | "\u{1b}OF" | "\u{1b}[4~"),
+        EditorKey::Ctrl(character) if character.is_ascii_alphabetic() => {
+            let control = (character.to_ascii_lowercase() as u8) & 0x1f;
+            data.as_bytes() == [control]
+        }
+        EditorKey::CtrlMinus => data == "\u{1f}",
+        EditorKey::Ctrl(_) => false,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct KittyEvent {
+    codepoint: i64,
+    modifiers: i64,
+    event_type: Option<i64>,
+}
+
+fn parse_kitty_event(data: &str) -> Option<KittyEvent> {
+    let captures = KITTY_CSI_U.captures(data)?;
+    let codepoint = captures[1].parse().ok()?;
+    let modifiers = captures
+        .get(4)
+        .and_then(|value| value.as_str().parse::<i64>().ok())
+        .unwrap_or(1)
+        - 1;
+    let event_type = captures
+        .get(5)
+        .or_else(|| captures.get(3))
+        .and_then(|value| value.as_str().parse().ok());
+    Some(KittyEvent {
+        codepoint,
+        modifiers,
+        event_type,
+    })
+}
+
 // Original:
 //   packages/pi-tui/src/keys.ts
 //   decodeKittyPrintable()
@@ -145,7 +250,10 @@ fn parse_kitty_csi_u(data: &str) -> Option<(i64, i64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ListKey, decode_kitty_printable, matches_list_key};
+    use super::{
+        EditorKey, ListKey, decode_kitty_printable, is_key_release, matches_editor_key,
+        matches_list_key,
+    };
 
     #[test]
     fn decodes_plain_shifted_and_keypad_printable_keys() {
@@ -179,5 +287,34 @@ mod tests {
         assert!(matches_list_key("\u{1b}[57420u", ListKey::Down));
         assert!(matches_list_key("\u{1b}[57421u", ListKey::PageUp));
         assert!(matches_list_key("\u{1b}[127u", ListKey::Backspace));
+    }
+
+    #[test]
+    fn matches_legacy_editor_navigation_and_controls() {
+        assert!(matches_editor_key("\u{1b}", EditorKey::Escape));
+        assert!(matches_editor_key("\u{7f}", EditorKey::Backspace));
+        assert!(matches_editor_key("\u{1b}[3~", EditorKey::Delete));
+        assert!(matches_editor_key("\r", EditorKey::Enter));
+        assert!(matches_editor_key("\t", EditorKey::Tab));
+        assert!(matches_editor_key("\u{1b}[Z", EditorKey::ShiftTab));
+        assert!(matches_editor_key("\u{1b}[D", EditorKey::Left));
+        assert!(matches_editor_key("\u{1b}[C", EditorKey::Right));
+        assert!(matches_editor_key("\u{1b}[H", EditorKey::Home));
+        assert!(matches_editor_key("\u{1b}[F", EditorKey::End));
+        assert!(matches_editor_key("\u{3}", EditorKey::Ctrl('c')));
+        assert!(matches_editor_key("\u{1f}", EditorKey::CtrlMinus));
+        assert!(!matches_editor_key("c", EditorKey::Ctrl('c')));
+    }
+
+    #[test]
+    fn matches_kitty_editor_keys_and_rejects_releases() {
+        assert!(matches_editor_key("\u{1b}[99;5u", EditorKey::Ctrl('c')));
+        assert!(matches_editor_key("\u{1b}[9;2u", EditorKey::ShiftTab));
+        assert!(matches_editor_key("\u{1b}[57417u", EditorKey::Right));
+        assert!(matches_editor_key("\u{1b}[127u", EditorKey::Backspace));
+        assert!(is_key_release("\u{1b}[99;5:3u"));
+        assert!(!matches_editor_key("\u{1b}[99;5:3u", EditorKey::Ctrl('c')));
+        assert!(!is_key_release("\u{1b}[99;5u"));
+        assert!(!is_key_release("c"));
     }
 }
