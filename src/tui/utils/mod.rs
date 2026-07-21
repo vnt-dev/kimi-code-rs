@@ -17,6 +17,7 @@ pub mod message_replay;
 pub mod paging;
 pub mod plugin_source_label;
 pub mod printable_key;
+pub mod render_cache;
 pub mod searchable_list;
 pub mod session_picker_rows;
 pub mod shell_output;
