@@ -370,6 +370,16 @@ pub struct ContextMessage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PluginCommandDef {
+    pub plugin_id: String,
+    pub name: String,
+    pub description: String,
+    pub body: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CronTaskSnapshot {
     pub id: String,
     pub cron: String,
