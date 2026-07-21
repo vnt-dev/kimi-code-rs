@@ -81,6 +81,12 @@ impl<'a> PromptTranscriptWriter<'a> {
             thinking_writer: PromptBlockWriter::new(stderr),
         }
     }
+
+    /// Write tool progress exactly as the original driver writes to stderr,
+    /// without changing the transcript block's indentation state.
+    pub fn write_raw_stderr(&mut self, text: &str) {
+        self.thinking_writer.write_raw(text);
+    }
 }
 
 impl PromptTurnWriter for PromptTranscriptWriter<'_> {
@@ -345,6 +351,10 @@ impl<'a> PromptBlockWriter<'a> {
             }
         }
         self.output.write(&rendered);
+    }
+
+    fn write_raw(&mut self, chunk: &str) {
+        self.output.write(chunk);
     }
 
     fn finish(&mut self) {
