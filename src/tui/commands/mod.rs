@@ -1,3 +1,4 @@
+pub mod add_dir;
 pub mod btw;
 pub mod complete_args;
 pub mod copy;
