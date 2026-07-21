@@ -1,6 +1,12 @@
 use async_trait::async_trait;
 
-use crate::sdk::types::PermissionMode;
+use crate::{
+    sdk::types::PermissionMode,
+    tui::{
+        config::TuiConfig,
+        theme::{colors::ResolvedTheme, custom_theme_loader::load_custom_theme_merged},
+    },
+};
 
 pub const NO_ACTIVE_SESSION_MESSAGE: &str = "No active session. Send /login to login.";
 
@@ -23,6 +29,31 @@ pub trait ModeCommandHost {
     fn update_permission_mode(&mut self, mode: PermissionMode);
     fn show_notice(&mut self, title: &str, detail: Option<&str>);
     fn show_error(&mut self, message: &str);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigStatusTone {
+    Normal,
+    Error,
+}
+
+#[async_trait(?Send)]
+pub trait EditorThemeCommandHost {
+    fn current_tui_config(&self) -> TuiConfig;
+    async fn pick_editor(&mut self, current_value: &str) -> Option<String>;
+    async fn pick_theme(&mut self, current_value: &str) -> Option<String>;
+    async fn save_tui_config(&mut self, config: &TuiConfig) -> Result<(), String>;
+    async fn apply_theme(
+        &mut self,
+        theme: &str,
+        resolved: Option<ResolvedTheme>,
+    ) -> Result<(), String>;
+    fn resolved_auto_theme(&self) -> ResolvedTheme;
+    fn update_editor_command(&mut self, command: Option<String>);
+    fn refresh_terminal_theme_tracking(&mut self);
+    fn track_theme_switch(&mut self, theme: &str);
+    fn show_config_status(&mut self, message: &str, tone: ConfigStatusTone);
+    fn show_config_error(&mut self, message: &str);
 }
 
 // Original: `src/tui/commands/config.ts`, `handlePlanCommand()`.
@@ -155,8 +186,126 @@ pub async fn handle_compact_command(
         .await
 }
 
+// Original: `handleEditorCommand()` and `showEditorPicker()`.
+pub async fn handle_editor_command(host: &mut impl EditorThemeCommandHost, args: &str) {
+    let command = args.trim();
+    if command.is_empty() {
+        let current = host.current_tui_config().editor_command.unwrap_or_default();
+        if let Some(value) = host.pick_editor(&current).await {
+            apply_editor_choice(host, &value).await;
+        }
+    } else {
+        apply_editor_choice(host, command).await;
+    }
+}
+
+// Original: `applyEditorChoice()`.
+async fn apply_editor_choice(host: &mut impl EditorThemeCommandHost, value: &str) {
+    let mut config = host.current_tui_config();
+    let previous = config.editor_command.as_deref().unwrap_or_default();
+    if !value.is_empty() && value == previous {
+        host.show_config_status(
+            &format!("Editor unchanged: {value}"),
+            ConfigStatusTone::Normal,
+        );
+        return;
+    }
+    let editor_command = (!value.is_empty()).then(|| value.to_owned());
+    config.editor_command.clone_from(&editor_command);
+    if let Err(error) = host.save_tui_config(&config).await {
+        host.show_config_status(
+            &format!("Failed to save editor: {error}"),
+            ConfigStatusTone::Error,
+        );
+        return;
+    }
+    host.update_editor_command(editor_command);
+    host.show_config_status(
+        if value.is_empty() {
+            "Editor set to auto-detect ($VISUAL / $EDITOR).".to_owned()
+        } else {
+            format!("Editor set to \"{value}\".")
+        }
+        .as_str(),
+        ConfigStatusTone::Normal,
+    );
+}
+
+// Original: `handleThemeCommand()` and `showThemePicker()`.
+pub async fn handle_theme_command(host: &mut impl EditorThemeCommandHost, args: &str) {
+    let theme = args.trim();
+    if theme.is_empty() {
+        let current = host.current_tui_config().theme;
+        if let Some(value) = host.pick_theme(&current).await {
+            apply_theme_choice(host, &value).await;
+        }
+        return;
+    }
+    if !is_built_in_theme(theme) && load_custom_theme_merged(theme).await.is_none() {
+        host.show_config_error(&format!("Unknown theme: {theme}"));
+        return;
+    }
+    apply_theme_choice(host, theme).await;
+}
+
+const fn is_built_in_theme(theme: &str) -> bool {
+    matches!(theme.as_bytes(), b"auto" | b"dark" | b"light")
+}
+
+// Original: `applyThemeChoice()`.
+async fn apply_theme_choice(host: &mut impl EditorThemeCommandHost, theme: &str) {
+    let mut config = host.current_tui_config();
+    if theme == config.theme {
+        if theme == "auto" {
+            host.refresh_terminal_theme_tracking();
+        }
+        host.show_config_status(
+            &format!("Theme unchanged: \"{theme}\"."),
+            ConfigStatusTone::Normal,
+        );
+        return;
+    }
+    if !is_built_in_theme(theme) && load_custom_theme_merged(theme).await.is_none() {
+        host.show_config_status(
+            &format!("Theme \"{theme}\" could not be loaded."),
+            ConfigStatusTone::Error,
+        );
+        return;
+    }
+    config.theme = theme.to_owned();
+    if let Err(error) = host.save_tui_config(&config).await {
+        host.show_config_status(
+            &format!("Failed to save theme: {error}"),
+            ConfigStatusTone::Error,
+        );
+        return;
+    }
+    let resolved = (theme == "auto").then(|| host.resolved_auto_theme());
+    if let Err(error) = host.apply_theme(theme, resolved).await {
+        host.show_config_error(&error);
+        return;
+    }
+    host.refresh_terminal_theme_tracking();
+    host.track_theme_switch(theme);
+    let detail = resolved.map_or_else(String::new, |resolved| {
+        format!(
+            " (tracking terminal; current: {})",
+            match resolved {
+                ResolvedTheme::Dark => "dark",
+                ResolvedTheme::Light => "light",
+            }
+        )
+    });
+    host.show_config_status(
+        &format!("Theme set to \"{theme}\"{detail}."),
+        ConfigStatusTone::Normal,
+    );
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::tui::config::{NotificationCondition, NotificationsConfig, UpgradePreferences};
+
     use super::*;
 
     struct Host {
@@ -305,5 +454,141 @@ mod tests {
         handle_plan_command(&mut host, "on").await;
         assert!(!host.state.plan_mode);
         assert_eq!(host.errors, ["Failed to set plan mode: backend down"]);
+    }
+
+    struct EditorThemeHost {
+        config: TuiConfig,
+        editor_pick: Option<String>,
+        theme_pick: Option<String>,
+        saved: Vec<TuiConfig>,
+        applied: Vec<(String, Option<ResolvedTheme>)>,
+        statuses: Vec<(String, ConfigStatusTone)>,
+        errors: Vec<String>,
+        refreshes: usize,
+        tracked: Vec<String>,
+        save_error: Option<String>,
+    }
+
+    impl Default for EditorThemeHost {
+        fn default() -> Self {
+            Self {
+                config: TuiConfig {
+                    theme: "dark".to_owned(),
+                    disable_paste_burst: false,
+                    editor_command: None,
+                    notifications: NotificationsConfig {
+                        enabled: true,
+                        condition: NotificationCondition::Unfocused,
+                    },
+                    upgrade: UpgradePreferences { auto_install: true },
+                },
+                editor_pick: None,
+                theme_pick: None,
+                saved: Vec::new(),
+                applied: Vec::new(),
+                statuses: Vec::new(),
+                errors: Vec::new(),
+                refreshes: 0,
+                tracked: Vec::new(),
+                save_error: None,
+            }
+        }
+    }
+
+    #[async_trait(?Send)]
+    impl EditorThemeCommandHost for EditorThemeHost {
+        fn current_tui_config(&self) -> TuiConfig {
+            self.config.clone()
+        }
+
+        async fn pick_editor(&mut self, _: &str) -> Option<String> {
+            self.editor_pick.take()
+        }
+
+        async fn pick_theme(&mut self, _: &str) -> Option<String> {
+            self.theme_pick.take()
+        }
+
+        async fn save_tui_config(&mut self, config: &TuiConfig) -> Result<(), String> {
+            if let Some(error) = &self.save_error {
+                return Err(error.clone());
+            }
+            self.saved.push(config.clone());
+            self.config = config.clone();
+            Ok(())
+        }
+
+        async fn apply_theme(
+            &mut self,
+            theme: &str,
+            resolved: Option<ResolvedTheme>,
+        ) -> Result<(), String> {
+            self.applied.push((theme.to_owned(), resolved));
+            Ok(())
+        }
+
+        fn resolved_auto_theme(&self) -> ResolvedTheme {
+            ResolvedTheme::Light
+        }
+
+        fn update_editor_command(&mut self, command: Option<String>) {
+            self.config.editor_command = command;
+        }
+
+        fn refresh_terminal_theme_tracking(&mut self) {
+            self.refreshes += 1;
+        }
+
+        fn track_theme_switch(&mut self, theme: &str) {
+            self.tracked.push(theme.to_owned());
+        }
+
+        fn show_config_status(&mut self, message: &str, tone: ConfigStatusTone) {
+            self.statuses.push((message.to_owned(), tone));
+        }
+
+        fn show_config_error(&mut self, message: &str) {
+            self.errors.push(message.to_owned());
+        }
+    }
+
+    #[tokio::test]
+    async fn editor_argument_persists_before_updating_state() {
+        let mut host = EditorThemeHost::default();
+        handle_editor_command(&mut host, "  nvim  ").await;
+        assert_eq!(host.config.editor_command.as_deref(), Some("nvim"));
+        assert_eq!(host.saved.len(), 1);
+        assert_eq!(host.statuses[0].0, "Editor set to \"nvim\".");
+    }
+
+    #[tokio::test]
+    async fn editor_picker_can_restore_auto_detection() {
+        let mut host = EditorThemeHost::default();
+        host.config.editor_command = Some("vim".to_owned());
+        host.editor_pick = Some(String::new());
+        handle_editor_command(&mut host, "").await;
+        assert_eq!(host.config.editor_command, None);
+        assert!(host.statuses[0].0.contains("auto-detect"));
+    }
+
+    #[tokio::test]
+    async fn auto_theme_applies_resolved_palette_then_tracks_terminal() {
+        let mut host = EditorThemeHost::default();
+        handle_theme_command(&mut host, "auto").await;
+        assert_eq!(
+            host.applied,
+            [("auto".to_owned(), Some(ResolvedTheme::Light))]
+        );
+        assert_eq!(host.refreshes, 1);
+        assert_eq!(host.tracked, ["auto"]);
+        assert!(host.statuses[0].0.contains("current: light"));
+    }
+
+    #[tokio::test]
+    async fn unknown_custom_theme_is_rejected_before_save() {
+        let mut host = EditorThemeHost::default();
+        handle_theme_command(&mut host, "definitely-missing-theme").await;
+        assert_eq!(host.errors, ["Unknown theme: definitely-missing-theme"]);
+        assert!(host.saved.is_empty());
     }
 }
