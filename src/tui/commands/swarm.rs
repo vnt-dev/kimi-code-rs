@@ -1,3 +1,5 @@
+use std::{fmt::Display, future::Future};
+
 use crate::sdk::types::PermissionMode;
 
 pub const LLM_NOT_SET_MESSAGE: &str = "LLM not set, send \"/login\" to login";
@@ -48,6 +50,27 @@ pub struct SwarmCommandState<'a> {
     pub model: &'a str,
     pub permission_mode: PermissionMode,
     pub swarm_mode: bool,
+}
+
+pub trait SwarmCommandHost {
+    type Error: Display + Send;
+
+    fn set_permission(
+        &mut self,
+        mode: PermissionMode,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    fn set_swarm_mode(
+        &mut self,
+        enabled: bool,
+        trigger: SwarmModeTrigger,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    fn update_permission_mode(&mut self, mode: PermissionMode);
+    fn update_swarm_mode(&mut self, enabled: bool, entry: Option<SwarmModeTrigger>);
+    fn render_swarm_mode_marker(&mut self, active: bool);
+    fn send_normal_user_input(&mut self, prompt: &str);
+    fn show_error(&mut self, message: &str);
 }
 
 /// Resolve the synchronous branches of `handleSwarmCommand`. The UI adapter
@@ -127,6 +150,64 @@ pub fn plan_swarm_permission_choice(
     }
 }
 
+/// Apply a choice from the Manual-mode permission prompt. Permission changes
+/// finish before the swarm action starts, matching the original call order.
+///
+/// Original:
+///   apps/kimi-code/src/tui/commands/swarm.ts
+///   startSwarmWithPermission(), setPermissionForSwarm()
+pub async fn execute_swarm_permission_plan<H: SwarmCommandHost>(
+    host: &mut H,
+    plan: SwarmPermissionPlan,
+) {
+    if let Some(mode) = plan.permission_change {
+        if let Err(error) = host.set_permission(mode).await {
+            host.show_error(&format!("Failed to set permission mode: {error}"));
+            return;
+        }
+        host.update_permission_mode(mode);
+    }
+    execute_swarm_action(host, plan.action).await;
+}
+
+/// Original:
+///   apps/kimi-code/src/tui/commands/swarm.ts
+///   startSwarmTask(), setSwarmMode(), renderSwarmModeMarker()
+pub async fn execute_swarm_action<H: SwarmCommandHost>(host: &mut H, action: SwarmAction) {
+    match action {
+        SwarmAction::SetMode { enabled, trigger } => {
+            if !set_swarm_mode(host, enabled, trigger).await {
+                return;
+            }
+            host.render_swarm_mode_marker(enabled);
+        }
+        SwarmAction::StartTask {
+            prompt,
+            enable_mode,
+        } => {
+            if enable_mode && !set_swarm_mode(host, true, SwarmModeTrigger::Task).await {
+                return;
+            }
+            host.render_swarm_mode_marker(true);
+            host.send_normal_user_input(&prompt);
+        }
+    }
+}
+
+async fn set_swarm_mode<H: SwarmCommandHost>(
+    host: &mut H,
+    enabled: bool,
+    trigger: SwarmModeTrigger,
+) -> bool {
+    if let Err(error) = host.set_swarm_mode(enabled, trigger).await {
+        let operation = if enabled { "enable" } else { "disable" };
+        host.show_error(&format!("Failed to {operation} swarm mode: {error}"));
+        return false;
+    }
+    host.update_swarm_mode(enabled, enabled.then_some(trigger));
+    true
+}
+
 /// Original: swarm.ts swarmModeSubcommand()
 pub fn swarm_mode_subcommand(input: &str) -> Option<bool> {
     match input.to_lowercase().as_str() {
@@ -139,6 +220,53 @@ pub fn swarm_mode_subcommand(input: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct Host {
+        operations: Vec<String>,
+        permission_error: Option<&'static str>,
+        swarm_error: Option<&'static str>,
+    }
+
+    impl SwarmCommandHost for Host {
+        type Error = &'static str;
+
+        async fn set_permission(&mut self, mode: PermissionMode) -> Result<(), Self::Error> {
+            self.operations.push(format!("set_permission:{mode:?}"));
+            self.permission_error.take().map_or(Ok(()), Err)
+        }
+
+        async fn set_swarm_mode(
+            &mut self,
+            enabled: bool,
+            trigger: SwarmModeTrigger,
+        ) -> Result<(), Self::Error> {
+            self.operations
+                .push(format!("set_swarm:{enabled}:{trigger:?}"));
+            self.swarm_error.take().map_or(Ok(()), Err)
+        }
+
+        fn update_permission_mode(&mut self, mode: PermissionMode) {
+            self.operations.push(format!("permission_state:{mode:?}"));
+        }
+
+        fn update_swarm_mode(&mut self, enabled: bool, entry: Option<SwarmModeTrigger>) {
+            self.operations
+                .push(format!("swarm_state:{enabled}:{entry:?}"));
+        }
+
+        fn render_swarm_mode_marker(&mut self, active: bool) {
+            self.operations.push(format!("marker:{active}"));
+        }
+
+        fn send_normal_user_input(&mut self, prompt: &str) {
+            self.operations.push(format!("send:{prompt}"));
+        }
+
+        fn show_error(&mut self, message: &str) {
+            self.operations.push(format!("error:{message}"));
+        }
+    }
 
     fn state(permission_mode: PermissionMode, swarm_mode: bool) -> SwarmCommandState<'static> {
         SwarmCommandState {
@@ -226,6 +354,93 @@ mod tests {
         assert_eq!(
             plan_swarm_permission_choice(&mode_prompt, PermissionMode::Manual).permission_change,
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn executes_permission_mode_marker_and_prompt_in_order() {
+        let mut host = Host::default();
+        execute_swarm_permission_plan(
+            &mut host,
+            SwarmPermissionPlan {
+                permission_change: Some(PermissionMode::Auto),
+                action: SwarmAction::StartTask {
+                    prompt: "Ship feature X".to_owned(),
+                    enable_mode: true,
+                },
+            },
+        )
+        .await;
+        assert_eq!(
+            host.operations,
+            [
+                "set_permission:Auto",
+                "permission_state:Auto",
+                "set_swarm:true:Task",
+                "swarm_state:true:Some(Task)",
+                "marker:true",
+                "send:Ship feature X",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_reentering_mode_for_task_when_already_enabled() {
+        let mut host = Host::default();
+        execute_swarm_action(
+            &mut host,
+            SwarmAction::StartTask {
+                prompt: "Continue".to_owned(),
+                enable_mode: false,
+            },
+        )
+        .await;
+        assert_eq!(host.operations, ["marker:true", "send:Continue"]);
+    }
+
+    #[tokio::test]
+    async fn permission_and_mode_failures_short_circuit_later_side_effects() {
+        let mut permission_failure = Host {
+            permission_error: Some("denied"),
+            ..Host::default()
+        };
+        execute_swarm_permission_plan(
+            &mut permission_failure,
+            SwarmPermissionPlan {
+                permission_change: Some(PermissionMode::Yolo),
+                action: SwarmAction::StartTask {
+                    prompt: "task".to_owned(),
+                    enable_mode: true,
+                },
+            },
+        )
+        .await;
+        assert_eq!(
+            permission_failure.operations,
+            [
+                "set_permission:Yolo",
+                "error:Failed to set permission mode: denied"
+            ]
+        );
+
+        let mut mode_failure = Host {
+            swarm_error: Some("denied"),
+            ..Host::default()
+        };
+        execute_swarm_action(
+            &mut mode_failure,
+            SwarmAction::StartTask {
+                prompt: "task".to_owned(),
+                enable_mode: true,
+            },
+        )
+        .await;
+        assert_eq!(
+            mode_failure.operations,
+            [
+                "set_swarm:true:Task",
+                "error:Failed to enable swarm mode: denied"
+            ]
         );
     }
 }
