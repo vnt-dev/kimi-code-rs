@@ -5,5 +5,6 @@ pub mod goal;
 pub mod parse;
 pub mod plugin_commands;
 pub mod registry;
+pub mod resolve;
 pub mod skills;
 pub mod types;

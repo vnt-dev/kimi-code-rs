@@ -4,6 +4,17 @@ pub enum SlashCommandAvailability {
     IdleOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashCommandBusyReason {
+    Streaming,
+    Compacting,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashCommandInvalidReason {
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KimiSlashCommand {
     pub name: String,
