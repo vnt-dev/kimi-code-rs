@@ -186,6 +186,21 @@ pub enum PermissionMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ShellEnvironment {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub term: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub term_program: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub term_program_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multiplexer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
     pub input: u64,
     pub input_cache_read: u64,
