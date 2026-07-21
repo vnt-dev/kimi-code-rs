@@ -16,6 +16,20 @@ pub enum InstallSource {
     Unsupported,
 }
 
+impl InstallSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NpmGlobal => "npm-global",
+            Self::PnpmGlobal => "pnpm-global",
+            Self::YarnGlobal => "yarn-global",
+            Self::BunGlobal => "bun-global",
+            Self::Homebrew => "homebrew",
+            Self::Native => "native",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateTarget {
     pub version: String,
