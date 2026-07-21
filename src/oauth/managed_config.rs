@@ -27,6 +27,15 @@ pub struct ManagedKimiCodeApplyResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedKimiCodeCleanupResult {
+    pub provider_name: &'static str,
+    pub removed_provider: bool,
+    pub removed_models: Vec<String>,
+    pub default_model_cleared: bool,
+    pub removed_services: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SelectedDefaultModel {
     model_key: String,
     thinking: bool,
@@ -188,6 +197,81 @@ pub fn apply_managed_api_key_provider_models(
     Ok(())
 }
 
+// Original:
+//   packages/oauth/src/managed-kimi-code.ts
+//   applyManagedKimiCodeLogoutConfig()
+pub fn apply_managed_kimi_code_logout_config(config: &mut Map<String, Value>) {
+    if let Some(providers) = config.get_mut("providers").and_then(Value::as_object_mut) {
+        providers.remove(KIMI_CODE_PROVIDER_NAME);
+    }
+
+    let current_default = config
+        .get("defaultModel")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let mut removed_default_model = false;
+    let mut existing_models = config
+        .remove("models")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    existing_models.retain(|key, model| {
+        let remove = model.get("provider").and_then(Value::as_str) == Some(KIMI_CODE_PROVIDER_NAME);
+        if remove && current_default.as_deref() == Some(key) {
+            removed_default_model = true;
+        }
+        !remove
+    });
+    config.insert("models".to_owned(), Value::Object(existing_models));
+    if removed_default_model {
+        config.remove("defaultModel");
+    }
+    if config.get("defaultProvider").and_then(Value::as_str) == Some(KIMI_CODE_PROVIDER_NAME) {
+        config.remove("defaultProvider");
+    }
+    remove_managed_services(config);
+}
+
+// Original:
+//   packages/oauth/src/managed-kimi-code.ts
+//   clearManagedKimiCodeConfig()
+pub fn clear_managed_kimi_code_config(
+    config: &mut Map<String, Value>,
+) -> ManagedKimiCodeCleanupResult {
+    let removed_provider = config
+        .get_mut("providers")
+        .and_then(Value::as_object_mut)
+        .is_some_and(|providers| providers.remove(KIMI_CODE_PROVIDER_NAME).is_some());
+
+    let mut removed_models = Vec::new();
+    if let Some(models) = config.get_mut("models").and_then(Value::as_object_mut) {
+        models.retain(|key, model| {
+            let remove =
+                model.get("provider").and_then(Value::as_str) == Some(KIMI_CODE_PROVIDER_NAME);
+            if remove {
+                removed_models.push(key.clone());
+            }
+            !remove
+        });
+    }
+
+    let default_model_cleared = config
+        .get("defaultModel")
+        .and_then(Value::as_str)
+        .is_some_and(|default_model| removed_models.iter().any(|model| model == default_model));
+    if default_model_cleared {
+        config.remove("defaultModel");
+    }
+    let removed_services = remove_managed_services(config);
+
+    ManagedKimiCodeCleanupResult {
+        provider_name: KIMI_CODE_PROVIDER_NAME,
+        removed_provider,
+        removed_models,
+        default_model_cleared,
+        removed_services,
+    }
+}
+
 fn assert_positive_context_length(
     model: &ManagedKimiCodeModelInfo,
 ) -> Result<(), ManagedConfigError> {
@@ -305,6 +389,26 @@ fn thinking_enabled(config: &Map<String, Value>) -> Option<bool> {
         .and_then(Value::as_object)
         .and_then(|thinking| thinking.get("enabled"))
         .and_then(Value::as_bool)
+}
+
+fn remove_managed_services(config: &mut Map<String, Value>) -> Vec<String> {
+    let mut removed = Vec::new();
+    let remove_services =
+        if let Some(services) = config.get_mut("services").and_then(Value::as_object_mut) {
+            if services.remove("moonshotSearch").is_some() {
+                removed.push("moonshotSearch".to_owned());
+            }
+            if services.remove("moonshotFetch").is_some() {
+                removed.push("moonshotFetch".to_owned());
+            }
+            services.is_empty()
+        } else {
+            false
+        };
+    if remove_services {
+        config.remove("services");
+    }
+    removed
 }
 
 #[cfg(test)]
@@ -558,6 +662,130 @@ mod tests {
         .expect_err("invalid context");
         assert!(error.to_string().contains("positive context_length"));
         assert_eq!(config, original);
+    }
+
+    #[test]
+    fn logout_removes_managed_entries_but_keeps_thinking_and_custom_state() {
+        let mut config = serde_json::json!({
+            "providers": {
+                "managed:kimi-code": { "type": "kimi" },
+                "custom": { "type": "kimi", "apiKey": "sk-existing" }
+            },
+            "models": {
+                "kimi-code/kimi-k2": {
+                    "provider": "managed:kimi-code",
+                    "model": "kimi-k2"
+                },
+                "custom/default": { "provider": "custom", "model": "default" }
+            },
+            "defaultModel": "kimi-code/kimi-k2",
+            "defaultProvider": "managed:kimi-code",
+            "thinking": { "enabled": true, "effort": "high" },
+            "services": {
+                "moonshotSearch": { "baseUrl": "https://api.example/search" },
+                "moonshotFetch": { "baseUrl": "https://api.example/fetch" },
+                "customService": { "baseUrl": "https://service.example" }
+            },
+            "raw": { "default_model": "kimi-code/kimi-k2" }
+        });
+
+        apply_managed_kimi_code_logout_config(config.as_object_mut().expect("config object"));
+
+        assert!(config["providers"].get("managed:kimi-code").is_none());
+        assert!(config["providers"].get("custom").is_some());
+        assert!(config["models"].get("kimi-code/kimi-k2").is_none());
+        assert!(config["models"].get("custom/default").is_some());
+        assert!(config.get("defaultModel").is_none());
+        assert!(config.get("defaultProvider").is_none());
+        assert_eq!(
+            config["thinking"],
+            serde_json::json!({ "enabled": true, "effort": "high" })
+        );
+        assert!(config["services"].get("moonshotSearch").is_none());
+        assert!(config["services"].get("moonshotFetch").is_none());
+        assert!(config["services"].get("customService").is_some());
+        assert_eq!(config["raw"]["default_model"], "kimi-code/kimi-k2");
+    }
+
+    #[test]
+    fn logout_only_clears_default_model_when_its_alias_was_removed() {
+        let mut config = serde_json::json!({
+            "providers": { "managed:kimi-code": {} },
+            "models": {
+                "custom/default": { "provider": "custom", "model": "default" }
+            },
+            "defaultModel": "custom/default",
+            "services": {
+                "moonshotSearch": {},
+                "moonshotFetch": {}
+            }
+        });
+
+        apply_managed_kimi_code_logout_config(config.as_object_mut().expect("config object"));
+
+        assert_eq!(config["defaultModel"], "custom/default");
+        assert!(config.get("services").is_none());
+    }
+
+    #[test]
+    fn clear_reports_each_removed_managed_entry() {
+        let mut config = serde_json::json!({
+            "providers": {
+                "managed:kimi-code": { "type": "kimi" },
+                "custom": { "apiKey": "sk-existing" }
+            },
+            "models": {
+                "kimi-code/kimi-k2": {
+                    "provider": "managed:kimi-code",
+                    "model": "kimi-k2"
+                },
+                "custom/default": { "provider": "custom", "model": "default" }
+            },
+            "defaultModel": "kimi-code/kimi-k2",
+            "defaultProvider": "managed:kimi-code",
+            "services": {
+                "moonshotSearch": {},
+                "moonshotFetch": {},
+                "otherService": { "baseUrl": "https://service.example" }
+            }
+        });
+
+        let result = clear_managed_kimi_code_config(config.as_object_mut().expect("config object"));
+
+        assert_eq!(
+            result,
+            ManagedKimiCodeCleanupResult {
+                provider_name: "managed:kimi-code",
+                removed_provider: true,
+                removed_models: vec!["kimi-code/kimi-k2".to_owned()],
+                default_model_cleared: true,
+                removed_services: vec!["moonshotSearch".to_owned(), "moonshotFetch".to_owned()],
+            }
+        );
+        assert!(config.get("defaultModel").is_none());
+        assert_eq!(config["defaultProvider"], "managed:kimi-code");
+        assert!(config["providers"].get("custom").is_some());
+        assert!(config["models"].get("custom/default").is_some());
+        assert!(config["services"].get("otherService").is_some());
+    }
+
+    #[test]
+    fn clear_reports_no_changes_without_materializing_optional_sections() {
+        let mut config = serde_json::json!({ "providers": {}, "custom": true });
+        let result = clear_managed_kimi_code_config(config.as_object_mut().expect("config object"));
+
+        assert_eq!(
+            result,
+            ManagedKimiCodeCleanupResult {
+                provider_name: "managed:kimi-code",
+                removed_provider: false,
+                removed_models: Vec::new(),
+                default_model_cleared: false,
+                removed_services: Vec::new(),
+            }
+        );
+        assert!(config.get("models").is_none());
+        assert!(config.get("services").is_none());
     }
 
     #[test]
