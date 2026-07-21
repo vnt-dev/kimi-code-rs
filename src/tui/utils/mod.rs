@@ -24,5 +24,6 @@ pub mod terminal_focus;
 pub mod terminal_notification;
 pub mod terminal_theme;
 pub mod thinking_config;
+pub mod tmux_keyboard;
 pub mod transcript_id;
 pub mod transcript_window;
