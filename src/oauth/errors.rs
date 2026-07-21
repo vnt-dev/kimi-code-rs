@@ -48,6 +48,10 @@ impl OAuthError {
         )
     }
 
+    pub fn device_code_timeout_with_message(message: impl Into<String>) -> Self {
+        Self::with_kind(OAuthErrorKind::DeviceCodeTimeout, message)
+    }
+
     pub fn retryable_refresh(message: impl Into<String>) -> Self {
         Self::with_kind(OAuthErrorKind::RetryableRefresh, message)
     }
