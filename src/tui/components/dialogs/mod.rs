@@ -23,6 +23,7 @@ pub mod start_permission_prompt;
 pub mod swarm_start_permission_prompt;
 pub mod tabbed_model_selector;
 pub mod task_output_viewer;
+pub mod tasks_browser;
 pub mod theme_selector;
 pub mod undo_selector;
 pub mod update_preference_selector;
@@ -71,6 +72,7 @@ pub use swarm_start_permission_prompt::{
 };
 pub use tabbed_model_selector::{TabbedModelSelectorComponent, TabbedModelSelectorOptions};
 pub use task_output_viewer::{TaskOutputViewer, TaskOutputViewerProps};
+pub use tasks_browser::{StopIgnoredReason, TasksBrowserApp, TasksBrowserProps, TasksFilter};
 pub use theme_selector::ThemeSelectorComponent;
 pub use undo_selector::{UndoChoice, UndoSelectorComponent};
 pub use update_preference_selector::UpdatePreferenceSelectorComponent;
