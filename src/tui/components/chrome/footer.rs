@@ -20,6 +20,7 @@ use crate::{
             Component, ComponentRole,
             render::{truncate_to_width, visible_width},
         },
+        easter_eggs::dance::{is_rainbow_dancing, render_dance_footer_model},
         theme::{ColorToken, current_theme},
     },
     utils::{
@@ -158,7 +159,12 @@ impl FooterComponent {
             } else {
                 " thinking".to_owned()
             };
-            left.push(theme.fg(ColorToken::Text, &format!("{model}{suffix}")));
+            let model_label = format!("{model}{suffix}");
+            left.push(if is_rainbow_dancing() {
+                render_dance_footer_model(&model_label)
+            } else {
+                theme.fg(ColorToken::Text, &model_label)
+            });
         }
         push_background_badge(&mut left, self.background_bash_task_count, "task", "tasks");
         push_background_badge(&mut left, self.background_agent_count, "agent", "agents");
