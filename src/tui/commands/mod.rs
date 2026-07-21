@@ -8,6 +8,7 @@ pub mod parse;
 pub mod plugin_commands;
 pub mod registry;
 pub mod resolve;
+pub mod session;
 pub mod skills;
 pub mod swarm;
 pub mod types;
