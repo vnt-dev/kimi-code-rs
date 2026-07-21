@@ -5,8 +5,12 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::tui::{
     components::render::visible_width,
+    keys::{EditorKey, is_key_release, matches_editor_key},
     theme::{ColorToken, current_theme},
+    utils::printable_key::{is_printable_char, printable_char},
 };
+
+use super::file_mention_provider::InputMode;
 
 const CAPS_LOCK_BIT: u32 = 64;
 const CTRL_BIT: u32 = 4;
@@ -46,6 +50,12 @@ pub struct CustomEditor {
     history_draft: Option<EditorBufferState>,
     history_filter: Option<Arc<HistoryFilter>>,
     undo_stack: Vec<EditorBufferState>,
+    input_mode: InputMode,
+    consuming_paste: bool,
+    consume_buffer: String,
+    bracket_paste_buffer: Option<String>,
+    autocomplete_showing: bool,
+    autocomplete_request_pending: bool,
 }
 
 impl Default for CustomEditor {
@@ -59,6 +69,12 @@ impl Default for CustomEditor {
             history_draft: None,
             history_filter: None,
             undo_stack: Vec::new(),
+            input_mode: InputMode::Prompt,
+            consuming_paste: false,
+            consume_buffer: String::new(),
+            bracket_paste_buffer: None,
+            autocomplete_showing: false,
+            autocomplete_request_pending: false,
         }
     }
 }
@@ -82,6 +98,27 @@ impl CustomEditor {
 
     pub fn cursor(&self) -> (usize, usize) {
         (self.state.cursor_line, self.state.cursor_col)
+    }
+
+    pub fn input_mode(&self) -> InputMode {
+        self.input_mode
+    }
+
+    pub fn set_input_mode(&mut self, mode: InputMode) -> bool {
+        if self.input_mode == mode {
+            return false;
+        }
+        self.input_mode = mode;
+        true
+    }
+
+    pub fn set_autocomplete_activity(&mut self, showing: bool, request_pending: bool) {
+        self.autocomplete_showing = showing;
+        self.autocomplete_request_pending = request_pending;
+    }
+
+    pub fn is_showing_autocomplete(&self) -> bool {
+        self.autocomplete_showing
     }
 
     pub fn set_cursor(&mut self, line: usize, col: usize) {
@@ -283,6 +320,301 @@ impl CustomEditor {
         true
     }
 
+    /// Applies one terminal input and returns host-level callbacks that must be
+    /// dispatched in order.
+    ///
+    /// Original: `custom-editor.ts`, `CustomEditor.handleInput()`.
+    pub fn handle_input_event(&mut self, data: &str) -> EditorInputOutcome {
+        let normalized = normalize_caps_locked_ctrl(data);
+        if is_key_release(&normalized) {
+            return EditorInputOutcome::consumed();
+        }
+        let mut outcome = EditorInputOutcome::default();
+        let is_escape = matches_editor_key(&normalized, EditorKey::Escape);
+        if !is_escape {
+            outcome.actions.push(EditorAction::NonEscapeInput);
+        }
+
+        if self.consuming_paste {
+            self.consume_buffer.push_str(&normalized);
+            if self.consume_buffer.contains(BRACKET_PASTE_END) {
+                self.consuming_paste = false;
+                self.consume_buffer.clear();
+            }
+            outcome.consumed = true;
+            return outcome;
+        }
+
+        if let Some(result) = self.handle_bracketed_paste(&normalized) {
+            outcome.actions.extend(result);
+            outcome.consumed = true;
+            return outcome;
+        }
+
+        if is_image_paste_key(&normalized) {
+            if self.expand_paste_marker_at_cursor() {
+                outcome.consumed = true;
+                return outcome;
+            }
+            outcome.actions.push(EditorAction::PasteImage);
+            outcome.consumed = true;
+            return outcome;
+        }
+
+        if matches_editor_key(&normalized, EditorKey::Ctrl('d')) {
+            if self.text().is_empty() {
+                outcome.actions.push(EditorAction::CtrlD);
+            } else {
+                self.delete_forward();
+            }
+            outcome.consumed = true;
+            return outcome;
+        }
+        for (key, action) in [
+            (EditorKey::Ctrl('c'), EditorAction::CtrlC),
+            (EditorKey::Ctrl('g'), EditorAction::OpenExternalEditor),
+            (EditorKey::Ctrl('o'), EditorAction::ToggleToolExpand),
+            (EditorKey::Ctrl('s'), EditorAction::CtrlS),
+        ] {
+            if matches_editor_key(&normalized, key) {
+                outcome.actions.push(action);
+                outcome.consumed = true;
+                return outcome;
+            }
+        }
+        if matches_editor_key(&normalized, EditorKey::Ctrl('b')) {
+            outcome
+                .actions
+                .push(EditorAction::CtrlBWithCursorLeftFallback);
+            outcome.consumed = true;
+            return outcome;
+        }
+        if matches_editor_key(&normalized, EditorKey::Ctrl('t')) {
+            outcome
+                .actions
+                .push(EditorAction::ToggleTodoWithDefaultFallback);
+            outcome.consumed = true;
+            return outcome;
+        }
+        if matches_editor_key(&normalized, EditorKey::ShiftTab) {
+            outcome.actions.push(EditorAction::ShiftTab);
+            outcome.consumed = true;
+            return outcome;
+        }
+        if matches_editor_key(&normalized, EditorKey::CtrlMinus) {
+            outcome.actions.push(EditorAction::UndoShortcut);
+            self.undo();
+            outcome.consumed = true;
+            return outcome;
+        }
+
+        if self.input_mode == InputMode::Bash
+            && self.text().is_empty()
+            && (is_escape || matches_editor_key(&normalized, EditorKey::Backspace))
+        {
+            self.input_mode = InputMode::Prompt;
+            outcome
+                .actions
+                .push(EditorAction::InputModeChanged(InputMode::Prompt));
+            outcome.consumed = true;
+            return outcome;
+        }
+
+        if matches_editor_key(&normalized, EditorKey::Up) && self.text().is_empty() {
+            outcome
+                .actions
+                .push(EditorAction::UpArrowEmptyWithHistoryFallback);
+            outcome.consumed = true;
+            return outcome;
+        }
+        if matches_editor_key(&normalized, EditorKey::Down) && self.text().is_empty() {
+            outcome
+                .actions
+                .push(EditorAction::DownArrowEmptyWithHistoryFallback);
+            outcome.consumed = true;
+            return outcome;
+        }
+        if is_escape {
+            if self.autocomplete_showing || self.autocomplete_request_pending {
+                self.autocomplete_showing = false;
+                self.autocomplete_request_pending = false;
+                outcome.actions.push(EditorAction::AutocompleteCancelled);
+            } else {
+                outcome.actions.push(EditorAction::Escape);
+            }
+            outcome.consumed = true;
+            return outcome;
+        }
+        if matches_editor_key(&normalized, EditorKey::Tab) {
+            if self.autocomplete_showing {
+                outcome.actions.push(EditorAction::AcceptAutocomplete);
+            }
+            outcome.consumed = true;
+            return outcome;
+        }
+
+        let printable = printable_char(&normalized);
+        if self.input_mode == InputMode::Prompt && printable == "!" && self.text().is_empty() {
+            self.input_mode = InputMode::Bash;
+            outcome
+                .actions
+                .push(EditorAction::InputModeChanged(InputMode::Bash));
+            outcome.consumed = true;
+            return outcome;
+        }
+
+        if matches_editor_key(&normalized, EditorKey::Backspace) {
+            self.delete_backward();
+        } else if matches_editor_key(&normalized, EditorKey::Delete) {
+            self.delete_forward();
+        } else if matches_editor_key(&normalized, EditorKey::Left) {
+            self.move_left();
+        } else if matches_editor_key(&normalized, EditorKey::Right) {
+            self.move_right();
+        } else if matches_editor_key(&normalized, EditorKey::Home) {
+            self.move_home();
+        } else if matches_editor_key(&normalized, EditorKey::End) {
+            self.move_end();
+        } else if matches_editor_key(&normalized, EditorKey::Up) {
+            self.move_up();
+        } else if matches_editor_key(&normalized, EditorKey::Down) {
+            self.move_down();
+        } else if matches_editor_key(&normalized, EditorKey::Enter) {
+            let submitted = self.submit_value();
+            outcome.actions.push(EditorAction::Submit(submitted));
+        } else if is_printable_char(&printable) {
+            self.insert_text_at_cursor(&printable);
+            self.append_autocomplete_request(&mut outcome.actions, &printable);
+        } else if normalized.chars().count() > 1 && !normalized.starts_with('\u{1b}') {
+            let empty_prompt = self.input_mode == InputMode::Prompt && self.text().is_empty();
+            self.insert_paste(&normalized);
+            self.enter_bash_from_pasted_bang(empty_prompt, &mut outcome.actions);
+        } else {
+            return outcome;
+        }
+        outcome.consumed = true;
+        outcome
+    }
+
+    pub fn apply_ctrl_b_fallback(&mut self) {
+        self.move_left();
+    }
+
+    pub fn apply_up_arrow_history_fallback(&mut self) -> bool {
+        self.history_previous()
+    }
+
+    pub fn apply_down_arrow_history_fallback(&mut self) -> bool {
+        self.history_next()
+    }
+
+    pub fn paste_image_as_text(&mut self, text: &str) {
+        self.insert_paste(text);
+    }
+
+    fn handle_bracketed_paste(&mut self, data: &str) -> Option<Vec<EditorAction>> {
+        if let Some(buffer) = &mut self.bracket_paste_buffer {
+            buffer.push_str(data);
+            if let Some(end) = buffer.find(BRACKET_PASTE_END) {
+                let content = buffer[..end].to_owned();
+                self.bracket_paste_buffer = None;
+                let empty_prompt = self.input_mode == InputMode::Prompt && self.text().is_empty();
+                self.insert_paste(&content);
+                let mut actions = Vec::new();
+                self.enter_bash_from_pasted_bang(empty_prompt, &mut actions);
+                return Some(actions);
+            }
+            return Some(Vec::new());
+        }
+        let start = data.find(BRACKET_PASTE_START)?;
+        if self.expand_paste_marker_at_cursor() {
+            if !data[start + BRACKET_PASTE_START.len()..].contains(BRACKET_PASTE_END) {
+                self.consuming_paste = true;
+            }
+            return Some(Vec::new());
+        }
+        let content_start = start + BRACKET_PASTE_START.len();
+        if let Some(relative_end) = data[content_start..].find(BRACKET_PASTE_END) {
+            let content = &data[content_start..content_start + relative_end];
+            let empty_prompt = self.input_mode == InputMode::Prompt && self.text().is_empty();
+            self.insert_paste(content);
+            let mut actions = Vec::new();
+            self.enter_bash_from_pasted_bang(empty_prompt, &mut actions);
+            Some(actions)
+        } else {
+            self.bracket_paste_buffer = Some(data[content_start..].to_owned());
+            Some(Vec::new())
+        }
+    }
+
+    fn enter_bash_from_pasted_bang(
+        &mut self,
+        empty_prompt_before_input: bool,
+        actions: &mut Vec<EditorAction>,
+    ) {
+        if empty_prompt_before_input
+            && self.input_mode == InputMode::Prompt
+            && self.text().starts_with('!')
+        {
+            self.input_mode = InputMode::Bash;
+            let text = self.text();
+            self.set_text_internal(
+                text.strip_prefix('!').unwrap_or(&text),
+                CursorPlacement::End,
+            );
+            actions.push(EditorAction::InputModeChanged(InputMode::Bash));
+        }
+    }
+
+    fn append_autocomplete_request(&self, actions: &mut Vec<EditorAction>, inserted: &str) {
+        let current = &self.state.lines[self.state.cursor_line];
+        let before = char_prefix_by_count(current, self.state.cursor_col);
+        if inserted == "/" {
+            if self.input_mode == InputMode::Bash {
+                actions.push(EditorAction::RequestAutocomplete { force: true });
+            } else if before == "/" || (before.starts_with('/') && before.contains(' ')) {
+                actions.push(EditorAction::RequestAutocomplete { force: false });
+            }
+        } else if inserted == "@"
+            || (before.starts_with('/')
+                && inserted.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || ".-_".contains(character)
+                }))
+        {
+            actions.push(EditorAction::RequestAutocomplete { force: false });
+        }
+    }
+
+    fn submit_value(&mut self) -> String {
+        let result = self.expanded_text().trim().to_owned();
+        self.state = EditorBufferState::default();
+        self.pastes.clear();
+        self.paste_counter = 0;
+        self.exit_history_browsing();
+        self.undo_stack.clear();
+        result
+    }
+
+    fn move_up(&mut self) {
+        if self.state.cursor_line > 0 {
+            self.state.cursor_line -= 1;
+            self.state.cursor_col = self
+                .state
+                .cursor_col
+                .min(line_char_count(&self.state.lines[self.state.cursor_line]));
+        }
+    }
+
+    fn move_down(&mut self) {
+        if self.state.cursor_line + 1 < self.state.lines.len() {
+            self.state.cursor_line += 1;
+            self.state.cursor_col = self
+                .state
+                .cursor_col
+                .min(line_char_count(&self.state.lines[self.state.cursor_line]));
+        }
+    }
+
     fn navigate_history(&mut self, direction: isize) -> bool {
         if self.history.is_empty() {
             return false;
@@ -386,6 +718,47 @@ impl CustomEditor {
     }
 }
 
+const BRACKET_PASTE_START: &str = "\u{1b}[200~";
+const BRACKET_PASTE_END: &str = "\u{1b}[201~";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorAction {
+    NonEscapeInput,
+    CtrlD,
+    CtrlC,
+    OpenExternalEditor,
+    ToggleToolExpand,
+    CtrlS,
+    CtrlBWithCursorLeftFallback,
+    ToggleTodoWithDefaultFallback,
+    ShiftTab,
+    UndoShortcut,
+    UpArrowEmptyWithHistoryFallback,
+    DownArrowEmptyWithHistoryFallback,
+    Escape,
+    PasteImage,
+    InputModeChanged(InputMode),
+    AutocompleteCancelled,
+    AcceptAutocomplete,
+    RequestAutocomplete { force: bool },
+    Submit(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EditorInputOutcome {
+    pub consumed: bool,
+    pub actions: Vec<EditorAction>,
+}
+
+impl EditorInputOutcome {
+    fn consumed() -> Self {
+        Self {
+            consumed: true,
+            actions: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum CursorPlacement {
     Start,
@@ -468,6 +841,22 @@ fn char_at(text: &str, index: usize) -> Option<char> {
 
 fn is_word_character(character: char) -> bool {
     character.is_alphanumeric() || character == '_'
+}
+
+fn char_prefix_by_count(text: &str, count: usize) -> &str {
+    let end = char_to_byte(text, count);
+    &text[..end]
+}
+
+fn is_image_paste_key(data: &str) -> bool {
+    #[cfg(windows)]
+    {
+        matches!(data, "\u{1b}v" | "\u{1b}[118;3u")
+    }
+    #[cfg(not(windows))]
+    {
+        matches_editor_key(data, EditorKey::Ctrl('v'))
+    }
 }
 
 /// Normalizes Kitty CSI-u Ctrl+letter events reported with Caps Lock.
@@ -1032,5 +1421,190 @@ mod tests {
         assert_eq!(editor.cursor(), (1, 2));
         editor.move_home();
         assert_eq!(editor.cursor(), (1, 0));
+    }
+
+    #[test]
+    fn input_dispatches_shortcuts_and_ignores_kitty_releases() {
+        let mut editor = CustomEditor::new();
+        let release = editor.handle_input_event("\u{1b}[99;5:3u");
+        assert!(release.consumed);
+        assert!(release.actions.is_empty());
+
+        let ctrl_c = editor.handle_input_event("\u{3}");
+        assert_eq!(
+            ctrl_c.actions,
+            [EditorAction::NonEscapeInput, EditorAction::CtrlC]
+        );
+        assert!(
+            editor
+                .handle_input_event("\u{7}")
+                .actions
+                .contains(&EditorAction::OpenExternalEditor)
+        );
+        assert!(
+            editor
+                .handle_input_event("\u{f}")
+                .actions
+                .contains(&EditorAction::ToggleToolExpand)
+        );
+        assert!(
+            editor
+                .handle_input_event("\u{13}")
+                .actions
+                .contains(&EditorAction::CtrlS)
+        );
+
+        editor.set_text("ab");
+        let ctrl_b = editor.handle_input_event("\u{2}");
+        assert!(
+            ctrl_b
+                .actions
+                .contains(&EditorAction::CtrlBWithCursorLeftFallback)
+        );
+        editor.apply_ctrl_b_fallback();
+        assert_eq!(editor.cursor(), (0, 1));
+    }
+
+    #[test]
+    fn input_switches_bash_mode_for_typed_and_pasted_bang() {
+        let mut editor = CustomEditor::new();
+        let typed = editor.handle_input_event("!");
+        assert_eq!(editor.input_mode(), InputMode::Bash);
+        assert_eq!(editor.text(), "");
+        assert!(
+            typed
+                .actions
+                .contains(&EditorAction::InputModeChanged(InputMode::Bash))
+        );
+        let exited = editor.handle_input_event("\u{7f}");
+        assert_eq!(editor.input_mode(), InputMode::Prompt);
+        assert!(
+            exited
+                .actions
+                .contains(&EditorAction::InputModeChanged(InputMode::Prompt))
+        );
+
+        let pasted = editor.handle_input_event("\u{1b}[200~!echo hi\u{1b}[201~");
+        assert_eq!(editor.input_mode(), InputMode::Bash);
+        assert_eq!(editor.text(), "echo hi");
+        assert!(
+            pasted
+                .actions
+                .contains(&EditorAction::InputModeChanged(InputMode::Bash))
+        );
+
+        editor.set_input_mode(InputMode::Prompt);
+        editor.set_text("prefix ");
+        editor.handle_input_event("\u{1b}[200~!literal\u{1b}[201~");
+        assert_eq!(editor.input_mode(), InputMode::Prompt);
+        assert_eq!(editor.text(), "prefix !literal");
+    }
+
+    #[test]
+    fn input_handles_split_bracketed_paste_and_marker_expansion_tail() {
+        let mut editor = CustomEditor::new();
+        editor.handle_input_event("\u{1b}[200~multi");
+        assert_eq!(editor.text(), "");
+        editor.handle_input_event(" line\u{1b}[201~");
+        assert_eq!(editor.text(), "multi line");
+
+        let content = (0..11)
+            .map(|index| format!("l{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        editor.set_text("");
+        editor.insert_paste(&content);
+        editor.set_cursor(0, 3);
+        editor.handle_input_event("\u{1b}[200~ignored");
+        assert_eq!(editor.text(), content);
+        editor.handle_input_event("more chunks");
+        editor.handle_input_event("tail\u{1b}[201~");
+        assert_eq!(editor.text(), content);
+    }
+
+    #[test]
+    fn input_submits_expanded_text_and_clears_buffer() {
+        let mut editor = CustomEditor::new();
+        let content = "x".repeat(1001);
+        editor.insert_paste(&content);
+        let outcome = editor.handle_input_event("\r");
+        assert!(outcome.actions.contains(&EditorAction::NonEscapeInput));
+        assert!(outcome.actions.contains(&EditorAction::Submit(content)));
+        assert_eq!(editor.text(), "");
+        assert_eq!(editor.expanded_text(), "");
+    }
+
+    #[test]
+    fn input_escape_and_tab_prioritize_autocomplete_activity() {
+        let mut editor = CustomEditor::new();
+        editor.set_autocomplete_activity(true, false);
+        let escape = editor.handle_input_event("\u{1b}");
+        assert_eq!(escape.actions, [EditorAction::AutocompleteCancelled]);
+        assert!(!editor.is_showing_autocomplete());
+
+        let app_escape = editor.handle_input_event("\u{1b}");
+        assert_eq!(app_escape.actions, [EditorAction::Escape]);
+        assert_eq!(
+            editor.handle_input_event("\t").actions,
+            [EditorAction::NonEscapeInput]
+        );
+        editor.set_autocomplete_activity(true, false);
+        assert_eq!(
+            editor.handle_input_event("\t").actions,
+            [
+                EditorAction::NonEscapeInput,
+                EditorAction::AcceptAutocomplete
+            ]
+        );
+    }
+
+    #[test]
+    fn input_requests_mode_specific_autocomplete() {
+        let mut editor = CustomEditor::new();
+        let slash = editor.handle_input_event("/");
+        assert!(
+            slash
+                .actions
+                .contains(&EditorAction::RequestAutocomplete { force: false })
+        );
+        editor.set_text("");
+        editor.set_input_mode(InputMode::Bash);
+        let slash = editor.handle_input_event("/");
+        assert!(
+            slash
+                .actions
+                .contains(&EditorAction::RequestAutocomplete { force: true })
+        );
+
+        editor.set_text("");
+        editor.set_input_mode(InputMode::Prompt);
+        let mention = editor.handle_input_event("@");
+        assert!(
+            mention
+                .actions
+                .contains(&EditorAction::RequestAutocomplete { force: false })
+        );
+    }
+
+    #[test]
+    fn empty_arrow_actions_allow_explicit_history_fallback() {
+        let mut editor = CustomEditor::new();
+        editor.add_to_history("previous");
+        let up = editor.handle_input_event("\u{1b}[A");
+        assert!(
+            up.actions
+                .contains(&EditorAction::UpArrowEmptyWithHistoryFallback)
+        );
+        assert_eq!(editor.text(), "");
+        assert!(editor.apply_up_arrow_history_fallback());
+        assert_eq!(editor.text(), "previous");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_alt_v_requests_image_paste() {
+        let mut editor = CustomEditor::new();
+        let outcome = editor.handle_input_event("\u{1b}v");
+        assert!(outcome.actions.contains(&EditorAction::PasteImage));
     }
 }
