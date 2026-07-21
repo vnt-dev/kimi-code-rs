@@ -1,4 +1,21 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffDisplayBlock {
+    pub path: String,
+    pub old_text: String,
+    pub new_text: String,
+    pub old_start: Option<usize>,
+    pub new_start: Option<usize>,
+    pub is_summary: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileContentDisplayBlock {
+    pub path: String,
+    pub content: String,
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuestionPanelOption {
     pub label: String,
     pub description: Option<String>,
