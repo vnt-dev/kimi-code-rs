@@ -9,6 +9,7 @@ pub mod settings_selector;
 pub mod start_permission_prompt;
 pub mod swarm_start_permission_prompt;
 pub mod theme_selector;
+pub mod undo_selector;
 pub mod update_preference_selector;
 
 pub use choice_picker::{
@@ -31,4 +32,5 @@ pub use swarm_start_permission_prompt::{
     SwarmStartPermissionChoice, SwarmStartPermissionPromptComponent,
 };
 pub use theme_selector::ThemeSelectorComponent;
+pub use undo_selector::{UndoChoice, UndoSelectorComponent};
 pub use update_preference_selector::UpdatePreferenceSelectorComponent;
