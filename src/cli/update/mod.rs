@@ -7,6 +7,7 @@ pub mod preflight;
 pub mod prompt;
 pub mod refresh;
 pub mod rollout;
+pub mod run_preflight;
 pub mod runtime;
 pub mod select;
 pub mod source;
