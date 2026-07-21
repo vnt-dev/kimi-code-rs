@@ -30,3 +30,4 @@ url = "2"
 unicode-width = "0.2"
 unicode-segmentation = "1.12"
 uuid = { version = "1", features = ["v4"] }
+zip = { version = "8.6.0", default-features = false, features = ["chrono", "deflate"] }
