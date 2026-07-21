@@ -1,3 +1,4 @@
+pub mod api_key_input_dialog;
 pub mod choice_picker;
 pub mod compaction;
 pub mod editor_selector;
@@ -14,6 +15,7 @@ pub mod theme_selector;
 pub mod undo_selector;
 pub mod update_preference_selector;
 
+pub use api_key_input_dialog::{ApiKeyInputDialogComponent, ApiKeyInputResult};
 pub use choice_picker::{
     ChoiceOption, ChoicePickerComponent, ChoicePickerOptions, ChoiceTone, NoticeTone,
 };
