@@ -3,6 +3,8 @@ use std::{collections::HashMap, time::SystemTime};
 use chrono::DateTime;
 use serde_json::{Map, Value};
 
+use super::api_error::read_api_error_message;
+
 const MANAGED_PREFIX: &str = "managed:";
 const KIMI_CODE_PLATFORM_ID: &str = "kimi-code";
 const FIXED_POINT_CENTS: f64 = 1_000_000.0;
@@ -32,6 +34,17 @@ pub struct ParsedManagedUsage {
     pub summary: Option<UsageRow>,
     pub limits: Vec<UsageRow>,
     pub extra_usage: Option<BoosterWalletInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FetchManagedUsageResult {
+    Ok {
+        parsed: ParsedManagedUsage,
+    },
+    Error {
+        status: Option<u16>,
+        message: String,
+    },
 }
 
 // Original:
@@ -343,8 +356,69 @@ fn js_integer_string(value: f64) -> String {
     format!("{value:.0}")
 }
 
+// Original: fetchManagedUsage()
+pub async fn fetch_managed_usage(
+    url: &str,
+    access_token: &str,
+    timeout: Option<std::time::Duration>,
+) -> FetchManagedUsageResult {
+    let response = reqwest::Client::new()
+        .get(url)
+        .timeout(timeout.unwrap_or(std::time::Duration::from_secs(8)))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) if error.is_timeout() => {
+            return FetchManagedUsageResult::Error {
+                status: None,
+                message: "Failed to fetch usage: request timed out.".to_owned(),
+            };
+        }
+        Err(error) => {
+            return FetchManagedUsageResult::Error {
+                status: None,
+                message: format!("Failed to fetch usage: {error}"),
+            };
+        }
+    };
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let hint = match status {
+            401 => "Authorization failed. Please check your API key (try /login).".to_owned(),
+            404 => "Usage endpoint not available. Try Kimi For Coding.".to_owned(),
+            _ => format!("Failed to fetch usage: HTTP {status}"),
+        };
+        return FetchManagedUsageResult::Error {
+            status: Some(status),
+            message: read_api_error_message(response, &hint).await,
+        };
+    }
+
+    match response.json::<Value>().await {
+        Ok(payload) => FetchManagedUsageResult::Ok {
+            parsed: parse_managed_usage_payload(&payload),
+        },
+        Err(error) => FetchManagedUsageResult::Error {
+            status: None,
+            message: format!("Failed to fetch usage: {error}"),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{Arc, Mutex},
+        thread,
+        time::Duration,
+    };
+
     use super::*;
 
     #[test]
@@ -461,6 +535,104 @@ mod tests {
         assert_eq!(
             format_reset_time_at("not-a-date", now),
             "resets at not-a-date"
+        );
+    }
+
+    fn fake_http_server(
+        status: u16,
+        body: &str,
+        delay: Duration,
+    ) -> (String, Arc<Mutex<String>>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake usage server");
+        let address = listener.local_addr().expect("fake usage address");
+        let request = Arc::new(Mutex::new(String::new()));
+        let recorded = Arc::clone(&request);
+        let body = body.to_owned();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept usage request");
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            loop {
+                let count = stream.read(&mut buffer).expect("read usage request");
+                if count == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..count]);
+                if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            *recorded.lock().expect("request lock") = String::from_utf8_lossy(&bytes).into_owned();
+            thread::sleep(delay);
+            let response = format!(
+                "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        (format!("http://{address}/usages"), request, handle)
+    }
+
+    #[tokio::test]
+    async fn fetch_sends_auth_and_accept_then_parses_success() {
+        let (url, request, handle) =
+            fake_http_server(200, r#"{"usage":{"used":40,"limit":1000}}"#, Duration::ZERO);
+        let result = fetch_managed_usage(&url, "secret", None).await;
+        handle.join().expect("usage server thread");
+        let FetchManagedUsageResult::Ok { parsed } = result else {
+            panic!("expected parsed usage")
+        };
+        assert_eq!(parsed.summary.expect("summary").used, 40.0);
+        let request = request.lock().expect("request lock").to_ascii_lowercase();
+        assert!(request.starts_with("get /usages http/1.1"));
+        assert!(request.contains("authorization: bearer secret"));
+        assert!(request.contains("accept: application/json"));
+        assert!(!request.contains("x-msh-"));
+    }
+
+    #[tokio::test]
+    async fn fetch_prefers_api_errors_and_preserves_status() {
+        for (status, body, expected) in [
+            (401, r#"{"message":"token revoked"}"#, "token revoked"),
+            (
+                403,
+                r#"{"error":{"message":"account disabled"}}"#,
+                "account disabled",
+            ),
+            (
+                404,
+                "",
+                "Usage endpoint not available. Try Kimi For Coding.",
+            ),
+        ] {
+            let (url, _, handle) = fake_http_server(status, body, Duration::ZERO);
+            let result = fetch_managed_usage(&url, "secret", None).await;
+            handle.join().expect("usage server thread");
+            assert_eq!(
+                result,
+                FetchManagedUsageResult::Error {
+                    status: Some(status),
+                    message: expected.to_owned()
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_classifies_timeout_without_an_http_status() {
+        let (url, _, handle) = fake_http_server(
+            200,
+            r#"{"usage":{"used":1,"limit":2}}"#,
+            Duration::from_millis(100),
+        );
+        let result = fetch_managed_usage(&url, "secret", Some(Duration::from_millis(10))).await;
+        handle.join().expect("usage server thread");
+        assert_eq!(
+            result,
+            FetchManagedUsageResult::Error {
+                status: None,
+                message: "Failed to fetch usage: request timed out.".to_owned()
+            }
         );
     }
 }
