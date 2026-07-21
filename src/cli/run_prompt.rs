@@ -14,15 +14,18 @@ use tokio::{
 };
 
 use super::{
+    goal_prompt::{
+        HeadlessGoalCreate, format_goal_summary_text, goal_exit_code, goal_summary_json,
+    },
     options::{CliOptions, PromptOutputFormat},
     prompt_render::{PromptJsonWriter, PromptOutput, PromptTranscriptWriter, PromptTurnWriter},
     prompt_session::{
-        ApprovalDecision, ApprovalResponse, CreateSessionOptions, ListSessionsOptions,
-        PrintTurnAction, PromptEvent, PromptEventKind, PromptHarness, PromptInput, PromptSession,
-        PromptSessionError, ResumeSessionInput,
+        ApprovalDecision, ApprovalResponse, CreateGoalInput, CreateSessionOptions,
+        ListSessionsOptions, PrintTurnAction, PromptEvent, PromptEventKind, PromptHarness,
+        PromptInput, PromptSession, PromptSessionError, ResumeSessionInput,
     },
 };
-use crate::sdk::types::PermissionMode;
+use crate::sdk::types::{GoalSnapshot, GoalStatus, PermissionMode};
 
 pub const PROMPT_CLEANUP_TIMEOUT: Duration = Duration::from_millis(8_000);
 
@@ -475,6 +478,79 @@ pub async fn run_prompt_turn(
     result
 }
 
+// Original:
+//   apps/kimi-code/src/cli/run-prompt.ts
+//   runHeadlessGoal()
+pub async fn run_headless_goal(
+    session: Arc<dyn PromptSession>,
+    goal: &HeadlessGoalCreate,
+    model: Option<&str>,
+    output_format: PromptOutputFormat,
+    stdout: &mut dyn PromptOutput,
+    stderr: &mut dyn PromptOutput,
+    process_exit_code: &mut Option<i32>,
+) -> Result<(), PromptSessionError> {
+    require_configured_model([model])?;
+    session
+        .create_goal(CreateGoalInput {
+            objective: goal.objective.clone(),
+            replace: goal.replace,
+        })
+        .await?;
+
+    let completed_snapshot = Arc::new(std::sync::Mutex::new(None::<GoalSnapshot>));
+    let snapshot_from_events = Arc::clone(&completed_snapshot);
+    let unsubscribe = session.on_event(Arc::new(move |event| {
+        if event.agent_id != PROMPT_MAIN_AGENT_ID {
+            return;
+        }
+        if let PromptEventKind::GoalUpdated {
+            snapshot: Some(snapshot),
+            completion: true,
+        } = event.kind
+        {
+            let mut snapshot_slot = snapshot_from_events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *snapshot_slot = Some(snapshot);
+        }
+    }));
+
+    let turn_result = run_prompt_turn(
+        Arc::clone(&session),
+        &goal.objective,
+        output_format,
+        stdout,
+        stderr,
+    )
+    .await;
+    unsubscribe();
+    let event_snapshot = completed_snapshot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let snapshot = match event_snapshot {
+        Some(snapshot) => Some(snapshot),
+        None => session.get_goal().await?,
+    };
+    match output_format {
+        PromptOutputFormat::StreamJson => {
+            let summary = serde_json::to_string(&goal_summary_json(snapshot.as_ref()))
+                .expect("goal summary is serializable");
+            stdout.write(&(summary + "\n"));
+        }
+        PromptOutputFormat::Text => {
+            stderr.write(&(format_goal_summary_text(snapshot.as_ref()) + "\n"));
+        }
+    }
+    if let Some(snapshot) = &snapshot
+        && snapshot.status != GoalStatus::Complete
+    {
+        *process_exit_code = Some(goal_exit_code(Some(snapshot.status.as_str())));
+    }
+    turn_result
+}
+
 #[derive(Clone)]
 pub struct PermissionRestore {
     session: Option<Arc<dyn PromptSession>>,
@@ -761,7 +837,8 @@ mod tests {
             },
         },
         sdk::types::{
-            CronTaskSnapshot, GoalSnapshot, PermissionMode, SessionStatus, SessionSummary,
+            CronTaskSnapshot, GoalBudgetReport, GoalSnapshot, PermissionMode, SessionStatus,
+            SessionSummary,
         },
     };
 
@@ -780,7 +857,7 @@ mod tests {
     }
 
     struct PrintSessionMock {
-        listener: Mutex<Option<EventListener>>,
+        listeners: Mutex<Vec<EventListener>>,
         events: Vec<PromptEvent>,
         prompted: Mutex<Vec<PromptInput>>,
         status: SessionStatus,
@@ -789,12 +866,15 @@ mod tests {
         approval_handler: Mutex<Option<ApprovalHandler>>,
         question_handler: Mutex<Option<QuestionHandler>>,
         auto_permission_gate: Option<Arc<tokio::sync::Notify>>,
+        create_goal_result: Option<GoalSnapshot>,
+        current_goal: Mutex<Option<GoalSnapshot>>,
+        created_goals: Mutex<Vec<CreateGoalInput>>,
     }
 
     impl PrintSessionMock {
         fn new(events: Vec<PromptEvent>) -> Self {
             Self {
-                listener: Mutex::new(None),
+                listeners: Mutex::new(Vec::new()),
                 events,
                 prompted: Mutex::new(Vec::new()),
                 status: SessionStatus {
@@ -813,6 +893,9 @@ mod tests {
                 approval_handler: Mutex::new(None),
                 question_handler: Mutex::new(None),
                 auto_permission_gate: None,
+                create_goal_result: None,
+                current_goal: Mutex::new(None),
+                created_goals: Mutex::new(Vec::new()),
             }
         }
 
@@ -824,6 +907,16 @@ mod tests {
 
         fn with_auto_permission_gate(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
             self.auto_permission_gate = Some(gate);
+            self
+        }
+
+        fn with_goals(
+            mut self,
+            create_goal_result: GoalSnapshot,
+            current_goal: Option<GoalSnapshot>,
+        ) -> Self {
+            self.create_goal_result = Some(create_goal_result);
+            *self.current_goal.lock().expect("current goal") = current_goal;
             self
         }
     }
@@ -866,15 +959,15 @@ mod tests {
         }
 
         fn on_event(&self, listener: EventListener) -> Unsubscribe {
-            *self.listener.lock().expect("listener") = Some(listener);
+            self.listeners.lock().expect("listeners").push(listener);
             Box::new(|| {})
         }
 
         async fn prompt(&self, input: PromptInput) -> Result<(), PromptSessionError> {
             self.prompted.lock().expect("prompts").push(input);
-            let listener = self.listener.lock().expect("listener").clone();
+            let listeners = self.listeners.lock().expect("listeners").clone();
             for event in &self.events {
-                if let Some(listener) = &listener {
+                for listener in &listeners {
                     listener(event.clone());
                 }
                 tokio::task::yield_now().await;
@@ -894,13 +987,19 @@ mod tests {
 
         async fn create_goal(
             &self,
-            _: CreateGoalInput,
+            input: CreateGoalInput,
         ) -> Result<GoalSnapshot, PromptSessionError> {
-            Err(std::io::Error::other("unused").into())
+            self.created_goals
+                .lock()
+                .expect("created goals")
+                .push(input);
+            self.create_goal_result
+                .clone()
+                .ok_or_else(|| std::io::Error::other("unused").into())
         }
 
         async fn get_goal(&self) -> Result<Option<GoalSnapshot>, PromptSessionError> {
-            Ok(None)
+            Ok(self.current_goal.lock().expect("current goal").clone())
         }
 
         async fn get_cron_tasks(&self) -> Result<Vec<CronTaskSnapshot>, PromptSessionError> {
@@ -913,6 +1012,31 @@ mod tests {
             session_id: "ses_prompt".to_owned(),
             agent_id: agent_id.to_owned(),
             kind,
+        }
+    }
+
+    fn goal_snapshot(status: GoalStatus, turns_used: u64, tokens_used: u64) -> GoalSnapshot {
+        GoalSnapshot {
+            goal_id: "goal_1".to_owned(),
+            objective: "ship the migration".to_owned(),
+            completion_criterion: None,
+            status,
+            turns_used,
+            tokens_used,
+            wall_clock_ms: 1_500,
+            budget: GoalBudgetReport {
+                token_budget: Some(1_000),
+                turn_budget: Some(10),
+                wall_clock_budget_ms: None,
+                remaining_tokens: Some(1_000_u64.saturating_sub(tokens_used)),
+                remaining_turns: Some(10_u64.saturating_sub(turns_used)),
+                remaining_wall_clock_ms: None,
+                token_budget_reached: false,
+                turn_budget_reached: false,
+                wall_clock_budget_reached: false,
+                over_budget: false,
+            },
+            terminal_reason: None,
         }
     }
 
@@ -1309,6 +1433,208 @@ mod tests {
             error.to_string(),
             "Provider safety policy blocked the response."
         );
+    }
+
+    #[tokio::test]
+    async fn runs_headless_goal_and_prefers_the_completion_event_snapshot() {
+        let active = goal_snapshot(GoalStatus::Active, 0, 0);
+        let complete = goal_snapshot(GoalStatus::Complete, 4, 240);
+        let session = Arc::new(
+            PrintSessionMock::new(vec![
+                prompt_event("main", PromptEventKind::TurnStarted { turn_id: 7 }),
+                prompt_event(
+                    "main",
+                    PromptEventKind::AssistantDelta {
+                        turn_id: 7,
+                        delta: "done".to_owned(),
+                    },
+                ),
+                prompt_event(
+                    "main",
+                    PromptEventKind::GoalUpdated {
+                        snapshot: Some(complete),
+                        completion: true,
+                    },
+                ),
+                prompt_event(
+                    "main",
+                    PromptEventKind::TurnEnded {
+                        turn_id: 7,
+                        reason: TurnEndReason::Completed,
+                        error: None,
+                    },
+                ),
+            ])
+            .with_goals(active, None),
+        );
+        let session_trait: Arc<dyn PromptSession> = session.clone();
+        let goal = HeadlessGoalCreate {
+            objective: "ship the migration".to_owned(),
+            replace: true,
+        };
+        let mut stdout = Capture::default();
+        let mut stderr = Capture::default();
+        let mut exit_code = None;
+
+        run_headless_goal(
+            session_trait,
+            &goal,
+            Some("k2"),
+            PromptOutputFormat::StreamJson,
+            &mut stdout,
+            &mut stderr,
+            &mut exit_code,
+        )
+        .await
+        .expect("headless goal");
+
+        assert_eq!(
+            session
+                .created_goals
+                .lock()
+                .expect("created goals")
+                .as_slice(),
+            [CreateGoalInput {
+                objective: "ship the migration".to_owned(),
+                replace: true,
+            }]
+        );
+        let summary: serde_json::Value = serde_json::from_str(
+            stdout
+                .text
+                .lines()
+                .last()
+                .expect("goal summary output line"),
+        )
+        .expect("goal summary json");
+        assert_eq!(summary["type"], "goal.summary");
+        assert_eq!(summary["status"], "complete");
+        assert_eq!(summary["turnsUsed"], 4);
+        assert_eq!(summary["tokensUsed"], 240);
+        assert!(stderr.text.is_empty());
+        assert_eq!(exit_code, None);
+    }
+
+    #[tokio::test]
+    async fn headless_goal_falls_back_to_current_goal_and_sets_blocked_exit_code() {
+        let active = goal_snapshot(GoalStatus::Active, 0, 0);
+        let mut blocked = goal_snapshot(GoalStatus::Blocked, 2, 80);
+        blocked.terminal_reason = Some("waiting for input".to_owned());
+        let session: Arc<dyn PromptSession> = Arc::new(
+            PrintSessionMock::new(vec![
+                prompt_event("main", PromptEventKind::TurnStarted { turn_id: 8 }),
+                prompt_event(
+                    "main",
+                    PromptEventKind::TurnEnded {
+                        turn_id: 8,
+                        reason: TurnEndReason::Completed,
+                        error: None,
+                    },
+                ),
+            ])
+            .with_goals(active, Some(blocked)),
+        );
+        let mut stdout = Capture::default();
+        let mut stderr = Capture::default();
+        let mut exit_code = None;
+
+        run_headless_goal(
+            session,
+            &HeadlessGoalCreate {
+                objective: "ship the migration".to_owned(),
+                replace: false,
+            },
+            Some("k2"),
+            PromptOutputFormat::Text,
+            &mut stdout,
+            &mut stderr,
+            &mut exit_code,
+        )
+        .await
+        .expect("blocked headless goal turn completes");
+
+        assert!(stdout.text.is_empty());
+        assert!(stderr.text.contains("Goal [blocked]"));
+        assert!(stderr.text.contains("waiting for input"));
+        assert_eq!(exit_code, Some(3));
+    }
+
+    #[tokio::test]
+    async fn headless_goal_reports_summary_even_when_the_turn_fails() {
+        let active = goal_snapshot(GoalStatus::Active, 0, 0);
+        let paused = goal_snapshot(GoalStatus::Paused, 1, 10);
+        let session: Arc<dyn PromptSession> = Arc::new(
+            PrintSessionMock::new(vec![
+                prompt_event("main", PromptEventKind::TurnStarted { turn_id: 9 }),
+                prompt_event(
+                    "main",
+                    PromptEventKind::TurnEnded {
+                        turn_id: 9,
+                        reason: TurnEndReason::Failed,
+                        error: None,
+                    },
+                ),
+            ])
+            .with_goals(active, Some(paused)),
+        );
+        let mut stdout = Capture::default();
+        let mut stderr = Capture::default();
+        let mut exit_code = None;
+
+        let error = run_headless_goal(
+            session,
+            &HeadlessGoalCreate {
+                objective: "ship the migration".to_owned(),
+                replace: false,
+            },
+            Some("k2"),
+            PromptOutputFormat::Text,
+            &mut stdout,
+            &mut stderr,
+            &mut exit_code,
+        )
+        .await
+        .expect_err("turn failure is preserved");
+
+        assert_eq!(error.to_string(), "Prompt turn ended with reason: failed");
+        assert!(stderr.text.contains("Goal [paused]"));
+        assert_eq!(exit_code, Some(6));
+    }
+
+    #[tokio::test]
+    async fn headless_goal_requires_a_model_before_creation() {
+        let session = Arc::new(PrintSessionMock::new(Vec::new()));
+        let session_trait: Arc<dyn PromptSession> = session.clone();
+        let mut stdout = Capture::default();
+        let mut stderr = Capture::default();
+        let mut exit_code = None;
+
+        let error = run_headless_goal(
+            session_trait,
+            &HeadlessGoalCreate {
+                objective: "ship the migration".to_owned(),
+                replace: false,
+            },
+            None,
+            PromptOutputFormat::Text,
+            &mut stdout,
+            &mut stderr,
+            &mut exit_code,
+        )
+        .await
+        .expect_err("missing model");
+
+        assert!(error.to_string().contains("No model configured"));
+        assert!(
+            session
+                .created_goals
+                .lock()
+                .expect("created goals")
+                .is_empty()
+        );
+        assert!(stdout.text.is_empty());
+        assert!(stderr.text.is_empty());
+        assert_eq!(exit_code, None);
     }
 
     #[tokio::test]
