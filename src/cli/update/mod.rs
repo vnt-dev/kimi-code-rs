@@ -4,6 +4,7 @@ pub mod cdn;
 pub mod install_lock;
 pub mod install_state;
 pub mod preflight;
+pub mod preflight_runtime;
 pub mod prompt;
 pub mod refresh;
 pub mod rollout;
