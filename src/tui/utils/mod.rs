@@ -3,6 +3,7 @@ pub mod background_task_status;
 pub mod foreground_task;
 pub mod goal_completion;
 pub mod image_attachment_store;
+pub mod image_placeholder;
 pub mod paging;
 pub mod printable_key;
 pub mod searchable_list;
