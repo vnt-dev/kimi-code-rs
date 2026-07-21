@@ -10,12 +10,19 @@ use std::{
 use super::{
     constants::kimi_code_flow_config,
     identity::{
-        IdentityError, KimiHostIdentity, assert_kimi_host_identity, create_kimi_device_headers,
+        IdentityError, KimiHostIdentity, KimiIdentityOptions, assert_kimi_host_identity,
+        create_kimi_default_headers, create_kimi_device_headers,
     },
     managed_auth::{KIMI_CODE_OAUTH_KEY, KIMI_CODE_PROVIDER_NAME, resolve_kimi_code_oauth_key},
+    managed_config::{ManagedKimiCodeApplyOptions, ManagedKimiCodeApplyResult},
+    managed_provision::{
+        ManagedKimiCodeProvisionResult, ManagedKimiConfigAdapter,
+        ProvisionManagedKimiCodeConfigOptions, ProvisionManagedKimiCodeError,
+        provision_managed_kimi_code_config,
+    },
     manager::{
-        OAuthManager, OAuthManagerError, OAuthManagerRuntime, OAuthRefreshOutcome,
-        SystemOAuthManagerRuntime,
+        DeviceCodeObserver, LoginAbortSignal, LoginOptions, OAuthManager, OAuthManagerError,
+        OAuthManagerRuntime, OAuthRefreshOutcome, SystemOAuthManagerRuntime,
     },
     storage::{FileTokenStorage, TokenStorage},
     types::OAuthFlowConfig,
@@ -25,8 +32,8 @@ use crate::utils::paths::{HomeDirectoryUnavailable, get_data_dir};
 type RefreshThreshold = dyn Fn(f64) -> f64 + Send + Sync;
 type RefreshObserver = dyn Fn(OAuthRefreshOutcome) + Send + Sync;
 
-#[derive(Clone, Default)]
-pub struct KimiOAuthToolkitOptions {
+#[derive(Clone)]
+pub struct KimiOAuthToolkitOptions<A = NoManagedConfigAdapter> {
     pub identity: Option<KimiHostIdentity>,
     pub home_dir: Option<PathBuf>,
     pub credentials_dir: Option<PathBuf>,
@@ -36,6 +43,60 @@ pub struct KimiOAuthToolkitOptions {
     pub device_code_timeout: Option<Duration>,
     pub refresh_threshold: Option<Arc<RefreshThreshold>>,
     pub on_refresh: Option<Arc<RefreshObserver>>,
+    pub config_adapter: Option<Arc<A>>,
+}
+
+impl<A> Default for KimiOAuthToolkitOptions<A> {
+    fn default() -> Self {
+        Self {
+            identity: None,
+            home_dir: None,
+            credentials_dir: None,
+            storage: None,
+            flow_config: None,
+            runtime: None,
+            device_code_timeout: None,
+            refresh_threshold: None,
+            on_refresh: None,
+            config_adapter: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoManagedConfigAdapter;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoManagedConfigAdapterError;
+
+impl fmt::Display for NoManagedConfigAdapterError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("managed Kimi Code configuration adapter is not available")
+    }
+}
+
+impl Error for NoManagedConfigAdapterError {}
+
+#[async_trait::async_trait]
+impl ManagedKimiConfigAdapter for NoManagedConfigAdapter {
+    type Config = ();
+    type Error = NoManagedConfigAdapterError;
+
+    async fn read(&self) -> Result<Self::Config, Self::Error> {
+        Ok(())
+    }
+
+    async fn write(&self, _config: Self::Config) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn apply(
+        &self,
+        _config: &mut Self::Config,
+        _options: ManagedKimiCodeApplyOptions<'_>,
+    ) -> Result<ManagedKimiCodeApplyResult, Self::Error> {
+        Err(NoManagedConfigAdapterError)
+    }
 }
 
 #[derive(Debug)]
@@ -44,6 +105,39 @@ pub enum KimiOAuthToolkitError {
     Identity(IdentityError),
     Home(HomeDirectoryUnavailable),
     Manager(OAuthManagerError),
+}
+
+#[derive(Debug)]
+pub enum KimiOAuthToolkitOperationError<E> {
+    Toolkit(KimiOAuthToolkitError),
+    Provision(ProvisionManagedKimiCodeError<E>),
+    Adapter(E),
+}
+
+impl<E: fmt::Display> fmt::Display for KimiOAuthToolkitOperationError<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Toolkit(error) => error.fmt(formatter),
+            Self::Provision(error) => error.fmt(formatter),
+            Self::Adapter(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl<E: Error + 'static> Error for KimiOAuthToolkitOperationError<E> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Toolkit(error) => Some(error),
+            Self::Provision(error) => Some(error),
+            Self::Adapter(error) => Some(error),
+        }
+    }
+}
+
+impl<E> From<KimiOAuthToolkitError> for KimiOAuthToolkitOperationError<E> {
+    fn from(error: KimiOAuthToolkitError) -> Self {
+        Self::Toolkit(error)
+    }
 }
 
 impl fmt::Display for KimiOAuthToolkitError {
@@ -109,6 +203,29 @@ pub struct AuthStatus {
     pub providers: Vec<AuthProviderStatus>,
 }
 
+#[derive(Default)]
+pub struct KimiOAuthLoginOptions<'a> {
+    pub on_device_code: Option<&'a dyn DeviceCodeObserver>,
+    pub signal: Option<&'a dyn LoginAbortSignal>,
+    pub provision_config: Option<bool>,
+    pub base_url: Option<&'a str>,
+    pub oauth_ref: Option<&'a KimiOAuthTokenRef>,
+    pub oauth_host: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KimiOAuthLoginResult {
+    pub provider_name: String,
+    pub ok: bool,
+    pub provision: Option<ManagedKimiCodeProvisionResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KimiOAuthLogoutResult {
+    pub provider_name: String,
+    pub ok: bool,
+}
+
 #[derive(Clone)]
 pub struct BearerTokenProvider {
     manager: Arc<OAuthManager>,
@@ -120,9 +237,9 @@ impl BearerTokenProvider {
     }
 }
 
-pub struct KimiOAuthToolkit {
+pub struct KimiOAuthToolkit<A = NoManagedConfigAdapter> {
     home_dir: PathBuf,
-    _identity: Option<KimiHostIdentity>,
+    identity: Option<KimiHostIdentity>,
     storage: Arc<dyn TokenStorage>,
     flow_config: OAuthFlowConfig,
     runtime: Arc<dyn OAuthManagerRuntime>,
@@ -130,13 +247,15 @@ pub struct KimiOAuthToolkit {
     refresh_threshold: Option<Arc<RefreshThreshold>>,
     on_refresh: Option<Arc<RefreshObserver>>,
     managers: Mutex<HashMap<String, Arc<OAuthManager>>>,
+    identity_headers: Mutex<Option<indexmap::IndexMap<String, String>>>,
+    config_adapter: Option<Arc<A>>,
 }
 
-impl KimiOAuthToolkit {
+impl<A> KimiOAuthToolkit<A> {
     // Original:
     //   packages/oauth/src/toolkit.ts
     //   KimiOAuthToolkit.constructor()
-    pub fn new(options: KimiOAuthToolkitOptions) -> Result<Self, KimiOAuthToolkitError> {
+    pub fn new(options: KimiOAuthToolkitOptions<A>) -> Result<Self, KimiOAuthToolkitError> {
         if let Some(identity) = options.identity.as_ref() {
             assert_kimi_host_identity(Some(identity))?;
         }
@@ -159,7 +278,7 @@ impl KimiOAuthToolkit {
         });
         Ok(Self {
             home_dir,
-            _identity: identity,
+            identity,
             storage,
             flow_config,
             runtime,
@@ -167,6 +286,8 @@ impl KimiOAuthToolkit {
             refresh_threshold: options.refresh_threshold,
             on_refresh: options.on_refresh,
             managers: Mutex::new(HashMap::new()),
+            identity_headers: Mutex::new(None),
+            config_adapter: options.config_adapter,
         })
     }
 
@@ -299,6 +420,247 @@ impl KimiOAuthToolkit {
             .or_else(|| oauth_host.map(str::to_owned))
             .unwrap_or_else(|| self.flow_config.oauth_host.clone())
     }
+
+    fn identity_headers(
+        &self,
+    ) -> Result<Option<indexmap::IndexMap<String, String>>, KimiOAuthToolkitError> {
+        let Some(identity) = &self.identity else {
+            return Ok(None);
+        };
+        let mut cached = self
+            .identity_headers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(headers) = cached.as_ref() {
+            return Ok(Some(headers.clone()));
+        }
+        let headers = create_kimi_default_headers(&KimiIdentityOptions {
+            home_dir: self.home_dir.clone(),
+            host: identity.clone(),
+        })?;
+        *cached = Some(headers.clone());
+        Ok(Some(headers))
+    }
+}
+
+impl<A> KimiOAuthToolkit<A>
+where
+    A: ManagedKimiConfigAdapter,
+{
+    // Original:
+    //   packages/oauth/src/toolkit.ts
+    //   KimiOAuthToolkit.login()
+    pub async fn login(
+        &self,
+        provider_name: Option<&str>,
+        options: KimiOAuthLoginOptions<'_>,
+    ) -> Result<KimiOAuthLoginResult, KimiOAuthToolkitOperationError<A::Error>> {
+        let name = provider_name.unwrap_or(KIMI_CODE_PROVIDER_NAME);
+        let oauth_host = self.oauth_host_for(options.oauth_ref, options.oauth_host);
+        let oauth_key = options
+            .oauth_ref
+            .and_then(|reference| reference.key.as_deref())
+            .map_or_else(
+                || self.default_oauth_key(options.base_url, &oauth_host),
+                str::to_owned,
+            );
+        let manager = self.manager_for(name, Some(&oauth_key), Some(&oauth_host))?;
+        let had_token = manager.has_token().await.map_err(manager_operation_error)?;
+        let mut used_device_login = false;
+        let access_token = if had_token {
+            match manager.ensure_fresh(false).await {
+                Ok(token) => token,
+                Err(error) if is_unauthorized_manager_error(&error) => {
+                    used_device_login = true;
+                    login_with_device(&manager, &options)
+                        .await
+                        .map_err(manager_operation_error)?
+                }
+                Err(error) => return Err(manager_operation_error(error)),
+            }
+        } else {
+            used_device_login = true;
+            login_with_device(&manager, &options)
+                .await
+                .map_err(manager_operation_error)?
+        };
+
+        let should_provision = options
+            .provision_config
+            .unwrap_or(self.config_adapter.is_some());
+        let provision = if should_provision {
+            if let Some(adapter) = self.config_adapter.as_deref() {
+                let headers = self.identity_headers()?;
+                match provision_with_token(
+                    adapter,
+                    &access_token,
+                    &oauth_key,
+                    &oauth_host,
+                    had_token,
+                    &options,
+                    headers.as_ref(),
+                )
+                .await
+                {
+                    Ok(provision) => Some(provision),
+                    Err(error)
+                        if is_unauthorized_provision_error(&error)
+                            && had_token
+                            && !used_device_login =>
+                    {
+                        let retry_token = match manager.ensure_fresh(true).await {
+                            Ok(token) => token,
+                            Err(error) if is_unauthorized_manager_error(&error) => {
+                                used_device_login = true;
+                                login_with_device(&manager, &options)
+                                    .await
+                                    .map_err(manager_operation_error)?
+                            }
+                            Err(error) => return Err(manager_operation_error(error)),
+                        };
+                        match provision_with_token(
+                            adapter,
+                            &retry_token,
+                            &oauth_key,
+                            &oauth_host,
+                            had_token,
+                            &options,
+                            headers.as_ref(),
+                        )
+                        .await
+                        {
+                            Ok(provision) => Some(provision),
+                            Err(error)
+                                if is_unauthorized_provision_error(&error)
+                                    && !used_device_login =>
+                            {
+                                let device_token = login_with_device(&manager, &options)
+                                    .await
+                                    .map_err(manager_operation_error)?;
+                                Some(
+                                    provision_with_token(
+                                        adapter,
+                                        &device_token,
+                                        &oauth_key,
+                                        &oauth_host,
+                                        had_token,
+                                        &options,
+                                        headers.as_ref(),
+                                    )
+                                    .await
+                                    .map_err(KimiOAuthToolkitOperationError::Provision)?,
+                                )
+                            }
+                            Err(error) => {
+                                return Err(KimiOAuthToolkitOperationError::Provision(error));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        return Err(KimiOAuthToolkitOperationError::Provision(error));
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        Ok(KimiOAuthLoginResult {
+            provider_name: name.to_owned(),
+            ok: true,
+            provision,
+        })
+    }
+
+    // Original: KimiOAuthToolkit.logout()
+    pub async fn logout(
+        &self,
+        provider_name: Option<&str>,
+        oauth_ref: Option<&KimiOAuthTokenRef>,
+    ) -> Result<KimiOAuthLogoutResult, KimiOAuthToolkitOperationError<A::Error>> {
+        let name = provider_name.unwrap_or(KIMI_CODE_PROVIDER_NAME);
+        let oauth_host = self.oauth_host_for(oauth_ref, None);
+        let oauth_key = oauth_ref
+            .and_then(|reference| reference.key.as_deref())
+            .map_or_else(|| self.default_oauth_key(None, &oauth_host), str::to_owned);
+        self.manager_for(name, Some(&oauth_key), Some(&oauth_host))?
+            .logout()
+            .await
+            .map_err(manager_operation_error)?;
+
+        if name == KIMI_CODE_PROVIDER_NAME
+            && let Some(adapter) = self
+                .config_adapter
+                .as_deref()
+                .filter(|adapter| adapter.supports_remove())
+        {
+            let mut config = adapter
+                .read()
+                .await
+                .map_err(KimiOAuthToolkitOperationError::Adapter)?;
+            adapter
+                .remove(&mut config)
+                .map_err(KimiOAuthToolkitOperationError::Adapter)?;
+            adapter
+                .write(config)
+                .await
+                .map_err(KimiOAuthToolkitOperationError::Adapter)?;
+        }
+        Ok(KimiOAuthLogoutResult {
+            provider_name: name.to_owned(),
+            ok: true,
+        })
+    }
+}
+
+async fn provision_with_token<A: ManagedKimiConfigAdapter>(
+    adapter: &A,
+    access_token: &str,
+    oauth_key: &str,
+    oauth_host: &str,
+    preserve_default_model: bool,
+    login_options: &KimiOAuthLoginOptions<'_>,
+    headers: Option<&indexmap::IndexMap<String, String>>,
+) -> Result<ManagedKimiCodeProvisionResult, ProvisionManagedKimiCodeError<A::Error>> {
+    provision_managed_kimi_code_config(ProvisionManagedKimiCodeConfigOptions {
+        adapter,
+        access_token,
+        base_url: login_options.base_url,
+        oauth_key: Some(oauth_key),
+        oauth_host: Some(oauth_host),
+        preserve_default_model,
+        headers,
+    })
+    .await
+}
+
+async fn login_with_device(
+    manager: &OAuthManager,
+    options: &KimiOAuthLoginOptions<'_>,
+) -> Result<String, OAuthManagerError> {
+    Ok(manager
+        .login(LoginOptions {
+            on_device_code: options.on_device_code,
+            signal: options.signal,
+        })
+        .await?
+        .access_token)
+}
+
+fn manager_operation_error<E>(error: OAuthManagerError) -> KimiOAuthToolkitOperationError<E> {
+    KimiOAuthToolkitOperationError::Toolkit(KimiOAuthToolkitError::Manager(error))
+}
+
+fn is_unauthorized_manager_error(error: &OAuthManagerError) -> bool {
+    error
+        .oauth()
+        .is_some_and(|error| error.kind() == super::errors::OAuthErrorKind::Unauthorized)
+}
+
+fn is_unauthorized_provision_error<E>(error: &ProvisionManagedKimiCodeError<E>) -> bool {
+    matches!(error, ProvisionManagedKimiCodeError::Models(error) if error.is_unauthorized())
 }
 
 fn normalize_oauth_host(oauth_host: &str) -> String {
@@ -351,9 +713,20 @@ pub fn resolve_kimi_token_storage_name(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::atomic::{AtomicUsize, Ordering},
+        thread,
+    };
+
     use async_trait::async_trait;
+    use serde_json::{Map, Value};
 
     use super::*;
+    use crate::oauth::managed_config::{
+        ManagedConfigError, apply_managed_kimi_code_config, apply_managed_kimi_code_logout_config,
+    };
     use crate::oauth::{
         errors::OAuthError,
         flow::DevicePollResult,
@@ -438,6 +811,165 @@ mod tests {
         }
     }
 
+    struct DeviceRuntime {
+        device_requests: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl OAuthManagerRuntime for DeviceRuntime {
+        fn now_seconds(&self) -> f64 {
+            100.0
+        }
+
+        async fn sleep(&self, _duration: Duration) {}
+
+        async fn refresh_token(
+            &self,
+            _config: &OAuthFlowConfig,
+            _refresh_token: &str,
+        ) -> Result<TokenInfo, OAuthError> {
+            Err(OAuthError::new("unexpected refresh"))
+        }
+
+        async fn request_device(
+            &self,
+            _config: &OAuthFlowConfig,
+        ) -> Result<DeviceAuthorization, OAuthError> {
+            self.device_requests.fetch_add(1, Ordering::SeqCst);
+            Ok(DeviceAuthorization {
+                user_code: "CODE".to_owned(),
+                device_code: "device".to_owned(),
+                verification_uri: "https://auth.example/device".to_owned(),
+                verification_uri_complete: "https://auth.example/device?code=CODE".to_owned(),
+                expires_in: Some(600.0),
+                interval: 0.0,
+            })
+        }
+
+        async fn poll_device(
+            &self,
+            _config: &OAuthFlowConfig,
+            _device_code: &str,
+        ) -> Result<DevicePollResult, OAuthError> {
+            Ok(DevicePollResult::Success(token("device-access")))
+        }
+    }
+
+    struct RefreshRuntime {
+        refreshes: AtomicUsize,
+        device_requests: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl OAuthManagerRuntime for RefreshRuntime {
+        fn now_seconds(&self) -> f64 {
+            100.0
+        }
+
+        async fn sleep(&self, _duration: Duration) {}
+
+        async fn refresh_token(
+            &self,
+            _config: &OAuthFlowConfig,
+            _refresh_token: &str,
+        ) -> Result<TokenInfo, OAuthError> {
+            self.refreshes.fetch_add(1, Ordering::SeqCst);
+            Ok(token("refreshed-access"))
+        }
+
+        async fn request_device(
+            &self,
+            _config: &OAuthFlowConfig,
+        ) -> Result<DeviceAuthorization, OAuthError> {
+            self.device_requests.fetch_add(1, Ordering::SeqCst);
+            Err(OAuthError::new("unexpected device request"))
+        }
+
+        async fn poll_device(
+            &self,
+            _config: &OAuthFlowConfig,
+            _device_code: &str,
+        ) -> Result<DevicePollResult, OAuthError> {
+            Err(OAuthError::new("unexpected device poll"))
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ConfigAdapterError(String);
+
+    impl fmt::Display for ConfigAdapterError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(&self.0)
+        }
+    }
+
+    impl Error for ConfigAdapterError {}
+
+    struct ConfigAdapter {
+        initial: Value,
+        written: Mutex<Option<Value>>,
+        events: Mutex<Vec<&'static str>>,
+        cleanup: bool,
+    }
+
+    #[async_trait]
+    impl ManagedKimiConfigAdapter for ConfigAdapter {
+        type Config = Map<String, Value>;
+        type Error = ConfigAdapterError;
+
+        async fn read(&self) -> Result<Self::Config, Self::Error> {
+            self.events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("read");
+            self.initial
+                .as_object()
+                .cloned()
+                .ok_or_else(|| ConfigAdapterError("config is not an object".to_owned()))
+        }
+
+        async fn write(&self, config: Self::Config) -> Result<(), Self::Error> {
+            self.events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("write");
+            *self
+                .written
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Value::Object(config));
+            Ok(())
+        }
+
+        fn apply(
+            &self,
+            config: &mut Self::Config,
+            options: ManagedKimiCodeApplyOptions<'_>,
+        ) -> Result<ManagedKimiCodeApplyResult, Self::Error> {
+            self.events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("apply");
+            apply_managed_kimi_code_config(config, options).map_err(map_config_error)
+        }
+
+        fn supports_remove(&self) -> bool {
+            self.cleanup
+        }
+
+        fn remove(&self, config: &mut Self::Config) -> Result<(), Self::Error> {
+            self.events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("remove");
+            apply_managed_kimi_code_logout_config(config);
+            Ok(())
+        }
+    }
+
+    fn map_config_error(error: ManagedConfigError) -> ConfigAdapterError {
+        ConfigAdapterError(error.to_string())
+    }
+
     fn token(access_token: &str) -> TokenInfo {
         TokenInfo {
             access_token: access_token.to_owned(),
@@ -456,6 +988,217 @@ mod tests {
             runtime: Some(Arc::new(StaticRuntime)),
             ..KimiOAuthToolkitOptions::default()
         }
+    }
+
+    fn sequence_models_server(
+        responses: Vec<(u16, &'static str)>,
+    ) -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind models server");
+        let address = listener.local_addr().expect("models server address");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&requests);
+        let handle = thread::spawn(move || {
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().expect("accept models request");
+                let mut bytes = Vec::new();
+                let mut buffer = [0_u8; 4_096];
+                loop {
+                    let count = stream.read(&mut buffer).expect("read models request");
+                    if count == 0 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                recorded
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(String::from_utf8_lossy(&bytes).into_owned());
+                let response = format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write models response");
+            }
+        });
+        (format!("http://{address}/coding/v1"), requests, handle)
+    }
+
+    #[tokio::test]
+    async fn login_without_existing_token_uses_device_flow_and_logout_removes_token() {
+        let storage = Arc::new(MemoryTokenStorage::default());
+        let runtime = Arc::new(DeviceRuntime {
+            device_requests: AtomicUsize::new(0),
+        });
+        let toolkit = KimiOAuthToolkit::new(KimiOAuthToolkitOptions::<NoManagedConfigAdapter> {
+            home_dir: Some(PathBuf::from("C:/tmp/kimi-login-test")),
+            storage: Some(storage.clone()),
+            runtime: Some(runtime.clone()),
+            ..KimiOAuthToolkitOptions::default()
+        })
+        .expect("toolkit");
+
+        let result = toolkit
+            .login(None, KimiOAuthLoginOptions::default())
+            .await
+            .expect("login");
+        assert!(result.ok);
+        assert_eq!(result.provider_name, "managed:kimi-code");
+        assert_eq!(result.provision, None);
+        assert_eq!(runtime.device_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            storage.load("kimi-code").await.expect("stored token"),
+            Some(token("device-access"))
+        );
+
+        let logout = toolkit.logout(None, None).await.expect("logout");
+        assert!(logout.ok);
+        assert_eq!(logout.provider_name, "managed:kimi-code");
+        assert_eq!(storage.load("kimi-code").await.expect("removed"), None);
+    }
+
+    #[tokio::test]
+    async fn provisioning_unauthorized_for_existing_token_forces_refresh_then_retries() {
+        let (base_url, requests, server) = sequence_models_server(vec![
+            (401, r#"{"error":{"message":"expired"}}"#),
+            (
+                200,
+                r#"{"data":[{"id":"kimi-for-coding","context_length":262144,"supports_reasoning":true}]}"#,
+            ),
+        ]);
+        let storage = Arc::new(MemoryTokenStorage::default());
+        storage
+            .save("test-slot", &token("old-access"))
+            .await
+            .expect("save old token");
+        let runtime = Arc::new(RefreshRuntime {
+            refreshes: AtomicUsize::new(0),
+            device_requests: AtomicUsize::new(0),
+        });
+        let adapter = Arc::new(ConfigAdapter {
+            initial: serde_json::json!({ "providers": {} }),
+            written: Mutex::new(None),
+            events: Mutex::new(Vec::new()),
+            cleanup: false,
+        });
+        let toolkit = KimiOAuthToolkit::new(KimiOAuthToolkitOptions {
+            identity: None,
+            home_dir: Some(PathBuf::from("C:/tmp/kimi-provision-retry")),
+            credentials_dir: None,
+            storage: Some(storage),
+            flow_config: None,
+            runtime: Some(runtime.clone()),
+            device_code_timeout: None,
+            refresh_threshold: None,
+            on_refresh: None,
+            config_adapter: Some(adapter.clone()),
+        })
+        .expect("toolkit");
+        let oauth_ref = KimiOAuthTokenRef {
+            key: Some("oauth/test-slot".to_owned()),
+            oauth_host: None,
+        };
+
+        let result = toolkit
+            .login(
+                None,
+                KimiOAuthLoginOptions {
+                    provision_config: Some(true),
+                    base_url: Some(&base_url),
+                    oauth_ref: Some(&oauth_ref),
+                    ..KimiOAuthLoginOptions::default()
+                },
+            )
+            .await
+            .expect("login and provision");
+        server.join().expect("models server thread");
+
+        assert!(result.provision.is_some());
+        assert_eq!(runtime.refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.device_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            adapter
+                .events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_slice(),
+            ["read", "apply", "write"]
+        );
+        let requests = requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer old-access")
+        );
+        assert!(
+            requests[1]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer refreshed-access")
+        );
+    }
+
+    #[tokio::test]
+    async fn logout_runs_optional_managed_config_cleanup_only_for_managed_provider() {
+        let storage = Arc::new(MemoryTokenStorage::default());
+        storage
+            .save("kimi-code", &token("access"))
+            .await
+            .expect("save token");
+        let adapter = Arc::new(ConfigAdapter {
+            initial: serde_json::json!({
+                "providers": {
+                    "managed:kimi-code": { "type": "kimi" },
+                    "custom": { "type": "openai" }
+                },
+                "models": {
+                    "kimi-code/kimi": { "provider": "managed:kimi-code", "model": "kimi" },
+                    "custom/model": { "provider": "custom", "model": "model" }
+                }
+            }),
+            written: Mutex::new(None),
+            events: Mutex::new(Vec::new()),
+            cleanup: true,
+        });
+        let toolkit = KimiOAuthToolkit::new(KimiOAuthToolkitOptions {
+            identity: None,
+            home_dir: Some(PathBuf::from("C:/tmp/kimi-logout-cleanup")),
+            credentials_dir: None,
+            storage: Some(storage),
+            flow_config: None,
+            runtime: Some(Arc::new(StaticRuntime)),
+            device_code_timeout: None,
+            refresh_threshold: None,
+            on_refresh: None,
+            config_adapter: Some(adapter.clone()),
+        })
+        .expect("toolkit");
+
+        toolkit.logout(None, None).await.expect("logout");
+
+        assert_eq!(
+            adapter
+                .events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_slice(),
+            ["read", "remove", "write"]
+        );
+        let written = adapter
+            .written
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let written = written.as_ref().expect("written config");
+        assert!(written["providers"].get("managed:kimi-code").is_none());
+        assert!(written["providers"].get("custom").is_some());
+        assert!(written["models"].get("kimi-code/kimi").is_none());
+        assert!(written["models"].get("custom/model").is_some());
     }
 
     #[tokio::test]

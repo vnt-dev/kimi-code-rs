@@ -34,6 +34,14 @@ pub trait ManagedKimiConfigAdapter: Send + Sync {
     fn config_path(&self) -> Option<&Path> {
         None
     }
+
+    fn supports_remove(&self) -> bool {
+        false
+    }
+
+    fn remove(&self, _config: &mut Self::Config) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
