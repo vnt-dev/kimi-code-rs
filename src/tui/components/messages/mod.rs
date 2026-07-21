@@ -1,5 +1,6 @@
 mod activation_preview;
 
+pub mod agent_swarm_progress_estimator;
 pub mod background_agent_status;
 pub mod cron_message;
 pub mod goal_format;
