@@ -1,4 +1,5 @@
 pub mod basic;
+pub mod chrome;
 pub mod core;
 pub mod markdown;
 pub mod media;
