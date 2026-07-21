@@ -4,6 +4,7 @@ pub mod errors;
 #[path = "oauth.rs"]
 pub mod flow;
 pub mod identity;
+pub mod manager;
 pub mod storage;
 pub mod token_state;
 pub mod types;
