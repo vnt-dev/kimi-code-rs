@@ -10,6 +10,7 @@ pub mod managed_models;
 pub mod managed_usage;
 pub mod manager;
 pub mod model_alias_merge;
+pub mod open_platform;
 pub mod storage;
 pub mod token_state;
 pub mod types;
