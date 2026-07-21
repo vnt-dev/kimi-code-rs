@@ -52,6 +52,12 @@ pub struct UpdateCache {
     pub manifest: Option<UpdateManifest>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchLatestResult {
+    pub latest: String,
+    pub manifest: Option<UpdateManifest>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInstallActive {
