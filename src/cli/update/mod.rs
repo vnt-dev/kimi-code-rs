@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod cdn;
 pub mod install_state;
 pub mod refresh;
 pub mod rollout;

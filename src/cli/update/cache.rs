@@ -111,7 +111,7 @@ fn nullable_nonempty_string(value: &Value) -> Option<Option<String>> {
     (!value.is_empty()).then(|| Some(value.to_owned()))
 }
 
-fn parse_manifest(value: Value) -> Option<UpdateManifest> {
+pub(crate) fn parse_manifest(value: Value) -> Option<UpdateManifest> {
     if value.is_null() {
         return None;
     }
