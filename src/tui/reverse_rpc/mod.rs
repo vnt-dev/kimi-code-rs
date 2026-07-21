@@ -1,6 +1,8 @@
 pub mod types;
 
 pub use types::{
-    DiffDisplayBlock, FileContentDisplayBlock, PendingQuestion, QuestionPanelData,
-    QuestionPanelItem, QuestionPanelOption, QuestionPanelResponse, QuestionSubmissionMethod,
+    ApprovalDecision, ApprovalPanelChoice, ApprovalPanelData, DiffDisplayBlock, DisplayBlock,
+    FileContentDisplayBlock, FileOperation, InvocationKind, PendingApproval, PendingQuestion,
+    QuestionPanelData, QuestionPanelItem, QuestionPanelOption, QuestionPanelResponse,
+    QuestionSubmissionMethod, TodoDisplayItem, TodoDisplayStatus,
 };

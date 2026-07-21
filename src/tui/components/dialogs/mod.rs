@@ -1,4 +1,5 @@
 pub mod api_key_input_dialog;
+pub mod approval_panel;
 pub mod approval_preview;
 pub mod choice_picker;
 pub mod compaction;
@@ -19,6 +20,7 @@ pub mod undo_selector;
 pub mod update_preference_selector;
 
 pub use api_key_input_dialog::{ApiKeyInputDialogComponent, ApiKeyInputResult};
+pub use approval_panel::{ApprovalPanelComponent, ApprovalPanelResponse};
 pub use approval_preview::{ApprovalPreviewBlock, ApprovalPreviewViewer};
 pub use choice_picker::{
     ChoiceOption, ChoicePickerComponent, ChoicePickerOptions, ChoiceTone, NoticeTone,
