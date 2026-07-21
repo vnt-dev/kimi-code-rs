@@ -1,3 +1,4 @@
+pub mod chip;
 pub mod goal;
 pub mod media;
 pub mod registry;
