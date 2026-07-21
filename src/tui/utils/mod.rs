@@ -19,6 +19,7 @@ pub mod printable_key;
 pub mod searchable_list;
 pub mod session_picker_rows;
 pub mod shell_output;
+pub mod startup;
 pub mod tab_strip;
 pub mod terminal_focus;
 pub mod terminal_notification;
