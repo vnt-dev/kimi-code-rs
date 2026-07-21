@@ -51,14 +51,14 @@ fn number_or_zero(value: Option<&Value>) -> f64 {
     value.and_then(Value::as_f64).unwrap_or(0.0)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeviceAuthorization {
     pub user_code: String,
     pub device_code: String,
     pub verification_uri: String,
     pub verification_uri_complete: String,
-    pub expires_in: Option<u64>,
-    pub interval: u64,
+    pub expires_in: Option<f64>,
+    pub interval: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
