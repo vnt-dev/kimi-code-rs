@@ -11,7 +11,10 @@ use url::Url;
 
 use crate::{
     sdk::types::ContextMessage,
-    tui::utils::export_markdown::{BuildExportMarkdownInput, build_export_markdown},
+    tui::utils::{
+        errors::is_abort_error,
+        export_markdown::{BuildExportMarkdownInput, build_export_markdown},
+    },
     utils::terminal_hyperlink::to_terminal_hyperlink,
 };
 
@@ -70,6 +73,26 @@ pub trait ExportMdCommandHost {
     fn show_status(&mut self, message: &str);
     fn show_error(&mut self, message: &str);
     fn show_notice(&mut self, title: &str, body: &str);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionInitError {
+    pub name: Option<String>,
+    pub message: String,
+}
+
+pub trait InitCommandHost {
+    fn model(&self) -> &str;
+    fn has_session(&self) -> bool;
+    fn set_defer_user_messages(&mut self, defer: bool);
+    fn begin_session_request(&mut self);
+    fn init_session(&mut self) -> impl Future<Output = Result<(), SessionInitError>> + Send;
+    fn track_init_complete(&mut self);
+    fn finalize_turn_and_send_queued_messages(&mut self);
+    fn set_streaming_idle(&mut self);
+    fn reset_live_pane(&mut self);
+    fn fail_session_request(&mut self, message: &str);
+    fn show_error(&mut self, message: &str);
 }
 
 /// Original:
@@ -207,6 +230,31 @@ pub async fn handle_export_md_command_at<H: ExportMdCommandHost>(
         &format!("Exported {} messages", context.history.len()),
         &linked,
     );
+}
+
+/// Original:
+///   apps/kimi-code/src/tui/commands/session.ts
+///   handleInitCommand()
+pub async fn handle_init_command<H: InitCommandHost>(host: &mut H) {
+    if host.model().trim().is_empty() || !host.has_session() {
+        host.show_error(super::swarm::LLM_NOT_SET_MESSAGE);
+        return;
+    }
+
+    host.set_defer_user_messages(true);
+    host.begin_session_request();
+    match host.init_session().await {
+        Ok(()) => {
+            host.track_init_complete();
+            host.finalize_turn_and_send_queued_messages();
+        }
+        Err(error) if is_abort_error(error.name.as_deref(), &error.message) => {
+            host.set_streaming_idle();
+            host.reset_live_pane();
+        }
+        Err(error) => host.fail_session_request(&format!("Init failed: {}", error.message)),
+    }
+    host.set_defer_user_messages(false);
 }
 
 fn resolve_export_path(
@@ -539,6 +587,123 @@ mod tests {
         assert_eq!(
             failed.operations.last().map(String::as_str),
             Some("error:Failed to export session: unavailable")
+        );
+    }
+
+    struct InitHost {
+        model: String,
+        has_session: bool,
+        result: Result<(), SessionInitError>,
+        operations: Vec<String>,
+    }
+
+    impl InitCommandHost for InitHost {
+        fn model(&self) -> &str {
+            &self.model
+        }
+        fn has_session(&self) -> bool {
+            self.has_session
+        }
+        fn set_defer_user_messages(&mut self, defer: bool) {
+            self.operations.push(format!("defer:{defer}"));
+        }
+        fn begin_session_request(&mut self) {
+            self.operations.push("begin".to_owned());
+        }
+        async fn init_session(&mut self) -> Result<(), SessionInitError> {
+            self.operations.push("init".to_owned());
+            self.result.clone()
+        }
+        fn track_init_complete(&mut self) {
+            self.operations.push("track".to_owned());
+        }
+        fn finalize_turn_and_send_queued_messages(&mut self) {
+            self.operations.push("finalize".to_owned());
+        }
+        fn set_streaming_idle(&mut self) {
+            self.operations.push("idle".to_owned());
+        }
+        fn reset_live_pane(&mut self) {
+            self.operations.push("reset".to_owned());
+        }
+        fn fail_session_request(&mut self, message: &str) {
+            self.operations.push(format!("fail:{message}"));
+        }
+        fn show_error(&mut self, message: &str) {
+            self.operations.push(format!("error:{message}"));
+        }
+    }
+
+    fn init_host(result: Result<(), SessionInitError>) -> InitHost {
+        InitHost {
+            model: "kimi-model".to_owned(),
+            has_session: true,
+            result,
+            operations: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn init_validates_then_tracks_finalizes_and_restores_defer_flag() {
+        let mut missing = init_host(Ok(()));
+        missing.has_session = false;
+        handle_init_command(&mut missing).await;
+        assert_eq!(
+            missing.operations,
+            [format!(
+                "error:{}",
+                crate::tui::commands::swarm::LLM_NOT_SET_MESSAGE
+            )]
+        );
+
+        let mut success = init_host(Ok(()));
+        handle_init_command(&mut success).await;
+        assert_eq!(
+            success.operations,
+            [
+                "defer:true",
+                "begin",
+                "init",
+                "track",
+                "finalize",
+                "defer:false"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn init_abort_restores_idle_ui_while_other_errors_fail_request() {
+        let mut aborted = init_host(Err(SessionInitError {
+            name: Some("AbortError".to_owned()),
+            message: "cancelled".to_owned(),
+        }));
+        handle_init_command(&mut aborted).await;
+        assert_eq!(
+            aborted.operations,
+            [
+                "defer:true",
+                "begin",
+                "init",
+                "idle",
+                "reset",
+                "defer:false"
+            ]
+        );
+
+        let mut failed = init_host(Err(SessionInitError {
+            name: None,
+            message: "network unavailable".to_owned(),
+        }));
+        handle_init_command(&mut failed).await;
+        assert_eq!(
+            failed.operations,
+            [
+                "defer:true",
+                "begin",
+                "init",
+                "fail:Init failed: network unavailable",
+                "defer:false"
+            ]
         );
     }
 }
