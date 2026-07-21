@@ -155,11 +155,14 @@ mod tests {
             color: None,
             detail: None,
             bullet: None,
+            compaction_data: None,
             background_agent_status: None,
             image_attachment_ids: None,
             skill_activation_id: None,
             skill_name: None,
             skill_args: None,
+            skill_trigger: None,
+            plugin_command_data: None,
         }
     }
 

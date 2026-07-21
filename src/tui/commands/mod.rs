@@ -13,4 +13,5 @@ pub mod session;
 pub mod skills;
 pub mod swarm;
 pub mod types;
+pub mod undo;
 pub mod web;

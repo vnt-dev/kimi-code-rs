@@ -36,6 +36,32 @@ pub struct BackgroundAgentStatusData {
     pub detail: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactionTranscriptData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens_before: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens_after: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCommandTranscriptData {
+    pub activation_id: String,
+    pub plugin_id: String,
+    pub command_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+    pub trigger: SkillActivationTrigger,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptEntryKind {
@@ -84,6 +110,8 @@ pub struct TranscriptEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bullet: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub compaction_data: Option<CompactionTranscriptData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub background_agent_status: Option<BackgroundAgentStatusData>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_attachment_ids: Option<Vec<u64>>,
@@ -93,6 +121,10 @@ pub struct TranscriptEntry {
     pub skill_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_args: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_trigger: Option<SkillActivationTrigger>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_command_data: Option<PluginCommandTranscriptData>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
