@@ -4,5 +4,6 @@ pub mod goal_prompt;
 pub mod headless_exit;
 pub mod options;
 pub mod prompt_render;
+pub mod run_prompt;
 pub mod startup_error;
 pub mod sub;
