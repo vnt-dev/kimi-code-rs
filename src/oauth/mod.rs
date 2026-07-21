@@ -4,6 +4,7 @@ pub mod errors;
 #[path = "oauth.rs"]
 pub mod flow;
 pub mod identity;
+pub mod managed_auth;
 pub mod managed_feedback;
 pub mod managed_feedback_upload;
 pub mod managed_models;
