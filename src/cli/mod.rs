@@ -2,6 +2,7 @@ pub mod commands;
 pub mod experimental_v2;
 pub mod goal_prompt;
 pub mod headless_exit;
+pub mod main_command;
 pub mod options;
 pub mod prompt_render;
 pub mod prompt_session;
