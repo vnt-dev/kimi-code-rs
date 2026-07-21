@@ -10,7 +10,11 @@ use crate::{
         types::{PermissionMode, ThinkingEffort},
     },
     tui::{
-        components::dialogs::model_selector::{ModelSelection, model_display_name, segments_for},
+        commands::experimental_flags::{ExperimentalFeatureState, set_experimental_features},
+        components::dialogs::{
+            ExperimentalFeatureDraftChange, SettingsSelection,
+            model_selector::{ModelSelection, model_display_name, segments_for},
+        },
         config::TuiConfig,
         theme::{colors::ResolvedTheme, custom_theme_loader::load_custom_theme_merged},
         utils::thinking_config::{ThinkingConfig, ThinkingConfigPatch, thinking_effort_to_config},
@@ -151,6 +155,42 @@ pub trait ModelCommandHost {
     fn show_model_notice(&mut self, title: &str, detail: Option<&str>);
     fn show_model_status(&mut self, message: &str, warning: bool);
     fn show_model_error(&mut self, message: &str);
+}
+
+#[async_trait(?Send)]
+pub trait SettingsCommandHost {
+    fn settings_tui_config(&self) -> TuiConfig;
+    fn current_permission_mode(&self) -> PermissionMode;
+    fn has_active_session(&self) -> bool;
+    async fn pick_permission(&mut self, current: PermissionMode) -> Option<PermissionMode>;
+    async fn pick_update_preference(&mut self, current: bool) -> Option<bool>;
+    async fn pick_setting(&mut self) -> Option<SettingsSelection>;
+    async fn get_experimental_features(&self) -> Result<Vec<ExperimentalFeatureState>, String>;
+    async fn pick_experimental_changes(
+        &mut self,
+        features: Vec<ExperimentalFeatureState>,
+    ) -> Option<Vec<ExperimentalFeatureDraftChange>>;
+    async fn set_experimental_config(
+        &mut self,
+        changes: &BTreeMap<String, bool>,
+    ) -> Result<(), String>;
+    async fn set_settings_permission(&mut self, mode: PermissionMode) -> Result<(), String>;
+    async fn save_settings_tui_config(&mut self, config: &TuiConfig) -> Result<(), String>;
+    async fn reload_session_after_experiments(&mut self, message: &str) -> Result<(), String>;
+    fn update_settings_permission(&mut self, mode: PermissionMode);
+    fn update_upgrade_preference(&mut self, auto_install: bool);
+    fn refresh_slash_command_autocomplete(&mut self);
+    fn restore_settings_editor(&mut self);
+    fn track_settings(&mut self, event: &str, value: &str);
+    fn show_settings_status(&mut self, message: &str, muted: bool);
+    fn show_settings_notice(&mut self, message: &str);
+    fn show_settings_error(&mut self, message: &str);
+
+    async fn open_model_setting(&mut self);
+    async fn open_theme_setting(&mut self);
+    async fn open_editor_setting(&mut self);
+    async fn open_experiments_setting(&mut self);
+    async fn open_usage_setting(&mut self);
 }
 
 // Original: `src/tui/commands/config.ts`, `handlePlanCommand()`.
@@ -699,8 +739,150 @@ async fn persist_model_selection(
     Ok(true)
 }
 
+// Original: `showPermissionPicker()` and `applyPermissionChoice()`.
+pub async fn show_permission_picker(host: &mut impl SettingsCommandHost) {
+    let current = host.current_permission_mode();
+    let Some(mode) = host.pick_permission(current).await else {
+        return;
+    };
+    if mode == current {
+        host.show_settings_status(
+            &format!("Permission mode unchanged: {}.", permission_label(mode)),
+            false,
+        );
+        return;
+    }
+    if let Err(error) = host.set_settings_permission(mode).await {
+        host.show_settings_error(&format!("Failed to set permission mode: {error}"));
+        return;
+    }
+    host.update_settings_permission(mode);
+    host.show_settings_notice(&format!("Permission mode: {}", permission_label(mode)));
+}
+
+const fn permission_label(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Manual => "manual",
+        PermissionMode::Yolo => "yolo",
+        PermissionMode::Auto => "auto",
+    }
+}
+
+// Original: `showUpdatePreferencePicker()` and
+// `applyUpdatePreferenceChoice()`.
+pub async fn show_update_preference_picker(host: &mut impl SettingsCommandHost) {
+    let current = host.settings_tui_config().upgrade.auto_install;
+    if let Some(value) = host.pick_update_preference(current).await {
+        apply_update_preference_choice(host, value).await;
+    }
+}
+
+pub async fn apply_update_preference_choice(
+    host: &mut impl SettingsCommandHost,
+    auto_install: bool,
+) {
+    let mut config = host.settings_tui_config();
+    if auto_install == config.upgrade.auto_install {
+        host.show_settings_status(
+            &format!(
+                "Automatic updates already {}.",
+                if auto_install { "enabled" } else { "disabled" }
+            ),
+            false,
+        );
+        return;
+    }
+    config.upgrade.auto_install = auto_install;
+    if let Err(error) = host.save_settings_tui_config(&config).await {
+        host.show_settings_error(&format!("Failed to save automatic update setting: {error}"));
+        return;
+    }
+    host.update_upgrade_preference(auto_install);
+    host.track_settings("upgrade_preference_changed", &auto_install.to_string());
+    host.show_settings_status(
+        &format!(
+            "Automatic updates {}.",
+            if auto_install { "enabled" } else { "disabled" }
+        ),
+        false,
+    );
+}
+
+// Original: `showExperimentsPanel()`.
+pub async fn show_experiments_panel(host: &mut impl SettingsCommandHost) {
+    let features = match host.get_experimental_features().await {
+        Ok(features) => features,
+        Err(error) => {
+            host.show_settings_error(&format!("Failed to load experimental features: {error}"));
+            return;
+        }
+    };
+    if let Some(changes) = host.pick_experimental_changes(features).await {
+        apply_experimental_feature_changes(host, &changes).await;
+    }
+}
+
+// Original: `applyExperimentalFeatureChanges()`.
+pub async fn apply_experimental_feature_changes(
+    host: &mut impl SettingsCommandHost,
+    changes: &[ExperimentalFeatureDraftChange],
+) {
+    if changes.is_empty() {
+        host.show_settings_status("No experimental feature changes to apply.", true);
+        return;
+    }
+    let patch = changes
+        .iter()
+        .map(|change| (change.id.clone(), change.enabled))
+        .collect::<BTreeMap<_, _>>();
+    if let Err(error) = host.set_experimental_config(&patch).await {
+        host.show_settings_error(&format!("Failed to update experimental features: {error}"));
+        return;
+    }
+    let features = match host.get_experimental_features().await {
+        Ok(features) => features,
+        Err(error) => {
+            host.show_settings_error(&format!("Failed to update experimental features: {error}"));
+            return;
+        }
+    };
+    set_experimental_features(&features);
+    host.refresh_slash_command_autocomplete();
+    host.restore_settings_editor();
+    if host.has_active_session() {
+        if let Err(error) = host
+            .reload_session_after_experiments("Experimental features updated. Session reloaded.")
+            .await
+        {
+            host.show_settings_error(&format!("Failed to update experimental features: {error}"));
+            return;
+        }
+    } else {
+        host.show_settings_status("Experimental features updated.", false);
+    }
+    host.track_settings("experimental_features_apply", &changes.len().to_string());
+}
+
+// Original: `showSettingsSelector()` and `handleSettingsSelection()`.
+pub async fn show_settings_selector(host: &mut impl SettingsCommandHost) {
+    let Some(selection) = host.pick_setting().await else {
+        return;
+    };
+    host.restore_settings_editor();
+    match selection {
+        SettingsSelection::Model => host.open_model_setting().await,
+        SettingsSelection::Permission => show_permission_picker(host).await,
+        SettingsSelection::Theme => host.open_theme_setting().await,
+        SettingsSelection::Editor => host.open_editor_setting().await,
+        SettingsSelection::Experiments => host.open_experiments_setting().await,
+        SettingsSelection::Upgrade => show_update_preference_picker(host).await,
+        SettingsSelection::Usage => host.open_usage_setting().await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::tui::commands::experimental_flags::{ExperimentalFlagSource, FlagSurface};
     use crate::tui::config::{NotificationCondition, NotificationsConfig, UpgradePreferences};
 
     use super::*;
@@ -1243,5 +1425,205 @@ mod tests {
         .await;
         assert!(host.errors[0].contains("Cannot switch models while streaming"));
         assert!(host.operations.is_empty());
+    }
+
+    struct SettingsHost {
+        config: TuiConfig,
+        permission: PermissionMode,
+        permission_pick: Option<PermissionMode>,
+        setting_pick: Option<SettingsSelection>,
+        features: Vec<ExperimentalFeatureState>,
+        active_session: bool,
+        operations: Vec<String>,
+        statuses: Vec<(String, bool)>,
+        notices: Vec<String>,
+        errors: Vec<String>,
+    }
+
+    impl Default for SettingsHost {
+        fn default() -> Self {
+            Self {
+                config: EditorThemeHost::default().config,
+                permission: PermissionMode::Manual,
+                permission_pick: None,
+                setting_pick: None,
+                features: vec![ExperimentalFeatureState {
+                    id: "feature".to_owned(),
+                    title: "Feature".to_owned(),
+                    description: String::new(),
+                    surface: FlagSurface::Tui,
+                    env: "KIMI_CODE_FEATURE".to_owned(),
+                    default_enabled: false,
+                    enabled: true,
+                    source: ExperimentalFlagSource::Config,
+                    config_value: Some(true),
+                }],
+                active_session: false,
+                operations: Vec::new(),
+                statuses: Vec::new(),
+                notices: Vec::new(),
+                errors: Vec::new(),
+            }
+        }
+    }
+
+    #[async_trait(?Send)]
+    impl SettingsCommandHost for SettingsHost {
+        fn settings_tui_config(&self) -> TuiConfig {
+            self.config.clone()
+        }
+        fn current_permission_mode(&self) -> PermissionMode {
+            self.permission
+        }
+        fn has_active_session(&self) -> bool {
+            self.active_session
+        }
+        async fn pick_permission(&mut self, _: PermissionMode) -> Option<PermissionMode> {
+            self.permission_pick.take()
+        }
+        async fn pick_update_preference(&mut self, _: bool) -> Option<bool> {
+            None
+        }
+        async fn pick_setting(&mut self) -> Option<SettingsSelection> {
+            self.setting_pick.take()
+        }
+        async fn get_experimental_features(&self) -> Result<Vec<ExperimentalFeatureState>, String> {
+            Ok(self.features.clone())
+        }
+        async fn pick_experimental_changes(
+            &mut self,
+            _: Vec<ExperimentalFeatureState>,
+        ) -> Option<Vec<ExperimentalFeatureDraftChange>> {
+            None
+        }
+        async fn set_experimental_config(
+            &mut self,
+            changes: &BTreeMap<String, bool>,
+        ) -> Result<(), String> {
+            self.operations.push(format!("set_experiments:{changes:?}"));
+            Ok(())
+        }
+        async fn set_settings_permission(&mut self, mode: PermissionMode) -> Result<(), String> {
+            self.operations.push(format!("set_permission:{mode:?}"));
+            Ok(())
+        }
+        async fn save_settings_tui_config(&mut self, config: &TuiConfig) -> Result<(), String> {
+            self.config = config.clone();
+            self.operations.push("save_tui".to_owned());
+            Ok(())
+        }
+        async fn reload_session_after_experiments(&mut self, message: &str) -> Result<(), String> {
+            self.operations.push(format!("reload:{message}"));
+            Ok(())
+        }
+        fn update_settings_permission(&mut self, mode: PermissionMode) {
+            self.permission = mode;
+            self.operations.push(format!("update_permission:{mode:?}"));
+        }
+        fn update_upgrade_preference(&mut self, auto_install: bool) {
+            self.config.upgrade.auto_install = auto_install;
+            self.operations
+                .push(format!("update_upgrade:{auto_install}"));
+        }
+        fn refresh_slash_command_autocomplete(&mut self) {
+            self.operations.push("refresh_autocomplete".to_owned());
+        }
+        fn restore_settings_editor(&mut self) {
+            self.operations.push("restore_editor".to_owned());
+        }
+        fn track_settings(&mut self, event: &str, value: &str) {
+            self.operations.push(format!("track:{event}:{value}"));
+        }
+        fn show_settings_status(&mut self, message: &str, muted: bool) {
+            self.statuses.push((message.to_owned(), muted));
+        }
+        fn show_settings_notice(&mut self, message: &str) {
+            self.notices.push(message.to_owned());
+        }
+        fn show_settings_error(&mut self, message: &str) {
+            self.errors.push(message.to_owned());
+        }
+        async fn open_model_setting(&mut self) {
+            self.operations.push("open_model".to_owned());
+        }
+        async fn open_theme_setting(&mut self) {
+            self.operations.push("open_theme".to_owned());
+        }
+        async fn open_editor_setting(&mut self) {
+            self.operations.push("open_editor".to_owned());
+        }
+        async fn open_experiments_setting(&mut self) {
+            self.operations.push("open_experiments".to_owned());
+        }
+        async fn open_usage_setting(&mut self) {
+            self.operations.push("open_usage".to_owned());
+        }
+    }
+
+    #[tokio::test]
+    async fn permission_picker_applies_backend_before_local_state() {
+        let mut host = SettingsHost {
+            permission_pick: Some(PermissionMode::Yolo),
+            ..SettingsHost::default()
+        };
+        show_permission_picker(&mut host).await;
+        assert_eq!(
+            host.operations,
+            ["set_permission:Yolo", "update_permission:Yolo"]
+        );
+        assert_eq!(host.permission, PermissionMode::Yolo);
+        assert_eq!(host.notices, ["Permission mode: yolo"]);
+    }
+
+    #[tokio::test]
+    async fn update_preference_saves_tracks_and_updates_state() {
+        let mut host = SettingsHost::default();
+        apply_update_preference_choice(&mut host, false).await;
+        assert!(!host.config.upgrade.auto_install);
+        assert_eq!(
+            host.operations,
+            [
+                "save_tui",
+                "update_upgrade:false",
+                "track:upgrade_preference_changed:false"
+            ]
+        );
+        assert_eq!(host.statuses[0].0, "Automatic updates disabled.");
+    }
+
+    #[tokio::test]
+    async fn experiments_refresh_flags_and_reload_active_session_in_order() {
+        let mut host = SettingsHost {
+            active_session: true,
+            ..SettingsHost::default()
+        };
+        apply_experimental_feature_changes(
+            &mut host,
+            &[ExperimentalFeatureDraftChange {
+                id: "feature".to_owned(),
+                enabled: true,
+            }],
+        )
+        .await;
+        assert_eq!(
+            host.operations,
+            [
+                "set_experiments:{\"feature\": true}",
+                "refresh_autocomplete",
+                "restore_editor",
+                "reload:Experimental features updated. Session reloaded.",
+                "track:experimental_features_apply:1"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn settings_selector_restores_then_routes_selection() {
+        let mut host = SettingsHost {
+            setting_pick: Some(SettingsSelection::Usage),
+            ..SettingsHost::default()
+        };
+        show_settings_selector(&mut host).await;
+        assert_eq!(host.operations, ["restore_editor", "open_usage"]);
     }
 }
