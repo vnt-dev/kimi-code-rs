@@ -20,6 +20,7 @@ pub mod status_panel;
 pub mod step_summary;
 pub mod swarm_markers;
 pub mod thinking;
+pub mod tool_call;
 pub mod tool_renderers;
 pub mod usage_panel;
 pub mod user_message;
