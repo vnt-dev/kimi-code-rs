@@ -3,6 +3,7 @@ pub mod auth;
 pub mod btw;
 pub mod complete_args;
 pub mod copy;
+pub mod dispatch;
 pub mod experimental_flags;
 pub mod goal;
 pub mod info;
