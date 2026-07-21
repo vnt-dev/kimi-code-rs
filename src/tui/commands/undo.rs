@@ -1,6 +1,9 @@
 use crate::{
     sdk::types::{ContextMessage, ContextMessageRole, PromptOriginKind},
-    tui::types::{SkillActivationTrigger, TranscriptEntry, TranscriptEntryKind},
+    tui::{
+        components::{Component, ComponentRole, Container},
+        types::{SkillActivationTrigger, TranscriptEntry, TranscriptEntryKind},
+    },
 };
 
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -231,6 +234,82 @@ pub fn is_undo_context_entry(entry: &TranscriptEntry) -> bool {
     }
 }
 
+pub fn active_undo_anchor_components<'a>(
+    entries: &'a [TranscriptEntry],
+    children: &'a [Box<dyn Component>],
+) -> (Vec<&'a TranscriptEntry>, bool) {
+    if let Some(compaction_index) = children
+        .iter()
+        .rposition(|child| child.role() == ComponentRole::Compaction)
+    {
+        let anchors = children[compaction_index + 1..]
+            .iter()
+            .filter_map(|child| child.transcript_entry())
+            .filter(|entry| is_undo_anchor_entry(entry))
+            .collect();
+        (anchors, true)
+    } else {
+        active_undo_anchor_entries(entries)
+    }
+}
+
+pub fn find_undo_anchor_component_index(
+    children: &[Box<dyn Component>],
+    count: usize,
+) -> Option<usize> {
+    let mut found = 0;
+    for (index, child) in children.iter().enumerate().rev() {
+        if is_undo_anchor_component(child.as_ref()) {
+            found += 1;
+            if found == count {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+pub fn remove_undo_context_components(container: &mut Container, start_index: usize) {
+    if start_index >= container.children.len() {
+        return;
+    }
+    for index in (start_index..container.children.len()).rev() {
+        if is_undo_context_component(container.children[index].as_ref()) {
+            container.children.remove(index);
+        }
+    }
+}
+
+pub fn is_undo_anchor_component(component: &dyn Component) -> bool {
+    match component.role() {
+        ComponentRole::UserMessage | ComponentRole::PluginCommand => true,
+        ComponentRole::SkillActivation => component
+            .transcript_entry()
+            .is_some_and(|entry| entry.skill_trigger == Some(SkillActivationTrigger::UserSlash)),
+        _ => false,
+    }
+}
+
+pub fn is_undo_context_component(component: &dyn Component) -> bool {
+    if let Some(entry) = component.transcript_entry() {
+        return is_undo_context_entry(entry);
+    }
+    matches!(
+        component.role(),
+        ComponentRole::UserMessage
+            | ComponentRole::AssistantMessage
+            | ComponentRole::Thinking
+            | ComponentRole::ToolCall
+            | ComponentRole::AgentGroup
+            | ComponentRole::AgentSwarmProgress
+            | ComponentRole::ReadGroup
+            | ComponentRole::SkillActivation
+            | ComponentRole::PluginCommand
+            | ComponentRole::BackgroundAgentStatus
+            | ComponentRole::CronMessage
+    )
+}
+
 pub fn format_undo_limit_message(requested_count: usize, availability: UndoAvailability) -> String {
     let reason = if availability.stopped_at_compaction {
         " after the last compaction"
@@ -258,10 +337,28 @@ fn format_prompt_count(count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use serde_json::{Map, json};
 
     use super::*;
+    use crate::tui::utils::transcript_component_metadata::mark_transcript_component;
     use crate::{sdk::types::PromptOrigin, tui::types::TranscriptRenderMode};
+
+    struct RoleComponent(ComponentRole);
+
+    impl Component for RoleComponent {
+        fn render(&mut self, _width: usize) -> Vec<String> {
+            Vec::new()
+        }
+        fn invalidate(&mut self) {}
+        fn role(&self) -> ComponentRole {
+            self.0
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
 
     fn entry(id: &str, kind: TranscriptEntryKind) -> TranscriptEntry {
         TranscriptEntry {
@@ -418,6 +515,48 @@ mod tests {
         assert_eq!(
             format_nothing_to_undo_message(availability),
             "Nothing to undo after the last compaction."
+        );
+    }
+
+    #[test]
+    fn component_anchors_stop_at_compaction_and_removal_preserves_notices() {
+        let before = entry("before", TranscriptEntryKind::User);
+        let after = entry("after", TranscriptEntryKind::User);
+        let notice = entry("notice", TranscriptEntryKind::Status);
+        let mut container = Container::new();
+        container.add_child(mark_transcript_component(
+            RoleComponent(ComponentRole::UserMessage),
+            before.clone(),
+        ));
+        container.add_child(RoleComponent(ComponentRole::Compaction));
+        container.add_child(mark_transcript_component(
+            RoleComponent(ComponentRole::UserMessage),
+            after.clone(),
+        ));
+        container.add_child(mark_transcript_component(
+            RoleComponent(ComponentRole::Other),
+            notice,
+        ));
+        container.add_child(RoleComponent(ComponentRole::Thinking));
+
+        let entries = [before, after];
+        let (anchors, stopped) = active_undo_anchor_components(&entries, &container.children);
+        assert!(stopped);
+        assert_eq!(
+            anchors
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["after"]
+        );
+        let index = find_undo_anchor_component_index(&container.children, 1).expect("anchor");
+        remove_undo_context_components(&mut container, index);
+        assert_eq!(container.children.len(), 3);
+        assert_eq!(
+            container.children[2]
+                .transcript_entry()
+                .map(|entry| entry.id.as_str()),
+            Some("notice")
         );
     }
 }
