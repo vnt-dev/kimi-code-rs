@@ -10,5 +10,6 @@ pub mod prompt_session;
 pub mod run_prompt;
 pub mod startup_error;
 pub mod sub;
+pub mod telemetry;
 pub mod update;
 pub mod version;
