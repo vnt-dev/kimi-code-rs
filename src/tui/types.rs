@@ -51,6 +51,23 @@ pub struct CompactionTranscriptData {
     pub instruction: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CronTranscriptData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recurring: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coalesced_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stale: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missed_count: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginCommandTranscriptData {
@@ -111,6 +128,8 @@ pub struct TranscriptEntry {
     pub bullet: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compaction_data: Option<CompactionTranscriptData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron_data: Option<CronTranscriptData>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_agent_status: Option<BackgroundAgentStatusData>,
     #[serde(skip_serializing_if = "Option::is_none")]

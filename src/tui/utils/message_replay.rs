@@ -140,6 +140,7 @@ pub fn replay_entry(
         detail: extras.detail,
         bullet: extras.bullet,
         compaction_data: None,
+        cron_data: None,
         background_agent_status: None,
         image_attachment_ids: None,
         skill_activation_id: None,

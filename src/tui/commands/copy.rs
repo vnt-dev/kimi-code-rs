@@ -41,6 +41,7 @@ mod tests {
             detail: None,
             bullet: None,
             compaction_data: None,
+            cron_data: None,
             background_agent_status: None,
             image_attachment_ids: None,
             skill_activation_id: None,
