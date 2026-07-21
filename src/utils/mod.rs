@@ -1,3 +1,4 @@
+pub mod git;
 pub mod history;
 pub mod open_url;
 pub mod paths;
