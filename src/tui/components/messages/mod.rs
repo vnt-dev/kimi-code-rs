@@ -22,3 +22,4 @@ pub mod swarm_markers;
 pub mod thinking;
 pub mod tool_renderers;
 pub mod usage_panel;
+pub mod user_message;
