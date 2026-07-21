@@ -173,3 +173,13 @@ pub struct ToolCallBlockData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolResultBlockData {
+    pub tool_call_id: String,
+    pub output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub synthetic: Option<bool>,
+}
