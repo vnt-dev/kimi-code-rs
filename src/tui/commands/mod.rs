@@ -8,6 +8,7 @@ pub mod goal;
 pub mod info;
 pub mod parse;
 pub mod plugin_commands;
+pub mod plugins;
 pub mod prompts;
 pub mod registry;
 pub mod reload;
