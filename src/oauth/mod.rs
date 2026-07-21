@@ -8,6 +8,7 @@ pub mod managed_feedback;
 pub mod managed_feedback_upload;
 pub mod managed_usage;
 pub mod manager;
+pub mod model_alias_merge;
 pub mod storage;
 pub mod token_state;
 pub mod types;
