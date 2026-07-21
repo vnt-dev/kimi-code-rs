@@ -1,5 +1,6 @@
 pub mod api_error;
 pub mod constants;
+pub mod custom_registry;
 pub mod errors;
 #[path = "oauth.rs"]
 pub mod flow;
