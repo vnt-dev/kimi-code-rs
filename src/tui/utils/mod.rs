@@ -15,3 +15,4 @@ pub mod terminal_focus;
 pub mod terminal_notification;
 pub mod terminal_theme;
 pub mod thinking_config;
+pub mod transcript_window;

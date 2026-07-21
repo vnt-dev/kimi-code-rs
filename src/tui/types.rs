@@ -34,3 +34,62 @@ pub struct BackgroundAgentStatusData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptEntryKind {
+    Welcome,
+    User,
+    Assistant,
+    ToolCall,
+    Thinking,
+    Status,
+    SkillActivation,
+    PluginCommand,
+    Cron,
+    Goal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TranscriptRenderMode {
+    Markdown,
+    Plain,
+    Notice,
+}
+
+/// Renderer-independent transcript record. Component-specific payloads will
+/// be added alongside their migrated components; the windowing logic relies
+/// only on the stable identity and turn association represented here.
+///
+/// Original:
+///   apps/kimi-code/src/tui/types.ts
+///   TranscriptEntry
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptEntry {
+    pub id: String,
+    pub kind: TranscriptEntryKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    pub render_mode: TranscriptRenderMode,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_text: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bullet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_agent_status: Option<BackgroundAgentStatusData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_attachment_ids: Option<Vec<u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_activation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_args: Option<String>,
+}
