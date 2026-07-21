@@ -1,14 +1,19 @@
-use std::{collections::HashMap, error::Error, fmt};
+use std::{collections::HashMap, error::Error, fmt, time::Duration};
 
 use async_trait::async_trait;
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 
 use super::{
     prompt::CHANGELOG_URL,
+    refresh::{RefreshUpdateCacheDeps, refresh_update_cache},
+    rollout::{
+        PassiveUpdateDecision, decide_passive_update_target, rollout_bucket,
+        rollout_delay_for_bucket,
+    },
     types::{
         InstallSource, NPM_PACKAGE_NAME, UpdateDecision, UpdateInstallState, UpdateInstallSuccess,
-        UpdateTarget,
+        UpdateManifest, UpdateTarget,
     },
 };
 
@@ -19,6 +24,92 @@ pub const NATIVE_INSTALL_COMMAND_WIN: &str =
     "irm https://code.kimi.com/kimi-code/install.ps1 | iex";
 pub const AUTO_INSTALL_FAILURE_PROMPT_THRESHOLD: u64 = 2;
 pub const AUTO_INSTALL_ACTIVE_TTL_MS: i64 = 6 * 60 * 60 * 1_000;
+pub const USER_VISIBLE_UPDATE_REFRESH_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RolloutTelemetry {
+    pub rollout_bucket: u8,
+    pub rollout_delay_seconds: u64,
+    pub rollout_from_manifest: bool,
+    pub rollout_bypassed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserVisibleUpdateTarget {
+    pub target: Option<UpdateTarget>,
+    pub manifest: Option<UpdateManifest>,
+    pub refreshed_decision: Option<PassiveUpdateDecision>,
+}
+
+// Original:
+//   apps/kimi-code/src/cli/update/preflight.ts
+//   rolloutTelemetryFor()
+pub fn rollout_telemetry_for(
+    device_id: &str,
+    target_version: &str,
+    manifest: Option<&UpdateManifest>,
+    bypass_rollout: bool,
+) -> RolloutTelemetry {
+    let bucket = rollout_bucket(device_id, target_version);
+    RolloutTelemetry {
+        rollout_bucket: bucket,
+        rollout_delay_seconds: manifest.map_or(0, |manifest| {
+            if bypass_rollout {
+                0
+            } else {
+                rollout_delay_for_bucket(&manifest.rollout, bucket)
+            }
+        }),
+        rollout_from_manifest: manifest.is_some(),
+        rollout_bypassed: bypass_rollout,
+    }
+}
+
+// Original:
+//   apps/kimi-code/src/cli/update/preflight.ts
+//   refreshUserVisibleUpdateTarget()
+//
+// Rust adaptation:
+//   The refreshed rollout decision is returned with the target so the caller
+//   can persist its diagnostic log without coupling this timing helper to I/O.
+pub async fn refresh_user_visible_update_target<D>(
+    dependencies: &D,
+    current_version: &str,
+    device_id: &str,
+    bypass_rollout: bool,
+    fallback_target: &UpdateTarget,
+    fallback_manifest: Option<&UpdateManifest>,
+    now: DateTime<Utc>,
+) -> UserVisibleUpdateTarget
+where
+    D: RefreshUpdateCacheDeps,
+{
+    let fallback = UserVisibleUpdateTarget {
+        target: Some(fallback_target.clone()),
+        manifest: fallback_manifest.cloned(),
+        refreshed_decision: None,
+    };
+    let refresh = async {
+        let refreshed = refresh_update_cache(dependencies).await.ok()?;
+        let decision = decide_passive_update_target(
+            current_version,
+            refreshed.latest.as_deref(),
+            refreshed.manifest.as_ref(),
+            device_id,
+            now,
+            bypass_rollout,
+        );
+        Some(UserVisibleUpdateTarget {
+            target: decision.target.clone(),
+            manifest: refreshed.manifest,
+            refreshed_decision: Some(decision),
+        })
+    };
+    match tokio::time::timeout(USER_VISIBLE_UPDATE_REFRESH_TIMEOUT, refresh).await {
+        Ok(Some(refreshed)) => refreshed,
+        Ok(None) | Err(_) => fallback,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdatePlatform {
@@ -475,6 +566,140 @@ mod tests {
     struct InstallerRuntimeMock {
         exit: SpawnUpdateExit,
         requests: Mutex<Vec<SpawnUpdateRequest>>,
+    }
+
+    struct VisibleRefreshDeps {
+        latest: String,
+        manifest: Option<UpdateManifest>,
+        fail: bool,
+        hang: bool,
+        writes: Mutex<Vec<super::super::types::UpdateCache>>,
+    }
+
+    #[async_trait]
+    impl RefreshUpdateCacheDeps for VisibleRefreshDeps {
+        type Error = std::io::Error;
+
+        async fn fetch_latest(
+            &self,
+        ) -> Result<super::super::types::FetchLatestResult, Self::Error> {
+            if self.hang {
+                return std::future::pending().await;
+            }
+            if self.fail {
+                return Err(std::io::Error::other("refresh failed"));
+            }
+            Ok(super::super::types::FetchLatestResult {
+                latest: self.latest.clone(),
+                manifest: self.manifest.clone(),
+            })
+        }
+
+        async fn write_cache(
+            &self,
+            cache: &super::super::types::UpdateCache,
+        ) -> Result<(), Self::Error> {
+            self.writes.lock().expect("writes").push(cache.clone());
+            Ok(())
+        }
+
+        fn now(&self) -> DateTime<Utc> {
+            Utc.with_ymd_and_hms(2026, 7, 21, 12, 0, 0)
+                .single()
+                .expect("time")
+        }
+    }
+
+    fn rollout_manifest(version: &str, delay_seconds: u64) -> UpdateManifest {
+        UpdateManifest {
+            version: version.to_owned(),
+            published_at: "2026-07-21T10:00:00.000Z".to_owned(),
+            rollout: vec![super::super::types::RolloutBatch {
+                percent: 100,
+                delay_seconds,
+            }],
+        }
+    }
+
+    #[test]
+    fn rollout_telemetry_uses_bucket_delay_manifest_and_bypass_fields() {
+        let manifest = rollout_manifest("0.5.0", 3_600);
+        let telemetry = rollout_telemetry_for("device", "0.5.0", Some(&manifest), false);
+        assert_eq!(telemetry.rollout_bucket, rollout_bucket("device", "0.5.0"));
+        assert_eq!(telemetry.rollout_delay_seconds, 3_600);
+        assert!(telemetry.rollout_from_manifest);
+        assert!(!telemetry.rollout_bypassed);
+
+        assert_eq!(
+            rollout_telemetry_for("device", "0.5.0", Some(&manifest), true).rollout_delay_seconds,
+            0
+        );
+        assert!(!rollout_telemetry_for("device", "0.5.0", None, false).rollout_from_manifest);
+    }
+
+    #[tokio::test]
+    async fn visible_refresh_returns_fresh_rollout_decision_and_manifest() {
+        let manifest = rollout_manifest("0.6.0", 0);
+        let deps = VisibleRefreshDeps {
+            latest: "0.6.0".to_owned(),
+            manifest: Some(manifest.clone()),
+            fail: false,
+            hang: false,
+            writes: Mutex::new(Vec::new()),
+        };
+
+        let result = refresh_user_visible_update_target(
+            &deps,
+            "0.4.0",
+            "device",
+            false,
+            &UpdateTarget {
+                version: "0.5.0".to_owned(),
+            },
+            None,
+            Utc.with_ymd_and_hms(2026, 7, 21, 12, 0, 0)
+                .single()
+                .expect("time"),
+        )
+        .await;
+
+        assert_eq!(result.target.expect("target").version, "0.6.0");
+        assert_eq!(result.manifest, Some(manifest));
+        assert!(result.refreshed_decision.is_some());
+        assert_eq!(deps.writes.lock().expect("writes").len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn visible_refresh_failure_or_timeout_uses_cached_fallback_without_decision() {
+        for (fail, hang) in [(true, false), (false, true)] {
+            let deps = VisibleRefreshDeps {
+                latest: "0.6.0".to_owned(),
+                manifest: None,
+                fail,
+                hang,
+                writes: Mutex::new(Vec::new()),
+            };
+            let fallback_manifest = rollout_manifest("0.5.0", 0);
+
+            let result = refresh_user_visible_update_target(
+                &deps,
+                "0.4.0",
+                "device",
+                false,
+                &UpdateTarget {
+                    version: "0.5.0".to_owned(),
+                },
+                Some(&fallback_manifest),
+                Utc.with_ymd_and_hms(2026, 7, 21, 12, 0, 0)
+                    .single()
+                    .expect("time"),
+            )
+            .await;
+
+            assert_eq!(result.target.expect("target").version, "0.5.0");
+            assert_eq!(result.manifest, Some(fallback_manifest));
+            assert_eq!(result.refreshed_decision, None);
+        }
     }
 
     #[async_trait]
