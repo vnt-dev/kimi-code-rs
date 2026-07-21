@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, error::Error, fmt};
 
 use async_trait::async_trait;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -107,6 +108,7 @@ pub trait ProviderRuntime: Send + Sync {
     async fn ensure_config_file(&self) -> Result<(), ProviderError>;
     async fn get_config(&self) -> Result<ProviderConfig, ProviderError>;
     async fn remove_provider(&self, provider_id: &str) -> Result<ProviderConfig, ProviderError>;
+    async fn set_config(&self, config: &ProviderConfig) -> Result<ProviderConfig, ProviderError>;
     fn write_stdout(&self, text: &str);
     fn write_stderr(&self, text: &str);
 }
@@ -187,7 +189,6 @@ pub trait ProviderRegistryRuntime: ProviderRuntime {
         &self,
         source: &CustomRegistrySource,
     ) -> Result<Vec<CustomRegistryProviderEntry>, RegistryFetchError>;
-    async fn set_config(&self, config: &ProviderConfig) -> Result<ProviderConfig, ProviderError>;
 }
 
 // Original:
@@ -423,6 +424,399 @@ fn resolve_capabilities(model: &CustomRegistryModelEntry) -> Vec<String> {
     capabilities
 }
 
+pub const DEFAULT_CATALOG_URL: &str = "https://models.dev/api.json";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CatalogLimit {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogModalities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CatalogModelEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<CatalogLimit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamically_loaded_tools: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interleaved: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modalities: Option<CatalogModalities>,
+    #[serde(flatten)]
+    pub additional_fields: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CatalogProviderEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub npm: Option<String>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub provider_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<IndexMap<String, CatalogModelEntry>>,
+    #[serde(flatten)]
+    pub additional_fields: Map<String, Value>,
+}
+
+pub type Catalog = IndexMap<String, CatalogProviderEntry>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WireType {
+    Anthropic,
+    OpenAi,
+    Kimi,
+    GoogleGenAi,
+    OpenAiResponses,
+    VertexAi,
+}
+
+impl WireType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::OpenAi => "openai",
+            Self::Kimi => "kimi",
+            Self::GoogleGenAi => "google-genai",
+            Self::OpenAiResponses => "openai_responses",
+            Self::VertexAi => "vertexai",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CatalogCapability {
+    pub image_in: bool,
+    pub video_in: bool,
+    pub audio_in: bool,
+    pub thinking: bool,
+    pub tool_use: bool,
+    pub max_context_tokens: u64,
+    pub dynamically_loaded_tools: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogModel {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_key: Option<String>,
+    pub capability: CatalogCapability,
+}
+
+#[derive(Debug)]
+pub struct CatalogFetchError {
+    pub status: Option<u16>,
+    source: ProviderError,
+}
+
+impl CatalogFetchError {
+    pub fn new(error: impl Error + Send + Sync + 'static, status: Option<u16>) -> Self {
+        Self {
+            status,
+            source: ProviderError::new(error),
+        }
+    }
+}
+
+impl fmt::Display for CatalogFetchError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.source.fmt(formatter)
+    }
+}
+
+impl Error for CatalogFetchError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+#[async_trait]
+pub trait ProviderCatalogRuntime: ProviderRuntime {
+    async fn fetch_catalog(&self, url: &str) -> Result<Catalog, CatalogFetchError>;
+}
+
+// Original:
+//   apps/kimi-code/src/cli/sub/provider.ts
+//   handleCatalogList()
+pub async fn handle_catalog_list(
+    runtime: &dyn ProviderCatalogRuntime,
+    provider_id: Option<&str>,
+    json: bool,
+    filter: Option<&str>,
+    url: Option<&str>,
+) -> Result<(), ProviderCommandError> {
+    let url = url.unwrap_or(DEFAULT_CATALOG_URL);
+    let catalog = match runtime.fetch_catalog(url).await {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            let suffix = error
+                .status
+                .map_or_else(String::new, |status| format!(" (HTTP {status})"));
+            runtime.write_stderr(&format!(
+                "Failed to fetch catalog from {url}{suffix}: {error}\n"
+            ));
+            return Err(ProviderCommandError::Exit(1));
+        }
+    };
+
+    if let Some(provider_id) = provider_id {
+        let Some(entry) = catalog.get(provider_id) else {
+            runtime.write_stderr(&format!(
+                "Provider \"{provider_id}\" not found in catalog at {url}.\n"
+            ));
+            return Err(ProviderCommandError::Exit(1));
+        };
+        let models = catalog_provider_models(entry);
+        if json {
+            #[derive(Serialize)]
+            #[serde(rename_all = "camelCase")]
+            struct CatalogProviderModels<'a> {
+                provider_id: &'a str,
+                name: &'a str,
+                models: &'a [CatalogModel],
+            }
+            let output = serde_json::to_string_pretty(&CatalogProviderModels {
+                provider_id,
+                name: entry.name.as_deref().unwrap_or(provider_id),
+                models: &models,
+            })
+            .map_err(ProviderError::from)?;
+            runtime.write_stdout(&format!("{output}\n"));
+            return Ok(());
+        }
+        if models.is_empty() {
+            runtime.write_stdout(&format!(
+                "Provider \"{provider_id}\" lists no usable models in this catalog.\n"
+            ));
+            return Ok(());
+        }
+        runtime.write_stdout(&format!(
+            "{} ({provider_id})\n",
+            entry.name.as_deref().unwrap_or(provider_id)
+        ));
+        for model in models {
+            let mut capabilities = Vec::new();
+            if model.capability.tool_use {
+                capabilities.push("tool_use");
+            }
+            if model.capability.thinking {
+                capabilities.push("thinking");
+            }
+            if model.capability.image_in {
+                capabilities.push("image_in");
+            }
+            let capability_label = if capabilities.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", capabilities.join(","))
+            };
+            runtime.write_stdout(&format!(
+                "  {}  ctx={}{}\n",
+                model.id, model.capability.max_context_tokens, capability_label
+            ));
+        }
+        return Ok(());
+    }
+
+    let filter = filter.map(str::to_lowercase);
+    let mut entries: Vec<(&String, &CatalogProviderEntry)> = catalog
+        .iter()
+        .filter(|(id, entry)| {
+            filter.as_ref().is_none_or(|filter| {
+                format!("{} {}", id, entry.name.as_deref().unwrap_or_default())
+                    .to_lowercase()
+                    .contains(filter)
+            })
+        })
+        .collect();
+    entries.sort_by_key(|(id, _)| *id);
+
+    if json {
+        let output: BTreeMap<&str, &CatalogProviderEntry> = entries
+            .iter()
+            .map(|(id, entry)| (id.as_str(), *entry))
+            .collect();
+        let output = serde_json::to_string_pretty(&output).map_err(ProviderError::from)?;
+        runtime.write_stdout(&format!("{output}\n"));
+        return Ok(());
+    }
+    if entries.is_empty() {
+        if let Some(filter) = filter {
+            runtime.write_stdout(&format!("No providers in catalog match \"{filter}\".\n"));
+        } else {
+            runtime.write_stdout("Catalog is empty.\n");
+        }
+        return Ok(());
+    }
+
+    for (id, entry) in entries {
+        let model_count = entry.models.as_ref().map_or(0, IndexMap::len);
+        let wire = infer_wire_type(entry).map_or("?", WireType::as_str);
+        runtime.write_stdout(&format!(
+            "{id}  wire={wire}  models={model_count}  {}\n",
+            entry.name.as_deref().unwrap_or_default()
+        ));
+    }
+    Ok(())
+}
+
+// Original:
+//   packages/kosong/src/catalog.ts
+//   inferWireType()
+pub fn infer_wire_type(entry: &CatalogProviderEntry) -> Option<WireType> {
+    match entry.provider_type.as_deref() {
+        Some("anthropic") => return Some(WireType::Anthropic),
+        Some("openai") => return Some(WireType::OpenAi),
+        Some("kimi") => return Some(WireType::Kimi),
+        Some("google-genai") => return Some(WireType::GoogleGenAi),
+        Some("openai_responses") => return Some(WireType::OpenAiResponses),
+        Some("vertexai") => return Some(WireType::VertexAi),
+        _ => {}
+    }
+    let npm = entry.npm.as_deref().unwrap_or_default().to_lowercase();
+    let id = entry.id.as_deref().unwrap_or_default().to_lowercase();
+    if npm.contains("anthropic") || id.contains("anthropic") || id.contains("claude") {
+        Some(WireType::Anthropic)
+    } else if id.contains("vertex") {
+        Some(WireType::VertexAi)
+    } else if npm.contains("google") || id.contains("google") || id.contains("gemini") {
+        Some(WireType::GoogleGenAi)
+    } else if npm.contains("openai") || id.contains("openai") {
+        Some(WireType::OpenAi)
+    } else {
+        None
+    }
+}
+
+// Original:
+//   packages/kosong/src/catalog.ts
+//   catalogProviderModels(), catalogModelToCapability()
+pub fn catalog_provider_models(entry: &CatalogProviderEntry) -> Vec<CatalogModel> {
+    entry
+        .models
+        .iter()
+        .flat_map(|models| models.values())
+        .filter_map(catalog_model_to_capability)
+        .collect()
+}
+
+fn catalog_model_to_capability(model: &CatalogModelEntry) -> Option<CatalogModel> {
+    let id = model.id.as_deref().filter(|id| !id.is_empty())?;
+    let context = positive_integer(model.limit.as_ref()?.context?)?;
+    if !is_usable_chat_model(model) {
+        return None;
+    }
+    let inputs = model
+        .modalities
+        .as_ref()
+        .and_then(|modalities| modalities.input.as_ref());
+    Some(CatalogModel {
+        id: id.to_owned(),
+        name: model
+            .name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned),
+        max_output_size: model
+            .limit
+            .as_ref()
+            .and_then(|limit| limit.output)
+            .and_then(positive_number),
+        reasoning_key: catalog_reasoning_key(model.interleaved.as_ref()),
+        capability: CatalogCapability {
+            image_in: contains_modality(inputs, "image"),
+            video_in: contains_modality(inputs, "video"),
+            audio_in: contains_modality(inputs, "audio"),
+            thinking: model.reasoning.unwrap_or(false),
+            tool_use: model.tool_call.unwrap_or(true),
+            max_context_tokens: context,
+            dynamically_loaded_tools: model.dynamically_loaded_tools == Some(true),
+        },
+    })
+}
+
+fn positive_integer(value: f64) -> Option<u64> {
+    (value.is_finite() && value > 0.0 && value.fract() == 0.0 && value <= u64::MAX as f64)
+        .then_some(value as u64)
+}
+
+fn positive_number(value: f64) -> Option<f64> {
+    (value.is_finite() && value > 0.0).then_some(value)
+}
+
+fn contains_modality(modalities: Option<&Vec<String>>, expected: &str) -> bool {
+    modalities.is_some_and(|values| values.iter().any(|value| value == expected))
+}
+
+fn is_usable_chat_model(model: &CatalogModelEntry) -> bool {
+    if model
+        .modalities
+        .as_ref()
+        .and_then(|modalities| modalities.output.as_ref())
+        .is_some_and(|outputs| !outputs.iter().any(|output| output == "text"))
+    {
+        return false;
+    }
+    ![
+        model.family.as_deref(),
+        model.id.as_deref(),
+        model.name.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(has_embedding_marker)
+}
+
+fn has_embedding_marker(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    lower.contains("embedding") || lower.split(['-', '_', '/']).any(|part| part == "embed")
+}
+
+fn catalog_reasoning_key(interleaved: Option<&Value>) -> Option<String> {
+    match interleaved {
+        Some(Value::Bool(true)) => Some("reasoning_content".to_owned()),
+        Some(Value::Object(object)) => object
+            .get("field")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
+            .map(str::to_owned),
+        _ => None,
+    }
+}
+
 // Original:
 //   apps/kimi-code/src/cli/sub/provider.ts
 //   handleProviderRemove()
@@ -533,6 +927,9 @@ mod tests {
         config: Mutex<ProviderConfig>,
         registry_entries: Mutex<Vec<CustomRegistryProviderEntry>>,
         fetch_error: Mutex<Option<(String, Option<u16>)>>,
+        catalog: Mutex<Catalog>,
+        catalog_error: Mutex<Option<(String, Option<u16>)>>,
+        catalog_urls: Mutex<Vec<String>>,
         ensure_calls: Mutex<usize>,
         remove_calls: Mutex<Vec<String>>,
         set_calls: Mutex<Vec<ProviderConfig>>,
@@ -546,6 +943,9 @@ mod tests {
                 config: Mutex::new(config),
                 registry_entries: Mutex::new(Vec::new()),
                 fetch_error: Mutex::new(None),
+                catalog: Mutex::new(Catalog::new()),
+                catalog_error: Mutex::new(None),
+                catalog_urls: Mutex::new(Vec::new()),
                 ensure_calls: Mutex::new(0),
                 remove_calls: Mutex::new(Vec::new()),
                 set_calls: Mutex::new(Vec::new()),
@@ -569,17 +969,24 @@ mod tests {
             }
             Ok(self.registry_entries.lock().expect("entries").clone())
         }
+    }
 
-        async fn set_config(
-            &self,
-            config: &ProviderConfig,
-        ) -> Result<ProviderConfig, ProviderError> {
-            self.set_calls
+    #[async_trait]
+    impl ProviderCatalogRuntime for RuntimeMock {
+        async fn fetch_catalog(&self, url: &str) -> Result<Catalog, CatalogFetchError> {
+            self.catalog_urls
                 .lock()
-                .expect("set calls")
-                .push(config.clone());
-            *self.config.lock().expect("config") = config.clone();
-            Ok(config.clone())
+                .expect("catalog URLs")
+                .push(url.to_owned());
+            if let Some((message, status)) =
+                self.catalog_error.lock().expect("catalog error").take()
+            {
+                return Err(CatalogFetchError::new(
+                    std::io::Error::other(message),
+                    status,
+                ));
+            }
+            Ok(self.catalog.lock().expect("catalog").clone())
         }
     }
 
@@ -607,6 +1014,18 @@ mod tests {
             config
                 .models
                 .retain(|_, model| model.provider != provider_id);
+            Ok(config.clone())
+        }
+
+        async fn set_config(
+            &self,
+            config: &ProviderConfig,
+        ) -> Result<ProviderConfig, ProviderError> {
+            self.set_calls
+                .lock()
+                .expect("set calls")
+                .push(config.clone());
+            *self.config.lock().expect("config") = config.clone();
             Ok(config.clone())
         }
 
@@ -659,6 +1078,196 @@ mod tests {
                 },
             )]),
         }
+    }
+
+    fn catalog_model(id: &str, reasoning: bool, image_input: bool) -> CatalogModelEntry {
+        CatalogModelEntry {
+            id: Some(id.to_owned()),
+            name: Some(format!("{id} display")),
+            family: None,
+            limit: Some(CatalogLimit {
+                context: Some(200_000.0),
+                output: Some(64_000.0),
+            }),
+            tool_call: Some(true),
+            reasoning: Some(reasoning),
+            dynamically_loaded_tools: None,
+            interleaved: None,
+            modalities: Some(CatalogModalities {
+                input: Some(if image_input {
+                    vec!["text".to_owned(), "image".to_owned()]
+                } else {
+                    vec!["text".to_owned()]
+                }),
+                output: Some(vec!["text".to_owned()]),
+            }),
+            additional_fields: Map::new(),
+        }
+    }
+
+    fn catalog_fixture() -> Catalog {
+        IndexMap::from([
+            (
+                "openai".to_owned(),
+                CatalogProviderEntry {
+                    id: Some("openai".to_owned()),
+                    name: Some("OpenAI".to_owned()),
+                    api: Some("https://api.openai.com/v1".to_owned()),
+                    env: Some(vec!["OPENAI_API_KEY".to_owned()]),
+                    npm: Some("@ai-sdk/openai".to_owned()),
+                    provider_type: None,
+                    models: Some(IndexMap::from([(
+                        "gpt-5.5".to_owned(),
+                        catalog_model("gpt-5.5", true, true),
+                    )])),
+                    additional_fields: Map::new(),
+                },
+            ),
+            (
+                "anthropic".to_owned(),
+                CatalogProviderEntry {
+                    id: Some("anthropic".to_owned()),
+                    name: Some("Anthropic".to_owned()),
+                    api: Some("https://api.anthropic.com/v1".to_owned()),
+                    env: Some(vec!["ANTHROPIC_API_KEY".to_owned()]),
+                    npm: Some("@ai-sdk/anthropic".to_owned()),
+                    provider_type: None,
+                    models: Some(IndexMap::from([
+                        (
+                            "claude-opus".to_owned(),
+                            catalog_model("claude-opus", true, true),
+                        ),
+                        (
+                            "claude-haiku".to_owned(),
+                            catalog_model("claude-haiku", false, false),
+                        ),
+                    ])),
+                    additional_fields: Map::new(),
+                },
+            ),
+        ])
+    }
+
+    #[tokio::test]
+    async fn catalog_list_sorts_providers_and_filters_case_insensitively() {
+        let runtime = RuntimeMock::new(ProviderConfig::default());
+        *runtime.catalog.lock().expect("catalog") = catalog_fixture();
+
+        handle_catalog_list(&runtime, None, false, None, None)
+            .await
+            .expect("catalog list");
+
+        let output = runtime.stdout.lock().expect("stdout").clone();
+        assert!(output.starts_with("anthropic  wire=anthropic  models=2  Anthropic\n"));
+        assert!(output.contains("openai  wire=openai  models=1  OpenAI"));
+        drop(output);
+        runtime.stdout.lock().expect("stdout").clear();
+
+        handle_catalog_list(&runtime, None, false, Some("OPEN"), None)
+            .await
+            .expect("filtered list");
+        let output = runtime.stdout.lock().expect("stdout");
+        assert!(output.contains("openai"));
+        assert!(!output.contains("anthropic"));
+    }
+
+    #[tokio::test]
+    async fn catalog_provider_view_lists_models_and_capabilities_in_source_order() {
+        let runtime = RuntimeMock::new(ProviderConfig::default());
+        *runtime.catalog.lock().expect("catalog") = catalog_fixture();
+
+        handle_catalog_list(&runtime, Some("anthropic"), false, None, None)
+            .await
+            .expect("provider models");
+
+        let output = runtime.stdout.lock().expect("stdout");
+        assert!(output.starts_with("Anthropic (anthropic)\n"));
+        assert!(output.contains("claude-opus  ctx=200000 [tool_use,thinking,image_in]"));
+        assert!(output.contains("claude-haiku  ctx=200000 [tool_use]"));
+        assert!(
+            output.find("claude-opus").expect("opus") < output.find("claude-haiku").expect("haiku")
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_json_normalizes_models_and_honors_url_override() {
+        let runtime = RuntimeMock::new(ProviderConfig::default());
+        *runtime.catalog.lock().expect("catalog") = catalog_fixture();
+
+        handle_catalog_list(
+            &runtime,
+            Some("openai"),
+            true,
+            None,
+            Some("https://example.test/catalog.json"),
+        )
+        .await
+        .expect("catalog JSON");
+
+        let output: Value =
+            serde_json::from_str(&runtime.stdout.lock().expect("stdout")).expect("valid JSON");
+        assert_eq!(output["providerId"], "openai");
+        assert_eq!(output["models"][0]["id"], "gpt-5.5");
+        assert_eq!(
+            output["models"][0]["capability"]["max_context_tokens"],
+            200_000
+        );
+        assert_eq!(
+            runtime
+                .catalog_urls
+                .lock()
+                .expect("catalog URLs")
+                .as_slice(),
+            ["https://example.test/catalog.json"]
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_list_handles_missing_provider_fetch_error_and_empty_filter() {
+        let runtime = RuntimeMock::new(ProviderConfig::default());
+        *runtime.catalog.lock().expect("catalog") = catalog_fixture();
+        let missing = handle_catalog_list(&runtime, Some("unknown"), false, None, None)
+            .await
+            .expect_err("missing provider");
+        assert!(matches!(missing, ProviderCommandError::Exit(1)));
+
+        *runtime.catalog_error.lock().expect("catalog error") =
+            Some(("service unavailable".to_owned(), Some(503)));
+        let fetch = handle_catalog_list(&runtime, None, false, None, None)
+            .await
+            .expect_err("fetch error");
+        assert!(matches!(fetch, ProviderCommandError::Exit(1)));
+        assert!(runtime.stderr.lock().expect("stderr").contains("HTTP 503"));
+
+        runtime.stdout.lock().expect("stdout").clear();
+        *runtime.catalog.lock().expect("catalog") = catalog_fixture();
+        handle_catalog_list(&runtime, None, false, Some("missing"), None)
+            .await
+            .expect("empty filter");
+        assert_eq!(
+            runtime.stdout.lock().expect("stdout").as_str(),
+            "No providers in catalog match \"missing\".\n"
+        );
+    }
+
+    #[test]
+    fn catalog_normalization_skips_non_chat_models_and_preserves_reasoning_key() {
+        let mut provider = catalog_fixture().swap_remove("openai").expect("provider");
+        let models = provider.models.as_mut().expect("models");
+        let mut embedding = catalog_model("text-embedding-3", false, false);
+        embedding.family = Some("embedding".to_owned());
+        models.insert("embedding".to_owned(), embedding);
+        let mut audio_only = catalog_model("audio", false, false);
+        audio_only.modalities.as_mut().expect("modalities").output = Some(vec!["audio".to_owned()]);
+        models.insert("audio".to_owned(), audio_only);
+        models.get_mut("gpt-5.5").expect("GPT").interleaved =
+            Some(json!({ "field": " reasoning " }));
+
+        let normalized = catalog_provider_models(&provider);
+
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].id, "gpt-5.5");
+        assert_eq!(normalized[0].reasoning_key.as_deref(), Some("reasoning"));
     }
 
     #[tokio::test]

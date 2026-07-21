@@ -12,6 +12,7 @@ clap = { version = "4", features = ["derive"] }
 dirs = "6"
 futures-util = "0.3"
 if-addrs = "0.15"
+indexmap = { version = "2", features = ["serde"] }
 md-5 = "0.11"
 regex = "1"
 semver = "1"
