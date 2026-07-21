@@ -1,6 +1,6 @@
 use std::{error::Error, fmt};
 
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
 use super::{
     api_error::read_api_error_message,
@@ -8,6 +8,7 @@ use super::{
     managed_models::{
         ManagedKimiCodeModelInfo, ModelParseError, SupportsThinkingType, parse_model_info,
     },
+    model_alias_merge::{MANAGED_KIMI_MODEL_FIELDS, merge_refreshed_model_alias},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +45,12 @@ pub enum OpenPlatformError {
     Model(ModelParseError),
     InvalidHeader(String),
     UnexpectedResponse(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyOpenPlatformResult {
+    pub default_model: String,
+    pub default_thinking: bool,
 }
 
 impl OpenPlatformError {
@@ -178,6 +185,124 @@ pub async fn fetch_open_platform_models(
             Err(error) => Some(Err(OpenPlatformError::Model(error))),
         })
         .collect()
+}
+
+// Original: applyOpenPlatformConfig()
+pub fn apply_open_platform_config(
+    config: &mut Map<String, Value>,
+    platform: &OpenPlatformDefinition,
+    models: &[ManagedKimiCodeModelInfo],
+    selected_model: &ManagedKimiCodeModelInfo,
+    thinking: bool,
+    effort: Option<&str>,
+    api_key: &str,
+) -> ApplyOpenPlatformResult {
+    let provider_key = platform.id;
+    let model_key = format!("{provider_key}/{}", selected_model.id);
+
+    let mut providers = config
+        .remove("providers")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    providers.insert(
+        provider_key.to_owned(),
+        json!({
+            "type": "kimi",
+            "baseUrl": platform.base_url,
+            "apiKey": api_key
+        }),
+    );
+    config.insert("providers".to_owned(), Value::Object(providers));
+
+    let mut models_config = config
+        .remove("models")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let upstream_keys = models
+        .iter()
+        .map(|model| format!("{provider_key}/{}", model.id))
+        .collect::<std::collections::HashSet<_>>();
+    models_config.retain(|key, value| {
+        value
+            .get("provider")
+            .and_then(Value::as_str)
+            .is_none_or(|provider| provider != provider_key || upstream_keys.contains(key))
+    });
+    for model in models {
+        let alias_key = format!("{provider_key}/{}", model.id);
+        let mut remote = Map::from_iter([
+            (
+                "provider".to_owned(),
+                Value::String(provider_key.to_owned()),
+            ),
+            ("model".to_owned(), Value::String(model.id.clone())),
+            ("maxContextSize".to_owned(), json!(model.context_length)),
+        ]);
+        if let Some(capabilities) = capabilities_for_model(model) {
+            remote.insert("capabilities".to_owned(), json!(capabilities));
+        }
+        if let Some(display_name) = &model.display_name {
+            remote.insert(
+                "displayName".to_owned(),
+                Value::String(display_name.clone()),
+            );
+        }
+        if let Some(support_efforts) = &model.support_efforts {
+            remote.insert("supportEfforts".to_owned(), json!(support_efforts));
+        }
+        if let Some(default_effort) = &model.default_effort {
+            remote.insert(
+                "defaultEffort".to_owned(),
+                Value::String(default_effort.clone()),
+            );
+        }
+        let existing = models_config.get(&alias_key).unwrap_or(&Value::Null);
+        let merged = merge_refreshed_model_alias(existing, &remote, &MANAGED_KIMI_MODEL_FIELDS);
+        models_config.insert(alias_key, Value::Object(merged));
+    }
+    config.insert("models".to_owned(), Value::Object(models_config));
+
+    config.insert("defaultModel".to_owned(), Value::String(model_key.clone()));
+    let mut thinking_config = config
+        .remove("thinking")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    thinking_config.insert("enabled".to_owned(), Value::Bool(thinking));
+    if let Some(effort) = effort {
+        thinking_config.insert("effort".to_owned(), Value::String(effort.to_owned()));
+    }
+    config.insert("thinking".to_owned(), Value::Object(thinking_config));
+    ApplyOpenPlatformResult {
+        default_model: model_key,
+        default_thinking: thinking,
+    }
+}
+
+// Original: removeOpenPlatformConfig()
+pub fn remove_open_platform_config(config: &mut Map<String, Value>, platform_id: &str) {
+    if let Some(providers) = config.get_mut("providers").and_then(Value::as_object_mut) {
+        providers.remove(platform_id);
+    }
+    let default_model = config
+        .get("defaultModel")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let mut removed_default = false;
+    if let Some(models) = config.get_mut("models").and_then(Value::as_object_mut) {
+        models.retain(|key, value| {
+            let remove = value.get("provider").and_then(Value::as_str) == Some(platform_id);
+            if remove && default_model.as_deref() == Some(key.as_str()) {
+                removed_default = true;
+            }
+            !remove
+        });
+    }
+    if removed_default {
+        config.remove("defaultModel");
+    }
+    if config.get("defaultProvider").and_then(Value::as_str) == Some(platform_id) {
+        config.remove("defaultProvider");
+    }
 }
 
 fn build_headers(
@@ -391,5 +516,82 @@ mod tests {
             .expect_err("shape error");
         handle.join().expect("platform server thread");
         assert!(error.to_string().contains("Unexpected models response"));
+    }
+
+    #[test]
+    fn apply_writes_provider_models_defaults_and_preserves_user_fields() {
+        let mut config = serde_json::json!({
+            "providers": { "moonshot-cn": { "apiKey": "old" } },
+            "models": {
+                "moonshot-cn/stale": { "provider": "moonshot-cn", "model": "stale" },
+                "moonshot-cn/kimi-k2": {
+                    "provider": "moonshot-cn",
+                    "model": "kimi-k2",
+                    "supportEfforts": ["old"],
+                    "maxOutputSize": 8192,
+                    "overrides": { "supportEfforts": ["low"] }
+                },
+                "other/model": { "provider": "other", "model": "model" }
+            },
+            "thinking": { "existing": true }
+        });
+        let mut model = model("kimi-k2");
+        model.context_length = 256_000;
+        model.supports_reasoning = true;
+        model.supports_image_in = true;
+        model.support_efforts = Some(vec!["low".to_owned(), "high".to_owned()]);
+        model.default_effort = Some("high".to_owned());
+        model.display_name = Some("Kimi K2".to_owned());
+        let result = apply_open_platform_config(
+            config.as_object_mut().expect("config object"),
+            &OPEN_PLATFORMS[0],
+            &[model.clone()],
+            &model,
+            true,
+            Some("high"),
+            "sk-new",
+        );
+        assert_eq!(
+            result,
+            ApplyOpenPlatformResult {
+                default_model: "moonshot-cn/kimi-k2".to_owned(),
+                default_thinking: true
+            }
+        );
+        assert_eq!(config["providers"]["moonshot-cn"]["apiKey"], "sk-new");
+        assert!(config["models"].get("moonshot-cn/stale").is_none());
+        assert!(config["models"].get("other/model").is_some());
+        let alias = &config["models"]["moonshot-cn/kimi-k2"];
+        assert_eq!(alias["maxContextSize"], 256_000);
+        assert_eq!(alias["supportEfforts"], json!(["low", "high"]));
+        assert_eq!(alias["maxOutputSize"], 8_192);
+        assert_eq!(alias["overrides"], json!({ "supportEfforts": ["low"] }));
+        assert_eq!(
+            config["thinking"],
+            json!({ "existing": true, "enabled": true, "effort": "high" })
+        );
+    }
+
+    #[test]
+    fn remove_deletes_only_matching_provider_models_and_defaults() {
+        let mut config = serde_json::json!({
+            "providers": { "moonshot-cn": {}, "other": {} },
+            "models": {
+                "moonshot-cn/kimi-k2": { "provider": "moonshot-cn" },
+                "other/model": { "provider": "other" }
+            },
+            "defaultModel": "moonshot-cn/kimi-k2",
+            "defaultProvider": "moonshot-cn"
+        });
+        remove_open_platform_config(
+            config.as_object_mut().expect("config object"),
+            "moonshot-cn",
+        );
+        assert!(config["providers"].get("moonshot-cn").is_none());
+        assert!(config["providers"].get("other").is_some());
+        assert!(config["models"].get("moonshot-cn/kimi-k2").is_none());
+        assert!(config["models"].get("other/model").is_some());
+        assert!(config.get("defaultModel").is_none());
+        assert!(config.get("defaultProvider").is_none());
     }
 }
