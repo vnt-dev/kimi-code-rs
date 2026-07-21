@@ -1,4 +1,5 @@
 pub mod choice_picker;
+pub mod compaction;
 pub mod editor_selector;
 pub mod effort_selector;
 pub mod goal_start_permission_prompt;
@@ -15,6 +16,7 @@ pub mod update_preference_selector;
 pub use choice_picker::{
     ChoiceOption, ChoicePickerComponent, ChoicePickerOptions, ChoiceTone, NoticeTone,
 };
+pub use compaction::CompactionComponent;
 pub use editor_selector::EditorSelectorComponent;
 pub use effort_selector::EffortSelectorComponent;
 pub use goal_start_permission_prompt::{
