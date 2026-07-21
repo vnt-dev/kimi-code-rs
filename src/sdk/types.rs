@@ -334,6 +334,9 @@ pub enum PromptOriginKind {
     CronJob,
     CronMissed,
     User,
+    BackgroundTask,
+    SkillActivation,
+    PluginCommand,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

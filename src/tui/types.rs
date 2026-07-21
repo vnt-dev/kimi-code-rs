@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 /// Metadata recorded for a background subagent transcript entry.
 ///
@@ -92,4 +93,32 @@ pub struct TranscriptEntry {
     pub skill_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_args: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkillActivationTrigger {
+    UserSlash,
+    ModelTool,
+    NestedSkill,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallBlockData {
+    pub id: String,
+    pub name: String,
+    pub args: Map<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub streaming_arguments: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub streaming_started_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
 }
