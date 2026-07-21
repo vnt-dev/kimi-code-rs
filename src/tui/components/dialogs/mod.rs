@@ -3,6 +3,7 @@ pub mod approval_panel;
 pub mod approval_preview;
 pub mod choice_picker;
 pub mod compaction;
+pub mod custom_registry_import;
 pub mod editor_selector;
 pub mod effort_selector;
 pub mod experiments_selector;
@@ -26,6 +27,9 @@ pub use choice_picker::{
     ChoiceOption, ChoicePickerComponent, ChoicePickerOptions, ChoiceTone, NoticeTone,
 };
 pub use compaction::CompactionComponent;
+pub use custom_registry_import::{
+    CustomRegistryImportDialogComponent, CustomRegistryImportResult, CustomRegistryImportValue,
+};
 pub use editor_selector::EditorSelectorComponent;
 pub use effort_selector::EffortSelectorComponent;
 pub use experiments_selector::{
