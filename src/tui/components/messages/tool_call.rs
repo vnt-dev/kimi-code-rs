@@ -12,22 +12,44 @@ use crate::{
     sdk::types::TokenUsage,
     tui::{
         components::{
-            Component, ComponentRole, Text,
+            Component, ComponentRole, Container, Spacer, Text,
+            media::{
+                code_highlight::{highlight_lines, lang_from_path},
+                diff_preview::{ClusteredDiffOptions, render_diff_lines_clustered},
+            },
             render::{truncate_to_width, visible_width},
         },
+        theme::{ColorToken, current_theme},
         types::{SubagentReplayBlockData, ToolCallBlockData, ToolResultBlockData},
         utils::{
             event_payload::{STREAMING_ARGS_PREVIEW_MAX_CHARS, append_streaming_args_preview},
             render_cache::is_render_cache_enabled,
         },
     },
-    utils::usage::usage_format::format_token_count,
+    utils::{terminal_hyperlink::to_terminal_hyperlink, usage::usage_format::format_token_count},
+};
+
+use super::{
+    agent_swarm_progress::agent_swarm_result_summary_from_output,
+    plan_box::{PlanBoxComponent, PlanBoxOptions, PlanBoxStatus},
+    shell_execution::{ShellExecutionComponent, ShellExecutionOptions},
+    tool_renderers::{
+        chip::pick_chip,
+        goal::{GoalToolHeaderOptions, build_goal_tool_header},
+        registry::pick_result_renderer,
+        types::RendererContext,
+    },
 };
 
 const MAX_ARG_LENGTH: usize = 60;
 const MAX_SUB_TOOL_CALLS_SHOWN: usize = 4;
 const MAX_PROGRESS_LINES: usize = 24;
 const MAX_LIVE_OUTPUT_CHARS: usize = 50_000;
+const COMMAND_PREVIEW_LINES: usize = 10;
+const STATUS_BULLET: &str = "● ";
+const FAILURE_MARK: &str = "✗ ";
+const SUCCESS_MARK: &str = "✓ ";
+const ABORTED_MARK: &str = "⊘";
 const APPROVED_PLAN_MARKER: &str = "## Approved Plan:";
 const AUTO_APPROVED_PLAN_MARKER: &str = "## Plan (auto-approved, not user-reviewed):";
 const REJECT_PREFIX: &str = "User rejected the plan.";
@@ -1241,6 +1263,840 @@ impl Component for PrefixedWrappedLine {
     }
 }
 
+/// Transcript component for a tool call and its eventual result.
+///
+/// Original: `ToolCallComponent` in `tool-call.ts`.
+pub struct ToolCallComponent {
+    state: ToolCallState,
+    render_cache: Option<(usize, Vec<String>)>,
+}
+
+impl ToolCallComponent {
+    pub fn new(
+        tool_call: ToolCallBlockData,
+        result: Option<ToolResultBlockData>,
+        workspace_dir: Option<String>,
+    ) -> Self {
+        Self {
+            state: ToolCallState::new(tool_call, result, workspace_dir),
+            render_cache: None,
+        }
+    }
+
+    pub fn state(&self) -> &ToolCallState {
+        &self.state
+    }
+
+    pub fn state_mut(&mut self) -> &mut ToolCallState {
+        self.mark_render_dirty();
+        &mut self.state
+    }
+
+    pub fn set_expanded(&mut self, expanded: bool) {
+        if self.state.set_expanded(expanded) {
+            self.mark_render_dirty();
+        }
+    }
+
+    pub fn set_result(&mut self, result: ToolResultBlockData) {
+        self.state.set_result(result);
+        self.mark_render_dirty();
+    }
+
+    pub fn update_tool_call(&mut self, tool_call: ToolCallBlockData) {
+        self.state.update_tool_call(tool_call);
+        self.mark_render_dirty();
+    }
+
+    pub fn append_progress(&mut self, text: &str) {
+        self.state.append_progress(text);
+        self.mark_render_dirty();
+    }
+
+    pub fn append_live_output(&mut self, text: &str) {
+        self.state.append_live_output(text);
+        self.mark_render_dirty();
+    }
+
+    pub fn set_plan_info(&mut self, plan: Option<&str>, path: Option<&str>) {
+        if self.state.set_plan_info(plan, path) {
+            self.mark_render_dirty();
+        }
+    }
+
+    pub fn get_read_snapshot(&self) -> ToolCallReadSnapshot {
+        self.state.get_read_snapshot()
+    }
+
+    pub fn get_subagent_snapshot(&self) -> ToolCallSubagentSnapshot {
+        self.state.get_subagent_snapshot()
+    }
+
+    pub fn set_snapshot_listener(&mut self, listener: Option<Box<dyn FnMut() + Send>>) {
+        self.state.set_snapshot_listener(listener);
+    }
+
+    pub fn dispose(&mut self) {}
+
+    fn mark_render_dirty(&mut self) {
+        self.render_cache = None;
+    }
+
+    fn build_components(&self) -> Vec<Box<dyn Component>> {
+        let mut components: Vec<Box<dyn Component>> = vec![Box::new(Spacer::new(1))];
+        components.push(Box::new(Text::new(self.build_header(), 0, 0)));
+        components.extend(self.build_call_preview());
+        components.extend(self.build_progress_block());
+        components.extend(self.build_live_output_block());
+        components.extend(self.build_content());
+        components.extend(self.build_subagent_block());
+        components
+    }
+
+    fn build_header(&self) -> String {
+        let tool_call = self.state.tool_call();
+        let result = self.state.result();
+        let is_finished = result.is_some();
+        let is_error = result.and_then(|result| result.is_error).unwrap_or(false);
+        let is_truncated = tool_call.truncated == Some(true) && !is_finished;
+        let theme = current_theme();
+        let bullet = if is_finished {
+            if is_error {
+                theme.fg(ColorToken::Error, FAILURE_MARK)
+            } else {
+                theme.fg(ColorToken::Success, STATUS_BULLET)
+            }
+        } else if is_truncated {
+            theme.fg(ColorToken::Error, FAILURE_MARK)
+        } else {
+            theme.fg(ColorToken::Text, STATUS_BULLET)
+        };
+
+        if tool_call.name == "ExitPlanMode" {
+            let label = theme.bold_fg(ColorToken::Primary, "Current plan");
+            let Some(result) = result.filter(|result| result.is_error != Some(true)) else {
+                return label;
+            };
+            return match interpret_exit_plan_mode_outcome(&result.output) {
+                ExitPlanModeOutcome {
+                    kind: ExitPlanModeOutcomeKind::Approved,
+                    chosen,
+                    ..
+                } => {
+                    let chip = chosen.map_or_else(
+                        || "Approved".to_owned(),
+                        |chosen| format!("Approved: {chosen}"),
+                    );
+                    format!(
+                        "{label}{}",
+                        theme.fg(ColorToken::Success, &format!(" · {chip}"))
+                    )
+                }
+                ExitPlanModeOutcome {
+                    kind: ExitPlanModeOutcomeKind::AutoApproved,
+                    ..
+                } => format!(
+                    "{label}{}",
+                    theme.fg(ColorToken::Warning, " · Auto-approved")
+                ),
+                _ => label,
+            };
+        }
+
+        if tool_call.name == "AskUserQuestion" {
+            let background =
+                tool_call.args.get("background").and_then(Value::as_bool) == Some(true);
+            let label = match (is_finished, is_error, background) {
+                (true, true, _) => "Could not collect your input",
+                (true, false, true) => "Started background question",
+                (true, false, false) => "Collected your answers",
+                (false, _, true) => "Starting background question",
+                (false, _, false) => "Waiting for your input",
+            };
+            let tone = if is_error {
+                ColorToken::Error
+            } else {
+                ColorToken::Primary
+            };
+            return format!("{bullet}{}", theme.bold_fg(tone, label));
+        }
+
+        if tool_call.name == "Bash" {
+            if is_truncated {
+                return format!(
+                    "{bullet}{} {}",
+                    theme.fg(ColorToken::Error, "Truncated"),
+                    theme.bold_fg(ColorToken::Primary, "Bash")
+                );
+            }
+            let label = if is_finished {
+                "Ran a command"
+            } else {
+                "Running a command"
+            };
+            let tone = if is_error {
+                ColorToken::Error
+            } else {
+                ColorToken::Primary
+            };
+            return format!(
+                "{bullet}{}{}",
+                theme.bold_fg(tone, label),
+                self.build_header_chip()
+            );
+        }
+
+        if let Some(header) = build_goal_tool_header(GoalToolHeaderOptions {
+            tool_call,
+            result,
+            bullet: &bullet,
+            chip: &self.build_header_chip(),
+        }) {
+            return header;
+        }
+
+        if tool_call.name == "Agent" && self.has_subagent_state() {
+            return self.build_single_subagent_header();
+        }
+
+        let verb = if is_finished {
+            "Used"
+        } else if is_truncated {
+            "Truncated"
+        } else {
+            "Using"
+        };
+        let verb = if is_truncated {
+            theme.fg(ColorToken::Error, verb)
+        } else {
+            verb.to_owned()
+        };
+        let label = if let Some(decoded) =
+            crate::tui::utils::mcp_tool_name::decode_mcp_tool_name(&tool_call.name)
+        {
+            format!(
+                "{}{}",
+                theme.bold_fg(ColorToken::Primary, decoded.tool_name),
+                theme.dim(&format!(" · MCP/{}", decoded.server_name))
+            )
+        } else {
+            theme.bold_fg(ColorToken::Primary, &tool_call.name)
+        };
+        let argument = extract_key_argument(
+            &tool_call.name,
+            &tool_call.args,
+            self.state.workspace_dir.as_deref(),
+        )
+        .map_or_else(String::new, |argument| theme.dim(&format!(" ({argument})")));
+        format!(
+            "{bullet}{verb} {label}{argument}{}",
+            self.build_header_chip()
+        )
+    }
+
+    fn build_header_chip(&self) -> String {
+        let Some(result) = self.state.result() else {
+            return String::new();
+        };
+        let Some(provider) = pick_chip(&self.state.tool_call().name) else {
+            return String::new();
+        };
+        let text = provider(self.state.tool_call(), result);
+        if text.is_empty() {
+            return String::new();
+        }
+        if result.is_error == Some(true) {
+            current_theme().fg(ColorToken::Error, &format!(" · {text}"))
+        } else {
+            current_theme().dim(&format!(" · {text}"))
+        }
+    }
+
+    fn build_call_preview(&self) -> Vec<Box<dyn Component>> {
+        let call = self.state.tool_call();
+        if call.name == "ExitPlanMode" {
+            return self.build_plan_preview();
+        }
+        if self.state.result().is_none() && call.truncated == Some(true) {
+            return vec![Box::new(Text::new(
+                current_theme()
+                    .dim("Tool call arguments truncated by max_tokens · call never executed."),
+                2,
+                0,
+            ))];
+        }
+        if self.state.result().is_none()
+            && let Some(arguments) = &call.streaming_arguments
+        {
+            return self.build_streaming_preview(arguments);
+        }
+
+        match call.name.as_str() {
+            "Write" => self.build_write_preview(),
+            "Edit" => self.build_edit_preview(),
+            "Bash" => {
+                let command = call
+                    .args
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if command.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Box::new(ShellExecutionComponent::new(
+                        ShellExecutionOptions {
+                            command: Some(command.to_owned()),
+                            show_command: true,
+                            command_preview_lines: (!self.state.expanded())
+                                .then_some(COMMAND_PREVIEW_LINES),
+                            ..ShellExecutionOptions::default()
+                        },
+                    ))]
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn build_write_preview(&self) -> Vec<Box<dyn Component>> {
+        let call = self.state.tool_call();
+        let content = call
+            .args
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if content.is_empty() {
+            return Vec::new();
+        }
+        let path = call
+            .args
+            .get("file_path")
+            .or_else(|| call.args.get("path"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let language = lang_from_path(path);
+        let lines = highlight_lines(content, language.as_deref());
+        let shown = if self.state.expanded() {
+            lines.len()
+        } else {
+            lines.len().min(COMMAND_PREVIEW_LINES)
+        };
+        let mut components: Vec<Box<dyn Component>> = lines
+            .iter()
+            .take(shown)
+            .enumerate()
+            .map(|(index, line)| {
+                Box::new(Text::new(
+                    format!(
+                        "{}{}",
+                        current_theme().dim(&format!("{:>4}  ", index + 1)),
+                        line
+                    ),
+                    2,
+                    0,
+                )) as Box<dyn Component>
+            })
+            .collect();
+        if shown < lines.len() {
+            components.push(Box::new(Text::new(
+                current_theme().dim(&format!(
+                    "... ({} more lines, {} total, ctrl+o to expand)",
+                    lines.len() - shown,
+                    lines.len()
+                )),
+                2,
+                0,
+            )));
+        }
+        components
+    }
+
+    fn build_edit_preview(&self) -> Vec<Box<dyn Component>> {
+        let call = self.state.tool_call();
+        let old = call
+            .args
+            .get("old_string")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let new = call
+            .args
+            .get("new_string")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if old.is_empty() && new.is_empty() {
+            return Vec::new();
+        }
+        let path = call
+            .args
+            .get("file_path")
+            .or_else(|| call.args.get("path"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        render_diff_lines_clustered(
+            old,
+            new,
+            path,
+            &ClusteredDiffOptions {
+                context_lines: Some(3),
+                max_lines: (!self.state.expanded()).then_some(COMMAND_PREVIEW_LINES),
+                ..ClusteredDiffOptions::default()
+            },
+        )
+        .into_iter()
+        .map(|line| Box::new(Text::new(line, 2, 0)) as Box<dyn Component>)
+        .collect()
+    }
+
+    fn build_streaming_preview(&self, arguments: &str) -> Vec<Box<dyn Component>> {
+        let call = self.state.tool_call();
+        match call.name.as_str() {
+            "Write" => {
+                let Some(content) = extract_partial_string_field(arguments, "content") else {
+                    return Vec::new();
+                };
+                if content.is_empty() {
+                    return Vec::new();
+                }
+                let path = extract_partial_string_field(arguments, "file_path")
+                    .or_else(|| extract_partial_string_field(arguments, "path"))
+                    .unwrap_or_default();
+                let language = lang_from_path(&path);
+                let lines = highlight_lines(&content, language.as_deref());
+                let start = lines.len().saturating_sub(COMMAND_PREVIEW_LINES);
+                lines
+                    .iter()
+                    .enumerate()
+                    .skip(start)
+                    .map(|(index, line)| {
+                        Box::new(Text::new(
+                            format!(
+                                "{}{}",
+                                current_theme().dim(&format!("{:>4}  ", index + 1)),
+                                line
+                            ),
+                            2,
+                            0,
+                        )) as Box<dyn Component>
+                    })
+                    .collect()
+            }
+            "Edit" => {
+                let path = extract_partial_string_field(arguments, "file_path")
+                    .or_else(|| extract_partial_string_field(arguments, "path"))
+                    .unwrap_or_default();
+                let elapsed = call
+                    .streaming_started_at_ms
+                    .map_or(0, |start| now_ms().saturating_sub(start) / 1000);
+                let target = if path.is_empty() {
+                    String::new()
+                } else {
+                    format!(" for {path}")
+                };
+                vec![Box::new(Text::new(
+                    current_theme().dim(&format!(
+                        "Preparing changes{target}... {} · {} elapsed",
+                        format_byte_size(arguments.len()),
+                        format_elapsed(elapsed)
+                    )),
+                    2,
+                    0,
+                ))]
+            }
+            "Bash" => extract_partial_string_field(arguments, "command").map_or_else(
+                Vec::new,
+                |command| {
+                    vec![
+                        Box::new(ShellExecutionComponent::new(ShellExecutionOptions {
+                            command: Some(command),
+                            show_command: true,
+                            command_preview_lines: (!self.state.expanded())
+                                .then_some(COMMAND_PREVIEW_LINES),
+                            ..ShellExecutionOptions::default()
+                        })) as Box<dyn Component>,
+                    ]
+                },
+            ),
+            _ => Vec::new(),
+        }
+    }
+
+    fn build_plan_preview(&self) -> Vec<Box<dyn Component>> {
+        let call = self.state.tool_call();
+        let inline = call
+            .args
+            .get("plan")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let approved = self
+            .state
+            .result()
+            .filter(|result| result.is_error != Some(true))
+            .map(|result| extract_approved_plan(&result.output))
+            .unwrap_or_default();
+        let plan = if !inline.is_empty() {
+            inline
+        } else if !approved.is_empty() {
+            &approved
+        } else {
+            self.state.current_plan().unwrap_or_default()
+        };
+        if plan.is_empty() {
+            return Vec::new();
+        }
+        let outcome = self
+            .state
+            .result()
+            .filter(|result| result.is_error != Some(true))
+            .map(|result| interpret_exit_plan_mode_outcome(&result.output));
+        let path = outcome
+            .as_ref()
+            .and_then(|outcome| outcome.path.clone())
+            .or_else(|| self.state.plan_path().map(str::to_owned));
+        let status = outcome
+            .filter(|outcome| outcome.kind == ExitPlanModeOutcomeKind::Rejected)
+            .map(|_| PlanBoxStatus {
+                label: "Rejected".to_owned(),
+                color_hex: current_theme().color(ColorToken::Error),
+            });
+        vec![Box::new(PlanBoxComponent::new(
+            plan,
+            current_theme().color(ColorToken::Success),
+            path,
+            PlanBoxOptions { status },
+        ))]
+    }
+
+    fn build_progress_block(&self) -> Vec<Box<dyn Component>> {
+        if self.state.result().is_some() {
+            return Vec::new();
+        }
+        let url = Regex::new(r"https?://\S+").expect("static progress URL regex");
+        self.state
+            .progress_lines()
+            .iter()
+            .map(|line| {
+                let styled = if line.is_empty() {
+                    String::new()
+                } else if url.is_match(line) {
+                    url.replace_all(line, |captures: &regex::Captures<'_>| {
+                        let value = captures.get(0).map_or("", |value| value.as_str());
+                        to_terminal_hyperlink(
+                            &current_theme().underline_fg(ColorToken::Warning, value),
+                            value,
+                        )
+                    })
+                    .into_owned()
+                } else {
+                    current_theme().dim(line)
+                };
+                Box::new(Text::new(styled, 2, 0)) as Box<dyn Component>
+            })
+            .collect()
+    }
+
+    fn build_live_output_block(&self) -> Vec<Box<dyn Component>> {
+        if self.state.result().is_some() || self.state.live_output().is_empty() {
+            return Vec::new();
+        }
+        vec![Box::new(ShellExecutionComponent::new(
+            ShellExecutionOptions {
+                result: Some(ToolResultBlockData {
+                    tool_call_id: self.state.tool_call().id.clone(),
+                    output: self.state.live_output().to_owned(),
+                    is_error: Some(false),
+                    synthetic: None,
+                }),
+                expanded: self.state.expanded(),
+                show_command: false,
+                tail_output: true,
+                expand_hint: Some(false),
+                ..ShellExecutionOptions::default()
+            },
+        ))]
+    }
+
+    fn build_content(&self) -> Vec<Box<dyn Component>> {
+        let Some(result) = self.state.result() else {
+            return Vec::new();
+        };
+        let call = self.state.tool_call();
+        if call.name == "AgentSwarm" {
+            return self.build_agent_swarm_result(result);
+        }
+        if result.output.is_empty()
+            || result.output.trim_start().starts_with("<system-reminder>")
+            || (matches!(call.name.as_str(), "TodoList" | "EnterPlanMode")
+                && result.is_error != Some(true))
+            || (call.name == "Agent" && self.has_subagent_state())
+        {
+            return Vec::new();
+        }
+        if call.name == "ExitPlanMode" && is_exit_plan_mode_outcome_output(&result.output) {
+            let outcome = interpret_exit_plan_mode_outcome(&result.output);
+            if outcome.kind != ExitPlanModeOutcomeKind::Rejected {
+                return Vec::new();
+            }
+            let Some(feedback) = outcome
+                .feedback
+                .filter(|feedback| !feedback.trim().is_empty())
+            else {
+                return Vec::new();
+            };
+            let mut components: Vec<Box<dyn Component>> = vec![Box::new(Text::new(
+                current_theme().bold_fg(ColorToken::Warning, "↪ Suggestion"),
+                2,
+                0,
+            ))];
+            components.extend(
+                feedback
+                    .lines()
+                    .map(|line| Box::new(Text::new(line, 4, 0)) as Box<dyn Component>),
+            );
+            return components;
+        }
+        if call.name == "AskUserQuestion"
+            && call.args.get("background").and_then(Value::as_bool) != Some(true)
+            && result.is_error != Some(true)
+            && let Some(components) = render_ask_user_question_result(&result.output)
+        {
+            return components;
+        }
+        pick_result_renderer(&call.name)(
+            call,
+            result,
+            RendererContext {
+                expanded: self.state.expanded(),
+            },
+        )
+    }
+
+    fn build_agent_swarm_result(&self, result: &ToolResultBlockData) -> Vec<Box<dyn Component>> {
+        let summary = agent_swarm_result_summary_from_output(&result.output);
+        let mut segments = Vec::new();
+        if summary.completed > 0 {
+            segments.push(current_theme().fg(
+                ColorToken::Success,
+                &format!(
+                    "{} {} completed",
+                    SUCCESS_MARK.trim_end(),
+                    summary.completed
+                ),
+            ));
+        }
+        if summary.failed > 0 {
+            segments.push(current_theme().fg(
+                ColorToken::Error,
+                &format!("{} {} failed", FAILURE_MARK.trim_end(), summary.failed),
+            ));
+        }
+        if summary.aborted > 0 {
+            segments.push(current_theme().fg(
+                ColorToken::Warning,
+                &format!("{ABORTED_MARK} {} aborted", summary.aborted),
+            ));
+        }
+        let details = if segments.is_empty() {
+            let aborted = result.is_error == Some(true)
+                && Regex::new(r"(?i)\b(?:aborted|cancelled)\b")
+                    .expect("static aborted regex")
+                    .is_match(&result.output);
+            let (tone, label) = if aborted {
+                (ColorToken::Warning, format!("{ABORTED_MARK} Aborted."))
+            } else if result.is_error == Some(true) {
+                (
+                    ColorToken::Error,
+                    format!("{} Failed.", FAILURE_MARK.trim_end()),
+                )
+            } else {
+                (
+                    ColorToken::Success,
+                    format!("{} Completed.", SUCCESS_MARK.trim_end()),
+                )
+            };
+            current_theme().fg(tone, &label)
+        } else {
+            segments.join(&current_theme().dim(" · "))
+        };
+        vec![Box::new(Text::new(
+            format!("{}{}", current_theme().dim("Agent swarm: "), details),
+            2,
+            0,
+        ))]
+    }
+
+    fn has_subagent_state(&self) -> bool {
+        self.state.subagent_agent_id.is_some()
+            || !self.state.ongoing_sub_calls.is_empty()
+            || !self.state.finished_sub_calls.is_empty()
+            || !self.state.subagent_text.is_empty()
+            || !self.state.subagent_thinking_text.is_empty()
+            || self.state.subagent_phase.is_some()
+            || self.state.background_task_terminal_phase.is_some()
+    }
+
+    fn build_single_subagent_header(&self) -> String {
+        let snapshot = self.state.get_subagent_snapshot();
+        let label = format_subagent_label(snapshot.agent_name.as_deref());
+        let (marker, status, tone) = match snapshot.phase {
+            Some(SubagentPhase::Done) => (STATUS_BULLET, "Completed", ColorToken::Success),
+            Some(SubagentPhase::Failed) => (FAILURE_MARK, "Failed", ColorToken::Error),
+            Some(SubagentPhase::Running) => ("⠋ ", "Running", ColorToken::Primary),
+            Some(SubagentPhase::Backgrounded) => ("◐ ", "Backgrounded", ColorToken::TextDim),
+            Some(SubagentPhase::Queued) => ("⠋ ", "Queued", ColorToken::Primary),
+            Some(SubagentPhase::Spawning) | None => ("⠋ ", "Starting", ColorToken::Primary),
+        };
+        let description = if snapshot.tool_call_description.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ({})",
+                truncate_arg_value("description", &snapshot.tool_call_description)
+            )
+        };
+        let mut stats = vec![format!(
+            "{} tool{}",
+            snapshot.tool_count,
+            if snapshot.tool_count == 1 { "" } else { "s" }
+        )];
+        if let Some(elapsed) = snapshot.elapsed_seconds {
+            stats.push(format_elapsed(elapsed));
+        }
+        if snapshot.tokens > 0 {
+            stats.push(format!(
+                "{} tok",
+                format_token_count(snapshot.tokens as f64)
+            ));
+        }
+        format!(
+            "{}{} {}{}{}",
+            current_theme().fg(tone, marker),
+            current_theme().bold_fg(tone, &label),
+            current_theme().fg(tone, status),
+            current_theme().dim(&description),
+            current_theme().dim(&format!(" · {}", stats.join(" · ")))
+        )
+    }
+
+    fn build_subagent_block(&self) -> Vec<Box<dyn Component>> {
+        if self.state.tool_call().name != "Agent" || !self.has_subagent_state() {
+            return Vec::new();
+        }
+        let snapshot = self.state.get_subagent_snapshot();
+        let mut components: Vec<Box<dyn Component>> = Vec::new();
+        if let Some(activity) = snapshot.latest_activity {
+            components.push(Box::new(PrefixedWrappedLine::new(
+                "  └─ ",
+                "     ",
+                activity,
+                Some(1),
+                Some(1),
+            )));
+        }
+        let result = if snapshot.is_error {
+            snapshot.error_text
+        } else if snapshot.phase == Some(SubagentPhase::Done) {
+            self.state.subagent_result_summary.clone().or_else(|| {
+                (!self.state.subagent_text.is_empty()).then(|| self.state.subagent_text.clone())
+            })
+        } else {
+            None
+        };
+        if let Some(result) = result {
+            components.push(Box::new(PrefixedWrappedLine::new(
+                "  │  ",
+                "  │  ",
+                result,
+                Some(2),
+                Some(2),
+            )));
+        }
+        components
+    }
+}
+
+impl Component for ToolCallComponent {
+    fn render(&mut self, width: usize) -> Vec<String> {
+        if is_render_cache_enabled()
+            && let Some((cached_width, lines)) = &self.render_cache
+            && *cached_width == width
+        {
+            return lines.clone();
+        }
+        let mut container = Container::new();
+        for component in self.build_components() {
+            container.add_boxed_child(component);
+        }
+        let lines = container
+            .render(width.max(1))
+            .into_iter()
+            .map(|line| {
+                if width == 0 {
+                    String::new()
+                } else {
+                    truncate_to_width(&line, width, "…", false)
+                }
+            })
+            .collect::<Vec<_>>();
+        if is_render_cache_enabled() {
+            self.render_cache = Some((width, lines.clone()));
+        }
+        lines
+    }
+
+    fn invalidate(&mut self) {
+        self.mark_render_dirty();
+    }
+
+    fn role(&self) -> ComponentRole {
+        ComponentRole::ToolCall
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn render_ask_user_question_result(output: &str) -> Option<Vec<Box<dyn Component>>> {
+    let parsed = serde_json::from_str::<Value>(output)
+        .ok()?
+        .as_object()?
+        .clone();
+    let answers = parsed.get("answers").and_then(Value::as_object);
+    if answers.is_none_or(Map::is_empty) {
+        let note = parsed
+            .get("note")
+            .and_then(Value::as_str)
+            .filter(|note| !note.is_empty())
+            .unwrap_or("User dismissed the question.");
+        return Some(vec![Box::new(Text::new(
+            current_theme().dim(&format!("  {note}")),
+            0,
+            0,
+        ))]);
+    }
+    let mut components: Vec<Box<dyn Component>> = Vec::new();
+    for (question, answer) in answers.expect("checked above") {
+        let answer = answer
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| answer.to_string());
+        components.push(Box::new(Text::new(
+            format!("  {}  {question}", current_theme().dim("Q")),
+            0,
+            0,
+        )));
+        components.push(Box::new(Text::new(
+            format!(
+                "  {}  {answer}",
+                current_theme().fg(ColorToken::Primary, "↪")
+            ),
+            0,
+            0,
+        )));
+    }
+    Some(components)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -1567,5 +2423,161 @@ mod tests {
         })));
         state.append_subagent_text("more", SubagentTextKind::Text);
         assert_eq!(changes.load(Ordering::Relaxed), 2);
+    }
+
+    fn strip_terminal(text: &str) -> String {
+        let sgr = Regex::new("\\x1b\\[[0-9;]*m").expect("valid SGR regex");
+        let osc = Regex::new("\\x1b\\]8;;[^\\x07]*\\x07").expect("valid OSC regex");
+        osc.replace_all(&sgr.replace_all(text, ""), "").into_owned()
+    }
+
+    #[test]
+    fn component_renders_read_header_and_keeps_narrow_lines_bounded() {
+        let mut component = ToolCallComponent::new(
+            tool_call(
+                "Read",
+                serde_json::json!({"path": "very/long/path/to/foo.ts"}),
+            ),
+            Some(result("one\ntwo", false)),
+            None,
+        );
+        let output = strip_terminal(&component.render(100).join("\n"));
+        assert!(output.contains("● Used Read"));
+        assert!(output.contains("2 lines"));
+        for width in [1, 2, 4, 10, 39] {
+            assert!(
+                component
+                    .render(width)
+                    .iter()
+                    .all(|line| visible_width(line) <= width)
+            );
+        }
+    }
+
+    #[test]
+    fn component_collapses_results_and_expands_on_demand() {
+        let mut component = ToolCallComponent::new(
+            tool_call("Bash", serde_json::json!({"command": "printf output"})),
+            Some(result("line1\nline2\nline3\nline4\nline5", false)),
+            None,
+        );
+        let collapsed = strip_terminal(&component.render(100).join("\n"));
+        assert!(collapsed.contains("Ran a command"));
+        assert!(collapsed.contains("line3"));
+        assert!(!collapsed.contains("line4"));
+        assert!(collapsed.contains("... (2 more lines, ctrl+o to expand)"));
+
+        component.set_expanded(true);
+        let expanded = strip_terminal(&component.render(100).join("\n"));
+        assert!(expanded.contains("line4"));
+        assert!(expanded.contains("line5"));
+        assert!(!expanded.contains("ctrl+o to expand"));
+    }
+
+    #[test]
+    fn component_swaps_live_bash_output_for_final_result() {
+        let mut component = ToolCallComponent::new(
+            tool_call("Bash", serde_json::json!({"command": "echo hi"})),
+            None,
+            None,
+        );
+        component.append_live_output("streamed-only\n");
+        let live = strip_terminal(&component.render(100).join("\n"));
+        assert!(live.contains("Running a command"));
+        assert!(live.contains("streamed-only"));
+
+        component.set_result(result("final-only\n", false));
+        let finished = strip_terminal(&component.render(100).join("\n"));
+        assert!(finished.contains("Ran a command"));
+        assert!(finished.contains("final-only"));
+        assert!(!finished.contains("streamed-only"));
+    }
+
+    #[test]
+    fn component_renders_write_edit_and_streaming_previews() {
+        let content = (1..=14)
+            .map(|number| format!("const value{number} = {number};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut write = ToolCallComponent::new(
+            tool_call(
+                "Write",
+                serde_json::json!({"path": "src/file.ts", "content": content}),
+            ),
+            None,
+            None,
+        );
+        let collapsed = strip_terminal(&write.render(100).join("\n"));
+        assert!(collapsed.contains("14 total, ctrl+o to expand"));
+        assert!(!collapsed.contains("value14"));
+        write.set_expanded(true);
+        assert!(strip_terminal(&write.render(100).join("\n")).contains("value14"));
+
+        let mut edit = ToolCallComponent::new(
+            tool_call(
+                "Edit",
+                serde_json::json!({
+                    "path": "src/file.rs",
+                    "old_string": "fn old() {}",
+                    "new_string": "fn new() {}"
+                }),
+            ),
+            None,
+            None,
+        );
+        let edit_output = strip_terminal(&edit.render(100).join("\n"));
+        assert!(edit_output.contains("- fn old() {}"));
+        assert!(edit_output.contains("+ fn new() {}"));
+
+        let mut streaming_call = tool_call("Bash", serde_json::json!({}));
+        streaming_call.streaming_arguments = Some(r#"{"command":"echo live"#.to_owned());
+        let mut streaming = ToolCallComponent::new(streaming_call, None, None);
+        assert!(strip_terminal(&streaming.render(100).join("\n")).contains("$ echo live"));
+    }
+
+    #[test]
+    fn component_renders_progress_plan_questions_and_swarm_summaries() {
+        let mut progress =
+            ToolCallComponent::new(tool_call("Authenticate", serde_json::json!({})), None, None);
+        progress.append_progress("Open https://example.com/login");
+        let progress_output = progress.render(100).join("\n");
+        assert!(progress_output.contains("\x1b]8;;https://example.com/login"));
+
+        let mut plan = ToolCallComponent::new(
+            tool_call(
+                "ExitPlanMode",
+                serde_json::json!({"plan": "# Plan\n\n- step"}),
+            ),
+            Some(result(
+                "User rejected the plan. Feedback:\n\nRevise it",
+                false,
+            )),
+            None,
+        );
+        let plan_output = strip_terminal(&plan.render(80).join("\n"));
+        assert!(plan_output.contains("Current plan"));
+        assert!(plan_output.contains("Rejected"));
+        assert!(plan_output.contains("Suggestion"));
+        assert!(plan_output.contains("Revise it"));
+
+        let mut question = ToolCallComponent::new(
+            tool_call("AskUserQuestion", serde_json::json!({})),
+            Some(result(r#"{"answers":{"Proceed?":"Yes"}}"#, false)),
+            None,
+        );
+        let question_output = strip_terminal(&question.render(100).join("\n"));
+        assert!(question_output.contains("Collected your answers"));
+        assert!(question_output.contains("Proceed?"));
+        assert!(question_output.contains("Yes"));
+
+        let swarm_result = "<subagent index=\"0\" outcome=\"completed\"></subagent>\n<subagent index=\"1\" outcome=\"failed\"></subagent>";
+        let mut swarm = ToolCallComponent::new(
+            tool_call("AgentSwarm", serde_json::json!({})),
+            Some(result(swarm_result, true)),
+            None,
+        );
+        let swarm_output = strip_terminal(&swarm.render(100).join("\n"));
+        assert!(swarm_output.contains("1 completed"));
+        assert!(swarm_output.contains("1 failed"));
     }
 }

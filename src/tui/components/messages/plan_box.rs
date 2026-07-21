@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{any::Any, path::Path};
 
 use url::Url;
 
@@ -164,6 +164,20 @@ impl PlanBoxComponent {
             .map_or_else(String::new, |status| {
                 format!(" · {}", paint(&status.color_hex, &status.label))
             })
+    }
+}
+
+impl Component for PlanBoxComponent {
+    fn render(&mut self, width: usize) -> Vec<String> {
+        PlanBoxComponent::render(self, width)
+    }
+
+    fn invalidate(&mut self) {
+        PlanBoxComponent::invalidate(self);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
