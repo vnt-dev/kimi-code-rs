@@ -9,6 +9,7 @@ pub mod managed_config;
 pub mod managed_feedback;
 pub mod managed_feedback_upload;
 pub mod managed_models;
+pub mod managed_provision;
 pub mod managed_usage;
 pub mod manager;
 pub mod model_alias_merge;
