@@ -15,6 +15,7 @@ pub mod help_panel;
 pub mod model_selector;
 pub mod permission_selector;
 pub mod platform_selector;
+pub mod plugin_mcp_selector;
 pub mod provider_manager;
 pub mod question_dialog;
 pub mod session_picker;
@@ -60,6 +61,9 @@ pub use model_selector::{
 };
 pub use permission_selector::PermissionSelectorComponent;
 pub use platform_selector::PlatformSelectorComponent;
+pub use plugin_mcp_selector::{
+    PluginMcpSelection, PluginMcpSelectorComponent, PluginMcpSelectorOptions,
+};
 pub use provider_manager::{ProviderManagerComponent, ProviderManagerOptions};
 pub use question_dialog::QuestionDialogComponent;
 pub use session_picker::{SessionPickerComponent, SessionPickerOptions, SessionScope};
