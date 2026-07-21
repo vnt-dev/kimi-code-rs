@@ -1,4 +1,19 @@
-use std::{fmt::Display, future::Future};
+use std::{
+    fmt::Display,
+    future::Future,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
+
+use chrono::{DateTime, Utc};
+use tokio::fs;
+use url::Url;
+
+use crate::{
+    sdk::types::ContextMessage,
+    tui::utils::export_markdown::{BuildExportMarkdownInput, build_export_markdown},
+    utils::terminal_hyperlink::to_terminal_hyperlink,
+};
 
 use super::swarm::NO_ACTIVE_SESSION_MESSAGE;
 
@@ -36,6 +51,25 @@ pub trait SessionCommandHost {
 
     fn show_status(&mut self, message: &str);
     fn show_error(&mut self, message: &str);
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionExportContext {
+    pub history: Vec<ContextMessage>,
+    pub token_count: u64,
+}
+
+pub trait ExportMdCommandHost {
+    type Error: Display + Send;
+
+    fn active_session_id(&self) -> Option<&str>;
+    fn work_dir(&self) -> &Path;
+    fn get_session_context(
+        &mut self,
+    ) -> impl Future<Output = Result<SessionExportContext, Self::Error>> + Send;
+    fn show_status(&mut self, message: &str);
+    fn show_error(&mut self, message: &str);
+    fn show_notice(&mut self, title: &str, body: &str);
 }
 
 /// Original:
@@ -113,6 +147,95 @@ pub fn fork_source_title(
         .to_owned()
 }
 
+/// Original:
+///   apps/kimi-code/src/tui/commands/session.ts
+///   handleExportMdCommand()
+pub async fn handle_export_md_command<H: ExportMdCommandHost>(host: &mut H, args: &str) {
+    let now = DateTime::<Utc>::from(SystemTime::now());
+    handle_export_md_command_at(host, args, now).await;
+}
+
+pub async fn handle_export_md_command_at<H: ExportMdCommandHost>(
+    host: &mut H,
+    args: &str,
+    now: DateTime<Utc>,
+) {
+    let Some(session_id) = host.active_session_id().map(str::to_owned) else {
+        host.show_error(NO_ACTIVE_SESSION_MESSAGE);
+        return;
+    };
+    let work_dir = host.work_dir().to_path_buf();
+    host.show_status("Exporting session as Markdown…");
+
+    let context = match host.get_session_context().await {
+        Ok(context) => context,
+        Err(error) => {
+            host.show_error(&format!("Failed to export session: {error}"));
+            return;
+        }
+    };
+    if context.history.is_empty() {
+        host.show_error("No messages to export.");
+        return;
+    }
+
+    let output_path = match resolve_export_path(args, &work_dir, &session_id, now) {
+        Ok(path) => path,
+        Err(error) => {
+            host.show_error(&format!("Failed to export session: {error}"));
+            return;
+        }
+    };
+    let markdown = build_export_markdown(&BuildExportMarkdownInput {
+        session_id: &session_id,
+        work_dir: &work_dir.to_string_lossy(),
+        history: &context.history,
+        token_count: context.token_count,
+        now,
+    });
+    if let Err(error) = write_export(&output_path, &markdown).await {
+        host.show_error(&format!("Failed to export session: {error}"));
+        return;
+    }
+    let Ok(url) = Url::from_file_path(&output_path) else {
+        host.show_error("Failed to export session: could not create file URL");
+        return;
+    };
+    let path_text = output_path.to_string_lossy();
+    let linked = to_terminal_hyperlink(&path_text, url.as_str());
+    host.show_notice(
+        &format!("Exported {} messages", context.history.len()),
+        &linked,
+    );
+}
+
+fn resolve_export_path(
+    args: &str,
+    work_dir: &Path,
+    session_id: &str,
+    now: DateTime<Utc>,
+) -> std::io::Result<PathBuf> {
+    let trimmed = args.trim();
+    if !trimmed.is_empty() {
+        let path = PathBuf::from(trimmed);
+        return if path.is_absolute() {
+            Ok(path)
+        } else {
+            std::env::current_dir().map(|directory| directory.join(path))
+        };
+    }
+    let short_id = take_utf16_units(session_id, 8);
+    let timestamp = now.format("%Y%m%d-%H%M%S");
+    Ok(work_dir.join(format!("kimi-export-{short_id}-{timestamp}.md")))
+}
+
+async fn write_export(path: &Path, markdown: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    fs::write(path, markdown).await
+}
+
 fn take_utf16_units(value: &str, maximum: usize) -> String {
     let mut units = 0;
     value
@@ -131,6 +254,10 @@ fn take_utf16_units(value: &str, maximum: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone;
+
+    use crate::sdk::types::{ContentPart, ContextMessageRole};
+
     use super::*;
 
     struct Host {
@@ -297,5 +424,121 @@ mod tests {
         assert!(switch_failed.operations.last().is_some_and(
             |operation| operation == "error:Failed to switch to forked session: closed"
         ));
+    }
+
+    struct ExportHost {
+        session_id: Option<String>,
+        work_dir: PathBuf,
+        context: Result<SessionExportContext, &'static str>,
+        operations: Vec<String>,
+    }
+
+    impl ExportMdCommandHost for ExportHost {
+        type Error = &'static str;
+
+        fn active_session_id(&self) -> Option<&str> {
+            self.session_id.as_deref()
+        }
+        fn work_dir(&self) -> &Path {
+            &self.work_dir
+        }
+
+        async fn get_session_context(&mut self) -> Result<SessionExportContext, Self::Error> {
+            self.operations.push("context".to_owned());
+            self.context.clone()
+        }
+
+        fn show_status(&mut self, message: &str) {
+            self.operations.push(format!("status:{message}"));
+        }
+        fn show_error(&mut self, message: &str) {
+            self.operations.push(format!("error:{message}"));
+        }
+        fn show_notice(&mut self, title: &str, body: &str) {
+            self.operations.push(format!("notice:{title}:{body}"));
+        }
+    }
+
+    fn export_context() -> SessionExportContext {
+        SessionExportContext {
+            history: vec![ContextMessage {
+                role: ContextMessageRole::User,
+                content: vec![ContentPart::Text {
+                    text: "hello".to_owned(),
+                }],
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                origin: None,
+            }],
+            token_count: 12,
+        }
+    }
+
+    fn export_host(work_dir: PathBuf) -> ExportHost {
+        ExportHost {
+            session_id: Some("session-123456".to_owned()),
+            work_dir,
+            context: Ok(export_context()),
+            operations: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn exports_default_markdown_path_and_reports_terminal_link() {
+        let directory =
+            std::env::temp_dir().join(format!("kimi-export-test-{}", uuid::Uuid::new_v4()));
+        let mut host = export_host(directory.clone());
+        let now = Utc
+            .with_ymd_and_hms(2026, 7, 21, 10, 11, 12)
+            .single()
+            .expect("valid date");
+        handle_export_md_command_at(&mut host, "", now).await;
+
+        let output = directory.join("kimi-export-session--20260721-101112.md");
+        let text = fs::read_to_string(&output).await.expect("export exists");
+        assert!(text.contains("session_id: session-123456"));
+        assert!(text.contains("hello"));
+        assert_eq!(host.operations[0], "status:Exporting session as Markdown…");
+        assert_eq!(host.operations[1], "context");
+        assert!(host.operations[2].starts_with("notice:Exported 1 messages:\u{1b}]8;;file:"));
+        fs::remove_dir_all(directory)
+            .await
+            .expect("remove temp export");
+    }
+
+    #[tokio::test]
+    async fn handles_missing_session_empty_history_and_context_failure() {
+        let directory = std::env::temp_dir();
+        let now = Utc
+            .with_ymd_and_hms(2026, 7, 21, 10, 11, 12)
+            .single()
+            .expect("valid date");
+
+        let mut missing = export_host(directory.clone());
+        missing.session_id = None;
+        handle_export_md_command_at(&mut missing, "", now).await;
+        assert_eq!(
+            missing.operations,
+            [format!("error:{NO_ACTIVE_SESSION_MESSAGE}")]
+        );
+
+        let mut empty = export_host(directory.clone());
+        empty.context = Ok(SessionExportContext {
+            history: Vec::new(),
+            token_count: 0,
+        });
+        handle_export_md_command_at(&mut empty, "", now).await;
+        assert_eq!(
+            empty.operations.last().map(String::as_str),
+            Some("error:No messages to export.")
+        );
+
+        let mut failed = export_host(directory);
+        failed.context = Err("unavailable");
+        handle_export_md_command_at(&mut failed, "", now).await;
+        assert_eq!(
+            failed.operations.last().map(String::as_str),
+            Some("error:Failed to export session: unavailable")
+        );
     }
 }
