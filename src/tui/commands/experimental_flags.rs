@@ -3,10 +3,32 @@ use std::{
     sync::{OnceLock, RwLock},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlagSurface {
+    Core,
+    Tui,
+    Both,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExperimentalFlagSource {
+    MasterEnv,
+    Env,
+    Config,
+    Default,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExperimentalFeatureState {
     pub id: String,
+    pub title: String,
+    pub description: String,
+    pub surface: FlagSurface,
+    pub env: String,
+    pub default_enabled: bool,
     pub enabled: bool,
+    pub source: ExperimentalFlagSource,
+    pub config_value: Option<bool>,
 }
 
 type ExperimentalFlagMap = HashMap<String, bool>;
@@ -52,11 +74,25 @@ mod tests {
         set_experimental_features(&[
             ExperimentalFeatureState {
                 id: "micro_compaction".to_owned(),
+                title: "Micro compaction".to_owned(),
+                description: String::new(),
+                surface: FlagSurface::Core,
+                env: "KIMI_CODE_MICRO_COMPACTION".to_owned(),
+                default_enabled: false,
                 enabled: true,
+                source: ExperimentalFlagSource::Config,
+                config_value: Some(true),
             },
             ExperimentalFeatureState {
                 id: "other".to_owned(),
+                title: "Other".to_owned(),
+                description: String::new(),
+                surface: FlagSurface::Tui,
+                env: "KIMI_CODE_OTHER".to_owned(),
+                default_enabled: false,
                 enabled: false,
+                source: ExperimentalFlagSource::Default,
+                config_value: None,
             },
         ]);
         assert!(is_experimental_flag_enabled(None));
