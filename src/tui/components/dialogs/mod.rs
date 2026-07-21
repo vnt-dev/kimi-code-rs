@@ -8,6 +8,7 @@ pub mod editor_selector;
 pub mod effort_selector;
 pub mod experiments_selector;
 pub mod feedback_input_dialog;
+pub mod goal_queue_edit_dialog;
 pub mod goal_queue_manager;
 pub mod goal_start_permission_prompt;
 pub mod help_panel;
@@ -42,6 +43,9 @@ pub use experiments_selector::{
     ExperimentalFeatureDraftChange, ExperimentsSelectorComponent, ExperimentsSelectorOptions,
 };
 pub use feedback_input_dialog::{FeedbackInputDialogComponent, FeedbackInputDialogResult};
+pub use goal_queue_edit_dialog::{
+    GoalQueueEditDialogComponent, GoalQueueEditDialogOptions, GoalQueueEditResult,
+};
 pub use goal_queue_manager::{
     GoalQueueManagerAction, GoalQueueManagerComponent, GoalQueueManagerOptions,
 };
