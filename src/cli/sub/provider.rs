@@ -103,12 +103,28 @@ pub struct ProviderConfig {
     pub additional_fields: Map<String, Value>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderConfigPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub providers: Option<BTreeMap<String, ProviderDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<BTreeMap<String, ModelDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Value>,
+}
+
 #[async_trait]
 pub trait ProviderRuntime: Send + Sync {
     async fn ensure_config_file(&self) -> Result<(), ProviderError>;
     async fn get_config(&self) -> Result<ProviderConfig, ProviderError>;
     async fn remove_provider(&self, provider_id: &str) -> Result<ProviderConfig, ProviderError>;
-    async fn set_config(&self, config: &ProviderConfig) -> Result<ProviderConfig, ProviderError>;
+    async fn set_config(
+        &self,
+        patch: &ProviderConfigPatch,
+    ) -> Result<ProviderConfig, ProviderError>;
     fn write_stdout(&self, text: &str);
     fn write_stderr(&self, text: &str);
 }
@@ -254,7 +270,13 @@ pub async fn handle_provider_add(
         apply_custom_registry_provider(&mut config, &entry, &source);
     }
 
-    runtime.set_config(&config).await?;
+    runtime
+        .set_config(&ProviderConfigPatch {
+            providers: Some(config.providers.clone()),
+            models: Some(config.models.clone()),
+            ..ProviderConfigPatch::default()
+        })
+        .await?;
     runtime.write_stdout(&format!(
         "Imported {} provider{} ({} model{}) from {trimmed_url}:\n",
         added_provider_ids.len(),
@@ -565,6 +587,221 @@ impl Error for CatalogFetchError {
 #[async_trait]
 pub trait ProviderCatalogRuntime: ProviderRuntime {
     async fn fetch_catalog(&self, url: &str) -> Result<Catalog, CatalogFetchError>;
+}
+
+// Original:
+//   apps/kimi-code/src/cli/sub/provider.ts
+//   handleCatalogAdd()
+pub async fn handle_catalog_add(
+    runtime: &dyn ProviderCatalogRuntime,
+    provider_id: &str,
+    flag_api_key: Option<&str>,
+    environment_api_key: Option<&str>,
+    default_model: Option<&str>,
+    url: Option<&str>,
+) -> Result<(), ProviderCommandError> {
+    let Some(api_key) = resolve_api_key(flag_api_key, environment_api_key) else {
+        runtime
+            .write_stderr("Missing API key. Pass --api-key <key> or set KIMI_REGISTRY_API_KEY.\n");
+        return Err(ProviderCommandError::Exit(1));
+    };
+    let url = url.unwrap_or(DEFAULT_CATALOG_URL);
+    let catalog = match runtime.fetch_catalog(url).await {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            let suffix = error
+                .status
+                .map_or_else(String::new, |status| format!(" (HTTP {status})"));
+            runtime.write_stderr(&format!(
+                "Failed to fetch catalog from {url}{suffix}: {error}\n"
+            ));
+            return Err(ProviderCommandError::Exit(1));
+        }
+    };
+    let Some(entry) = catalog.get(provider_id) else {
+        runtime.write_stderr(&format!(
+            "Provider \"{provider_id}\" not found in catalog at {url}.\n"
+        ));
+        return Err(ProviderCommandError::Exit(1));
+    };
+    let Some(wire) = infer_wire_type(entry) else {
+        runtime.write_stderr(&format!(
+            "Provider \"{provider_id}\" has an unsupported wire type in the catalog.\n"
+        ));
+        return Err(ProviderCommandError::Exit(1));
+    };
+    let models = catalog_provider_models(entry);
+    if models.is_empty() {
+        runtime.write_stderr(&format!(
+            "Provider \"{provider_id}\" lists no usable models in this catalog.\n"
+        ));
+        return Err(ProviderCommandError::Exit(1));
+    }
+    if let Some(default_model) = default_model
+        && !models.iter().any(|model| model.id == default_model)
+    {
+        runtime.write_stderr(&format!(
+            "Model \"{default_model}\" is not in provider \"{provider_id}\". Run \"kimi provider catalog list {provider_id}\" to see available ids.\n"
+        ));
+        return Err(ProviderCommandError::Exit(1));
+    }
+
+    runtime.ensure_config_file().await?;
+    let mut config = runtime.get_config().await?;
+    let previous_default_model = config.default_model.clone();
+    let previous_thinking = config.thinking.clone();
+    if config.providers.contains_key(provider_id) {
+        config = runtime.remove_provider(provider_id).await?;
+    }
+    apply_catalog_provider(
+        &mut config,
+        ApplyCatalogProviderOptions {
+            provider_id,
+            wire,
+            base_url: catalog_base_url(entry, wire),
+            api_key: &api_key,
+            models: &models,
+            selected_model_id: default_model.unwrap_or_default(),
+            thinking: false,
+        },
+    );
+    if default_model.is_none() {
+        config.default_model =
+            previous_default_model.filter(|alias| config.models.contains_key(alias));
+    }
+    config.thinking = previous_thinking;
+    runtime
+        .set_config(&ProviderConfigPatch {
+            providers: Some(config.providers.clone()),
+            models: Some(config.models.clone()),
+            default_model: config.default_model.clone(),
+            thinking: config.thinking.clone(),
+        })
+        .await?;
+
+    let display_name = entry.name.as_deref().unwrap_or(provider_id);
+    runtime.write_stdout(&format!(
+        "Imported {display_name} ({provider_id}) with {} model{} from {url}.\n",
+        models.len(),
+        if models.len() == 1 { "" } else { "s" }
+    ));
+    if let Some(default_model) = default_model {
+        runtime.write_stdout(&format!(
+            "Default model set to {provider_id}/{default_model}.\n"
+        ));
+    }
+    Ok(())
+}
+
+// Original:
+//   packages/kosong/src/catalog.ts
+//   catalogBaseUrl()
+pub fn catalog_base_url(entry: &CatalogProviderEntry, wire: WireType) -> Option<String> {
+    let api = entry.api.as_deref().filter(|api| !api.is_empty())?;
+    if wire == WireType::Anthropic {
+        if let Some(base) = api.strip_suffix("/v1/") {
+            return Some(base.to_owned());
+        }
+        if let Some(base) = api.strip_suffix("/v1") {
+            return Some(base.to_owned());
+        }
+    }
+    Some(api.to_owned())
+}
+
+// Original:
+//   packages/node-sdk/src/catalog.ts
+//   applyCatalogProvider()
+pub struct ApplyCatalogProviderOptions<'a> {
+    pub provider_id: &'a str,
+    pub wire: WireType,
+    pub base_url: Option<String>,
+    pub api_key: &'a str,
+    pub models: &'a [CatalogModel],
+    pub selected_model_id: &'a str,
+    pub thinking: bool,
+}
+
+pub fn apply_catalog_provider(
+    config: &mut ProviderConfig,
+    options: ApplyCatalogProviderOptions<'_>,
+) -> String {
+    let provider_id = options.provider_id;
+    config.providers.insert(
+        provider_id.to_owned(),
+        ProviderDefinition {
+            provider_type: options.wire.as_str().to_owned(),
+            base_url: options.base_url,
+            api_key: Some(options.api_key.to_owned()),
+            oauth: None,
+            source: None,
+            additional_fields: Map::new(),
+        },
+    );
+    config
+        .models
+        .retain(|_, model| model.provider != provider_id);
+    for model in options.models {
+        config.models.insert(
+            format!("{provider_id}/{}", model.id),
+            catalog_model_to_alias(provider_id, model),
+        );
+    }
+    let default_model = format!("{provider_id}/{}", options.selected_model_id);
+    config.default_model = Some(default_model.clone());
+    let mut thinking_config = match config.thinking.take() {
+        Some(Value::Object(object)) => object,
+        _ => Map::new(),
+    };
+    thinking_config.insert("enabled".to_owned(), Value::Bool(options.thinking));
+    config.thinking = Some(Value::Object(thinking_config));
+    default_model
+}
+
+fn catalog_model_to_alias(provider_id: &str, model: &CatalogModel) -> ModelDefinition {
+    let mut capabilities = Vec::new();
+    for (enabled, capability) in [
+        (model.capability.image_in, "image_in"),
+        (model.capability.video_in, "video_in"),
+        (model.capability.audio_in, "audio_in"),
+        (model.capability.thinking, "thinking"),
+        (model.capability.tool_use, "tool_use"),
+        (
+            model.capability.dynamically_loaded_tools,
+            "dynamically_loaded_tools",
+        ),
+    ] {
+        if enabled {
+            capabilities.push(capability);
+        }
+    }
+    let mut additional_fields = Map::from_iter([(
+        "maxContextSize".to_owned(),
+        Value::from(model.capability.max_context_tokens),
+    )]);
+    if !capabilities.is_empty() {
+        additional_fields.insert("capabilities".to_owned(), serde_json::json!(capabilities));
+    }
+    if let Some(max_output_size) = model.max_output_size {
+        additional_fields.insert(
+            "maxOutputSize".to_owned(),
+            serde_json::json!(max_output_size),
+        );
+    }
+    if let Some(name) = &model.name {
+        additional_fields.insert("displayName".to_owned(), Value::String(name.clone()));
+    }
+    if let Some(reasoning_key) = &model.reasoning_key {
+        additional_fields.insert(
+            "reasoningKey".to_owned(),
+            Value::String(reasoning_key.clone()),
+        );
+    }
+    ModelDefinition {
+        provider: provider_id.to_owned(),
+        model: model.id.clone(),
+        additional_fields,
+    }
 }
 
 // Original:
@@ -932,7 +1169,7 @@ mod tests {
         catalog_urls: Mutex<Vec<String>>,
         ensure_calls: Mutex<usize>,
         remove_calls: Mutex<Vec<String>>,
-        set_calls: Mutex<Vec<ProviderConfig>>,
+        set_calls: Mutex<Vec<ProviderConfigPatch>>,
         stdout: Mutex<String>,
         stderr: Mutex<String>,
     }
@@ -1011,21 +1248,42 @@ mod tests {
                 .push(provider_id.to_owned());
             let mut config = self.config.lock().expect("config");
             config.providers.remove(provider_id);
+            let removed_default = config.default_model.as_ref().is_some_and(|default_model| {
+                config
+                    .models
+                    .get(default_model)
+                    .is_some_and(|model| model.provider == provider_id)
+            });
             config
                 .models
                 .retain(|_, model| model.provider != provider_id);
+            if removed_default {
+                config.default_model = None;
+            }
             Ok(config.clone())
         }
 
         async fn set_config(
             &self,
-            config: &ProviderConfig,
+            patch: &ProviderConfigPatch,
         ) -> Result<ProviderConfig, ProviderError> {
             self.set_calls
                 .lock()
                 .expect("set calls")
-                .push(config.clone());
-            *self.config.lock().expect("config") = config.clone();
+                .push(patch.clone());
+            let mut config = self.config.lock().expect("config");
+            if let Some(providers) = &patch.providers {
+                config.providers = providers.clone();
+            }
+            if let Some(models) = &patch.models {
+                config.models = models.clone();
+            }
+            if let Some(default_model) = &patch.default_model {
+                config.default_model = Some(default_model.clone());
+            }
+            if let Some(thinking) = &patch.thinking {
+                config.thinking = Some(thinking.clone());
+            }
             Ok(config.clone())
         }
 
@@ -1146,6 +1404,174 @@ mod tests {
                 },
             ),
         ])
+    }
+
+    #[tokio::test]
+    async fn catalog_add_imports_models_and_preserves_unrelated_defaults() {
+        let mut config = ProviderConfig::default();
+        config
+            .providers
+            .insert("other".to_owned(), definition("kimi"));
+        config
+            .models
+            .insert("other/main".to_owned(), model("other", "main"));
+        config.default_model = Some("other/main".to_owned());
+        config.thinking = Some(json!({ "enabled": true, "effort": "high" }));
+        let runtime = RuntimeMock::new(config);
+        *runtime.catalog.lock().expect("catalog") = catalog_fixture();
+
+        handle_catalog_add(&runtime, "anthropic", Some("sk-ant"), None, None, None)
+            .await
+            .expect("catalog add");
+
+        let config = runtime.config.lock().expect("config");
+        assert_eq!(config.providers["anthropic"].provider_type, "anthropic");
+        assert_eq!(
+            config.providers["anthropic"].base_url.as_deref(),
+            Some("https://api.anthropic.com")
+        );
+        assert!(config.models.contains_key("anthropic/claude-opus"));
+        assert!(config.models.contains_key("other/main"));
+        assert_eq!(config.default_model.as_deref(), Some("other/main"));
+        assert_eq!(
+            config.thinking,
+            Some(json!({ "enabled": true, "effort": "high" }))
+        );
+        drop(config);
+        assert!(
+            runtime
+                .stdout
+                .lock()
+                .expect("stdout")
+                .contains("Imported Anthropic (anthropic) with 2 models")
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_add_sets_requested_default_without_overwriting_thinking() {
+        let mut config = ProviderConfig {
+            thinking: Some(json!({ "enabled": true })),
+            ..ProviderConfig::default()
+        };
+        config.additional_fields.insert("keep".to_owned(), json!(1));
+        let runtime = RuntimeMock::new(config);
+        *runtime.catalog.lock().expect("catalog") = catalog_fixture();
+
+        handle_catalog_add(
+            &runtime,
+            "anthropic",
+            None,
+            Some("sk-env"),
+            Some("claude-opus"),
+            None,
+        )
+        .await
+        .expect("catalog add");
+
+        let config = runtime.config.lock().expect("config");
+        assert_eq!(
+            config.default_model.as_deref(),
+            Some("anthropic/claude-opus")
+        );
+        assert_eq!(config.thinking, Some(json!({ "enabled": true })));
+        assert_eq!(config.additional_fields["keep"], 1);
+        drop(config);
+        assert!(
+            runtime
+                .stdout
+                .lock()
+                .expect("stdout")
+                .contains("Default model set to anthropic/claude-opus")
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_reimport_restores_resolvable_default_and_drops_stale_default() {
+        for (default_model, expected) in [
+            ("anthropic/claude-opus", Some("anthropic/claude-opus")),
+            ("anthropic/legacy", None),
+        ] {
+            let mut config = ProviderConfig::default();
+            config
+                .providers
+                .insert("anthropic".to_owned(), definition("anthropic"));
+            let model_id = default_model.split('/').nth(1).expect("model id");
+            config
+                .models
+                .insert(default_model.to_owned(), model("anthropic", model_id));
+            config.default_model = Some(default_model.to_owned());
+            let runtime = RuntimeMock::new(config);
+            *runtime.catalog.lock().expect("catalog") = catalog_fixture();
+
+            handle_catalog_add(&runtime, "anthropic", Some("rotated"), None, None, None)
+                .await
+                .expect("reimport");
+
+            assert_eq!(
+                runtime
+                    .config
+                    .lock()
+                    .expect("config")
+                    .default_model
+                    .as_deref(),
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_add_rejects_invalid_inputs_before_mutating_config() {
+        let runtime = RuntimeMock::new(ProviderConfig::default());
+        *runtime.catalog.lock().expect("catalog") = catalog_fixture();
+
+        let missing_key = handle_catalog_add(&runtime, "anthropic", None, None, None, None)
+            .await
+            .expect_err("missing key");
+        assert!(matches!(missing_key, ProviderCommandError::Exit(1)));
+        assert!(
+            runtime
+                .catalog_urls
+                .lock()
+                .expect("catalog URLs")
+                .is_empty()
+        );
+
+        let invalid_model = handle_catalog_add(
+            &runtime,
+            "anthropic",
+            Some("key"),
+            None,
+            Some("unknown"),
+            None,
+        )
+        .await
+        .expect_err("unknown model");
+        assert!(matches!(invalid_model, ProviderCommandError::Exit(1)));
+        assert!(runtime.set_calls.lock().expect("set calls").is_empty());
+        assert!(
+            runtime
+                .stderr
+                .lock()
+                .expect("stderr")
+                .contains("kimi provider catalog list anthropic")
+        );
+    }
+
+    #[test]
+    fn catalog_base_url_only_strips_anthropic_v1_suffix() {
+        let mut provider = catalog_fixture()
+            .shift_remove("anthropic")
+            .expect("provider");
+        assert_eq!(
+            catalog_base_url(&provider, WireType::Anthropic).as_deref(),
+            Some("https://api.anthropic.com")
+        );
+        assert_eq!(
+            catalog_base_url(&provider, WireType::OpenAi).as_deref(),
+            Some("https://api.anthropic.com/v1")
+        );
+        provider.api = Some("".to_owned());
+        assert_eq!(catalog_base_url(&provider, WireType::Anthropic), None);
     }
 
     #[tokio::test]
