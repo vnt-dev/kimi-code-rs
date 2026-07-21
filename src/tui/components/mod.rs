@@ -1,6 +1,7 @@
 pub mod basic;
 pub mod chrome;
 pub mod core;
+pub mod dialogs;
 pub mod editor;
 pub mod markdown;
 pub mod media;
