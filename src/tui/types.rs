@@ -1,6 +1,55 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::sdk::types::PromptPart;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueuedMessageMode {
+    Prompt,
+    Bash,
+}
+
+/// Message held while the current turn or compaction is still active.
+///
+/// Original: `apps/kimi-code/src/tui/types.ts`, `QueuedMessage`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuedMessage {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<PromptPart>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_attachment_ids: Option<Vec<u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<QueuedMessageMode>,
+}
+
+impl QueuedMessage {
+    pub fn prompt(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            agent_id: None,
+            parts: None,
+            image_attachment_ids: None,
+            mode: None,
+        }
+    }
+
+    pub fn bash(text: impl Into<String>) -> Self {
+        Self {
+            mode: Some(QueuedMessageMode::Bash),
+            ..Self::prompt(text)
+        }
+    }
+
+    pub fn is_bash(&self) -> bool {
+        self.mode == Some(QueuedMessageMode::Bash)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BannerDisplay {
