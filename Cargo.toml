@@ -9,6 +9,7 @@ async-trait = "0.1.91"
 atomic-write-file = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive"] }
+crossterm = "0.29"
 dirs = "6"
 futures-util = "0.3"
 if-addrs = "0.15"

@@ -1,4 +1,11 @@
-use std::{error::Error, fmt, path::PathBuf, process::Stdio, time::SystemTime};
+use std::{
+    error::Error,
+    fmt,
+    io::{IsTerminal, Write},
+    path::PathBuf,
+    process::Stdio,
+    time::SystemTime,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -11,6 +18,7 @@ use super::{
         ForegroundInstallerRuntime, SpawnUpdateExit, SpawnUpdateRequest, UpdateInstallError,
         UpdatePlatform,
     },
+    prompt::{InstallPromptRuntime, PromptKey},
     refresh::RefreshUpdateCacheDeps,
     source::{DetectInstallSourceDeps, InstallPlatform},
     types::{FetchLatestResult, UpdateCache},
@@ -225,6 +233,71 @@ impl fmt::Display for CommandFailed {
 
 impl Error for CommandFailed {}
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemInstallPromptRuntime;
+
+#[async_trait]
+impl InstallPromptRuntime for SystemInstallPromptRuntime {
+    fn raw_mode(&self) -> bool {
+        crossterm::terminal::is_raw_mode_enabled().unwrap_or(false)
+    }
+
+    fn can_set_raw_mode(&self) -> bool {
+        std::io::stdin().is_terminal()
+    }
+
+    fn set_raw_mode(&self, enabled: bool) {
+        if enabled {
+            let _ = crossterm::terminal::enable_raw_mode();
+        } else {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+    }
+
+    fn resume_input(&self) {
+        // Rust's stdin handle has no paused state equivalent to Node streams.
+    }
+
+    async fn next_keypress(&self) -> PromptKey {
+        tokio::task::spawn_blocking(|| {
+            loop {
+                match crossterm::event::read() {
+                    Ok(crossterm::event::Event::Key(event)) => return prompt_key_for_event(event),
+                    Ok(_) => {}
+                    Err(_) => return PromptKey::CtrlC,
+                }
+            }
+        })
+        .await
+        .unwrap_or(PromptKey::CtrlC)
+    }
+
+    fn color_enabled(&self) -> bool {
+        std::io::stdout().is_terminal()
+    }
+
+    fn write_output(&self, text: &str) {
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(text.as_bytes());
+        let _ = stdout.flush();
+    }
+}
+
+fn prompt_key_for_event(event: crossterm::event::KeyEvent) -> PromptKey {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    match event.code {
+        KeyCode::Up => PromptKey::Up,
+        KeyCode::Down => PromptKey::Down,
+        KeyCode::Enter => PromptKey::Enter,
+        KeyCode::Esc => PromptKey::Escape,
+        KeyCode::Char('c' | 'C') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+            PromptKey::CtrlC
+        }
+        _ => PromptKey::Other,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SystemCdnFetch {
     client: reqwest::Client,
@@ -403,5 +476,39 @@ mod tests {
 
         assert_eq!(response.status, 503);
         assert_eq!(response.body, "release unavailable");
+    }
+
+    #[test]
+    fn terminal_prompt_maps_navigation_confirmation_and_cancellation_keys() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        for (event, expected) in [
+            (
+                KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                PromptKey::Up,
+            ),
+            (
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                PromptKey::Down,
+            ),
+            (
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                PromptKey::Enter,
+            ),
+            (
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                PromptKey::Escape,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                PromptKey::CtrlC,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+                PromptKey::Other,
+            ),
+        ] {
+            assert_eq!(prompt_key_for_event(event), expected);
+        }
     }
 }
