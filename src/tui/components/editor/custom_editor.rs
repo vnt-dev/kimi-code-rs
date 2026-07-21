@@ -1,10 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use regex::Regex;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::tui::{
-    components::render::visible_width,
+    components::{Component, ComponentRole, core::CURSOR_MARKER, render::visible_width},
     keys::{EditorKey, is_key_release, matches_editor_key},
     theme::{ColorToken, current_theme},
     utils::printable_key::{is_printable_char, printable_char},
@@ -56,6 +56,13 @@ pub struct CustomEditor {
     bracket_paste_buffer: Option<String>,
     autocomplete_showing: bool,
     autocomplete_request_pending: bool,
+    terminal_rows: usize,
+    scroll_offset: usize,
+    focused: bool,
+    connected_above: bool,
+    border_highlighted: bool,
+    argument_hints: HashMap<String, String>,
+    pending_actions: Vec<EditorAction>,
 }
 
 impl Default for CustomEditor {
@@ -75,6 +82,13 @@ impl Default for CustomEditor {
             bracket_paste_buffer: None,
             autocomplete_showing: false,
             autocomplete_request_pending: false,
+            terminal_rows: 24,
+            scroll_offset: 0,
+            focused: false,
+            connected_above: false,
+            border_highlighted: false,
+            argument_hints: HashMap::new(),
+            pending_actions: Vec::new(),
         }
     }
 }
@@ -115,6 +129,30 @@ impl CustomEditor {
     pub fn set_autocomplete_activity(&mut self, showing: bool, request_pending: bool) {
         self.autocomplete_showing = showing;
         self.autocomplete_request_pending = request_pending;
+    }
+
+    pub fn set_terminal_rows(&mut self, rows: usize) {
+        self.terminal_rows = rows.max(1);
+    }
+
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+    }
+
+    pub fn set_connected_above(&mut self, connected: bool) {
+        self.connected_above = connected;
+    }
+
+    pub fn set_border_highlighted(&mut self, highlighted: bool) {
+        self.border_highlighted = highlighted;
+    }
+
+    pub fn set_argument_hints(&mut self, hints: HashMap<String, String>) {
+        self.argument_hints = hints;
+    }
+
+    pub fn take_actions(&mut self) -> Vec<EditorAction> {
+        std::mem::take(&mut self.pending_actions)
     }
 
     pub fn is_showing_autocomplete(&self) -> bool {
@@ -716,6 +754,368 @@ impl CustomEditor {
         self.history_index = -1;
         self.history_draft = None;
     }
+
+    /// Renders the pi-tui editor surface, then applies Kimi's prompt, slash
+    /// highlighting, argument hint, and complete side border.
+    ///
+    /// Original:
+    ///   packages/pi-tui/src/components/editor.ts, Editor.render()
+    ///   apps/kimi-code/src/tui/components/editor/custom-editor.ts,
+    ///   CustomEditor.render()
+    pub fn render_editor(&mut self, width: usize) -> Vec<String> {
+        let width = width.max(1);
+        let max_padding = width.saturating_sub(1) / 2;
+        let padding_x = EDITOR_LEFT_PADDING.min(max_padding);
+        let content_width = width.saturating_sub(padding_x.saturating_mul(2)).max(1);
+        let layout_width = if padding_x == 0 {
+            content_width.saturating_sub(1).max(1)
+        } else {
+            content_width
+        };
+        let layout_lines = layout_editor_text(&self.state, layout_width);
+        let max_visible_lines = (self.terminal_rows.saturating_mul(3) / 10).max(5);
+        let cursor_line_index = layout_lines
+            .iter()
+            .position(|line| line.has_cursor)
+            .unwrap_or_default();
+
+        if cursor_line_index < self.scroll_offset {
+            self.scroll_offset = cursor_line_index;
+        } else if cursor_line_index >= self.scroll_offset + max_visible_lines {
+            self.scroll_offset = cursor_line_index - max_visible_lines + 1;
+        }
+        let max_scroll_offset = layout_lines.len().saturating_sub(max_visible_lines);
+        self.scroll_offset = self.scroll_offset.min(max_scroll_offset);
+
+        let visible_lines = &layout_lines
+            [self.scroll_offset..(self.scroll_offset + max_visible_lines).min(layout_lines.len())];
+        let border_token = if self.border_highlighted {
+            ColorToken::BorderFocus
+        } else {
+            ColorToken::Border
+        };
+        let paint_border = |text: &str| current_theme().fg(border_token, text);
+        let left_padding = " ".repeat(padding_x);
+        let right_padding = left_padding.clone();
+        let mut lines = Vec::with_capacity(visible_lines.len() + 2);
+
+        if self.scroll_offset > 0 {
+            lines.push(paint_border(&scroll_separator(
+                width,
+                '↑',
+                self.scroll_offset,
+            )));
+        } else {
+            lines.push(paint_border(&"─".repeat(width)));
+        }
+
+        for layout_line in visible_lines {
+            let mut display_text = layout_line.text.clone();
+            let mut line_visible_width = visible_width(&display_text);
+            let mut cursor_in_padding = false;
+            if layout_line.has_cursor {
+                let cursor_col = layout_line.cursor_col.unwrap_or_default();
+                let cursor_byte = char_to_byte(&display_text, cursor_col);
+                let before = &display_text[..cursor_byte];
+                let after = &display_text[cursor_byte..];
+                let marker = if self.focused { CURSOR_MARKER } else { "" };
+                if let Some(grapheme) = UnicodeSegmentation::graphemes(after, true).next() {
+                    let rest = &after[grapheme.len()..];
+                    display_text = format!("{before}{marker}\u{1b}[7m{grapheme}\u{1b}[0m{rest}");
+                } else {
+                    display_text = format!("{before}{marker}{CURSOR_BLOCK}");
+                    line_visible_width += 1;
+                    cursor_in_padding = line_visible_width > content_width && padding_x > 0;
+                }
+            }
+            let padding = " ".repeat(content_width.saturating_sub(line_visible_width));
+            let line_right_padding = if cursor_in_padding {
+                right_padding.get(1..).unwrap_or_default()
+            } else {
+                &right_padding
+            };
+            lines.push(format!(
+                "{left_padding}{display_text}{padding}{line_right_padding}"
+            ));
+        }
+
+        let lines_below = layout_lines
+            .len()
+            .saturating_sub(self.scroll_offset + visible_lines.len());
+        if lines_below > 0 {
+            lines.push(paint_border(&scroll_separator(width, '↓', lines_below)));
+        } else {
+            lines.push(paint_border(&"─".repeat(width)));
+        }
+
+        let first_content_index = 1;
+        let is_bash = self.input_mode == InputMode::Bash;
+        if !is_bash
+            && self.text().trim_start().starts_with('/')
+            && let Some(line) = lines.get(first_content_index)
+            && let Some(highlighted) = highlight_first_slash_token(line)
+        {
+            lines[first_content_index] = highlighted;
+        }
+        if let Some(hint) = self.compute_argument_hint()
+            && let Some(line) = lines.get(first_content_index)
+        {
+            lines[first_content_index] =
+                inject_argument_hint(line, &hint, self.text().chars().count(), width);
+        }
+        if let Some(line) = lines.get(first_content_index) {
+            let prompt_paint = |text: &str| paint_border(text);
+            if let Some(with_prompt) = inject_prompt_symbol(
+                line,
+                if is_bash { "!" } else { ">" },
+                is_bash.then_some(&prompt_paint as &dyn Fn(&str) -> String),
+            ) {
+                lines[first_content_index] = with_prompt;
+            }
+        }
+
+        let label = is_bash.then(|| {
+            format!(
+                " {} ",
+                current_theme().bold_fg(ColorToken::ShellMode, "! shell mode")
+            )
+        });
+        wrap_with_side_borders(
+            &lines,
+            &paint_border,
+            SideBorderOptions {
+                connected_above: self.connected_above && !self.border_highlighted,
+                label: label.as_deref(),
+            },
+        )
+    }
+
+    fn compute_argument_hint(&self) -> Option<String> {
+        if self.input_mode == InputMode::Bash {
+            return None;
+        }
+        let text = self.text();
+        let captures = Regex::new(r"^/(\S+)( ?)$")
+            .expect("valid argument hint regex")
+            .captures(&text)?;
+        let command = captures.get(1)?.as_str();
+        let hint = self.argument_hints.get(command)?;
+        if self.state.cursor_line != 0
+            || self.state.cursor_col != line_char_count(&self.state.lines[0])
+        {
+            return None;
+        }
+        if captures
+            .get(2)
+            .is_some_and(|value| !value.as_str().is_empty())
+        {
+            Some(hint.clone())
+        } else {
+            Some(format!(" {hint}"))
+        }
+    }
+}
+
+impl Component for CustomEditor {
+    fn render(&mut self, width: usize) -> Vec<String> {
+        self.render_editor(width)
+    }
+
+    fn handle_input(&mut self, data: &str) {
+        let outcome = self.handle_input_event(data);
+        self.pending_actions.extend(outcome.actions);
+    }
+
+    fn invalidate(&mut self) {}
+
+    fn role(&self) -> ComponentRole {
+        ComponentRole::Other
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EditorLayoutLine {
+    text: String,
+    has_cursor: bool,
+    cursor_col: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TextChunk {
+    text: String,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GraphemeLayout<'a> {
+    text: &'a str,
+    start: usize,
+    width: usize,
+    whitespace: bool,
+}
+
+fn layout_editor_text(state: &EditorBufferState, width: usize) -> Vec<EditorLayoutLine> {
+    if state.lines.is_empty() || state.lines.len() == 1 && state.lines[0].is_empty() {
+        return vec![EditorLayoutLine {
+            text: String::new(),
+            has_cursor: true,
+            cursor_col: Some(0),
+        }];
+    }
+
+    let mut layout = Vec::new();
+    for (line_index, line) in state.lines.iter().enumerate() {
+        let is_current_line = line_index == state.cursor_line;
+        let chunks = word_wrap_editor_line(line, width);
+        for (chunk_index, chunk) in chunks.iter().enumerate() {
+            let is_last_chunk = chunk_index + 1 == chunks.len();
+            let cursor = state.cursor_col;
+            let has_cursor = is_current_line
+                && if is_last_chunk {
+                    cursor >= chunk.start
+                } else {
+                    cursor >= chunk.start && cursor < chunk.end
+                };
+            let cursor_col = has_cursor.then(|| {
+                cursor
+                    .saturating_sub(chunk.start)
+                    .min(chunk.text.chars().count())
+            });
+            layout.push(EditorLayoutLine {
+                text: chunk.text.clone(),
+                has_cursor,
+                cursor_col,
+            });
+        }
+    }
+    layout
+}
+
+/// Word-aware counterpart of pi-tui's `wordWrapLine()` that records source
+/// character ranges so a cursor can be mapped onto the correct visual row.
+fn word_wrap_editor_line(line: &str, max_width: usize) -> Vec<TextChunk> {
+    let max_width = max_width.max(1);
+    let line_length = line.chars().count();
+    if line.is_empty() || visible_width(line) <= max_width {
+        return vec![TextChunk {
+            text: line.to_owned(),
+            start: 0,
+            end: line_length,
+        }];
+    }
+
+    let mut char_index = 0;
+    let segments = UnicodeSegmentation::graphemes(line, true)
+        .map(|grapheme| {
+            let start = char_index;
+            char_index += grapheme.chars().count();
+            GraphemeLayout {
+                text: grapheme,
+                start,
+                width: visible_width(grapheme),
+                whitespace: grapheme.chars().all(char::is_whitespace),
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut chunks = Vec::new();
+    let mut current_width = 0usize;
+    let mut chunk_start = 0usize;
+    let mut wrap_opportunity: Option<(usize, usize)> = None;
+
+    for (index, segment) in segments.iter().enumerate() {
+        if current_width + segment.width > max_width {
+            if let Some((wrap_index, wrap_width)) = wrap_opportunity
+                && current_width.saturating_sub(wrap_width) + segment.width <= max_width
+            {
+                chunks.push(text_chunk(line, chunk_start, wrap_index));
+                chunk_start = wrap_index;
+                current_width = current_width.saturating_sub(wrap_width);
+            } else if chunk_start < segment.start {
+                chunks.push(text_chunk(line, chunk_start, segment.start));
+                chunk_start = segment.start;
+                current_width = 0;
+            }
+            wrap_opportunity = None;
+        }
+
+        if segment.width > max_width {
+            current_width = segment.width;
+            wrap_opportunity = None;
+            continue;
+        }
+
+        current_width += segment.width;
+        if let Some(next) = segments.get(index + 1) {
+            let whitespace_boundary = segment.whitespace && !next.whitespace;
+            let cjk_boundary = !segment.whitespace
+                && !next.whitespace
+                && (is_cjk_break(segment.text) || is_cjk_break(next.text));
+            if whitespace_boundary || cjk_boundary {
+                wrap_opportunity = Some((next.start, current_width));
+            }
+        }
+    }
+    chunks.push(text_chunk(line, chunk_start, line_length));
+    chunks
+}
+
+fn text_chunk(line: &str, start: usize, end: usize) -> TextChunk {
+    TextChunk {
+        text: char_range(line, start, end).to_owned(),
+        start,
+        end,
+    }
+}
+
+fn char_range(text: &str, start: usize, end: usize) -> &str {
+    let start_byte = char_to_byte(text, start);
+    let end_byte = char_to_byte(text, end);
+    &text[start_byte..end_byte]
+}
+
+fn is_cjk_break(grapheme: &str) -> bool {
+    grapheme.chars().any(|character| {
+        matches!(
+            character as u32,
+            0x2e80..=0x2fff
+                | 0x3040..=0x30ff
+                | 0x31f0..=0x31ff
+                | 0x3400..=0x4dbf
+                | 0x4e00..=0x9fff
+                | 0xac00..=0xd7af
+                | 0xf900..=0xfaff
+                | 0x20000..=0x2fa1f
+        )
+    })
+}
+
+fn scroll_separator(width: usize, arrow: char, count: usize) -> String {
+    let indicator = format!("─── {arrow} {count} more ");
+    let indicator_width = visible_width(&indicator);
+    if indicator_width <= width {
+        format!("{indicator}{}", "─".repeat(width - indicator_width))
+    } else {
+        truncate_plain_width(&indicator, width)
+    }
+}
+
+fn truncate_plain_width(text: &str, width: usize) -> String {
+    let mut output = String::new();
+    let mut used = 0;
+    for grapheme in UnicodeSegmentation::graphemes(text, true) {
+        let grapheme_width = visible_width(grapheme);
+        if used + grapheme_width > width {
+            break;
+        }
+        output.push_str(grapheme);
+        used += grapheme_width;
+    }
+    output
 }
 
 const BRACKET_PASTE_START: &str = "\u{1b}[200~";
@@ -1598,6 +1998,89 @@ mod tests {
         assert_eq!(editor.text(), "");
         assert!(editor.apply_up_arrow_history_fallback());
         assert_eq!(editor.text(), "previous");
+    }
+
+    #[test]
+    fn renders_prompt_cursor_and_hardware_marker_inside_full_border() {
+        let mut editor = CustomEditor::new();
+        editor.set_focused(true);
+        let output = editor.render_editor(20);
+
+        assert_eq!(output.len(), 3);
+        assert!(strip_sgr(&output[0]).starts_with('╭'));
+        assert!(strip_sgr(&output[0]).ends_with('╮'));
+        assert!(strip_sgr(&output[1]).starts_with("│ > "));
+        assert!(output[1].contains(CURSOR_MARKER));
+        assert!(output[1].contains(CURSOR_BLOCK));
+        assert!(strip_sgr(&output[2]).starts_with('╰'));
+        assert!(strip_sgr(&output[2]).ends_with('╯'));
+        assert!(output.iter().all(|line| visible_width(line) == 20));
+    }
+
+    #[test]
+    fn renders_bash_badge_prompt_and_connected_border_states() {
+        let mut editor = CustomEditor::new();
+        editor.set_input_mode(InputMode::Bash);
+        editor.set_connected_above(true);
+        let output = editor.render_editor(32);
+        assert!(strip_sgr(&output[0]).starts_with("├ ! shell mode "));
+        assert!(strip_sgr(&output[0]).ends_with('┤'));
+        assert!(strip_sgr(&output[1]).starts_with("│ ! "));
+
+        editor.set_border_highlighted(true);
+        let highlighted = editor.render_editor(32);
+        assert!(strip_sgr(&highlighted[0]).starts_with("╭ ! shell mode "));
+        assert!(highlighted[0].contains("38;2"));
+    }
+
+    #[test]
+    fn renders_slash_highlight_and_argument_hint_only_at_command_end() {
+        let mut editor = CustomEditor::new();
+        editor.set_argument_hints(HashMap::from([(
+            "goal".to_owned(),
+            "[status|cancel]".to_owned(),
+        )]));
+        editor.set_text("/goal");
+        let output = editor.render_editor(36);
+        assert!(output[1].contains("38;2"));
+        assert!(strip_sgr(&output[1]).contains("/goal  [status|cancel]"));
+
+        editor.set_cursor(0, 2);
+        let without_hint = editor.render_editor(36);
+        assert!(!strip_sgr(&without_hint[1]).contains("status|cancel"));
+
+        editor.set_input_mode(InputMode::Bash);
+        let bash = editor.render_editor(36);
+        assert!(!strip_sgr(&bash[1]).contains("status|cancel"));
+    }
+
+    #[test]
+    fn wraps_cjk_and_scrolls_to_keep_cursor_visual_row_visible() {
+        let mut editor = CustomEditor::new();
+        editor.set_terminal_rows(10);
+        editor.set_text("甲乙丙丁\none\ntwo\nthree\nfour\nfive\nsix");
+        let output = editor.render_editor(12);
+
+        assert_eq!(output.len(), 7);
+        assert!(strip_sgr(&output[0]).contains('↑'));
+        assert!(output.iter().all(|line| visible_width(line) == 12));
+        assert!(output.iter().any(|line| strip_sgr(line).contains("six")));
+
+        editor.set_cursor(0, 0);
+        let top = editor.render_editor(12);
+        assert!(!strip_sgr(&top[0]).contains('↑'));
+        assert!(strip_sgr(top.last().expect("bottom border")).contains('↓'));
+    }
+
+    #[test]
+    fn component_input_queues_host_actions_for_controller_dispatch() {
+        let mut editor = CustomEditor::new();
+        Component::handle_input(&mut editor, "\u{3}");
+        assert_eq!(
+            editor.take_actions(),
+            [EditorAction::NonEscapeInput, EditorAction::CtrlC]
+        );
+        assert!(editor.take_actions().is_empty());
     }
 
     #[cfg(windows)]
