@@ -76,36 +76,47 @@ impl Theme {
     }
 
     pub fn fg(&self, token: ColorToken, text: &str) -> String {
-        style_hex(&self.color(token), text, None)
+        style_hex(&self.color(token), text, 38, None)
     }
 
     pub fn bold_fg(&self, token: ColorToken, text: &str) -> String {
-        style_hex(&self.color(token), text, Some(("1", "22")))
+        style_hex(&self.color(token), text, 38, Some(("1", "22")))
     }
 
     pub fn dim_fg(&self, token: ColorToken, text: &str) -> String {
-        style_hex(&self.color(token), text, Some(("2", "22")))
+        style_hex(&self.color(token), text, 38, Some(("2", "22")))
     }
 
     pub fn italic_fg(&self, token: ColorToken, text: &str) -> String {
-        style_hex(&self.color(token), text, Some(("3", "23")))
+        style_hex(&self.color(token), text, 38, Some(("3", "23")))
     }
 
     pub fn underline_fg(&self, token: ColorToken, text: &str) -> String {
-        style_hex(&self.color(token), text, Some(("4", "24")))
+        style_hex(&self.color(token), text, 38, Some(("4", "24")))
+    }
+
+    pub fn strikethrough_fg(&self, token: ColorToken, text: &str) -> String {
+        style_hex(&self.color(token), text, 38, Some(("9", "29")))
+    }
+
+    pub fn bg(&self, token: ColorToken, text: &str) -> String {
+        style_hex(&self.color(token), text, 48, None)
     }
 
     pub fn bold(&self, text: &str) -> String {
-        format!("\u{1b}[1m{text}\u{1b}[22m")
+        style(text, "1", "22")
     }
     pub fn dim(&self, text: &str) -> String {
-        format!("\u{1b}[2m{text}\u{1b}[22m")
+        style(text, "2", "22")
     }
     pub fn italic(&self, text: &str) -> String {
-        format!("\u{1b}[3m{text}\u{1b}[23m")
+        style(text, "3", "23")
     }
     pub fn underline(&self, text: &str) -> String {
-        format!("\u{1b}[4m{text}\u{1b}[24m")
+        style(text, "4", "24")
+    }
+    pub fn strikethrough(&self, text: &str) -> String {
+        style(text, "9", "29")
     }
 }
 
@@ -114,15 +125,27 @@ pub fn current_theme() -> &'static Theme {
     &THEME
 }
 
-fn style_hex(hex: &str, text: &str, modifier: Option<(&str, &str)>) -> String {
+fn style_hex(hex: &str, text: &str, color_code: u8, modifier: Option<(&str, &str)>) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
     let Some((red, green, blue)) = parse_hex(hex) else {
         return text.to_owned();
     };
+    let reset_code = if color_code == 48 { 49 } else { 39 };
     match modifier {
         Some((open, close)) => format!(
-            "\u{1b}[38;2;{red};{green};{blue}m\u{1b}[{open}m{text}\u{1b}[{close}m\u{1b}[39m"
+            "\u{1b}[{color_code};2;{red};{green};{blue}m\u{1b}[{open}m{text}\u{1b}[{close}m\u{1b}[{reset_code}m"
         ),
-        None => format!("\u{1b}[38;2;{red};{green};{blue}m{text}\u{1b}[39m"),
+        None => format!("\u{1b}[{color_code};2;{red};{green};{blue}m{text}\u{1b}[{reset_code}m"),
+    }
+}
+
+fn style(text: &str, open: &str, close: &str) -> String {
+    if text.is_empty() {
+        String::new()
+    } else {
+        format!("\u{1b}[{open}m{text}\u{1b}[{close}m")
     }
 }
 
@@ -146,6 +169,21 @@ mod tests {
         let styled = theme.bold_fg(ColorToken::Success, "done");
         assert!(styled.contains("38;2;78;200;126"));
         assert_eq!(visible_width(&styled), 4);
+    }
+
+    #[test]
+    fn supports_background_strikethrough_and_empty_text() {
+        let theme = Theme::new(dark_colors());
+        let background = theme.bg(ColorToken::Error, "error");
+        assert!(background.contains("\u{1b}[48;2;232;84;84m"));
+        assert!(background.ends_with("\u{1b}[49m"));
+        assert_eq!(visible_width(&background), 5);
+
+        let struck = theme.strikethrough_fg(ColorToken::TextDim, "done");
+        assert!(struck.contains("\u{1b}[9m"));
+        assert!(struck.contains("\u{1b}[29m"));
+        assert_eq!(theme.strikethrough(""), "");
+        assert_eq!(theme.fg(ColorToken::Text, ""), "");
     }
 
     #[test]
