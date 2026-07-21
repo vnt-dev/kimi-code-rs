@@ -4,5 +4,6 @@ pub mod experimental_flags;
 pub mod goal;
 pub mod parse;
 pub mod plugin_commands;
+pub mod registry;
 pub mod skills;
 pub mod types;
