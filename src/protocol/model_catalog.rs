@@ -108,6 +108,13 @@ mod tests {
         .unwrap();
         assert_eq!(serde_json::to_value(provider).unwrap()["type"], "openai");
         assert!(
+            serde_json::from_value::<ProviderCatalogItem>(serde_json::json!({
+                "id":"openai","type":"openai","base_url":null,"has_api_key":true,
+                "status":"connected"
+            }))
+            .is_err()
+        );
+        assert!(
             serde_json::from_value::<ModelCatalogItem>(serde_json::json!({
                 "provider":"p","model":"m","max_context_size":0
             }))
@@ -120,5 +127,18 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(file.created_at, "2026-06-04T10:30:00.000Z");
+        assert!(
+            serde_json::from_value::<FileMeta>(serde_json::json!({
+                "id":"f","name":"a.txt","media_type":"text/plain","size":0,
+                "created_at":"2026-06-04T10:30:00Z","expires_at":null
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<crate::protocol::WorkspaceCreate>(serde_json::json!({
+                "root":"/repo","name":null
+            }))
+            .is_err()
+        );
     }
 }

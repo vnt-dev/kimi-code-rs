@@ -26,5 +26,5 @@ fn deserialize_optional_time<'de, D>(deserializer: D) -> Result<Option<IsoDateTi
 where
     D: serde::Deserializer<'de>,
 {
-    Option::<IsoDateTime>::deserialize(deserializer)
+    IsoDateTime::deserialize(deserializer).map(Some)
 }

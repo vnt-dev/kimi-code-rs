@@ -100,7 +100,5 @@ fn deserialize_optional_workspace_name<'de, D>(deserializer: D) -> Result<Option
 where
     D: Deserializer<'de>,
 {
-    Option::<String>::deserialize(deserializer)?
-        .map(validate_name)
-        .transpose()
+    validate_name(String::deserialize(deserializer)?).map(Some)
 }
