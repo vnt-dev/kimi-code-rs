@@ -8,18 +8,29 @@ use crate::{
     skiplist::{RangeOptions, SkipList, compare_number, compare_string},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum IndexType {
     Equality,
     Range,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IndexDef {
     pub field: String,
+    #[serde(rename = "type", default = "default_index_type")]
     pub index_type: IndexType,
+    #[serde(default)]
     pub unique: bool,
+    #[serde(default = "default_sparse")]
     pub sparse: bool,
+}
+
+fn default_index_type() -> IndexType {
+    IndexType::Equality
+}
+fn default_sparse() -> bool {
+    true
 }
 
 impl IndexDef {
@@ -33,10 +44,11 @@ impl IndexDef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IndexInfo {
     pub name: String,
     pub field: String,
+    #[serde(rename = "type")]
     pub index_type: IndexType,
     pub unique: bool,
     pub sparse: bool,

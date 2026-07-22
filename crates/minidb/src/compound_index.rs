@@ -11,20 +11,25 @@ use crate::{
     skiplist::{RangeOptions, SkipList, compare_string},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum OrderType {
+    #[default]
     Number,
     String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompoundIndexDef {
     pub group_by: String,
     pub order_by: String,
+    #[serde(default)]
     pub order_type: OrderType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompoundIndexInfo {
     pub name: String,
     pub group_by: String,

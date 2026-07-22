@@ -6,6 +6,7 @@ pub mod crc32;
 pub mod dt_index;
 pub mod index_manager;
 pub mod lockfile;
+pub mod minidb;
 pub mod query;
 pub mod recovery;
 pub mod rename_replace;
@@ -17,4 +18,5 @@ pub mod text_postings;
 pub mod value_reader;
 pub mod wal;
 
+pub use minidb::{MiniDb, MiniDbError};
 pub use query::{get_path, matches_filter, project, set_path};
