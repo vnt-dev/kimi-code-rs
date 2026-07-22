@@ -1,4 +1,5 @@
 pub mod approval;
+pub mod asyncapi;
 pub mod display;
 pub mod envelope;
 pub mod error_codes;
@@ -21,6 +22,7 @@ pub mod workspace;
 pub mod ws_control;
 
 pub use approval::{ApprovalDecision, ApprovalRequest, ApprovalResponse, ApprovalScope};
+pub use asyncapi::{AsyncApiDocumentOptions, ServerProtocol, create_async_api_document};
 pub use display::*;
 pub use envelope::{Envelope, err_envelope, ok_envelope};
 pub use error_codes::{ERROR_CODE_REASON, ErrorCode};
