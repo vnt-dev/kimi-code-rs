@@ -9,7 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use kimi_code_rs::cli::{
-    commands::{CommandInvocation, parse_command_from},
+    commands::{CommandInvocation, ServerArgs, parse_command_from},
     entrypoint::{
         EntrypointDisposition, EntrypointRuntime, EntrypointRuntimeError, SubcommandOutcome,
         run_entrypoint,
@@ -17,6 +17,9 @@ use kimi_code_rs::cli::{
     main_command::{MainCommandRuntime, MainCommandRuntimeError},
     options::CliOptions,
     startup_error::{StartupErrorFormatOptions, StartupFailure, format_startup_error},
+    sub::web::deprecated_server::{
+        DeprecatedServerDisposition, DeprecatedServerRuntime, handle_deprecated_server,
+    },
     update::types::UpdatePreflightResult,
     version::get_version,
 };
@@ -40,6 +43,12 @@ impl fmt::Display for MigrationPending {
 impl Error for MigrationPending {}
 
 struct SystemEntrypointRuntime;
+
+impl DeprecatedServerRuntime for SystemEntrypointRuntime {
+    fn write_stderr(&self, text: &str) {
+        eprint!("{text}");
+    }
+}
 
 #[async_trait]
 impl MainCommandRuntime for SystemEntrypointRuntime {
@@ -79,11 +88,33 @@ impl EntrypointRuntime for SystemEntrypointRuntime {
         command: &CommandInvocation,
         _: &str,
     ) -> Result<SubcommandOutcome, EntrypointRuntimeError> {
+        if let CommandInvocation::Server(arguments) = command
+            && !is_legacy_kill(arguments)
+        {
+            let DeprecatedServerDisposition::Exit(exit_code) = handle_deprecated_server(self);
+            return Ok(SubcommandOutcome { exit_code });
+        }
+        if let CommandInvocation::Server(arguments) = command
+            && is_legacy_kill(arguments)
+        {
+            return Err(EntrypointRuntimeError::new(MigrationPending {
+                original: "src/cli/sub/web/legacy-kill.ts handleLegacyKillCommand()",
+                completion: "compose lock-file I/O, shutdown HTTP, and safe process signaling",
+            }));
+        }
+
         Err(EntrypointRuntimeError::new(MigrationPending {
             original: subcommand_source(command),
             completion: "compose the migrated handler with its concrete process runtime",
         }))
     }
+}
+
+fn is_legacy_kill(arguments: &ServerArgs) -> bool {
+    arguments
+        .legacy_args
+        .first()
+        .is_some_and(|argument| argument == "kill")
 }
 
 fn subcommand_source(command: &CommandInvocation) -> &'static str {
@@ -168,5 +199,61 @@ fn process_exit_code(code: i32) -> ExitCode {
     match u8::try_from(code) {
         Ok(code) => ExitCode::from(code),
         Err(_) => ExitCode::FAILURE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server(arguments: &[&str]) -> CommandInvocation {
+        CommandInvocation::Server(ServerArgs {
+            legacy_args: arguments
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect(),
+        })
+    }
+
+    #[test]
+    fn recognizes_only_the_registered_legacy_kill_subcommand() {
+        for arguments in [
+            vec!["kill"],
+            vec!["kill", "old-id"],
+            vec!["kill", "--force"],
+        ] {
+            let CommandInvocation::Server(arguments) = server(&arguments) else {
+                unreachable!()
+            };
+            assert!(is_legacy_kill(&arguments));
+        }
+
+        for arguments in [vec![], vec!["run"], vec!["Kill"], vec!["--port", "1234"]] {
+            let CommandInvocation::Server(arguments) = server(&arguments) else {
+                unreachable!()
+            };
+            assert!(!is_legacy_kill(&arguments));
+        }
+    }
+
+    #[tokio::test]
+    async fn system_runtime_executes_the_deprecated_server_shim() {
+        let outcome = SystemEntrypointRuntime
+            .run_subcommand(&server(&["run", "--port", "1234"]), "1.2.3")
+            .await
+            .expect("deprecated server disposition");
+
+        assert_eq!(outcome, SubcommandOutcome { exit_code: 1 });
+    }
+
+    #[tokio::test]
+    async fn legacy_kill_remains_an_explicit_pending_runtime_boundary() {
+        let error = SystemEntrypointRuntime
+            .run_subcommand(&server(&["kill"]), "1.2.3")
+            .await
+            .expect_err("legacy kill runtime");
+
+        assert!(error.to_string().contains("handleLegacyKillCommand"));
+        assert!(error.to_string().contains("safe process signaling"));
     }
 }
