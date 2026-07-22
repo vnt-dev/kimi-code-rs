@@ -11,7 +11,7 @@ use crate::tui::{
         CTRL_C_HINT, CTRL_D_HINT, DOUBLE_ESC_WINDOW_MS, EXIT_CONFIRM_WINDOW_MS,
         LLM_NOT_SET_MESSAGE, NO_ACTIVE_SESSION_MESSAGE,
     },
-    types::{QueuedMessage, QueuedMessageMode, SteerInputItem},
+    types::{QueuedMessage, QueuedMessageMode, SteerInputItem, StreamingPhase},
     utils::{
         image_attachment_store::{ImageAttachmentOriginal, ImageAttachmentStore},
         image_placeholder::{ExtractionResult, extract_media_attachments},
@@ -63,15 +63,6 @@ pub trait ClipboardImageProcessor: Send + Sync {
         meta: ImageMeta,
         context: ClipboardImageProcessingContext<'_>,
     ) -> PreparedClipboardImage;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamingPhase {
-    Idle,
-    Waiting,
-    Thinking,
-    Composing,
-    Shell,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

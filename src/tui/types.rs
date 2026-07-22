@@ -1,7 +1,20 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::sdk::types::PromptPart;
+use crate::{
+    cli::sub::provider::ProviderDefinition,
+    sdk::{
+        model_alias::ModelAlias,
+        types::{GoalSnapshot, PermissionMode, PromptPart, ThinkingEffort},
+    },
+    tui::{
+        components::editor::InputMode,
+        config::{NotificationsConfig, UpgradePreferences},
+        reverse_rpc::types::{PendingApproval, PendingQuestion},
+    },
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -81,6 +94,151 @@ pub struct BannerState {
     pub display: BannerDisplay,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttl_hours: Option<f64>,
+}
+
+/// Current high-level activity shown by the footer and streaming pane.
+///
+/// Original: `apps/kimi-code/src/tui/types.ts`, `AppState.streamingPhase`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamingPhase {
+    Idle,
+    Waiting,
+    Thinking,
+    Composing,
+    Shell,
+}
+
+impl StreamingPhase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Waiting => "waiting",
+            Self::Thinking => "thinking",
+            Self::Composing => "composing",
+            Self::Shell => "shell",
+        }
+    }
+}
+
+/// Shared application state consumed by TUI controllers and renderers.
+///
+/// Original: `apps/kimi-code/src/tui/types.ts`, `AppState`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppState {
+    pub model: String,
+    pub work_dir: String,
+    pub additional_dirs: Vec<String>,
+    pub session_id: String,
+    pub permission_mode: PermissionMode,
+    pub plan_mode: bool,
+    pub input_mode: InputMode,
+    pub swarm_mode: bool,
+    pub thinking_effort: ThinkingEffort,
+    pub context_usage: f64,
+    pub context_tokens: u64,
+    pub max_context_tokens: u64,
+    pub is_compacting: bool,
+    pub is_replaying: bool,
+    pub streaming_phase: StreamingPhase,
+    pub streaming_start_time_ms: u64,
+    pub theme: String,
+    pub version: String,
+    pub editor_command: Option<String>,
+    pub disable_paste_burst: Option<bool>,
+    pub notifications: NotificationsConfig,
+    pub upgrade: UpgradePreferences,
+    pub available_models: BTreeMap<String, ModelAlias>,
+    pub available_providers: BTreeMap<String, ProviderDefinition>,
+    pub session_title: Option<String>,
+    pub goal: Option<GoalSnapshot>,
+    pub mcp_servers_summary: Option<String>,
+    pub banner: Option<BannerState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivePaneMode {
+    Idle,
+    Waiting,
+    Thinking,
+    Tool,
+    Session,
+}
+
+/// Modal/live-pane state. Only one reverse-RPC prompt may be visible at once.
+///
+/// Original: `apps/kimi-code/src/tui/types.ts`, `LivePaneState` and
+/// `INITIAL_LIVE_PANE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LivePaneState {
+    pub mode: LivePaneMode,
+    pub pending_approval: Option<PendingApproval>,
+    pub pending_question: Option<PendingQuestion>,
+}
+
+impl Default for LivePaneState {
+    fn default() -> Self {
+        Self {
+            mode: LivePaneMode::Idle,
+            pending_approval: None,
+            pending_question: None,
+        }
+    }
+}
+
+/// Command-line values that control TUI startup before a session is ready.
+///
+/// Original: `apps/kimi-code/src/tui/types.ts`, `TUIStartupOptions`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TuiStartupOptions {
+    pub session_flag: Option<String>,
+    pub continue_last: bool,
+    pub yolo: bool,
+    pub auto: bool,
+    pub plan: bool,
+    pub model: Option<String>,
+    pub startup_notice: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiStartupState {
+    Pending,
+    Ready,
+    Picker,
+}
+
+/// Constructor input for the top-level TUI runtime.
+///
+/// Original: `apps/kimi-code/src/tui/types.ts`, `KimiTUIOptions`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KimiTuiOptions {
+    pub initial_app_state: AppState,
+    pub startup: TuiStartupOptions,
+}
+
+#[cfg(test)]
+mod application_state_tests {
+    use super::*;
+
+    #[test]
+    fn streaming_phase_names_match_original_external_values() {
+        assert_eq!(StreamingPhase::Idle.as_str(), "idle");
+        assert_eq!(StreamingPhase::Waiting.as_str(), "waiting");
+        assert_eq!(StreamingPhase::Thinking.as_str(), "thinking");
+        assert_eq!(StreamingPhase::Composing.as_str(), "composing");
+        assert_eq!(StreamingPhase::Shell.as_str(), "shell");
+    }
+
+    #[test]
+    fn initial_live_pane_is_idle_without_pending_requests() {
+        assert_eq!(
+            LivePaneState::default(),
+            LivePaneState {
+                mode: LivePaneMode::Idle,
+                pending_approval: None,
+                pending_question: None,
+            }
+        );
+    }
 }
 
 /// Metadata recorded for a background subagent transcript entry.
