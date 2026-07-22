@@ -4,3 +4,4 @@ pub mod openai_hooks;
 pub mod openai_legacy;
 pub mod openai_legacy_contrib;
 pub mod openai_legacy_transport;
+pub mod openai_responses;
