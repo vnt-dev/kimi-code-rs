@@ -8,12 +8,13 @@ use std::{
 
 use regex::Regex;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tokio::{
     fs::{self, OpenOptions},
     io::AsyncWriteExt,
     sync::Mutex,
 };
+
+use crate::agent_core_v2::_base::utils::workdir_slug::encode_work_dir_key;
 
 const AGENT_WIRE_PROTOCOL_VERSION: &str = "1.4";
 const MAX_TITLE_LENGTH: usize = 200;
@@ -533,44 +534,6 @@ fn normalize_path(path: &Path) -> io::Result<PathBuf> {
     Ok(normalized)
 }
 
-fn encode_work_dir_key(work_dir: &str) -> String {
-    let name = Path::new(work_dir)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("workspace");
-    let slug = slugify_work_dir_name(name);
-    let hash = Sha256::digest(work_dir.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("wd_{slug}_{}", &hash[..12])
-}
-
-fn slugify_work_dir_name(name: &str) -> String {
-    let mut slug = String::new();
-    let mut separating = false;
-    for character in name.to_lowercase().chars() {
-        if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
-            if separating && !slug.is_empty() {
-                slug.push('-');
-            }
-            separating = false;
-            slug.push(character);
-        } else {
-            separating = true;
-        }
-        if slug.len() >= 40 {
-            break;
-        }
-    }
-    let slug = slug.trim_matches('-');
-    if slug.is_empty() || matches!(slug, "." | "..") {
-        "workspace".to_owned()
-    } else {
-        slug.to_owned()
-    }
-}
-
 fn is_safe_session_id(id: &str) -> bool {
     !matches!(id, "" | "." | "..")
         && id
@@ -635,16 +598,6 @@ mod tests {
 
     fn temp_home() -> PathBuf {
         std::env::temp_dir().join(format!("kimi-rust-prompt-store-{}", uuid::Uuid::new_v4()))
-    }
-
-    #[test]
-    fn workdir_key_matches_source_slug_and_sha256_format() {
-        assert_eq!(
-            encode_work_dir_key("/tmp/My Project"),
-            "wd_my-project_dab36f6a753b"
-        );
-        assert_eq!(slugify_work_dir_name("项目"), "workspace");
-        assert_eq!(slugify_work_dir_name("---"), "workspace");
     }
 
     #[test]

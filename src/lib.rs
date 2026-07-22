@@ -1,3 +1,4 @@
+pub mod agent_core_v2;
 pub mod built_in_catalog;
 pub mod cli;
 pub mod feedback;
