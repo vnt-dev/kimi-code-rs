@@ -91,6 +91,23 @@ pub enum ChatProviderError {
 }
 
 impl ChatProviderError {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Abort => "AbortError",
+            Self::ApiConnection { .. } => "APIConnectionError",
+            Self::ApiTimeout { .. } => "APITimeoutError",
+            Self::ApiStatus { .. } => "APIStatusError",
+            Self::ApiContextOverflow { .. } => "APIContextOverflowError",
+            Self::ApiRequestTooLarge { .. } => "APIRequestTooLargeError",
+            Self::ApiProviderRateLimit { .. } => "APIProviderRateLimitError",
+            Self::ApiProviderOverloaded { .. } => "APIProviderOverloadedError",
+            Self::ApiEmptyResponse { .. } => "APIEmptyResponseError",
+            Self::ChatProvider { .. } => "ChatProviderError",
+            Self::External { name, .. } => name,
+            Self::Other { .. } => "Error",
+        }
+    }
+
     pub fn message(&self) -> &str {
         match self {
             Self::Abort => ABORT_MESSAGE,

@@ -82,7 +82,32 @@ impl fmt::Display for BugIndicatingError {
 
 impl Error for BugIndicatingError {}
 
-pub type ErrorCause = Arc<dyn Error + Send + Sync>;
+#[derive(Clone)]
+pub enum ErrorCause {
+    Error(Arc<dyn Error + Send + Sync>),
+    Value(Value),
+}
+
+impl fmt::Debug for ErrorCause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Error(error) => formatter.debug_tuple("Error").field(error).finish(),
+            Self::Value(value) => formatter.debug_tuple("Value").field(value).finish(),
+        }
+    }
+}
+
+impl From<Arc<dyn Error + Send + Sync>> for ErrorCause {
+    fn from(error: Arc<dyn Error + Send + Sync>) -> Self {
+        Self::Error(error)
+    }
+}
+
+impl From<Value> for ErrorCause {
+    fn from(value: Value) -> Self {
+        Self::Value(value)
+    }
+}
 
 #[derive(Default)]
 pub struct Error2Options {
@@ -143,9 +168,10 @@ impl fmt::Display for Error2 {
 
 impl Error for Error2 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.cause
-            .as_deref()
-            .map(|cause| cause as &(dyn Error + 'static))
+        match self.cause.as_ref() {
+            Some(ErrorCause::Error(cause)) => Some(cause.as_ref()),
+            Some(ErrorCause::Value(_)) | None => None,
+        }
     }
 }
 
@@ -153,15 +179,25 @@ pub fn is_error2(error: &(dyn Error + 'static)) -> bool {
     error.downcast_ref::<Error2>().is_some()
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ErrorCauseRef<'a> {
+    Error(&'a (dyn Error + 'static)),
+    Value(&'a Value),
+}
+
 // Original: errors.ts, unwrapErrorCause()
-pub fn unwrap_error_cause<'a>(mut error: &'a (dyn Error + 'static)) -> &'a (dyn Error + 'static) {
-    while let Some(error2) = error.downcast_ref::<Error2>() {
-        let Some(cause) = error2.source() else {
-            break;
+pub fn unwrap_error_cause<'a>(error: &'a (dyn Error + 'static)) -> ErrorCauseRef<'a> {
+    let mut current = error;
+    loop {
+        let Some(error2) = current.downcast_ref::<Error2>() else {
+            return ErrorCauseRef::Error(current);
         };
-        error = cause;
+        match error2.cause.as_ref() {
+            Some(ErrorCause::Error(cause)) => current = cause.as_ref(),
+            Some(ErrorCause::Value(value)) => return ErrorCauseRef::Value(value),
+            None => return ErrorCauseRef::Error(current),
+        }
     }
-    error
 }
 
 #[derive(Debug)]
@@ -200,12 +236,12 @@ mod tests {
 
     #[test]
     fn error2_preserves_code_name_details_and_cause_chain() {
-        let root: ErrorCause = Arc::new(io::Error::other("root"));
-        let inner: ErrorCause = Arc::new(Error2::with_options(
+        let root: Arc<dyn Error + Send + Sync> = Arc::new(io::Error::other("root"));
+        let inner: Arc<dyn Error + Send + Sync> = Arc::new(Error2::with_options(
             "inner",
             "wrapped",
             Error2Options {
-                cause: Some(Arc::clone(&root)),
+                cause: Some(ErrorCause::Error(Arc::clone(&root))),
                 ..Error2Options::default()
             },
         ));
@@ -218,14 +254,34 @@ mod tests {
                     "statusCode".to_owned(),
                     Value::from(503),
                 )])),
-                cause: Some(inner),
+                cause: Some(ErrorCause::Error(inner)),
             },
         );
         assert_eq!(outer.name, "CustomError");
         assert_eq!(outer.code, "outer");
         assert_eq!(outer.details.as_ref().unwrap()["statusCode"], 503);
-        assert_eq!(unwrap_error_cause(&outer).to_string(), "root");
+        let ErrorCauseRef::Error(root) = unwrap_error_cause(&outer) else {
+            panic!("expected error cause")
+        };
+        assert_eq!(root.to_string(), "root");
         assert!(is_error2(&outer));
+    }
+
+    #[test]
+    fn error2_preserves_non_error_causes() {
+        let error = Error2::with_options(
+            "internal",
+            "value cause",
+            Error2Options {
+                cause: Some(ErrorCause::Value(Value::String("boom".to_owned()))),
+                ..Error2Options::default()
+            },
+        );
+        let ErrorCauseRef::Value(value) = unwrap_error_cause(&error) else {
+            panic!("expected value cause")
+        };
+        assert_eq!(value, "boom");
+        assert!(error.source().is_none());
     }
 
     #[test]
