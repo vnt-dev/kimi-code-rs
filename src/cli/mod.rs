@@ -7,6 +7,7 @@ pub mod headless_exit;
 pub mod main_command;
 pub mod options;
 pub mod prompt_render;
+pub mod prompt_runtime;
 pub mod prompt_session;
 pub mod run_prompt;
 pub mod startup_error;

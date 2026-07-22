@@ -21,6 +21,7 @@ use kimi_code_rs::cli::{
     },
     main_command::{MainCommandRuntime, MainCommandRuntimeError},
     options::CliOptions,
+    prompt_runtime::{ProcessPromptOutput, SystemPromptRuntime},
     startup_error::{StartupErrorFormatOptions, StartupFailure, format_startup_error},
     sub::{
         doctor::{DoctorOptions, DoctorTarget, handle_doctor},
@@ -98,11 +99,22 @@ impl MainCommandRuntime for SystemEntrypointRuntime {
         Ok(UpdatePreflightResult::Continue)
     }
 
-    async fn run_prompt(&self, _: &CliOptions, _: &str) -> Result<(), MainCommandRuntimeError> {
-        Err(MainCommandRuntimeError::new(MigrationPending {
-            original: "src/main.ts runPrompt()",
-            completion: "compose a concrete PromptRuntime and PromptSessionFactory",
-        }))
+    async fn run_prompt(
+        &self,
+        options: &CliOptions,
+        version: &str,
+    ) -> Result<(), MainCommandRuntimeError> {
+        let data_dir = get_data_dir().map_err(MainCommandRuntimeError::new)?;
+        let runtime = SystemPromptRuntime::new(data_dir, version, env::vars().collect())
+            .map_err(MainCommandRuntimeError::new)?;
+        runtime
+            .run(
+                options,
+                &mut ProcessPromptOutput::stdout(),
+                &mut ProcessPromptOutput::stderr(),
+            )
+            .await
+            .map_err(MainCommandRuntimeError::new)
     }
 
     async fn run_shell(&self, _: &CliOptions, _: &str) -> Result<(), MainCommandRuntimeError> {

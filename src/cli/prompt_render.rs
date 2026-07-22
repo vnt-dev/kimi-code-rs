@@ -5,7 +5,7 @@ pub use crate::sdk::types::HookResultEvent;
 
 use super::options::PromptOutputFormat;
 
-pub trait PromptOutput {
+pub trait PromptOutput: Send {
     fn columns(&self) -> Option<usize> {
         None
     }
