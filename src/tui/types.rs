@@ -50,6 +50,16 @@ impl QueuedMessage {
     }
 }
 
+/// One Ctrl-S steering unit, preserving media parts extracted at submission.
+///
+/// Original: `apps/kimi-code/src/tui/types.ts`, `SteerInputItem`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SteerInputItem {
+    pub text: String,
+    pub parts: Option<Vec<PromptPart>>,
+    pub image_attachment_ids: Option<Vec<u64>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BannerDisplay {
