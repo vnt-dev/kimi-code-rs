@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer};
+use url::Url;
 
 pub fn non_empty<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
@@ -35,6 +36,15 @@ where
     } else {
         Ok(value)
     }
+}
+
+pub fn absolute_url<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    Url::parse(&value).map_err(serde::de::Error::custom)?;
+    Ok(value)
 }
 
 pub fn optional_non_empty_vec<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
