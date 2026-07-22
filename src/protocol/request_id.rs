@@ -63,6 +63,12 @@ mod tests {
             parse_iso_date_time("2026-06-04T18:30:00+08:00").unwrap(),
             "2026-06-04T10:30:00.000Z"
         );
+        let normalized: crate::protocol::IsoDateTime =
+            serde_json::from_str("\"2026-06-04T18:30:00+08:00\"").unwrap();
+        assert_eq!(normalized, "2026-06-04T10:30:00.000Z");
+        assert!(
+            serde_json::from_str::<CursorQuery>(r#"{"before_id":"a","after_id":"b"}"#).is_err()
+        );
 
         let generated = parse_or_generate_request_id(None);
         assert!(is_ulid(&generated));

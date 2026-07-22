@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::error::Error;
 use std::fmt;
 
 use super::error_codes::ErrorCode;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct CursorQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub before_id: Option<String>,
@@ -12,6 +12,29 @@ pub struct CursorQuery {
     pub after_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_size: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct RawCursorQuery {
+    before_id: Option<String>,
+    after_id: Option<String>,
+    page_size: Option<i64>,
+}
+
+impl<'de> Deserialize<'de> for CursorQuery {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawCursorQuery::deserialize(deserializer)?;
+        let query = Self {
+            before_id: raw.before_id,
+            after_id: raw.after_id,
+            page_size: raw.page_size,
+        };
+        query.validate().map_err(serde::de::Error::custom)?;
+        Ok(query)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
