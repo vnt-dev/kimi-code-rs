@@ -1,18 +1,28 @@
+use indexmap::IndexMap;
 use serde_json::{Map, Value};
+use std::sync::{Arc, LazyLock};
 
 use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
 use crate::agent_core_v2::kosong::contract::errors::ChatProviderError;
+use crate::agent_core_v2::kosong::contract::message::is_tool_declaration_only_message;
 use crate::agent_core_v2::kosong::contract::message::{ContentPart, Message, Role};
 use crate::agent_core_v2::kosong::contract::provider::{
-    FinishReason, ResponseFormat, ThinkingEffort,
+    FinishReason, GenerateOptions, ProviderError, ResponseFormat, ThinkingEffort, ToolCallIdPolicy,
 };
 use crate::agent_core_v2::kosong::contract::tool::Tool;
+use crate::agent_core_v2::kosong::provider::bases::anthropic::anthropic_hooks::AnthropicHooks;
 use crate::agent_core_v2::kosong::provider::bases::anthropic::anthropic_profile::{
     AnthropicModelFamily, AnthropicModelVersion, AnthropicThinkingMode,
     infer_anthropic_model_profile, match_known_anthropic_model_profile,
     parse_anthropic_model_version,
 };
+use crate::agent_core_v2::kosong::provider::bases::merge_user_messages::{
+    ConsecutiveUserMessageMergePolicy, merge_consecutive_user_messages,
+};
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::NormalizedFinishReason;
+use crate::agent_core_v2::kosong::provider::bases::tool_call_id::{
+    normalize_tool_call_ids_for_provider, sanitize_tool_call_id,
+};
 
 pub type AnthropicGenerationKwargs = Map<String, Value>;
 
@@ -20,6 +30,10 @@ pub const INTERLEAVED_THINKING_BETA: &str = "interleaved-thinking-2025-05-14";
 pub const CONTEXT_MANAGEMENT_BETA: &str = "context-management-2025-06-27";
 pub const CLEAR_THINKING_EDIT: &str = "clear_thinking_20251015";
 pub const FALLBACK_MAX_TOKENS: f64 = 128_000.0;
+
+pub static ANTHROPIC_TOOL_CALL_ID_POLICY: LazyLock<ToolCallIdPolicy> = LazyLock::new(|| {
+    ToolCallIdPolicy::new(Arc::new(|id| sanitize_tool_call_id(id, Some(64))), Some(64))
+});
 
 // Original: anthropic.ts, normalizeAnthropicStopReason()
 pub fn normalize_anthropic_stop_reason(raw: Option<&str>) -> NormalizedFinishReason {
@@ -548,6 +562,238 @@ pub fn get_anthropic_model_capability(model_name: &str) -> Option<&'static Model
     }
 }
 
+struct AnthropicMessageMergePolicy;
+
+impl ConsecutiveUserMessageMergePolicy<Value> for AnthropicMessageMergePolicy {
+    fn is_user(&self, message: &Value) -> bool {
+        message.get("role").and_then(Value::as_str) == Some("user")
+    }
+
+    fn is_tool_result_only(&self, message: &Value) -> bool {
+        is_tool_result_only(message)
+    }
+
+    fn merge(&self, mut last: Value, next: Value) -> Value {
+        let next_content = next
+            .get("content")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(content) = last.get_mut("content").and_then(Value::as_array_mut) {
+            content.extend(next_content);
+        }
+        last
+    }
+}
+
+#[derive(Debug)]
+pub struct AnthropicPreparedRequest {
+    pub params: Map<String, Value>,
+    pub extra_headers: IndexMap<String, String>,
+    pub use_beta_api: bool,
+}
+
+fn javascript_min(left: f64, right: f64) -> f64 {
+    if left.is_nan() || right.is_nan() {
+        f64::NAN
+    } else {
+        left.min(right)
+    }
+}
+
+fn javascript_max(left: f64, right: f64) -> f64 {
+    if left.is_nan() || right.is_nan() {
+        f64::NAN
+    } else {
+        left.max(right)
+    }
+}
+
+fn extend_defined(target: &mut Map<String, Value>, patch: Map<String, Value>) {
+    target.extend(patch.into_iter().filter(|(_, value)| !value.is_null()));
+}
+
+// Original:
+//   anthropic.ts, AnthropicChatProvider.generate() request construction
+//   before client selection and I/O.
+#[allow(clippy::too_many_arguments)]
+pub fn build_anthropic_request(
+    model: &str,
+    generation_kwargs: &AnthropicGenerationKwargs,
+    explicit_max_tokens: bool,
+    default_metadata: Option<&IndexMap<String, String>>,
+    adaptive_thinking: Option<bool>,
+    support_efforts: Option<&[String]>,
+    beta_api: bool,
+    default_thinking_effort: Option<&ThinkingEffort>,
+    hooks: Option<&AnthropicHooks>,
+    system_prompt: &str,
+    tools: &[Tool],
+    history: &[Message],
+    options: Option<&GenerateOptions>,
+) -> Result<AnthropicPreparedRequest, ProviderError> {
+    let normalized = normalize_tool_call_ids_for_provider(
+        history
+            .iter()
+            .filter(|message| !is_tool_declaration_only_message(message))
+            .cloned()
+            .collect(),
+        &ANTHROPIC_TOOL_CALL_ID_POLICY,
+    )?;
+    let converted = normalized
+        .iter()
+        .map(|message| convert_message(message, model))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut messages = merge_consecutive_user_messages(
+        &converted
+            .into_iter()
+            .filter(should_keep_converted_message)
+            .collect::<Vec<_>>(),
+        &AnthropicMessageMergePolicy,
+    );
+    inject_cache_control_on_last_block(&mut messages);
+
+    let mut kwargs = generation_kwargs.clone();
+    let mut use_beta_api = beta_api;
+    let mut metadata = default_metadata.cloned();
+    if let Some(cache_key) = options.and_then(|options| options.cache_key.as_ref()) {
+        metadata
+            .get_or_insert_default()
+            .insert("user_id".to_owned(), cache_key.clone());
+    }
+    if let Some(temperature) = options
+        .and_then(|options| options.sampling.as_ref())
+        .and_then(|sampling| sampling.temperature)
+    {
+        kwargs.insert("temperature".to_owned(), Value::from(temperature));
+    }
+    if let Some(top_p) = options
+        .and_then(|options| options.sampling.as_ref())
+        .and_then(|sampling| sampling.top_p)
+    {
+        kwargs.insert("top_p".to_owned(), Value::from(top_p));
+    }
+
+    let thinking = options
+        .and_then(|options| options.thinking.as_ref())
+        .map(|thinking| (&thinking.effort, thinking.keep.as_deref()))
+        .or_else(|| default_thinking_effort.map(|effort| (effort, None)));
+    if let Some((effort, keep)) = thinking {
+        let hooked = hooks.and_then(|hooks| {
+            (hooks.with_thinking)(
+                effort,
+                &crate::agent_core_v2::kosong::protocol::protocol_trait::ThinkingHookOptions {
+                    keep: keep.map(str::to_owned),
+                },
+                &kwargs,
+            )
+        });
+        if let Some(hooked) = hooked {
+            extend_defined(&mut kwargs, hooked);
+        } else {
+            encode_thinking(
+                model,
+                support_efforts,
+                adaptive_thinking,
+                effort,
+                &mut kwargs,
+            );
+        }
+        if let Some(keep) = keep {
+            apply_thinking_keep(&mut kwargs, keep);
+            use_beta_api = true;
+        }
+    }
+
+    if let Some(mut cap) = options.and_then(|options| options.max_completion_tokens) {
+        if let Some((used, max)) =
+            options.and_then(|options| options.used_context_tokens.zip(options.max_context_tokens))
+            && max > 0.0
+        {
+            cap = javascript_min(cap, max - used);
+        }
+        cap = javascript_max(1.0, cap);
+        let requested_cap = resolve_default_max_tokens(model, Some(cap));
+        let existing_cap = kwargs.get("max_tokens").and_then(Value::as_f64);
+        let max_tokens = if existing_cap.is_none() || explicit_max_tokens {
+            existing_cap.unwrap_or(requested_cap)
+        } else {
+            javascript_min(existing_cap.unwrap_or(requested_cap), requested_cap)
+        };
+        kwargs.insert("max_tokens".to_owned(), Value::from(max_tokens));
+    }
+
+    let mut request_kwargs = Map::new();
+    for key in [
+        "max_tokens",
+        "temperature",
+        "top_k",
+        "top_p",
+        "thinking",
+        "output_config",
+    ] {
+        if let Some(value) = kwargs.get(key).filter(|value| !value.is_null()) {
+            request_kwargs.insert(key.to_owned(), value.clone());
+        }
+    }
+    if let Some(context_management) = kwargs
+        .get("contextManagement")
+        .filter(|value| !value.is_null())
+    {
+        request_kwargs.insert("context_management".to_owned(), context_management.clone());
+    }
+    apply_response_format(
+        &mut request_kwargs,
+        options.and_then(|options| options.response_format.as_ref()),
+    )?;
+
+    let betas = beta_features(&kwargs);
+    let mut extra_headers = IndexMap::new();
+    if !use_beta_api && !betas.is_empty() {
+        extra_headers.insert("anthropic-beta".to_owned(), betas.join(","));
+    }
+    let mut anthropic_tools = tools.iter().map(convert_tool).collect::<Vec<_>>();
+    if let Some(last_tool) = anthropic_tools.last_mut().and_then(Value::as_object_mut) {
+        last_tool.insert(
+            "cache_control".to_owned(),
+            serde_json::json!({"type":"ephemeral"}),
+        );
+    }
+
+    let mut params = Map::from_iter([
+        ("model".to_owned(), Value::String(model.to_owned())),
+        ("messages".to_owned(), Value::Array(messages)),
+    ]);
+    params.extend(request_kwargs);
+    if !system_prompt.is_empty() {
+        params.insert(
+            "system".to_owned(),
+            serde_json::json!([{
+                "type":"text",
+                "text":system_prompt,
+                "cache_control":{"type":"ephemeral"}
+            }]),
+        );
+    }
+    if !anthropic_tools.is_empty() {
+        params.insert("tools".to_owned(), Value::Array(anthropic_tools));
+    }
+    if let Some(metadata) = metadata {
+        params.insert("metadata".to_owned(), serde_json::to_value(metadata)?);
+    }
+    if use_beta_api && !betas.is_empty() {
+        params.insert(
+            "betas".to_owned(),
+            Value::Array(betas.into_iter().map(Value::String).collect()),
+        );
+    }
+    Ok(AnthropicPreparedRequest {
+        params,
+        extra_headers,
+        use_beta_api,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,6 +953,88 @@ mod tests {
             !get_anthropic_model_capability("claude-3-5-sonnet")
                 .unwrap()
                 .thinking
+        );
+    }
+
+    #[test]
+    fn request_assembly_preserves_overlay_order_and_beta_endpoint_switch() {
+        let generation_kwargs = Map::from_iter([
+            ("max_tokens".to_owned(), Value::from(128_000)),
+            (
+                "betaFeatures".to_owned(),
+                serde_json::json!([INTERLEAVED_THINKING_BETA]),
+            ),
+        ]);
+        let history = vec![
+            Message::new(
+                Role::User,
+                vec![ContentPart::Text {
+                    text: "one".to_owned(),
+                }],
+                Vec::new(),
+            ),
+            Message::new(
+                Role::User,
+                vec![ContentPart::Text {
+                    text: "two".to_owned(),
+                }],
+                Vec::new(),
+            ),
+        ];
+        let tools = vec![Tool {
+            name: "read".to_owned(),
+            description: "Read".to_owned(),
+            parameters: serde_json::json!({"type":"object"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            deferred: None,
+        }];
+        let options = GenerateOptions {
+            cache_key: Some("session-1".to_owned()),
+            thinking: Some(
+                crate::agent_core_v2::kosong::contract::provider::ThinkingRequestOptions {
+                    effort: ThinkingEffort::from("max"),
+                    keep: Some("recent".to_owned()),
+                },
+            ),
+            max_completion_tokens: Some(10_000.0),
+            used_context_tokens: Some(95.0),
+            max_context_tokens: Some(100.0),
+            ..GenerateOptions::default()
+        };
+        let request = build_anthropic_request(
+            "claude-opus-4-6",
+            &generation_kwargs,
+            false,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            "system",
+            &tools,
+            &history,
+            Some(&options),
+        )
+        .unwrap();
+        assert!(request.use_beta_api);
+        assert!(request.extra_headers.is_empty());
+        assert_eq!(request.params["max_tokens"], 5.0);
+        assert_eq!(request.params["metadata"]["user_id"], "session-1");
+        assert_eq!(request.params["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            request.params["messages"][0]["content"][1]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert_eq!(
+            request.params["tools"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert_eq!(
+            request.params["betas"],
+            serde_json::json!([CONTEXT_MANAGEMENT_BETA])
         );
     }
 }
