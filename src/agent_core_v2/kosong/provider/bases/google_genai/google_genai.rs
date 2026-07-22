@@ -1,17 +1,25 @@
+use futures_util::{Stream, StreamExt};
 use indexmap::IndexMap;
 use regex::Regex;
 use serde_json::{Map, Value};
+use std::collections::VecDeque;
+use std::pin::Pin;
 use std::sync::LazyLock;
+use std::task::{Context, Poll};
+use tokio_util::sync::CancellationToken;
 
 use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
 use crate::agent_core_v2::kosong::contract::errors::ChatProviderError;
 use crate::agent_core_v2::kosong::contract::message::{
-    ContentPart, Message, Role, is_tool_declaration_only_message,
+    ContentPart, Message, Role, StreamedMessagePart, ToolCall, ToolCallType,
+    is_tool_declaration_only_message,
 };
 use crate::agent_core_v2::kosong::contract::provider::{
-    FinishReason, GenerateOptions, ResponseFormat, ThinkingEffort,
+    FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage, ThinkingEffort,
+    TraceId,
 };
 use crate::agent_core_v2::kosong::contract::tool::Tool;
+use crate::agent_core_v2::kosong::contract::usage::TokenUsage;
 use crate::agent_core_v2::kosong::provider::bases::merge_user_messages::{
     ConsecutiveUserMessageMergePolicy, merge_consecutive_user_messages,
 };
@@ -579,6 +587,280 @@ pub fn get_google_gen_ai_model_capability(model_name: &str) -> Option<&'static M
     }
 }
 
+enum GoogleGenAiResponseEvent {
+    Response(Value),
+    Chunk(Value),
+}
+
+// Original: google-genai.ts, GoogleGenAIStreamedMessage
+pub struct GoogleGenAiStreamedMessage {
+    source: Pin<Box<dyn Stream<Item = Result<GoogleGenAiResponseEvent, ProviderError>> + Send>>,
+    pending: VecDeque<StreamedMessagePart>,
+    signal: Option<CancellationToken>,
+    abort_emitted: bool,
+    id: Option<String>,
+    usage: Option<TokenUsage>,
+    finish_reason: Option<FinishReason>,
+    raw_finish_reason: Option<String>,
+}
+
+impl GoogleGenAiStreamedMessage {
+    pub fn from_response(response: Value, signal: Option<CancellationToken>) -> Self {
+        Self::new(
+            futures_util::stream::iter([Ok(GoogleGenAiResponseEvent::Response(response))]),
+            signal,
+        )
+    }
+
+    pub fn from_stream<S>(response: S, signal: Option<CancellationToken>) -> Self
+    where
+        S: Stream<Item = Result<Value, ProviderError>> + Send + 'static,
+    {
+        Self::new(
+            response.map(|chunk| chunk.map(GoogleGenAiResponseEvent::Chunk)),
+            signal,
+        )
+    }
+
+    fn new<S>(source: S, signal: Option<CancellationToken>) -> Self
+    where
+        S: Stream<Item = Result<GoogleGenAiResponseEvent, ProviderError>> + Send + 'static,
+    {
+        Self {
+            source: Box::pin(source),
+            pending: VecDeque::new(),
+            signal,
+            abort_emitted: false,
+            id: None,
+            usage: None,
+            finish_reason: None,
+            raw_finish_reason: None,
+        }
+    }
+
+    fn capture_finish_reason(&mut self, response: &Value) {
+        let Some(first) = response
+            .get("candidates")
+            .and_then(Value::as_array)
+            .and_then(|candidates| candidates.first())
+        else {
+            return;
+        };
+        let raw = first
+            .get("finishReason")
+            .or_else(|| first.get("finish_reason"));
+        if raw.is_none() {
+            return;
+        }
+        let normalized = normalize_google_gen_ai_finish_reason(raw);
+        if normalized.finish_reason.is_some() || normalized.raw_finish_reason.is_some() {
+            self.finish_reason = normalized.finish_reason;
+            self.raw_finish_reason = normalized.raw_finish_reason;
+        }
+    }
+
+    fn extract_usage(&mut self, response: &Value) {
+        let Some(usage) = response.get("usageMetadata") else {
+            return;
+        };
+        let prompt = usage
+            .get("promptTokenCount")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let cached = usage
+            .get("cachedContentTokenCount")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        self.usage = Some(TokenUsage {
+            input_other: (prompt - cached).max(0.0),
+            output: usage
+                .get("candidatesTokenCount")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            input_cache_read: cached,
+            input_cache_creation: 0.0,
+        });
+    }
+
+    fn extract_id(&mut self, response: &Value) {
+        if let Some(id) = response.get("responseId").and_then(Value::as_str) {
+            self.id = Some(id.to_owned());
+        }
+    }
+
+    fn js_truthy(value: &Value) -> bool {
+        match value {
+            Value::Null => false,
+            Value::Bool(value) => *value,
+            Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+            Value::String(value) => !value.is_empty(),
+            Value::Array(_) | Value::Object(_) => true,
+        }
+    }
+
+    fn extract_chunk_parts(&mut self, response: &Value) {
+        let candidates = response
+            .get("candidates")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten();
+        for candidate in candidates {
+            let Some(parts) = candidate
+                .get("content")
+                .and_then(|content| content.get("parts"))
+                .and_then(Value::as_array)
+            else {
+                continue;
+            };
+            for part in parts {
+                if part.get("thought").and_then(Value::as_bool) == Some(true)
+                    && let Some(text) = part.get("text").and_then(Value::as_str)
+                {
+                    let signature = part
+                        .get("thoughtSignature")
+                        .or_else(|| part.get("thought_signature"))
+                        .and_then(Value::as_str)
+                        .filter(|signature| !signature.is_empty())
+                        .map(str::to_owned);
+                    self.pending
+                        .push_back(StreamedMessagePart::Content(ContentPart::Think {
+                            think: text.to_owned(),
+                            encrypted: signature,
+                        }));
+                    continue;
+                }
+                if let Some(text) = part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
+                {
+                    self.pending
+                        .push_back(StreamedMessagePart::Content(ContentPart::Text {
+                            text: text.to_owned(),
+                        }));
+                    continue;
+                }
+                let Some(function_call) = part
+                    .get("functionCall")
+                    .or_else(|| part.get("function_call"))
+                else {
+                    continue;
+                };
+                let Some(name) = function_call
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty())
+                else {
+                    continue;
+                };
+                let id = function_call
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let entropy = uuid::Uuid::new_v4()
+                    .simple()
+                    .to_string()
+                    .chars()
+                    .take(8)
+                    .collect::<String>();
+                let arguments = function_call.get("args").map_or_else(
+                    || "{}".to_owned(),
+                    |args| {
+                        if Self::js_truthy(args) {
+                            serde_json::to_string(args).unwrap_or_else(|_| "{}".to_owned())
+                        } else {
+                            "{}".to_owned()
+                        }
+                    },
+                );
+                let signature = part
+                    .get("thoughtSignature")
+                    .or_else(|| part.get("thought_signature"))
+                    .and_then(Value::as_str)
+                    .filter(|signature| !signature.is_empty());
+                let extras = signature.map(|signature| {
+                    Map::from_iter([(
+                        "thought_signature_b64".to_owned(),
+                        Value::String(signature.to_owned()),
+                    )])
+                });
+                self.pending
+                    .push_back(StreamedMessagePart::ToolCall(ToolCall {
+                        call_type: ToolCallType::Function,
+                        id: format!("{name}_{id}_{entropy}"),
+                        name: name.to_owned(),
+                        arguments: Some(arguments),
+                        extras,
+                        stream_index: None,
+                    }));
+            }
+        }
+    }
+
+    fn process_response(&mut self, response: Value) {
+        self.extract_usage(&response);
+        self.extract_id(&response);
+        self.capture_finish_reason(&response);
+        self.extract_chunk_parts(&response);
+    }
+}
+
+impl Stream for GoogleGenAiStreamedMessage {
+    type Item = Result<StreamedMessagePart, ProviderError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self
+            .signal
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            if self.abort_emitted {
+                return Poll::Ready(None);
+            }
+            self.abort_emitted = true;
+            self.pending.clear();
+            return Poll::Ready(Some(Err(Box::new(ChatProviderError::Abort))));
+        }
+        loop {
+            if let Some(part) = self.pending.pop_front() {
+                return Poll::Ready(Some(Ok(part)));
+            }
+            match self.source.as_mut().poll_next(context) {
+                Poll::Ready(Some(Ok(
+                    GoogleGenAiResponseEvent::Response(response)
+                    | GoogleGenAiResponseEvent::Chunk(response),
+                ))) => self.process_response(response),
+                Poll::Ready(Some(Err(error))) => return Poll::Ready(Some(Err(error))),
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+impl StreamedMessage for GoogleGenAiStreamedMessage {
+    fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    fn usage(&self) -> Option<&TokenUsage> {
+        self.usage.as_ref()
+    }
+
+    fn finish_reason(&self) -> Option<FinishReason> {
+        self.finish_reason
+    }
+
+    fn raw_finish_reason(&self) -> Option<&str> {
+        self.raw_finish_reason.as_deref()
+    }
+
+    fn trace_id(&self) -> TraceId<'_> {
+        TraceId::Absent
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,5 +942,49 @@ mod tests {
                 .thinking
         );
         assert!(get_google_gen_ai_model_capability("gemini-3-preview").is_none());
+    }
+
+    #[tokio::test]
+    async fn streamed_message_extracts_parts_metadata_and_cancellation() {
+        let response = serde_json::json!({
+            "responseId":"response-1",
+            "usageMetadata":{
+                "promptTokenCount":10,
+                "cachedContentTokenCount":4,
+                "candidatesTokenCount":3
+            },
+            "candidates":[{
+                "finishReason":"STOP",
+                "content":{"parts":[
+                    {"thought":true,"text":"reason","thoughtSignature":"signed"},
+                    {"text":"answer"},
+                    {"functionCall":{"name":"read","id":"call","args":{"path":"a"}},
+                     "thoughtSignature":"tool-signed"}
+                ]}
+            }]
+        });
+        let mut message = GoogleGenAiStreamedMessage::from_response(response, None);
+        let parts = message.by_ref().collect::<Vec<_>>().await;
+        assert_eq!(parts.len(), 3);
+        assert_eq!(message.id(), Some("response-1"));
+        assert_eq!(message.finish_reason(), Some(FinishReason::Completed));
+        assert_eq!(message.usage().unwrap().input_other, 6.0);
+        let StreamedMessagePart::ToolCall(call) = parts[2].as_ref().unwrap() else {
+            panic!("expected tool call")
+        };
+        assert!(call.id.starts_with("read_call_"));
+        assert_eq!(call.arguments.as_deref(), Some("{\"path\":\"a\"}"));
+        assert_eq!(
+            call.extras.as_ref().unwrap()["thought_signature_b64"],
+            "tool-signed"
+        );
+
+        let signal = CancellationToken::new();
+        signal.cancel();
+        let mut cancelled =
+            GoogleGenAiStreamedMessage::from_response(serde_json::json!({}), Some(signal));
+        let error = cancelled.next().await.unwrap().unwrap_err();
+        assert_eq!(error.to_string(), "The operation was aborted.");
+        assert!(cancelled.next().await.is_none());
     }
 }
