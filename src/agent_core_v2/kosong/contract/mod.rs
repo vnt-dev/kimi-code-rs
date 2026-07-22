@@ -3,6 +3,7 @@ pub mod errors;
 pub mod generate;
 pub mod inspection;
 pub mod message;
+pub mod message_helpers;
 pub mod provider;
 pub mod request_trace;
 pub mod tokens;
