@@ -626,13 +626,17 @@ where
 }
 
 fn install_headless_handlers(session: &Arc<dyn PromptSession>) {
-    session.set_approval_handler(Some(Arc::new(|_| ApprovalResponse {
-        decision: ApprovalDecision::Approved,
-        scope: None,
-        feedback: None,
-        selected_label: None,
+    session.set_approval_handler(Some(Arc::new(|_| {
+        Box::pin(async {
+            ApprovalResponse {
+                decision: ApprovalDecision::Approved,
+                scope: None,
+                feedback: None,
+                selected_label: None,
+            }
+        })
     })));
-    session.set_question_handler(Some(Arc::new(|_| None)));
+    session.set_question_handler(Some(Arc::new(|_| Box::pin(async { None }))));
 }
 
 pub struct ResolvedPromptSession {
@@ -1696,7 +1700,8 @@ mod tests {
             tool_name: "Shell".to_owned(),
             action: "run".to_owned(),
             display: serde_json::json!({}),
-        });
+        })
+        .await;
         assert_eq!(response.decision, ApprovalDecision::Approved);
         let question = session
             .question_handler
@@ -1709,7 +1714,8 @@ mod tests {
                 turn_id: Some(1),
                 tool_call_id: None,
                 questions: Vec::new(),
-            }),
+            })
+            .await,
             None
         );
 

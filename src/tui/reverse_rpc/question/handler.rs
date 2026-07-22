@@ -1,12 +1,35 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
+
+use tokio::sync::Mutex;
 
 use crate::{
-    cli::prompt_session::{QuestionAnswer, QuestionAnswerMethod, QuestionRequest, QuestionResult},
+    cli::prompt_session::{
+        QuestionAnswer, QuestionAnswerMethod, QuestionHandler, QuestionRequest, QuestionResult,
+    },
     tui::reverse_rpc::types::{
         QuestionPanelData, QuestionPanelItem, QuestionPanelOption, QuestionPanelResponse,
         QuestionSubmissionMethod,
     },
 };
+
+use super::controller::QuestionController;
+
+// Original:
+//   apps/kimi-code/src/tui/reverse-rpc/question/handler.ts
+//   createQuestionAskHandler()
+pub fn create_question_ask_handler(controller: Arc<Mutex<QuestionController>>) -> QuestionHandler {
+    Arc::new(move |event| {
+        let controller = Arc::clone(&controller);
+        Box::pin(async move {
+            let receiver = {
+                let mut controller = controller.lock().await;
+                controller.show(adapt_question_request(&event))
+            };
+            let response = receiver.await.ok()?;
+            adapt_question_answers(&event, &response)
+        })
+    })
+}
 
 // Original:
 //   apps/kimi-code/src/tui/reverse-rpc/question/handler.ts
@@ -160,5 +183,33 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn async_handler_waits_for_panel_and_maps_answer() {
+        let controller = Arc::new(Mutex::new(QuestionController::new()));
+        let handler = create_question_ask_handler(Arc::clone(&controller));
+        let task = tokio::spawn(handler(request()));
+        tokio::task::yield_now().await;
+        controller.lock().await.respond(QuestionPanelResponse {
+            answers: vec![Some("Alpha".to_owned()), Some("SQLite".to_owned())],
+            method: Some(QuestionSubmissionMethod::Enter),
+        });
+        let result = task.await.expect("handler task").expect("answers");
+        let QuestionResult::Response { answers, method } = result else {
+            panic!("response expected");
+        };
+        assert_eq!(answers.len(), 2);
+        assert_eq!(method, Some(QuestionAnswerMethod::Enter));
+    }
+
+    #[tokio::test]
+    async fn dropped_question_response_returns_none() {
+        let controller = Arc::new(Mutex::new(QuestionController::new()));
+        let handler = create_question_ask_handler(Arc::clone(&controller));
+        let task = tokio::spawn(handler(request()));
+        tokio::task::yield_now().await;
+        *controller.lock().await = QuestionController::new();
+        assert_eq!(task.await.expect("handler task"), None);
     }
 }

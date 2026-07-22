@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, error::Error, sync::Arc};
+use std::{collections::BTreeMap, error::Error, future::Future, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
@@ -238,8 +238,11 @@ pub enum QuestionResult {
     },
 }
 
-pub type ApprovalHandler = Arc<dyn Fn(ApprovalRequest) -> ApprovalResponse + Send + Sync>;
-pub type QuestionHandler = Arc<dyn Fn(QuestionRequest) -> Option<QuestionResult> + Send + Sync>;
+pub type ApprovalHandlerFuture = Pin<Box<dyn Future<Output = ApprovalResponse> + Send + 'static>>;
+pub type QuestionHandlerFuture =
+    Pin<Box<dyn Future<Output = Option<QuestionResult>> + Send + 'static>>;
+pub type ApprovalHandler = Arc<dyn Fn(ApprovalRequest) -> ApprovalHandlerFuture + Send + Sync>;
+pub type QuestionHandler = Arc<dyn Fn(QuestionRequest) -> QuestionHandlerFuture + Send + Sync>;
 
 // Original:
 //   apps/kimi-code/src/cli/prompt-session.ts
