@@ -4,7 +4,41 @@ use serde_json::Value;
 use std::fmt;
 
 use super::display::OptionalJsonValue;
+use super::model_catalog::{ProviderRefreshChange, ProviderRefreshFailure};
+use super::rest::config::ConfigResponse;
+use super::session::{Session, SessionLastTurnReason, SessionPendingInteraction};
 use super::validation::{optional_non_null, required_nullable};
+use super::workspace::Workspace;
+
+macro_rules! event_type {
+    ($name:ident, $wire:literal) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub struct $name;
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                serializer.serialize_str($wire)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                if value == $wire {
+                    Ok(Self)
+                } else {
+                    Err(serde::de::Error::custom(concat!("type must be ", $wire)))
+                }
+            }
+        }
+    };
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -756,6 +790,321 @@ pub enum AgentPhase {
     },
 }
 
+event_type!(AgentStatusUpdatedEventType, "agent.status.updated");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStatusUpdatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: AgentStatusUpdatedEventType,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub model: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub thinking_effort: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub context_tokens: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub max_context_tokens: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub context_usage: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub plan_mode: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub swarm_mode: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub permission: Option<PermissionMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub usage: Option<UsageStatus>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub phase: Option<AgentPhase>,
+}
+
+event_type!(SessionMetaUpdatedEventType, "session.meta.updated");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionMetaUpdatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: SessionMetaUpdatedEventType,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub title: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub patch: Option<IndexMap<String, Value>>,
+}
+
+event_type!(SessionCreatedEventType, "event.session.created");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionCreatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: SessionCreatedEventType,
+    pub session: Session,
+}
+
+event_type!(WorkspaceCreatedEventType, "event.workspace.created");
+event_type!(WorkspaceUpdatedEventType, "event.workspace.updated");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceCreatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: WorkspaceCreatedEventType,
+    pub workspace: Workspace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceUpdatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: WorkspaceUpdatedEventType,
+    pub workspace: Workspace,
+}
+
+event_type!(WorkspaceDeletedEventType, "event.workspace.deleted");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceDeletedEvent {
+    #[serde(rename = "type")]
+    pub event_type: WorkspaceDeletedEventType,
+    #[serde(deserialize_with = "super::validation::non_empty")]
+    pub workspace_id: String,
+    #[serde(deserialize_with = "super::validation::non_empty")]
+    pub root: String,
+}
+
+event_type!(SessionWorkChangedEventType, "event.session.work_changed");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorkChangedEvent {
+    #[serde(rename = "type")]
+    pub event_type: SessionWorkChangedEventType,
+    pub busy: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub main_turn_active: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub pending_interaction: Option<SessionPendingInteraction>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub last_turn_reason: Option<SessionLastTurnReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LegacySessionStatus {
+    Idle,
+    Running,
+    AwaitingApproval,
+    AwaitingQuestion,
+    Aborted,
+}
+
+event_type!(
+    SessionStatusChangedEventType,
+    "event.session.status_changed"
+);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionStatusChangedEvent {
+    #[serde(rename = "type")]
+    pub event_type: SessionStatusChangedEventType,
+    pub status: LegacySessionStatus,
+    pub previous_status: LegacySessionStatus,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_empty_string"
+    )]
+    pub current_prompt_id: Option<String>,
+}
+
+fn optional_non_empty_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    super::validation::non_empty(deserializer).map(Some)
+}
+
+event_type!(ConfigChangedEventType, "event.config.changed");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigChangedEvent {
+    #[serde(rename = "type")]
+    pub event_type: ConfigChangedEventType,
+    pub changed_fields: Vec<String>,
+    pub config: ConfigResponse,
+}
+
+event_type!(ModelCatalogChangedEventType, "event.model_catalog.changed");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelCatalogChangedEvent {
+    #[serde(rename = "type")]
+    pub event_type: ModelCatalogChangedEventType,
+    pub changed: Vec<ProviderRefreshChange>,
+    #[serde(deserialize_with = "non_empty_strings")]
+    pub unchanged: Vec<String>,
+    pub failed: Vec<ProviderRefreshFailure>,
+}
+
+fn non_empty_strings<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values = Vec::<String>::deserialize(deserializer)?;
+    if values.iter().any(String::is_empty) {
+        Err(serde::de::Error::custom("items must not be empty"))
+    } else {
+        Ok(values)
+    }
+}
+
+event_type!(GoalUpdatedEventType, "goal.updated");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GoalUpdatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: GoalUpdatedEventType,
+    #[serde(deserialize_with = "required_nullable")]
+    pub snapshot: Option<GoalSnapshot>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub change: Option<GoalChange>,
+}
+
+event_type!(SkillActivatedEventType, "skill.activated");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillActivatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: SkillActivatedEventType,
+    pub activation_id: String,
+    pub skill_name: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_args: Option<String>,
+    pub trigger: SkillActivationTrigger,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_path: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_source: Option<SkillSource>,
+}
+
+event_type!(PluginCommandActivatedEventType, "plugin_command.activated");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCommandActivatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: PluginCommandActivatedEventType,
+    pub activation_id: String,
+    pub plugin_id: String,
+    pub command_name: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub command_args: Option<String>,
+    pub trigger: PluginCommandTrigger,
+}
+
+event_type!(ErrorEventType, "error");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ErrorEvent {
+    #[serde(rename = "type")]
+    pub event_type: ErrorEventType,
+    #[serde(flatten)]
+    pub error: KimiErrorPayload,
+}
+
+event_type!(WarningEventType, "warning");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WarningEvent {
+    #[serde(rename = "type")]
+    pub event_type: WarningEventType,
+    pub message: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub code: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,6 +1171,24 @@ mod tests {
                 "stream": "tool_call", "since": 3
             }))
             .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<WorkspaceDeletedEvent>(serde_json::json!({
+                "type": "event.workspace.deleted", "workspace_id": "", "root": "/repo"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<GoalUpdatedEvent>(serde_json::json!({
+                "type": "goal.updated", "snapshot": null
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<WarningEvent>(serde_json::json!({
+                "type": "error", "message": "wrong literal"
+            }))
+            .is_err()
         );
     }
 }
