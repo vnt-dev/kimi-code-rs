@@ -1,5 +1,49 @@
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url::Url;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum OptionalNullable<T> {
+    #[default]
+    Absent,
+    Null,
+    Value(T),
+}
+
+impl<T> OptionalNullable<T> {
+    pub fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+}
+
+impl<T> Serialize for OptionalNullable<T>
+where
+    T: Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Absent | Self::Null => serializer.serialize_none(),
+            Self::Value(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de, T> Deserialize<'de> for OptionalNullable<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match Option::<T>::deserialize(deserializer)? {
+            Some(value) => Self::Value(value),
+            None => Self::Null,
+        })
+    }
+}
 
 pub fn non_empty<'de, D>(deserializer: D) -> Result<String, D::Error>
 where

@@ -15,6 +15,7 @@ pub mod session;
 pub mod skill;
 pub mod snapshot;
 pub mod task;
+pub mod terminal;
 pub mod tool;
 pub mod workspace;
 
@@ -35,5 +36,6 @@ pub use session::*;
 pub use skill::*;
 pub use snapshot::*;
 pub use task::*;
+pub use terminal::*;
 pub use tool::*;
 pub use workspace::*;
