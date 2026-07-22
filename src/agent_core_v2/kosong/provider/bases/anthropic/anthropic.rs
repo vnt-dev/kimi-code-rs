@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
@@ -16,8 +17,8 @@ use crate::agent_core_v2::kosong::contract::message::{
     ToolCallPartType, ToolCallType,
 };
 use crate::agent_core_v2::kosong::contract::provider::{
-    FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage, ThinkingEffort,
-    ToolCallIdPolicy, TraceId,
+    ChatProvider, FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage,
+    ThinkingEffort, ToolCallIdPolicy, TraceId,
 };
 use crate::agent_core_v2::kosong::contract::tool::Tool;
 use crate::agent_core_v2::kosong::contract::usage::TokenUsage;
@@ -27,10 +28,14 @@ use crate::agent_core_v2::kosong::provider::bases::anthropic::anthropic_profile:
     infer_anthropic_model_profile, match_known_anthropic_model_profile,
     parse_anthropic_model_version,
 };
+use crate::agent_core_v2::kosong::provider::bases::anthropic::anthropic_transport::{
+    AnthropicHttpResponse, send_anthropic_request,
+};
 use crate::agent_core_v2::kosong::provider::bases::merge_user_messages::{
     ConsecutiveUserMessageMergePolicy, merge_consecutive_user_messages,
 };
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::NormalizedFinishReason;
+use crate::agent_core_v2::kosong::provider::bases::request_auth::merge_request_headers;
 use crate::agent_core_v2::kosong::provider::bases::tool_call_id::{
     normalize_tool_call_ids_for_provider, sanitize_tool_call_id,
 };
@@ -1132,6 +1137,194 @@ impl StreamedMessage for AnthropicStreamedMessage {
     }
 }
 
+pub struct AnthropicOptions {
+    pub model: String,
+    pub stream: Option<bool>,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub default_max_tokens: Option<f64>,
+    pub beta_features: Option<Vec<String>>,
+    pub default_headers: Option<IndexMap<String, String>>,
+    pub metadata: Option<IndexMap<String, String>>,
+    pub adaptive_thinking: Option<bool>,
+    pub support_efforts: Option<Vec<String>>,
+    pub beta_api: Option<bool>,
+    pub thinking_effort: Option<ThinkingEffort>,
+    pub hooks: Option<AnthropicHooks>,
+    pub http_client: Option<reqwest::Client>,
+}
+
+// MIGRATION-TODO:
+// Original: AnthropicOptions.clientFactory / resolveAuthBackedClient().
+// Missing abstraction: a custom client can carry its own authentication and
+// endpoint, while this reqwest transport currently injects those explicitly.
+// Temporary behavior: callers may inject a reusable reqwest Client, but not a
+// per-request factory. Completion condition: add an auth-aware transport
+// factory without forcing x-api-key onto factory-owned clients.
+
+impl AnthropicOptions {
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            stream: None,
+            api_key: None,
+            base_url: None,
+            default_max_tokens: None,
+            beta_features: None,
+            default_headers: None,
+            metadata: None,
+            adaptive_thinking: None,
+            support_efforts: None,
+            beta_api: None,
+            thinking_effort: None,
+            hooks: None,
+            http_client: None,
+        }
+    }
+}
+
+// Original: anthropic.ts, AnthropicChatProvider
+pub struct AnthropicChatProvider {
+    model: String,
+    stream: bool,
+    api_key: Option<String>,
+    base_url: String,
+    default_headers: Option<IndexMap<String, String>>,
+    generation_kwargs: AnthropicGenerationKwargs,
+    metadata: Option<IndexMap<String, String>>,
+    adaptive_thinking: Option<bool>,
+    support_efforts: Option<Vec<String>>,
+    beta_api: bool,
+    thinking_effort: Option<ThinkingEffort>,
+    explicit_max_tokens: bool,
+    hooks: Option<AnthropicHooks>,
+    http_client: reqwest::Client,
+}
+
+impl AnthropicChatProvider {
+    pub fn new(options: AnthropicOptions) -> Self {
+        let explicit_max_tokens = options.default_max_tokens.is_some();
+        let max_tokens = options
+            .default_max_tokens
+            .unwrap_or_else(|| resolve_default_max_tokens(&options.model, None));
+        let betas = options
+            .beta_features
+            .unwrap_or_else(|| vec![INTERLEAVED_THINKING_BETA.to_owned()]);
+        let generation_kwargs = Map::from_iter([
+            ("max_tokens".to_owned(), Value::from(max_tokens)),
+            (
+                "betaFeatures".to_owned(),
+                Value::Array(betas.into_iter().map(Value::String).collect()),
+            ),
+        ]);
+        Self {
+            model: options.model,
+            stream: options.stream.unwrap_or(true),
+            api_key: options.api_key.filter(|api_key| !api_key.is_empty()),
+            base_url: options
+                .base_url
+                .unwrap_or_else(|| "https://api.anthropic.com".to_owned()),
+            default_headers: options.default_headers,
+            generation_kwargs,
+            metadata: options.metadata,
+            adaptive_thinking: options.adaptive_thinking,
+            support_efforts: options.support_efforts,
+            beta_api: options.beta_api.unwrap_or(false),
+            thinking_effort: options.thinking_effort,
+            explicit_max_tokens,
+            hooks: options.hooks,
+            http_client: options.http_client.unwrap_or_default(),
+        }
+    }
+
+    fn require_api_key(&self, options: Option<&GenerateOptions>) -> Result<String, ProviderError> {
+        let api_key = options
+            .and_then(|options| options.auth.as_ref())
+            .and_then(|auth| auth.api_key.as_deref())
+            .or(self.api_key.as_deref());
+        match api_key {
+            Some(api_key) if !api_key.is_empty() => Ok(api_key.to_owned()),
+            _ => Err(Box::new(ChatProviderError::ChatProvider {
+                message: "AnthropicChatProvider: apiKey is required. Provide it via constructor options, options.auth.apiKey on each request, or an OAuth login. The Anthropic adapter does not read shell API-key environment variables.".to_owned(),
+            })),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatProvider for AnthropicChatProvider {
+    fn name(&self) -> &str {
+        "anthropic"
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    fn thinking_effort(&self) -> Option<&ThinkingEffort> {
+        self.thinking_effort.as_ref()
+    }
+
+    fn max_completion_tokens(&self) -> Option<f64> {
+        self.generation_kwargs
+            .get("max_tokens")
+            .and_then(Value::as_f64)
+    }
+
+    async fn generate(
+        &self,
+        system_prompt: &str,
+        tools: &[Tool],
+        history: &[Message],
+        options: Option<&GenerateOptions>,
+    ) -> Result<Box<dyn StreamedMessage>, ProviderError> {
+        let prepared = build_anthropic_request(
+            &self.model,
+            &self.generation_kwargs,
+            self.explicit_max_tokens,
+            self.metadata.as_ref(),
+            self.adaptive_thinking,
+            self.support_efforts.as_deref(),
+            self.beta_api,
+            self.thinking_effort.as_ref(),
+            self.hooks.as_ref(),
+            system_prompt,
+            tools,
+            history,
+            options,
+        )?;
+        let api_key = self.require_api_key(options)?;
+        let headers = merge_request_headers(
+            Some(&prepared.extra_headers),
+            options
+                .and_then(|options| options.auth.as_ref())
+                .and_then(|auth| auth.headers.as_ref()),
+        );
+        if let Some(callback) = options.and_then(|options| options.on_request_sent.as_ref()) {
+            callback();
+        }
+        let response = send_anthropic_request(
+            &self.http_client,
+            &self.base_url,
+            &api_key,
+            self.default_headers.as_ref(),
+            headers.as_ref(),
+            prepared.params,
+            self.stream,
+            options.and_then(|options| options.signal.as_ref()),
+        )
+        .await?;
+        Ok(match response {
+            AnthropicHttpResponse::Message(message) => {
+                Box::new(AnthropicStreamedMessage::from_response(message))
+            }
+            AnthropicHttpResponse::Stream(stream) => {
+                Box::new(AnthropicStreamedMessage::from_stream(stream))
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1424,5 +1617,23 @@ mod tests {
         assert_eq!(message.finish_reason(), Some(FinishReason::Completed));
         assert_eq!(message.usage().unwrap().input_other, 8.0);
         assert_eq!(message.usage().unwrap().output, 6.0);
+    }
+
+    #[tokio::test]
+    async fn provider_requires_explicit_anthropic_auth_without_shell_fallback() {
+        let mut options = AnthropicOptions::new("claude-sonnet-4-6");
+        options.api_key = Some(String::new());
+        options.default_max_tokens = Some(4_096.0);
+        let provider = AnthropicChatProvider::new(options);
+        assert_eq!(provider.name(), "anthropic");
+        assert_eq!(provider.max_completion_tokens(), Some(4_096.0));
+        let error = match provider.generate("", &[], &[], None).await {
+            Ok(_) => panic!("missing auth must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "AnthropicChatProvider: apiKey is required. Provide it via constructor options, options.auth.apiKey on each request, or an OAuth login. The Anthropic adapter does not read shell API-key environment variables."
+        );
     }
 }
