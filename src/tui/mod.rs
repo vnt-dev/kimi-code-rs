@@ -9,6 +9,7 @@ pub mod fuzzy;
 pub mod goal_queue_store;
 pub mod keys;
 pub mod reverse_rpc;
+pub mod state;
 pub mod steering;
 pub mod theme;
 pub mod types;
