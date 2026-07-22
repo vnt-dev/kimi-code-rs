@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use serde_json::{Map, Value};
 
@@ -10,13 +13,57 @@ use crate::tui::{
     },
     types::{QueuedMessage, QueuedMessageMode, SteerInputItem},
     utils::{
-        image_attachment_store::ImageAttachmentStore,
+        image_attachment_store::{ImageAttachmentOriginal, ImageAttachmentStore},
         image_placeholder::{ExtractionResult, extract_media_attachments},
     },
 };
 use crate::utils::process::external_editor::{
     ExternalEditorRuntime, edit_in_external_editor_with, resolve_editor_command,
 };
+use crate::utils::{
+    clipboard::{ClipboardMedia, ClipboardMediaError, read_clipboard_media},
+    image::{ImageMeta, parse_image_meta},
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedClipboardImage {
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
+    pub width: u32,
+    pub height: u32,
+    pub original: Option<ImageAttachmentOriginal>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClipboardImageProcessingContext<'a> {
+    pub max_edge: Option<u32>,
+    pub session_directory: Option<&'a Path>,
+}
+
+#[async_trait::async_trait]
+pub trait ClipboardMediaReader: Send + Sync {
+    async fn read(&self) -> Result<Option<ClipboardMedia>, ClipboardMediaError>;
+}
+
+pub struct SystemClipboardMediaReader;
+
+#[async_trait::async_trait]
+impl ClipboardMediaReader for SystemClipboardMediaReader {
+    async fn read(&self) -> Result<Option<ClipboardMedia>, ClipboardMediaError> {
+        read_clipboard_media().await
+    }
+}
+
+/// Agent-core image compression/persistence boundary used by the app layer.
+#[async_trait::async_trait]
+pub trait ClipboardImageProcessor: Send + Sync {
+    async fn prepare(
+        &self,
+        bytes: Vec<u8>,
+        meta: ImageMeta,
+        context: ClipboardImageProcessingContext<'_>,
+    ) -> PreparedClipboardImage;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingPhase {
@@ -87,6 +134,8 @@ pub trait EditorKeyboardHost {
     fn stop_ui(&mut self);
     fn start_ui(&mut self);
     fn focus_editor(&mut self);
+    fn image_max_edge(&self) -> Option<u32>;
+    fn session_directory(&self) -> Option<&Path>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +324,71 @@ impl EditorKeyboardController {
         host.focus_editor();
         host.request_render(true);
         host.set_external_editor_running(false);
+    }
+
+    // Original: EditorKeyboardController.handleClipboardImagePaste()
+    pub async fn handle_clipboard_media_paste(
+        &mut self,
+        editor: &mut CustomEditor,
+        image_store: &mut ImageAttachmentStore,
+        host: &mut dyn EditorKeyboardHost,
+        reader: &dyn ClipboardMediaReader,
+        processor: &dyn ClipboardImageProcessor,
+    ) -> bool {
+        let media = match reader.read().await {
+            Ok(Some(media)) => media,
+            Ok(None) => return false,
+            Err(error) => {
+                host.show_error(error.to_string());
+                return true;
+            }
+        };
+        match media {
+            ClipboardMedia::Video(video) => {
+                let attachment = image_store.add_video(
+                    video.mime_type,
+                    video.source_path.to_string_lossy().into_owned(),
+                    Some(&video.filename),
+                );
+                editor.insert_text_at_cursor(&format!("{} ", attachment.placeholder));
+                host.request_render(false);
+                host.track(
+                    "shortcut_paste",
+                    Map::from_iter([("kind".to_owned(), Value::String("video".to_owned()))]),
+                );
+                true
+            }
+            ClipboardMedia::Image(image) => {
+                let Some(meta) = parse_image_meta(&image.bytes) else {
+                    return false;
+                };
+                let session_directory = host.session_directory().map(Path::to_path_buf);
+                let prepared = processor
+                    .prepare(
+                        image.bytes,
+                        meta,
+                        ClipboardImageProcessingContext {
+                            max_edge: host.image_max_edge(),
+                            session_directory: session_directory.as_deref(),
+                        },
+                    )
+                    .await;
+                let attachment = image_store.add_image(
+                    prepared.bytes,
+                    prepared.mime_type,
+                    prepared.width,
+                    prepared.height,
+                    prepared.original,
+                );
+                editor.insert_text_at_cursor(&format!("{} ", attachment.placeholder));
+                host.request_render(false);
+                host.track(
+                    "shortcut_paste",
+                    Map::from_iter([("kind".to_owned(), Value::String("image".to_owned()))]),
+                );
+                true
+            }
+        }
     }
 
     fn handle_ctrl_c(
@@ -537,6 +651,8 @@ fn track(host: &mut dyn EditorKeyboardHost, event: &'static str) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[derive(Default)]
@@ -560,6 +676,8 @@ mod tests {
         btw_close: bool,
         external_editor_running: bool,
         editor_command: Option<String>,
+        image_max_edge: Option<u32>,
+        session_directory: Option<PathBuf>,
     }
 
     impl EditorKeyboardHost for Host {
@@ -681,6 +799,12 @@ mod tests {
         }
         fn focus_editor(&mut self) {
             self.events.push("focus-editor".to_owned());
+        }
+        fn image_max_edge(&self) -> Option<u32> {
+            self.image_max_edge
+        }
+        fn session_directory(&self) -> Option<&Path> {
+            self.session_directory.as_deref()
         }
     }
 
@@ -1151,6 +1275,136 @@ mod tests {
         assert_eq!(
             host.events.last().map(String::as_str),
             Some("editor-running:false")
+        );
+    }
+
+    struct MediaReader(Result<Option<ClipboardMedia>, ClipboardMediaError>);
+
+    #[async_trait::async_trait]
+    impl ClipboardMediaReader for MediaReader {
+        async fn read(&self) -> Result<Option<ClipboardMedia>, ClipboardMediaError> {
+            self.0.clone()
+        }
+    }
+
+    struct ImageProcessor;
+
+    #[async_trait::async_trait]
+    impl ClipboardImageProcessor for ImageProcessor {
+        async fn prepare(
+            &self,
+            bytes: Vec<u8>,
+            meta: ImageMeta,
+            context: ClipboardImageProcessingContext<'_>,
+        ) -> PreparedClipboardImage {
+            assert_eq!(context.max_edge, Some(1_024));
+            assert_eq!(context.session_directory, Some(Path::new("session")));
+            PreparedClipboardImage {
+                bytes,
+                mime_type: meta.mime.as_str().to_owned(),
+                width: meta.width,
+                height: meta.height,
+                original: None,
+            }
+        }
+    }
+
+    fn tiny_png() -> Vec<u8> {
+        let mut bytes = vec![0; 24];
+        bytes[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        bytes[19] = 2;
+        bytes[23] = 3;
+        bytes
+    }
+
+    #[tokio::test]
+    async fn clipboard_image_is_processed_stored_inserted_and_tracked() {
+        let mut controller = EditorKeyboardController::new();
+        let mut editor = CustomEditor::new();
+        let mut store = ImageAttachmentStore::new();
+        let mut host = Host {
+            image_max_edge: Some(1_024),
+            session_directory: Some(PathBuf::from("session")),
+            ..Host::default()
+        };
+        let handled = controller
+            .handle_clipboard_media_paste(
+                &mut editor,
+                &mut store,
+                &mut host,
+                &MediaReader(Ok(Some(ClipboardMedia::Image(
+                    crate::utils::clipboard::ClipboardImage {
+                        bytes: tiny_png(),
+                        mime_type: "image/png".to_owned(),
+                    },
+                )))),
+                &ImageProcessor,
+            )
+            .await;
+        assert!(handled);
+        assert_eq!(store.len(), 1);
+        assert_eq!(editor.text(), "[image #1 (2×3)] ");
+        assert!(host.events.contains(&"shortcut_paste".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn clipboard_video_is_stored_without_image_processing() {
+        let mut controller = EditorKeyboardController::new();
+        let mut editor = CustomEditor::new();
+        let mut store = ImageAttachmentStore::new();
+        let mut host = Host::default();
+        let handled = controller
+            .handle_clipboard_media_paste(
+                &mut editor,
+                &mut store,
+                &mut host,
+                &MediaReader(Ok(Some(ClipboardMedia::Video(
+                    crate::utils::clipboard::ClipboardVideo {
+                        mime_type: "video/mp4".to_owned(),
+                        filename: "clip.mp4".to_owned(),
+                        source_path: PathBuf::from("clip.mp4"),
+                    },
+                )))),
+                &ImageProcessor,
+            )
+            .await;
+        assert!(handled);
+        assert_eq!(store.len(), 1);
+        assert!(editor.text().starts_with("[video #1 clip.mp4]"));
+    }
+
+    #[tokio::test]
+    async fn empty_or_invalid_clipboard_falls_back_to_text_paste() {
+        let mut controller = EditorKeyboardController::new();
+        let mut editor = CustomEditor::new();
+        let mut store = ImageAttachmentStore::new();
+        let mut host = Host::default();
+        assert!(
+            !controller
+                .handle_clipboard_media_paste(
+                    &mut editor,
+                    &mut store,
+                    &mut host,
+                    &MediaReader(Ok(None)),
+                    &ImageProcessor,
+                )
+                .await
+        );
+        assert!(
+            !controller
+                .handle_clipboard_media_paste(
+                    &mut editor,
+                    &mut store,
+                    &mut host,
+                    &MediaReader(Ok(Some(ClipboardMedia::Image(
+                        crate::utils::clipboard::ClipboardImage {
+                            bytes: b"not-image".to_vec(),
+                            mime_type: "image/png".to_owned(),
+                        },
+                    )))),
+                    &ImageProcessor,
+                )
+                .await
         );
     }
 }
