@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use indexmap::IndexMap;
 use regex::Regex;
@@ -17,15 +18,19 @@ use crate::agent_core_v2::kosong::contract::message::{
     is_tool_declaration_only_message,
 };
 use crate::agent_core_v2::kosong::contract::provider::{
-    FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage, ThinkingEffort,
-    TraceId,
+    ChatProvider, FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage,
+    ThinkingEffort, TraceId,
 };
 use crate::agent_core_v2::kosong::contract::tool::Tool;
 use crate::agent_core_v2::kosong::contract::usage::TokenUsage;
+use crate::agent_core_v2::kosong::provider::bases::google_genai::google_genai_transport::{
+    GoogleGenAiHttpResponse, send_google_gen_ai_request,
+};
 use crate::agent_core_v2::kosong::provider::bases::merge_user_messages::{
     ConsecutiveUserMessageMergePolicy, merge_consecutive_user_messages,
 };
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::NormalizedFinishReason;
+use crate::agent_core_v2::kosong::provider::bases::request_auth::require_provider_api_key;
 
 pub type GoogleGenAiGenerationKwargs = Map<String, Value>;
 
@@ -882,6 +887,182 @@ impl StreamedMessage for GoogleGenAiStreamedMessage {
     }
 }
 
+pub struct GoogleGenAiOptions {
+    pub model: String,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub vertex_ai: Option<bool>,
+    pub project: Option<String>,
+    pub location: Option<String>,
+    pub stream: Option<bool>,
+    pub thinking_effort: Option<ThinkingEffort>,
+    pub default_headers: Option<IndexMap<String, String>>,
+    pub http_client: Option<reqwest::Client>,
+}
+
+impl GoogleGenAiOptions {
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            api_key: None,
+            base_url: None,
+            vertex_ai: None,
+            project: None,
+            location: None,
+            stream: None,
+            thinking_effort: None,
+            default_headers: None,
+            http_client: None,
+        }
+    }
+}
+
+// MIGRATION-TODO:
+// Original: GoogleGenAIOptions.clientFactory and Vertex ADC authentication.
+// Temporary behavior: reusable reqwest client injection is supported; Vertex
+// requests require an explicit API key plus project/location (or their common
+// environment variables). Completion condition: add an auth-aware transport
+// factory and Google Application Default Credentials token provider.
+
+// Original: google-genai.ts, GoogleGenAIChatProvider
+pub struct GoogleGenAiChatProvider {
+    model: String,
+    api_key: Option<String>,
+    base_url: Option<String>,
+    vertex_ai: bool,
+    project: Option<String>,
+    location: Option<String>,
+    stream: bool,
+    thinking_effort: Option<ThinkingEffort>,
+    default_headers: Option<IndexMap<String, String>>,
+    generation_kwargs: GoogleGenAiGenerationKwargs,
+    http_client: reqwest::Client,
+}
+
+impl GoogleGenAiChatProvider {
+    pub fn new(options: GoogleGenAiOptions) -> Self {
+        let api_key = match options.api_key {
+            Some(api_key) => Some(api_key),
+            None => std::env::var("GOOGLE_API_KEY").ok(),
+        }
+        .filter(|api_key| !api_key.is_empty());
+        Self {
+            model: options.model,
+            api_key,
+            base_url: options.base_url.filter(|base_url| !base_url.is_empty()),
+            vertex_ai: options.vertex_ai.unwrap_or(false),
+            project: options.project,
+            location: options.location,
+            stream: options.stream.unwrap_or(true),
+            thinking_effort: options.thinking_effort,
+            default_headers: options.default_headers,
+            generation_kwargs: Map::new(),
+            http_client: options.http_client.unwrap_or_default(),
+        }
+    }
+
+    fn vertex_identity(&self) -> Result<(String, String), ProviderError> {
+        let project = self
+            .project
+            .clone()
+            .or_else(|| std::env::var("GOOGLE_CLOUD_PROJECT").ok());
+        let location = self
+            .location
+            .clone()
+            .or_else(|| std::env::var("GOOGLE_CLOUD_LOCATION").ok());
+        match (project, location) {
+            (Some(project), Some(location)) if !project.is_empty() && !location.is_empty() => {
+                Ok((project, location))
+            }
+            _ => Err(Box::new(ChatProviderError::ChatProvider {
+                message: "GoogleGenAIChatProvider: Vertex AI requires project and location. Provide providerOptions.project/location or GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION.".to_owned(),
+            })),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatProvider for GoogleGenAiChatProvider {
+    fn name(&self) -> &str {
+        "google_genai"
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    fn thinking_effort(&self) -> Option<&ThinkingEffort> {
+        self.thinking_effort.as_ref()
+    }
+
+    fn max_completion_tokens(&self) -> Option<f64> {
+        self.generation_kwargs
+            .get("maxOutputTokens")
+            .and_then(Value::as_f64)
+    }
+
+    async fn generate(
+        &self,
+        system_prompt: &str,
+        tools: &[Tool],
+        history: &[Message],
+        options: Option<&GenerateOptions>,
+    ) -> Result<Box<dyn StreamedMessage>, ProviderError> {
+        let params = build_google_gen_ai_request(
+            &self.model,
+            &self.generation_kwargs,
+            self.thinking_effort.as_ref(),
+            system_prompt,
+            tools,
+            history,
+            options,
+        )?;
+        let (api_key, vertex_identity) = if self.vertex_ai {
+            let api_key = self.api_key.clone().ok_or_else(|| {
+                Box::new(ChatProviderError::ChatProvider {
+                    message: "GoogleGenAIChatProvider: Vertex Application Default Credentials have not been migrated; provide an explicit API key for the current Rust transport.".to_owned(),
+                }) as ProviderError
+            })?;
+            (Some(api_key), Some(self.vertex_identity()?))
+        } else {
+            (
+                Some(require_provider_api_key(
+                    "GoogleGenAIChatProvider",
+                    options.and_then(|options| options.auth.as_ref()),
+                    self.api_key.as_deref(),
+                )?),
+                None,
+            )
+        };
+        if let Some(callback) = options.and_then(|options| options.on_request_sent.as_ref()) {
+            callback();
+        }
+        let vertex = vertex_identity
+            .as_ref()
+            .map(|(project, location)| (project.as_str(), location.as_str()));
+        let response = send_google_gen_ai_request(
+            &self.http_client,
+            self.base_url.as_deref(),
+            api_key.as_deref(),
+            self.default_headers.as_ref(),
+            vertex,
+            params,
+            self.stream,
+            options.and_then(|options| options.signal.as_ref()),
+        )
+        .await?;
+        let signal = options.and_then(|options| options.signal.clone());
+        Ok(match response {
+            GoogleGenAiHttpResponse::Response(response) => {
+                Box::new(GoogleGenAiStreamedMessage::from_response(response, signal))
+            }
+            GoogleGenAiHttpResponse::Stream(stream) => {
+                Box::new(GoogleGenAiStreamedMessage::from_stream(stream, signal))
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1007,5 +1188,22 @@ mod tests {
         let error = cancelled.next().await.unwrap().unwrap_err();
         assert_eq!(error.to_string(), "The operation was aborted.");
         assert!(cancelled.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_uses_google_name_and_requires_api_key_outside_vertex() {
+        let mut options = GoogleGenAiOptions::new("gemini-2.5-pro");
+        options.api_key = Some(String::new());
+        let provider = GoogleGenAiChatProvider::new(options);
+        assert_eq!(provider.name(), "google_genai");
+        assert_eq!(provider.model_name(), "gemini-2.5-pro");
+        let error = match provider.generate("", &[], &[], None).await {
+            Ok(_) => panic!("missing key must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "GoogleGenAIChatProvider: apiKey is required. Provide it via the constructor options, the provider's API-key environment variable, options.auth.apiKey on each request, or an OAuth login."
+        );
     }
 }
