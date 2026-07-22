@@ -1950,7 +1950,7 @@ pub enum McpTransport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum McpServerStatus {
+pub enum McpServerConnectionStatus {
     Pending,
     Connected,
     Failed,
@@ -1963,7 +1963,7 @@ pub enum McpServerStatus {
 pub struct McpServerStatusPayload {
     pub name: String,
     pub transport: McpTransport,
-    pub status: McpServerStatus,
+    pub status: McpServerConnectionStatus,
     pub tool_count: f64,
     #[serde(
         default,

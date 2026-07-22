@@ -26,10 +26,7 @@ pub use asyncapi::{AsyncApiDocumentOptions, ServerProtocol, create_async_api_doc
 pub use display::*;
 pub use envelope::{Envelope, err_envelope, ok_envelope};
 pub use error_codes::{ERROR_CODE_REASON, ErrorCode};
-pub use events::{
-    GoalActor, GoalBudgetLimits, GoalBudgetReport, GoalChange, GoalChangeKind, GoalChangeStats,
-    GoalSnapshot, GoalStatus, GoalToolResult, SkillSource,
-};
+pub use events::*;
 pub use file::FileMeta;
 pub use fs::*;
 pub use message::*;
@@ -40,6 +37,7 @@ pub use model_catalog::{
 pub use pagination::{CursorQuery, PageResponse, PaginationValidationError};
 pub use question::*;
 pub use request_id::{is_ulid, parse_or_generate_request_id};
+pub use rest::*;
 pub use session::*;
 pub use skill::SkillDescriptor;
 pub use task::{

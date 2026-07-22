@@ -216,7 +216,7 @@ pub enum PromptCompletedReason {
 #[serde(rename_all = "camelCase")]
 pub struct PromptCompletedEventPayload {
     #[serde(rename = "type")]
-    pub event_type: PromptCompletedEventType,
+    pub event_type: RestPromptCompletedEventType,
     pub agent_id: String,
     pub session_id: String,
     pub prompt_id: String,
@@ -226,7 +226,7 @@ pub struct PromptCompletedEventPayload {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PromptCompletedEventType {
+pub enum RestPromptCompletedEventType {
     #[serde(rename = "prompt.completed")]
     PromptCompleted,
 }
@@ -235,7 +235,7 @@ pub enum PromptCompletedEventType {
 #[serde(rename_all = "camelCase")]
 pub struct PromptAbortedEventPayload {
     #[serde(rename = "type")]
-    pub event_type: PromptAbortedEventType,
+    pub event_type: RestPromptAbortedEventType,
     pub agent_id: String,
     pub session_id: String,
     pub prompt_id: String,
@@ -243,7 +243,7 @@ pub struct PromptAbortedEventPayload {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PromptAbortedEventType {
+pub enum RestPromptAbortedEventType {
     #[serde(rename = "prompt.aborted")]
     PromptAborted,
 }
@@ -252,7 +252,7 @@ pub enum PromptAbortedEventType {
 #[serde(rename_all = "camelCase")]
 pub struct PromptSteeredEventPayload {
     #[serde(rename = "type")]
-    pub event_type: PromptSteeredEventType,
+    pub event_type: RestPromptSteeredEventType,
     pub agent_id: String,
     pub session_id: String,
     pub active_prompt_id: String,
@@ -262,7 +262,7 @@ pub struct PromptSteeredEventPayload {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PromptSteeredEventType {
+pub enum RestPromptSteeredEventType {
     #[serde(rename = "prompt.steered")]
     PromptSteered,
 }
