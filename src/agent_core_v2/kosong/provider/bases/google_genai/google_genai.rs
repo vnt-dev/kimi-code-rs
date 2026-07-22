@@ -9,7 +9,9 @@ use std::task::{Context, Poll};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
-use crate::agent_core_v2::kosong::contract::errors::ChatProviderError;
+use crate::agent_core_v2::kosong::contract::errors::{
+    ChatProviderError, classify_base_api_error, normalize_api_status_error,
+};
 use crate::agent_core_v2::kosong::contract::message::{
     ContentPart, Message, Role, StreamedMessagePart, ToolCall, ToolCallType,
     is_tool_declaration_only_message,
@@ -53,6 +55,25 @@ pub fn normalize_google_gen_ai_finish_reason(raw: Option<&Value>) -> NormalizedF
         finish_reason: Some(finish_reason),
         raw_finish_reason: Some(raw),
     }
+}
+
+// Original: google-genai.ts, convertGoogleGenAIError()
+pub fn convert_google_gen_ai_error(error: reqwest::Error) -> ChatProviderError {
+    if error.is_timeout() {
+        ChatProviderError::timeout(error.to_string())
+    } else if error.is_connect() || error.is_request() || error.is_body() {
+        ChatProviderError::connection(error.to_string())
+    } else if error.is_decode() {
+        ChatProviderError::ChatProvider {
+            message: format!("GoogleGenAI error: {error}"),
+        }
+    } else {
+        classify_base_api_error(&error.to_string())
+    }
+}
+
+pub fn convert_google_gen_ai_status_error(status_code: u16, message: &str) -> ChatProviderError {
+    normalize_api_status_error(i32::from(status_code), message, None, None, None)
 }
 
 // Original: google-genai.ts, toolToGoogleGenAI()
