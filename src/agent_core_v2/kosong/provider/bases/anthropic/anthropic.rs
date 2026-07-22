@@ -1,11 +1,15 @@
 use serde_json::{Map, Value};
 
+use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
 use crate::agent_core_v2::kosong::contract::errors::ChatProviderError;
 use crate::agent_core_v2::kosong::contract::message::{ContentPart, Message, Role};
-use crate::agent_core_v2::kosong::contract::provider::{FinishReason, ResponseFormat};
+use crate::agent_core_v2::kosong::contract::provider::{
+    FinishReason, ResponseFormat, ThinkingEffort,
+};
 use crate::agent_core_v2::kosong::contract::tool::Tool;
 use crate::agent_core_v2::kosong::provider::bases::anthropic::anthropic_profile::{
-    AnthropicModelFamily, AnthropicModelVersion, match_known_anthropic_model_profile,
+    AnthropicModelFamily, AnthropicModelVersion, AnthropicThinkingMode,
+    infer_anthropic_model_profile, match_known_anthropic_model_profile,
     parse_anthropic_model_version,
 };
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::NormalizedFinishReason;
@@ -302,6 +306,248 @@ pub fn convert_message(message: &Message, model: &str) -> Result<Value, ChatProv
     Ok(serde_json::json!({"role":message.role.as_str(),"content":blocks}))
 }
 
+const CACHEABLE_TYPES: [&str; 8] = [
+    "text",
+    "image",
+    "document",
+    "search_result",
+    "tool_use",
+    "tool_result",
+    "server_tool_use",
+    "web_search_tool_result",
+];
+
+// Original: anthropic.ts, injectCacheControlOnLastBlock()
+pub fn inject_cache_control_on_last_block(messages: &mut [Value]) {
+    let Some(block) = messages
+        .last_mut()
+        .and_then(|message| message.get_mut("content"))
+        .and_then(Value::as_array_mut)
+        .and_then(|content| content.last_mut())
+    else {
+        return;
+    };
+    let Some(block_type) = block.get("type").and_then(Value::as_str) else {
+        return;
+    };
+    if CACHEABLE_TYPES.contains(&block_type)
+        && let Some(block) = block.as_object_mut()
+    {
+        block.insert(
+            "cache_control".to_owned(),
+            serde_json::json!({"type":"ephemeral"}),
+        );
+    }
+}
+
+pub fn is_tool_result_only(message: &Value) -> bool {
+    message.get("role").and_then(Value::as_str) == Some("user")
+        && message
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| {
+                !content.is_empty()
+                    && content.iter().all(|block| {
+                        block.get("type").and_then(Value::as_str) == Some("tool_result")
+                    })
+            })
+}
+
+pub fn should_keep_converted_message(message: &Value) -> bool {
+    message.get("role").and_then(Value::as_str) != Some("assistant")
+        || message
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| !content.is_empty())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResolvedThinkingProfile {
+    mode: AnthropicThinkingMode,
+    supports_effort_param: bool,
+}
+
+fn resolve_thinking_profile(
+    model: &str,
+    support_efforts: Option<&[String]>,
+    adaptive_thinking: Option<bool>,
+) -> ResolvedThinkingProfile {
+    let inferred = infer_anthropic_model_profile(model);
+    match adaptive_thinking {
+        Some(false) => ResolvedThinkingProfile {
+            mode: AnthropicThinkingMode::Budget,
+            supports_effort_param: false,
+        },
+        Some(true) => ResolvedThinkingProfile {
+            mode: AnthropicThinkingMode::Adaptive,
+            supports_effort_param: true,
+        },
+        None => {
+            let requires_adaptive = support_efforts.is_some_and(|efforts| {
+                efforts
+                    .iter()
+                    .any(|effort| !matches!(effort.as_str(), "low" | "medium" | "high"))
+            });
+            ResolvedThinkingProfile {
+                mode: if requires_adaptive {
+                    AnthropicThinkingMode::Adaptive
+                } else {
+                    inferred.mode
+                },
+                supports_effort_param: requires_adaptive || inferred.supports_effort_param,
+            }
+        }
+    }
+}
+
+fn beta_features(kwargs: &AnthropicGenerationKwargs) -> Vec<String> {
+    kwargs
+        .get("betaFeatures")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+fn set_beta_features(kwargs: &mut AnthropicGenerationKwargs, betas: Vec<String>) {
+    kwargs.insert(
+        "betaFeatures".to_owned(),
+        Value::Array(betas.into_iter().map(Value::String).collect()),
+    );
+}
+
+fn budget_tokens_for_effort(effort: &ThinkingEffort) -> Option<u64> {
+    match effort.as_str() {
+        "low" => Some(1_024),
+        "medium" => Some(4_096),
+        "on" | "high" => Some(32_000),
+        _ => None,
+    }
+}
+
+// Original: anthropic.ts, AnthropicChatProvider._encodeThinking()
+pub fn encode_thinking(
+    model: &str,
+    support_efforts: Option<&[String]>,
+    adaptive_thinking: Option<bool>,
+    effort: &ThinkingEffort,
+    kwargs: &mut AnthropicGenerationKwargs,
+) {
+    let profile = resolve_thinking_profile(model, support_efforts, adaptive_thinking);
+    let mut betas = beta_features(kwargs);
+    if profile.mode == AnthropicThinkingMode::Adaptive {
+        betas.retain(|beta| beta != INTERLEAVED_THINKING_BETA);
+    }
+    set_beta_features(kwargs, betas);
+
+    if effort.is_off() {
+        kwargs.insert(
+            "thinking".to_owned(),
+            serde_json::json!({"type":"disabled"}),
+        );
+        kwargs.remove("output_config");
+        return;
+    }
+    if profile.mode == AnthropicThinkingMode::Adaptive {
+        kwargs.insert(
+            "thinking".to_owned(),
+            serde_json::json!({"type":"adaptive","display":"summarized"}),
+        );
+        if effort.as_str() == "on" {
+            kwargs.remove("output_config");
+        } else {
+            kwargs.insert(
+                "output_config".to_owned(),
+                serde_json::json!({"effort":effort.as_str()}),
+            );
+        }
+        return;
+    }
+
+    let budget = budget_tokens_for_effort(effort);
+    kwargs.insert(
+        "thinking".to_owned(),
+        budget.map_or_else(
+            || serde_json::json!({"type":"enabled"}),
+            |budget| serde_json::json!({"type":"enabled","budget_tokens":budget}),
+        ),
+    );
+    if (profile.supports_effort_param || budget.is_none()) && effort.as_str() != "on" {
+        kwargs.insert(
+            "output_config".to_owned(),
+            serde_json::json!({"effort":effort.as_str()}),
+        );
+    } else {
+        kwargs.remove("output_config");
+    }
+}
+
+// Original: anthropic.ts, applyThinkingKeep()
+pub fn apply_thinking_keep(kwargs: &mut AnthropicGenerationKwargs, keep: &str) {
+    let mut betas = beta_features(kwargs);
+    if !betas.iter().any(|beta| beta == CONTEXT_MANAGEMENT_BETA) {
+        betas.push(CONTEXT_MANAGEMENT_BETA.to_owned());
+    }
+    set_beta_features(kwargs, betas);
+
+    let existing = kwargs
+        .get("contextManagement")
+        .and_then(|value| value.get("edits"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut edits = vec![serde_json::json!({"type":CLEAR_THINKING_EDIT,"keep":keep})];
+    edits.extend(
+        existing
+            .into_iter()
+            .filter(|edit| edit.get("type").and_then(Value::as_str) != Some(CLEAR_THINKING_EDIT)),
+    );
+    kwargs.insert(
+        "contextManagement".to_owned(),
+        serde_json::json!({"edits":edits}),
+    );
+}
+
+pub const ANTHROPIC_VISION_TOOL_CAPABILITY: ModelCapability = ModelCapability {
+    image_in: true,
+    video_in: false,
+    audio_in: false,
+    thinking: false,
+    tool_use: true,
+    max_context_tokens: 0,
+    dynamically_loaded_tools: None,
+};
+
+pub const ANTHROPIC_THINKING_VISION_TOOL_CAPABILITY: ModelCapability = ModelCapability {
+    thinking: true,
+    ..ANTHROPIC_VISION_TOOL_CAPABILITY
+};
+
+// Original: anthropic.ts, getAnthropicModelCapability()
+pub fn get_anthropic_model_capability(model_name: &str) -> Option<&'static ModelCapability> {
+    let normalized = model_name.to_ascii_lowercase();
+    if ["claude-3-", "claude-3.5-", "claude-3.7-"]
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix))
+    {
+        Some(&ANTHROPIC_VISION_TOOL_CAPABILITY)
+    } else if [
+        "claude-opus-4",
+        "claude-sonnet-4",
+        "claude-haiku-4",
+        "claude-fable",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+    {
+        Some(&ANTHROPIC_THINKING_VISION_TOOL_CAPABILITY)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +659,54 @@ mod tests {
                 .unwrap_err()
                 .message(),
             "Tool call arguments must be a JSON object."
+        );
+    }
+
+    #[test]
+    fn thinking_cache_and_capability_policies_match_transport_rules() {
+        let mut kwargs = Map::from_iter([(
+            "betaFeatures".to_owned(),
+            serde_json::json!([INTERLEAVED_THINKING_BETA, "vendor-beta"]),
+        )]);
+        encode_thinking(
+            "claude-opus-4-6",
+            None,
+            None,
+            &ThinkingEffort::from("max"),
+            &mut kwargs,
+        );
+        assert_eq!(kwargs["thinking"]["type"], "adaptive");
+        assert_eq!(kwargs["output_config"]["effort"], "max");
+        assert_eq!(kwargs["betaFeatures"], serde_json::json!(["vendor-beta"]));
+
+        apply_thinking_keep(&mut kwargs, "all");
+        apply_thinking_keep(&mut kwargs, "recent");
+        assert_eq!(
+            kwargs["contextManagement"]["edits"],
+            serde_json::json!([{"type":CLEAR_THINKING_EDIT,"keep":"recent"}])
+        );
+        assert_eq!(
+            kwargs["betaFeatures"],
+            serde_json::json!(["vendor-beta", CONTEXT_MANAGEMENT_BETA])
+        );
+
+        let mut messages = vec![serde_json::json!({
+            "role":"user","content":[{"type":"text","text":"last"}]
+        })];
+        inject_cache_control_on_last_block(&mut messages);
+        assert_eq!(
+            messages[0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert!(
+            get_anthropic_model_capability("claude-sonnet-4-6")
+                .unwrap()
+                .thinking
+        );
+        assert!(
+            !get_anthropic_model_capability("claude-3-5-sonnet")
+                .unwrap()
+                .thinking
         );
     }
 }
