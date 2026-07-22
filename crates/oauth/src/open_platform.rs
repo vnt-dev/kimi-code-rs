@@ -317,7 +317,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::oauth::managed_models::{ManagedKimiCodeProtocol, SupportsThinkingType};
+    use crate::managed_models::{ManagedKimiCodeProtocol, SupportsThinkingType};
 
     fn model(id: &str) -> ManagedKimiCodeModelInfo {
         ManagedKimiCodeModelInfo {

@@ -5,7 +5,7 @@ edition = "2024"
 autobins = false
 
 [workspace]
-members = [".", "crates/protocol"]
+members = [".", "crates/oauth", "crates/protocol"]
 resolver = "3"
 
 [[bin]]
@@ -23,6 +23,7 @@ dirs = "6"
 futures-util = "0.3"
 if-addrs = "0.15"
 indexmap = { version = "2", features = ["serde"] }
+kimi-code-oauth = { path = "crates/oauth" }
 kimi-code-protocol = { path = "crates/protocol" }
 md-5 = "0.11"
 pulldown-cmark = "0.13.4"

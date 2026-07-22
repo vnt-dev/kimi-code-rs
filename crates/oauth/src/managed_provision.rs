@@ -162,7 +162,7 @@ mod tests {
     use serde_json::{Map, Value};
 
     use super::*;
-    use crate::oauth::managed_config::{ManagedConfigError, apply_managed_kimi_code_config};
+    use crate::managed_config::{ManagedConfigError, apply_managed_kimi_code_config};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct TestAdapterError(String);

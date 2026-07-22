@@ -40,7 +40,7 @@ use super::{
     storage::{FileTokenStorage, TokenStorage},
     types::OAuthFlowConfig,
 };
-use crate::utils::paths::{HomeDirectoryUnavailable, get_data_dir};
+use crate::home::{HomeDirectoryUnavailable, default_kimi_home};
 
 type RefreshThreshold = dyn Fn(f64) -> f64 + Send + Sync;
 type RefreshObserver = dyn Fn(OAuthRefreshOutcome) + Send + Sync;
@@ -291,7 +291,7 @@ impl<A> KimiOAuthToolkit<A> {
         if let Some(identity) = options.identity.as_ref() {
             assert_kimi_host_identity(Some(identity))?;
         }
-        let home_dir = options.home_dir.map_or_else(get_data_dir, Ok)?;
+        let home_dir = options.home_dir.map_or_else(default_kimi_home, Ok)?;
         let credentials_dir = options
             .credentials_dir
             .unwrap_or_else(|| home_dir.join("credentials"));
@@ -878,10 +878,10 @@ mod tests {
     use serde_json::{Map, Value};
 
     use super::*;
-    use crate::oauth::managed_config::{
+    use crate::managed_config::{
         ManagedConfigError, apply_managed_kimi_code_config, apply_managed_kimi_code_logout_config,
     };
-    use crate::oauth::{
+    use crate::{
         errors::OAuthError,
         flow::DevicePollResult,
         storage::TokenStorageError,

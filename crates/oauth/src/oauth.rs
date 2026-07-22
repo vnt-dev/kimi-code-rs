@@ -341,7 +341,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::oauth::{errors::OAuthErrorKind, identity::KIMI_CODE_PLATFORM};
+    use crate::{errors::OAuthErrorKind, identity::KIMI_CODE_PLATFORM};
 
     #[derive(Clone)]
     struct FakeResponse {

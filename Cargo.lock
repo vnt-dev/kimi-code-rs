@@ -835,6 +835,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kimi-code-oauth"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dirs",
+ "futures-util",
+ "indexmap",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "kimi-code-protocol"
 version = "0.1.0"
 dependencies = [
@@ -862,6 +880,7 @@ dependencies = [
  "futures-util",
  "if-addrs",
  "indexmap",
+ "kimi-code-oauth",
  "kimi-code-protocol",
  "md-5",
  "pulldown-cmark",

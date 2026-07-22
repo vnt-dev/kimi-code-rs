@@ -3,7 +3,7 @@ pub mod built_in_catalog;
 pub mod cli;
 pub mod feedback;
 pub mod migration;
-pub mod oauth;
+pub use kimi_code_oauth as oauth;
 pub use kimi_code_protocol as protocol;
 pub mod sdk;
 pub mod tui;

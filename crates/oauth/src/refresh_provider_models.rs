@@ -961,7 +961,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::oauth::custom_registry::remove_custom_registry_provider;
+    use crate::custom_registry::remove_custom_registry_provider;
 
     #[derive(Debug)]
     struct TestHostError(String);
