@@ -1,4 +1,7 @@
-use std::any::Any;
+use std::{
+    any::Any,
+    sync::{Arc, Mutex, MutexGuard},
+};
 
 use crate::tui::types::TranscriptEntry;
 
@@ -48,6 +51,44 @@ pub trait Component: Any + Send {
     }
 
     fn as_any(&self) -> &dyn Any;
+}
+
+fn recover_lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
+    match value.lock() {
+        Ok(value) => value,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// Shared component handle used where the TypeScript UI keeps the same object
+/// in both a controller and a container.
+impl<T> Component for Arc<Mutex<T>>
+where
+    T: Component,
+{
+    fn render(&mut self, width: usize) -> Vec<String> {
+        recover_lock(self).render(width)
+    }
+
+    fn handle_input(&mut self, data: &str) {
+        recover_lock(self).handle_input(data);
+    }
+
+    fn wants_key_release(&self) -> bool {
+        recover_lock(self).wants_key_release()
+    }
+
+    fn invalidate(&mut self) {
+        recover_lock(self).invalidate();
+    }
+
+    fn role(&self) -> ComponentRole {
+        recover_lock(self).role()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// Original:
@@ -170,5 +211,28 @@ mod tests {
         assert!(container.remove_child_at(0).is_some());
         container.clear();
         assert!(container.children.is_empty());
+    }
+
+    #[test]
+    fn shared_component_keeps_controller_and_container_on_the_same_instance() {
+        let widths = Arc::new(Mutex::new(Vec::new()));
+        let invalidations = Arc::new(Mutex::new(0));
+        let shared = Arc::new(Mutex::new(RecordingComponent {
+            name: "shared",
+            widths: Arc::clone(&widths),
+            invalidations: Arc::clone(&invalidations),
+        }));
+        let mut container = Container::new();
+        container.add_child(Arc::clone(&shared));
+
+        assert_eq!(container.render(12), ["shared:12"]);
+        shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .invalidate();
+        assert_eq!(
+            invalidations.lock().map(|value| *value).unwrap_or_default(),
+            1
+        );
     }
 }
