@@ -1,5 +1,6 @@
 pub mod cluster;
 pub mod codec;
+pub mod compaction;
 pub mod compound_index;
 pub mod crc32;
 pub mod dt_index;

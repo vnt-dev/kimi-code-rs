@@ -5,7 +5,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use crate::{
     codec::{CodecError, Frame, HEADER_SIZE, TYPE_SET, encode_frame},
-    store::{Store, StoreError, ValueFile, ValueLoc},
+    store::{Store, StoreEntry, StoreError, ValueFile, ValueLoc},
 };
 
 const FLUSH_BYTES: usize = 1 << 20;
@@ -35,6 +35,14 @@ pub async fn write_snapshot(
     temporary_path: impl AsRef<Path>,
     yield_every: usize,
 ) -> Result<SnapshotResult, SnapshotError> {
+    write_snapshot_entries(store.entries()?, temporary_path, yield_every).await
+}
+
+pub async fn write_snapshot_entries(
+    entries: impl IntoIterator<Item = StoreEntry>,
+    temporary_path: impl AsRef<Path>,
+    yield_every: usize,
+) -> Result<SnapshotResult, SnapshotError> {
     let yield_every = if yield_every == 0 { 2_000 } else { yield_every };
     let mut file = File::create(temporary_path).await?;
     let mut count = 0;
@@ -42,7 +50,7 @@ pub async fn write_snapshot(
     let mut batch = Vec::with_capacity(FLUSH_BYTES);
     let mut locations = HashMap::new();
 
-    for entry in store.entries()? {
+    for entry in entries {
         let meta = entry
             .datetimes
             .as_ref()
