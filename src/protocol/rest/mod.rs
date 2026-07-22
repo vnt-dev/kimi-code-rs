@@ -1,5 +1,6 @@
 pub mod approval;
 pub mod auth;
+pub mod config;
 pub mod connection;
 pub mod file;
 pub mod fs;
@@ -19,6 +20,7 @@ pub mod workspace;
 
 pub use approval::*;
 pub use auth::*;
+pub use config::*;
 pub use connection::*;
 pub use file::*;
 pub use fs::*;
