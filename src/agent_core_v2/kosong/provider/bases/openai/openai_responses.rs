@@ -1,4 +1,6 @@
+use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
+use indexmap::IndexMap;
 use regex::Regex;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -7,6 +9,7 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 use tokio_util::sync::CancellationToken;
 
+use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
 use crate::agent_core_v2::kosong::contract::errors::{
     ApiStatusData, ChatProviderError, is_context_overflow_error_code,
 };
@@ -15,14 +18,21 @@ use crate::agent_core_v2::kosong::contract::message::{
     ToolCallPartType, ToolCallType, extract_text, is_tool_declaration_only_message,
 };
 use crate::agent_core_v2::kosong::contract::provider::{
-    FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage, ThinkingEffort,
-    ToolCallIdPolicy, TraceId,
+    ChatProvider, FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage,
+    ThinkingEffort, ToolCallIdPolicy, TraceId,
 };
 use crate::agent_core_v2::kosong::contract::tool::Tool;
 use crate::agent_core_v2::kosong::contract::usage::TokenUsage;
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::{
-    NormalizedFinishReason, TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_PROMPT,
-    ToolMessageConversion, is_media_part,
+    NormalizedFinishReason, OPENAI_REASONING_CAPABILITY, OPENAI_VISION_TOOL_CAPABILITY,
+    OPENAI_VISION_TOOL_PREFIXES, TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_PROMPT,
+    ToolMessageConversion, has_model_prefix, is_media_part, is_openai_reasoning_model,
+};
+use crate::agent_core_v2::kosong::provider::bases::openai::openai_responses_transport::{
+    OpenAiResponsesHttpResponse, send_openai_responses_request,
+};
+use crate::agent_core_v2::kosong::provider::bases::request_auth::{
+    merge_request_headers, require_provider_api_key,
 };
 use crate::agent_core_v2::kosong::provider::bases::tool_call_id::{
     ToolCallIdError, normalize_tool_call_ids_for_provider, sanitize_openai_responses_call_id,
@@ -1114,6 +1124,169 @@ impl StreamedMessage for OpenAiResponsesStreamedMessage {
     }
 }
 
+pub struct OpenAiResponsesOptions {
+    pub model: String,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub max_output_tokens: Option<f64>,
+    pub thinking_effort: Option<ThinkingEffort>,
+    pub default_headers: Option<IndexMap<String, String>>,
+    pub tool_message_conversion: Option<ToolMessageConversion>,
+    pub http_client: Option<reqwest::Client>,
+}
+
+impl OpenAiResponsesOptions {
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            api_key: None,
+            base_url: None,
+            max_output_tokens: None,
+            thinking_effort: None,
+            default_headers: None,
+            tool_message_conversion: None,
+            http_client: None,
+        }
+    }
+}
+
+// Original: openai-responses.ts, OpenAIResponsesChatProvider
+//
+// Rust adaptation: the OpenAI SDK client becomes a reusable reqwest client.
+// Request shaping and response decoding remain separate method-level units.
+//
+// MIGRATION-TODO:
+// Original: OpenAIResponsesOptions.clientFactory
+// Missing abstraction: an arbitrary per-auth OpenAI SDK client factory has no
+// Rust transport trait yet. Temporary behavior: callers may inject one reusable
+// reqwest::Client through http_client. Completion condition: introduce a
+// per-request Responses transport factory without changing generate ordering.
+pub struct OpenAiResponsesChatProvider {
+    model: String,
+    stream: bool,
+    api_key: Option<String>,
+    base_url: String,
+    default_headers: Option<IndexMap<String, String>>,
+    thinking_effort: Option<ThinkingEffort>,
+    generation_kwargs: OpenAiResponsesGenerationKwargs,
+    tool_message_conversion: ToolMessageConversion,
+    http_client: reqwest::Client,
+}
+
+impl OpenAiResponsesChatProvider {
+    pub fn new(options: OpenAiResponsesOptions) -> Self {
+        let api_key = match options.api_key {
+            Some(api_key) => Some(api_key),
+            None => std::env::var("OPENAI_API_KEY").ok(),
+        }
+        .filter(|api_key| !api_key.is_empty());
+        let generation_kwargs = options.max_output_tokens.map_or_else(Map::new, |tokens| {
+            Map::from_iter([("max_output_tokens".to_owned(), Value::from(tokens))])
+        });
+        Self {
+            model: options.model,
+            stream: true,
+            api_key,
+            base_url: options
+                .base_url
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_owned()),
+            default_headers: options.default_headers,
+            thinking_effort: options.thinking_effort,
+            generation_kwargs,
+            tool_message_conversion: options
+                .tool_message_conversion
+                .unwrap_or(ToolMessageConversion::Parts),
+            http_client: options.http_client.unwrap_or_default(),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatProvider for OpenAiResponsesChatProvider {
+    fn name(&self) -> &str {
+        "openai-responses"
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    fn thinking_effort(&self) -> Option<&ThinkingEffort> {
+        self.thinking_effort.as_ref()
+    }
+
+    fn max_completion_tokens(&self) -> Option<f64> {
+        self.generation_kwargs
+            .get("max_output_tokens")
+            .and_then(Value::as_f64)
+    }
+
+    async fn generate(
+        &self,
+        system_prompt: &str,
+        tools: &[Tool],
+        history: &[Message],
+        options: Option<&GenerateOptions>,
+    ) -> Result<Box<dyn StreamedMessage>, ProviderError> {
+        let api_key = require_provider_api_key(
+            "OpenAIResponsesChatProvider",
+            options.and_then(|options| options.auth.as_ref()),
+            self.api_key.as_deref(),
+        )?;
+        let headers = merge_request_headers(
+            self.default_headers.as_ref(),
+            options
+                .and_then(|options| options.auth.as_ref())
+                .and_then(|auth| auth.headers.as_ref()),
+        );
+        let params = build_openai_responses_request(
+            &self.model,
+            self.stream,
+            &self.generation_kwargs,
+            self.thinking_effort.as_ref(),
+            self.tool_message_conversion,
+            system_prompt,
+            tools,
+            history,
+            options,
+        )?;
+        if let Some(callback) = options.and_then(|options| options.on_request_sent.as_ref()) {
+            callback();
+        }
+        let response = send_openai_responses_request(
+            &self.http_client,
+            &self.base_url,
+            &api_key,
+            headers.as_ref(),
+            params,
+            self.stream,
+            options.and_then(|options| options.signal.as_ref()),
+        )
+        .await?;
+        let signal = options.and_then(|options| options.signal.clone());
+        Ok(match response {
+            OpenAiResponsesHttpResponse::Response(response) => Box::new(
+                OpenAiResponsesStreamedMessage::from_response(response, signal),
+            ),
+            OpenAiResponsesHttpResponse::Stream(stream) => {
+                Box::new(OpenAiResponsesStreamedMessage::from_stream(stream, signal))
+            }
+        })
+    }
+}
+
+// Original: openai-responses.ts, getOpenAIResponsesModelCapability()
+pub fn get_openai_responses_model_capability(model_name: &str) -> Option<&'static ModelCapability> {
+    let normalized = model_name.to_ascii_lowercase();
+    if is_openai_reasoning_model(&normalized) {
+        Some(&OPENAI_REASONING_CAPABILITY)
+    } else if has_model_prefix(&normalized, &OPENAI_VISION_TOOL_PREFIXES) {
+        Some(&OPENAI_VISION_TOOL_CAPABILITY)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1207,6 +1380,25 @@ mod tests {
         assert_eq!(request["instructions"], "be concise");
         assert_eq!(request["prompt_cache_key"], "cache-a");
         assert_eq!(request["tools"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn provider_preserves_constructor_defaults_and_capability_fallback() {
+        let mut options = OpenAiResponsesOptions::new("gpt-5");
+        options.api_key = Some("key".to_owned());
+        options.max_output_tokens = Some(2048.0);
+        let provider = OpenAiResponsesChatProvider::new(options);
+
+        assert_eq!(provider.name(), "openai-responses");
+        assert_eq!(provider.model_name(), "gpt-5");
+        assert_eq!(provider.max_completion_tokens(), Some(2048.0));
+        assert!(provider.stream);
+        assert_eq!(provider.base_url, "https://api.openai.com/v1");
+        assert!(std::ptr::eq(
+            get_openai_responses_model_capability("o3").unwrap(),
+            &OPENAI_REASONING_CAPABILITY
+        ));
+        assert!(get_openai_responses_model_capability("unknown").is_none());
     }
 
     #[tokio::test]
