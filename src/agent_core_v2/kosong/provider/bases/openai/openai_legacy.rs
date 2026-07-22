@@ -1,22 +1,35 @@
+use futures_util::{Stream, StreamExt};
 use serde_json::{Map, Value};
+use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
+use std::task::{Context, Poll};
 
 use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
 use crate::agent_core_v2::kosong::contract::message::{
-    ContentPart, Message, Role, is_tool_declaration_only_message,
+    ContentPart, Message, Role, StreamIndex, StreamedMessagePart, ToolCall, ToolCallType,
+    is_tool_declaration_only_message,
 };
 use crate::agent_core_v2::kosong::contract::provider::{
-    GenerateOptions, ResponseFormat, ThinkingEffort, ToolCallIdPolicy,
+    FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage, ThinkingEffort,
+    ToolCallIdPolicy, TraceId,
 };
 use crate::agent_core_v2::kosong::contract::tool::Tool;
+use crate::agent_core_v2::kosong::contract::usage::TokenUsage;
+use crate::agent_core_v2::kosong::provider::bases::openai::chat_completions_stream::{
+    BufferedChatCompletionToolCall, ChatCompletionStreamToolCallDelta,
+    convert_chat_completion_stream_tool_call,
+};
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::{
     ConvertedToolMessageContent, OPENAI_REASONING_CAPABILITY, OPENAI_TEXT_TOOL_CAPABILITY,
     OPENAI_VISION_TOOL_CAPABILITY, OPENAI_VISION_TOOL_PREFIXES, OpenAiContentPart,
     TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_PROMPT, ToolMessageConversion,
-    convert_content_part, convert_tool_message_content, has_model_prefix,
-    is_openai_reasoning_model, tool_to_openai,
+    convert_content_part, convert_tool_message_content, extract_usage, has_model_prefix,
+    is_openai_reasoning_model, normalize_openai_finish_reason, tool_to_openai,
 };
-use crate::agent_core_v2::kosong::provider::bases::openai::openai_hooks::OpenAiChatHooks;
+use crate::agent_core_v2::kosong::provider::bases::openai::openai_hooks::{
+    BoundExtractUsageHook, OpenAiChatHooks,
+};
 use crate::agent_core_v2::kosong::provider::bases::tool_call_id::{
     ToolCallIdError, normalize_tool_call_ids_for_provider, sanitize_tool_call_id,
 };
@@ -599,9 +612,294 @@ pub fn build_openai_legacy_request(
     Ok(params)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenAiLegacyFunctionCall {
+    pub name: String,
+    pub arguments: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenAiLegacyToolCall {
+    pub call_type: String,
+    pub id: String,
+    pub function: OpenAiLegacyFunctionCall,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OpenAiLegacyMessagePayload {
+    pub fields: Map<String, Value>,
+    pub content: Option<String>,
+    pub tool_calls: Vec<OpenAiLegacyToolCall>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OpenAiLegacyDelta {
+    pub fields: Map<String, Value>,
+    pub content: Option<String>,
+    pub tool_calls: Vec<ChatCompletionStreamToolCallDelta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OpenAiLegacyChoice {
+    pub finish_reason: Option<String>,
+    pub message: Option<OpenAiLegacyMessagePayload>,
+    pub delta: Option<OpenAiLegacyDelta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OpenAiLegacyCompletion {
+    pub id: String,
+    pub usage: Option<Value>,
+    pub raw: Map<String, Value>,
+    pub choices: Vec<OpenAiLegacyChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OpenAiLegacyChunk {
+    pub id: Option<String>,
+    pub usage: Option<Value>,
+    pub raw: Map<String, Value>,
+    pub choices: Vec<OpenAiLegacyChoice>,
+}
+
+enum OpenAiLegacyEvent {
+    Completion(OpenAiLegacyCompletion),
+    Chunk(OpenAiLegacyChunk),
+}
+
+// Original: openai-legacy.ts, OpenAILegacyStreamedMessage
+pub struct OpenAiLegacyStreamedMessage {
+    source: Pin<Box<dyn Stream<Item = Result<OpenAiLegacyEvent, ProviderError>> + Send>>,
+    pending: VecDeque<StreamedMessagePart>,
+    buffered_tool_calls: HashMap<StreamIndex, BufferedChatCompletionToolCall>,
+    reasoning_key: Option<String>,
+    extract_usage_hook: Option<BoundExtractUsageHook>,
+    id: Option<String>,
+    usage: Option<TokenUsage>,
+    finish_reason: Option<FinishReason>,
+    raw_finish_reason: Option<String>,
+    trace_id: Option<String>,
+}
+
+impl OpenAiLegacyStreamedMessage {
+    pub fn from_completion(
+        response: OpenAiLegacyCompletion,
+        reasoning_key: Option<String>,
+        trace_id: Option<String>,
+        extract_usage_hook: Option<BoundExtractUsageHook>,
+    ) -> Self {
+        Self::new(
+            futures_util::stream::iter([Ok(OpenAiLegacyEvent::Completion(response))]),
+            reasoning_key,
+            trace_id,
+            extract_usage_hook,
+        )
+    }
+
+    pub fn from_stream<S>(
+        response: S,
+        reasoning_key: Option<String>,
+        trace_id: Option<String>,
+        extract_usage_hook: Option<BoundExtractUsageHook>,
+    ) -> Self
+    where
+        S: Stream<Item = Result<OpenAiLegacyChunk, ProviderError>> + Send + 'static,
+    {
+        Self::new(
+            response.map(|result| result.map(OpenAiLegacyEvent::Chunk)),
+            reasoning_key,
+            trace_id,
+            extract_usage_hook,
+        )
+    }
+
+    fn new<S>(
+        source: S,
+        reasoning_key: Option<String>,
+        trace_id: Option<String>,
+        extract_usage_hook: Option<BoundExtractUsageHook>,
+    ) -> Self
+    where
+        S: Stream<Item = Result<OpenAiLegacyEvent, ProviderError>> + Send + 'static,
+    {
+        Self {
+            source: Box::pin(source),
+            pending: VecDeque::new(),
+            buffered_tool_calls: HashMap::new(),
+            reasoning_key,
+            extract_usage_hook,
+            id: None,
+            usage: None,
+            finish_reason: None,
+            raw_finish_reason: None,
+            trace_id,
+        }
+    }
+
+    fn capture_finish_reason(&mut self, raw: Option<&str>) {
+        let normalized = normalize_openai_finish_reason(raw);
+        self.finish_reason = normalized.finish_reason;
+        self.raw_finish_reason = normalized.raw_finish_reason;
+    }
+
+    fn capture_usage(&mut self, raw: &Map<String, Value>, fallback: Option<&Value>) {
+        let raw_usage = match self.extract_usage_hook.as_ref().map(|hook| hook(raw)) {
+            Some(
+                crate::agent_core_v2::kosong::protocol::protocol_trait::UsageExtraction::Usage(
+                    usage,
+                ),
+            ) => Some(Value::Object(usage)),
+            Some(
+                crate::agent_core_v2::kosong::protocol::protocol_trait::UsageExtraction::NoUsage,
+            ) => None,
+            Some(
+                crate::agent_core_v2::kosong::protocol::protocol_trait::UsageExtraction::Defer,
+            )
+            | None => fallback.cloned(),
+        };
+        if let Some(raw_usage) = raw_usage.as_ref() {
+            self.usage = extract_usage(raw_usage);
+        }
+    }
+
+    fn process_completion(&mut self, response: OpenAiLegacyCompletion) {
+        self.id = Some(response.id);
+        self.capture_usage(&response.raw, response.usage.as_ref());
+        let Some(choice) = response.choices.first() else {
+            self.capture_finish_reason(None);
+            return;
+        };
+        self.capture_finish_reason(choice.finish_reason.as_deref());
+        let Some(message) = choice.message.as_ref() else {
+            return;
+        };
+        if let Some(reasoning) = extract_reasoning_content(
+            &Value::Object(message.fields.clone()),
+            self.reasoning_key.as_deref(),
+        ) {
+            self.pending
+                .push_back(StreamedMessagePart::Content(ContentPart::Think {
+                    think: reasoning,
+                    encrypted: None,
+                }));
+        }
+        if let Some(content) = message
+            .content
+            .as_ref()
+            .filter(|content| !content.is_empty())
+        {
+            self.pending
+                .push_back(StreamedMessagePart::Content(ContentPart::Text {
+                    text: content.clone(),
+                }));
+        }
+        for tool_call in &message.tool_calls {
+            if tool_call.call_type != "function" {
+                continue;
+            }
+            self.pending
+                .push_back(StreamedMessagePart::ToolCall(ToolCall {
+                    call_type: ToolCallType::Function,
+                    id: if tool_call.id.is_empty() {
+                        uuid::Uuid::new_v4().to_string()
+                    } else {
+                        tool_call.id.clone()
+                    },
+                    name: tool_call.function.name.clone(),
+                    arguments: tool_call.function.arguments.clone(),
+                    extras: None,
+                    stream_index: None,
+                }));
+        }
+    }
+
+    fn process_chunk(&mut self, chunk: OpenAiLegacyChunk) {
+        if let Some(id) = chunk.id.filter(|id| !id.is_empty()) {
+            self.id = Some(id);
+        }
+        self.capture_usage(&chunk.raw, chunk.usage.as_ref());
+        let Some(choice) = chunk.choices.first() else {
+            return;
+        };
+        if choice.finish_reason.is_some() {
+            self.capture_finish_reason(choice.finish_reason.as_deref());
+        }
+        let Some(delta) = choice.delta.as_ref() else {
+            return;
+        };
+        if let Some(reasoning) = extract_reasoning_content(
+            &Value::Object(delta.fields.clone()),
+            self.reasoning_key.as_deref(),
+        ) {
+            self.pending
+                .push_back(StreamedMessagePart::Content(ContentPart::Think {
+                    think: reasoning,
+                    encrypted: None,
+                }));
+        }
+        if let Some(content) = delta.content.as_ref().filter(|content| !content.is_empty()) {
+            self.pending
+                .push_back(StreamedMessagePart::Content(ContentPart::Text {
+                    text: content.clone(),
+                }));
+        }
+        for tool_call in &delta.tool_calls {
+            self.pending
+                .extend(convert_chat_completion_stream_tool_call(
+                    tool_call,
+                    &mut self.buffered_tool_calls,
+                ));
+        }
+    }
+}
+
+impl Stream for OpenAiLegacyStreamedMessage {
+    type Item = Result<StreamedMessagePart, ProviderError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            if let Some(part) = self.pending.pop_front() {
+                return Poll::Ready(Some(Ok(part)));
+            }
+            match self.source.as_mut().poll_next(context) {
+                Poll::Ready(Some(Ok(OpenAiLegacyEvent::Completion(response)))) => {
+                    self.process_completion(response);
+                }
+                Poll::Ready(Some(Ok(OpenAiLegacyEvent::Chunk(chunk)))) => {
+                    self.process_chunk(chunk);
+                }
+                Poll::Ready(Some(Err(error))) => return Poll::Ready(Some(Err(error))),
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+impl StreamedMessage for OpenAiLegacyStreamedMessage {
+    fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    fn usage(&self) -> Option<&TokenUsage> {
+        self.usage.as_ref()
+    }
+
+    fn finish_reason(&self) -> Option<FinishReason> {
+        self.finish_reason
+    }
+
+    fn raw_finish_reason(&self) -> Option<&str> {
+        self.raw_finish_reason.as_deref()
+    }
+
+    fn trace_id(&self) -> TraceId<'_> {
+        TraceId::Present(self.trace_id.as_deref())
+    }
+}
+
 // MIGRATION-TODO:
-// Original: openai-legacy.ts, OpenAILegacyStreamedMessage,
-// OpenAILegacyChatProvider network/stream methods.
+// Original: openai-legacy.ts, OpenAILegacyChatProvider network methods.
 // Missing dependency: the selected async OpenAI HTTP transport and its stream
 // event types. Temporary behavior: none; this module exposes only completed
 // pure request-shaping methods. Completion condition: port message/history
@@ -971,5 +1269,119 @@ mod tests {
         assert_eq!(params["messages"][2]["role"], "merge-marker");
         assert_eq!(params["tools"][0]["type"], "function");
         assert_eq!(params["built_last"], true);
+    }
+
+    #[tokio::test]
+    async fn streamed_message_converts_both_response_modes_and_captures_metadata() {
+        let index = StreamIndex::Number(0);
+        let chunks = futures_util::stream::iter(vec![
+            Ok(OpenAiLegacyChunk {
+                id: Some("chat-1".to_owned()),
+                choices: vec![OpenAiLegacyChoice {
+                    delta: Some(OpenAiLegacyDelta {
+                        fields: Map::from_iter([(
+                            "reasoning_content".to_owned(),
+                            Value::String("think".to_owned()),
+                        )]),
+                        tool_calls: vec![ChatCompletionStreamToolCallDelta {
+                            index: Some(index.clone()),
+                            id: Some("call-1".to_owned()),
+                            function: Some(
+                                crate::agent_core_v2::kosong::provider::bases::openai::chat_completions_stream::ChatCompletionStreamToolFunctionDelta {
+                                    name: None,
+                                    arguments: Some("{\"x\":".to_owned()),
+                                },
+                            ),
+                        }],
+                        ..OpenAiLegacyDelta::default()
+                    }),
+                    ..OpenAiLegacyChoice::default()
+                }],
+                ..OpenAiLegacyChunk::default()
+            }),
+            Ok(OpenAiLegacyChunk {
+                choices: vec![OpenAiLegacyChoice {
+                    finish_reason: Some("stop".to_owned()),
+                    delta: Some(OpenAiLegacyDelta {
+                        content: Some("hello".to_owned()),
+                        tool_calls: vec![ChatCompletionStreamToolCallDelta {
+                            index: Some(index),
+                            id: None,
+                            function: Some(
+                                crate::agent_core_v2::kosong::provider::bases::openai::chat_completions_stream::ChatCompletionStreamToolFunctionDelta {
+                                    name: Some("run".to_owned()),
+                                    arguments: Some("1}".to_owned()),
+                                },
+                            ),
+                        }],
+                        ..OpenAiLegacyDelta::default()
+                    }),
+                    ..OpenAiLegacyChoice::default()
+                }],
+                ..OpenAiLegacyChunk::default()
+            }),
+            Ok(OpenAiLegacyChunk {
+                usage: Some(json!({
+                    "prompt_tokens": 10,
+                    "completion_tokens": 3,
+                    "prompt_tokens_details": {"cached_tokens": 2}
+                })),
+                ..OpenAiLegacyChunk::default()
+            }),
+        ]);
+        let mut streamed = OpenAiLegacyStreamedMessage::from_stream(
+            chunks,
+            None,
+            Some("trace-1".to_owned()),
+            None,
+        );
+        let mut parts = Vec::new();
+        while let Some(part) = streamed.next().await {
+            parts.push(part.unwrap());
+        }
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(
+            &parts[0],
+            StreamedMessagePart::Content(ContentPart::Think { think, .. }) if think == "think"
+        ));
+        assert!(matches!(
+            &parts[1],
+            StreamedMessagePart::Content(ContentPart::Text { text }) if text == "hello"
+        ));
+        assert!(matches!(
+            &parts[2],
+            StreamedMessagePart::ToolCall(call)
+                if call.id == "call-1" && call.arguments.as_deref() == Some("{\"x\":1}")
+        ));
+        assert_eq!(streamed.id(), Some("chat-1"));
+        assert_eq!(streamed.usage().unwrap().input_other, 8.0);
+        assert_eq!(streamed.finish_reason(), Some(FinishReason::Completed));
+        assert_eq!(streamed.raw_finish_reason(), Some("stop"));
+        assert_eq!(streamed.trace_id(), TraceId::Present(Some("trace-1")));
+
+        let response = OpenAiLegacyCompletion {
+            id: "complete-1".to_owned(),
+            choices: vec![OpenAiLegacyChoice {
+                finish_reason: Some("length".to_owned()),
+                message: Some(OpenAiLegacyMessagePayload {
+                    fields: Map::from_iter([(
+                        "reasoning".to_owned(),
+                        Value::String("r".to_owned()),
+                    )]),
+                    content: Some("done".to_owned()),
+                    tool_calls: Vec::new(),
+                }),
+                delta: None,
+            }],
+            ..OpenAiLegacyCompletion::default()
+        };
+        let mut non_stream =
+            OpenAiLegacyStreamedMessage::from_completion(response, None, None, None);
+        let mut count = 0;
+        while non_stream.next().await.transpose().unwrap().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 2);
+        assert_eq!(non_stream.finish_reason(), Some(FinishReason::Truncated));
     }
 }
