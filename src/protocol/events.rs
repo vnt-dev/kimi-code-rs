@@ -3,7 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::fmt;
 
-use super::display::OptionalJsonValue;
+use super::display::{OptionalJsonValue, ToolInputDisplay};
 use super::model_catalog::{ProviderRefreshChange, ProviderRefreshFailure};
 use super::rest::config::ConfigResponse;
 use super::session::{Session, SessionLastTurnReason, SessionPendingInteraction};
@@ -1105,6 +1105,366 @@ pub struct WarningEvent {
     pub code: Option<String>,
 }
 
+event_type!(TurnStartedEventType, "turn.started");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnStartedEvent {
+    #[serde(rename = "type")]
+    pub event_type: TurnStartedEventType,
+    pub turn_id: f64,
+    pub origin: PromptOrigin,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub prompt: Option<String>,
+}
+
+event_type!(TurnEndedEventType, "turn.ended");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnEndedEvent {
+    #[serde(rename = "type")]
+    pub event_type: TurnEndedEventType,
+    pub turn_id: f64,
+    pub reason: TurnEndReason,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub error: Option<KimiErrorPayload>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub duration_ms: Option<f64>,
+}
+
+event_type!(TurnStepStartedEventType, "turn.step.started");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnStepStartedEvent {
+    #[serde(rename = "type")]
+    pub event_type: TurnStepStartedEventType,
+    pub turn_id: f64,
+    pub step: f64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub step_id: Option<String>,
+}
+
+event_type!(TurnStepCompletedEventType, "turn.step.completed");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnStepCompletedEvent {
+    #[serde(rename = "type")]
+    pub event_type: TurnStepCompletedEventType,
+    pub turn_id: f64,
+    pub step: f64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub step_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub usage: Option<TokenUsage>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub finish_reason: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub llm_first_token_latency_ms: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub llm_stream_duration_ms: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub llm_request_build_ms: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub llm_server_first_token_ms: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub llm_server_decode_ms: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub llm_client_consume_ms: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub provider_finish_reason: Option<FinishReason>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub raw_finish_reason: Option<String>,
+}
+
+event_type!(TurnStepRetryingEventType, "turn.step.retrying");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnStepRetryingEvent {
+    #[serde(rename = "type")]
+    pub event_type: TurnStepRetryingEventType,
+    pub turn_id: f64,
+    pub step: f64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub step_id: Option<String>,
+    pub failed_attempt: f64,
+    pub next_attempt: f64,
+    pub max_attempts: f64,
+    pub delay_ms: f64,
+    pub error_name: String,
+    pub error_message: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub status_code: Option<f64>,
+}
+
+event_type!(TurnStepInterruptedEventType, "turn.step.interrupted");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnStepInterruptedEvent {
+    #[serde(rename = "type")]
+    pub event_type: TurnStepInterruptedEventType,
+    pub turn_id: f64,
+    pub step: f64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub step_id: Option<String>,
+    pub reason: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub message: Option<String>,
+}
+
+event_type!(AssistantDeltaEventType, "assistant.delta");
+event_type!(ThinkingDeltaEventType, "thinking.delta");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantDeltaEvent {
+    #[serde(rename = "type")]
+    pub event_type: AssistantDeltaEventType,
+    pub turn_id: f64,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThinkingDeltaEvent {
+    #[serde(rename = "type")]
+    pub event_type: ThinkingDeltaEventType,
+    pub turn_id: f64,
+    pub delta: String,
+}
+
+event_type!(HookResultEventType, "hook.result");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookResultEvent {
+    #[serde(rename = "type")]
+    pub event_type: HookResultEventType,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub turn_id: Option<f64>,
+    pub hook_event: String,
+    pub content: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub blocked: Option<bool>,
+}
+
+event_type!(ToolCallDeltaEventType, "tool.call.delta");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallDeltaEvent {
+    #[serde(rename = "type")]
+    pub event_type: ToolCallDeltaEventType,
+    pub turn_id: f64,
+    pub tool_call_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub name: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub arguments_part: Option<String>,
+}
+
+event_type!(ToolCallStartedEventType, "tool.call.started");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallStartedEvent {
+    #[serde(rename = "type")]
+    pub event_type: ToolCallStartedEventType,
+    pub turn_id: f64,
+    pub tool_call_id: String,
+    pub name: String,
+    pub args: Value,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub description: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub display: Option<ToolInputDisplay>,
+}
+
+event_type!(ToolProgressEventType, "tool.progress");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolProgressEvent {
+    #[serde(rename = "type")]
+    pub event_type: ToolProgressEventType,
+    pub turn_id: f64,
+    pub tool_call_id: String,
+    pub update: ToolUpdate,
+}
+
+event_type!(ShellOutputEventType, "shell.output");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellOutputEvent {
+    #[serde(rename = "type")]
+    pub event_type: ShellOutputEventType,
+    pub command_id: String,
+    pub update: ToolUpdate,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub task_id: Option<String>,
+}
+
+event_type!(ShellStartedEventType, "shell.started");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellStartedEvent {
+    #[serde(rename = "type")]
+    pub event_type: ShellStartedEventType,
+    pub command_id: String,
+    pub task_id: String,
+}
+
+event_type!(ShellCompletedEventType, "shell.completed");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellCompletedEvent {
+    #[serde(rename = "type")]
+    pub event_type: ShellCompletedEventType,
+    pub command_id: String,
+    pub is_error: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub task_id: Option<String>,
+}
+
+event_type!(ToolResultEventType, "tool.result");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolResultEvent {
+    #[serde(rename = "type")]
+    pub event_type: ToolResultEventType,
+    pub turn_id: f64,
+    pub tool_call_id: String,
+    pub output: Value,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub is_error: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub synthetic: Option<bool>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1187,6 +1547,19 @@ mod tests {
         assert!(
             serde_json::from_value::<WarningEvent>(serde_json::json!({
                 "type": "error", "message": "wrong literal"
+            }))
+            .is_err()
+        );
+        let tool: ToolCallStartedEvent = serde_json::from_value(serde_json::json!({
+            "type": "tool.call.started", "turnId": 1, "toolCallId": "call-1",
+            "name": "bash", "args": {"command": "pwd"},
+            "display": {"kind": "command", "command": "pwd", "language": "bash"}
+        }))
+        .unwrap();
+        assert_eq!(tool.name, "bash");
+        assert!(
+            serde_json::from_value::<ShellCompletedEvent>(serde_json::json!({
+                "type": "shell.started", "commandId": "cmd", "isError": false
             }))
             .is_err()
         );
