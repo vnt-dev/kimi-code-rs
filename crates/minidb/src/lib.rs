@@ -11,6 +11,8 @@ pub mod rename_replace;
 pub mod skiplist;
 pub mod snapshot;
 pub mod store;
+pub mod text_index;
+pub mod text_postings;
 pub mod value_reader;
 pub mod wal;
 
