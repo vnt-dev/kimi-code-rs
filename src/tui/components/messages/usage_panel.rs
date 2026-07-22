@@ -480,7 +480,6 @@ mod tests {
             by_model: Some(BTreeMap::from([(
                 "kimi".to_owned(),
                 TokenUsage {
-                    input: 0,
                     input_cache_read: 500,
                     input_cache_creation: 500,
                     input_other: 1_000,

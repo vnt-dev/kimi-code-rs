@@ -504,7 +504,6 @@ pub struct SkillSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
-    pub input: u64,
     pub input_cache_read: u64,
     pub input_cache_creation: u64,
     pub input_other: u64,
@@ -612,6 +611,9 @@ pub enum PromptOriginKind {
     BackgroundTask,
     SkillActivation,
     PluginCommand,
+    ShellCommand,
+    Task,
+    Retry,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
