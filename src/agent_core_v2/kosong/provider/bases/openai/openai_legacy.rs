@@ -1,4 +1,6 @@
+use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
+use indexmap::IndexMap;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
@@ -11,8 +13,8 @@ use crate::agent_core_v2::kosong::contract::message::{
     is_tool_declaration_only_message,
 };
 use crate::agent_core_v2::kosong::contract::provider::{
-    FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage, ThinkingEffort,
-    ToolCallIdPolicy, TraceId,
+    ChatProvider, FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage,
+    ThinkingEffort, ToolCallIdPolicy, TraceId, VideoUploadSource,
 };
 use crate::agent_core_v2::kosong::contract::tool::Tool;
 use crate::agent_core_v2::kosong::contract::usage::TokenUsage;
@@ -29,6 +31,12 @@ use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::{
 };
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_hooks::{
     BoundExtractUsageHook, OpenAiChatHooks,
+};
+use crate::agent_core_v2::kosong::provider::bases::openai::openai_legacy_transport::{
+    OpenAiLegacyHttpResponse, send_openai_legacy_request,
+};
+use crate::agent_core_v2::kosong::provider::bases::request_auth::{
+    merge_request_headers, require_provider_api_key,
 };
 use crate::agent_core_v2::kosong::provider::bases::tool_call_id::{
     ToolCallIdError, normalize_tool_call_ids_for_provider, sanitize_tool_call_id,
@@ -898,13 +906,215 @@ impl StreamedMessage for OpenAiLegacyStreamedMessage {
     }
 }
 
-// MIGRATION-TODO:
-// Original: openai-legacy.ts, OpenAILegacyChatProvider network methods.
-// Missing dependency: the selected async OpenAI HTTP transport and its stream
-// event types. Temporary behavior: none; this module exposes only completed
-// pure request-shaping methods. Completion condition: port message/history
-// shaping next, then implement the provider and stream over reqwest or a
-// maintained SDK while preserving request order, cancellation and errors.
+pub struct OpenAiLegacyOptions {
+    pub model: String,
+    pub stream: Option<bool>,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub default_headers: Option<IndexMap<String, String>>,
+    pub reasoning_key: Option<String>,
+    pub thinking_effort: Option<ThinkingEffort>,
+    pub max_tokens: Option<f64>,
+    pub tool_message_conversion: Option<ToolMessageConversion>,
+    pub hooks: Option<OpenAiChatHooks>,
+    pub http_client: Option<reqwest::Client>,
+}
+
+impl OpenAiLegacyOptions {
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            stream: None,
+            api_key: None,
+            base_url: None,
+            default_headers: None,
+            reasoning_key: None,
+            thinking_effort: None,
+            max_tokens: None,
+            tool_message_conversion: None,
+            hooks: None,
+            http_client: None,
+        }
+    }
+}
+
+// Original:
+//   packages/agent-core-v2/src/kosong/provider/bases/openai/openai-legacy.ts
+//   OpenAILegacyChatProvider
+//
+// Rust adaptation:
+//   The OpenAI SDK client becomes a reusable reqwest client. Request shaping
+//   stays in build_openai_legacy_request(), and the transport boundary keeps
+//   authentication, cancellation, response headers, JSON and SSE handling in
+//   their original call order.
+pub struct OpenAiLegacyChatProvider {
+    model: String,
+    stream: bool,
+    api_key: Option<String>,
+    base_url: String,
+    default_headers: Option<IndexMap<String, String>>,
+    reasoning_key: Option<String>,
+    thinking_effort: Option<ThinkingEffort>,
+    generation_kwargs: OpenAiLegacyGenerationKwargs,
+    tool_message_conversion: ToolMessageConversion,
+    hooks: Option<OpenAiChatHooks>,
+    http_client: reqwest::Client,
+}
+
+impl OpenAiLegacyChatProvider {
+    pub fn new(options: OpenAiLegacyOptions) -> Self {
+        // Presence, rather than non-emptiness, controls the environment
+        // fallback. This preserves the contrib factory's explicit empty-key
+        // sentinel for vendor endpoints.
+        let api_key = match options.api_key {
+            Some(api_key) => Some(api_key),
+            None => std::env::var("OPENAI_API_KEY").ok(),
+        }
+        .filter(|api_key| !api_key.is_empty());
+        let normalized_reasoning_key = options
+            .reasoning_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                options
+                    .hooks
+                    .as_ref()
+                    .and_then(|hooks| hooks.reasoning_key.as_ref())
+                    .and_then(|hook| hook())
+            });
+        let generation_kwargs = normalize_generation_kwargs(
+            &options.model,
+            &options.max_tokens.map_or_else(Map::new, |tokens| {
+                completion_token_kwargs(&options.model, tokens)
+            }),
+        );
+        Self {
+            model: options.model,
+            stream: options.stream.unwrap_or(true),
+            api_key,
+            base_url: options
+                .base_url
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_owned()),
+            default_headers: options.default_headers,
+            reasoning_key: normalized_reasoning_key,
+            thinking_effort: options.thinking_effort,
+            generation_kwargs,
+            tool_message_conversion: options
+                .tool_message_conversion
+                .unwrap_or(ToolMessageConversion::Parts),
+            hooks: options.hooks,
+            http_client: options.http_client.unwrap_or_default(),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatProvider for OpenAiLegacyChatProvider {
+    fn name(&self) -> &str {
+        "openai"
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    fn thinking_effort(&self) -> Option<&ThinkingEffort> {
+        self.thinking_effort.as_ref()
+    }
+
+    fn max_completion_tokens(&self) -> Option<f64> {
+        self.generation_kwargs
+            .get("max_completion_tokens")
+            .or_else(|| self.generation_kwargs.get("max_tokens"))
+            .and_then(Value::as_f64)
+    }
+
+    async fn generate(
+        &self,
+        system_prompt: &str,
+        tools: &[Tool],
+        history: &[Message],
+        options: Option<&GenerateOptions>,
+    ) -> Result<Box<dyn StreamedMessage>, ProviderError> {
+        let api_key = require_provider_api_key(
+            "OpenAILegacyChatProvider",
+            options.and_then(|options| options.auth.as_ref()),
+            self.api_key.as_deref(),
+        )?;
+        let headers = merge_request_headers(
+            self.default_headers.as_ref(),
+            options
+                .and_then(|options| options.auth.as_ref())
+                .and_then(|auth| auth.headers.as_ref()),
+        );
+        let params = build_openai_legacy_request(
+            &self.model,
+            self.stream,
+            self.reasoning_key.as_deref(),
+            &self.generation_kwargs,
+            self.thinking_effort.as_ref(),
+            self.tool_message_conversion,
+            self.hooks.as_ref(),
+            system_prompt,
+            tools,
+            history,
+            options,
+        )?;
+        if let Some(callback) = options.and_then(|options| options.on_request_sent.as_ref()) {
+            callback();
+        }
+        let response = send_openai_legacy_request(
+            &self.http_client,
+            &self.base_url,
+            &api_key,
+            headers.as_ref(),
+            params,
+            self.stream,
+            options.and_then(|options| options.signal.as_ref()),
+        )
+        .await?;
+        let extract_usage = self
+            .hooks
+            .as_ref()
+            .and_then(|hooks| hooks.extract_usage.clone());
+        let message: Box<dyn StreamedMessage> = match response {
+            OpenAiLegacyHttpResponse::Completion { value, trace_id } => {
+                Box::new(OpenAiLegacyStreamedMessage::from_completion(
+                    value,
+                    self.reasoning_key.clone(),
+                    trace_id,
+                    extract_usage,
+                ))
+            }
+            OpenAiLegacyHttpResponse::Stream { value, trace_id } => {
+                Box::new(OpenAiLegacyStreamedMessage::from_stream(
+                    value,
+                    self.reasoning_key.clone(),
+                    trace_id,
+                    extract_usage,
+                ))
+            }
+        };
+        Ok(message)
+    }
+
+    async fn upload_video(
+        &self,
+        input: VideoUploadSource,
+        options: Option<&GenerateOptions>,
+    ) -> Result<Option<ContentPart>, ProviderError> {
+        let Some(upload) = self
+            .hooks
+            .as_ref()
+            .and_then(|hooks| hooks.upload_video.as_ref())
+        else {
+            return Ok(None);
+        };
+        upload(input, options.cloned()).await.map(Some)
+    }
+}
 
 #[cfg(test)]
 mod tests {
