@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::error::Error;
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -102,6 +104,12 @@ pub enum FinishReason {
 
 pub type ProviderError = Box<dyn Error + Send + Sync>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceId<'a> {
+    Absent,
+    Present(Option<&'a str>),
+}
+
 // Original:
 //   packages/agent-core-v2/src/kosong/contract/provider.ts
 //   StreamedMessage
@@ -117,7 +125,11 @@ pub trait StreamedMessage:
     fn usage(&self) -> Option<&TokenUsage>;
     fn finish_reason(&self) -> Option<FinishReason>;
     fn raw_finish_reason(&self) -> Option<&str>;
-    fn trace_id(&self) -> Option<&str>;
+    fn trace_id(&self) -> TraceId<'_>;
+
+    fn cancel(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -388,8 +400,8 @@ mod tests {
             Some("stop")
         }
 
-        fn trace_id(&self) -> Option<&str> {
-            Some("trace-1")
+        fn trace_id(&self) -> TraceId<'_> {
+            TraceId::Present(Some("trace-1"))
         }
     }
 
@@ -448,7 +460,7 @@ mod tests {
 
         let mut stream = provider.generate("system", &[], &[], None).await.unwrap();
         assert_eq!(stream.id(), Some("response-1"));
-        assert_eq!(stream.trace_id(), Some("trace-1"));
+        assert_eq!(stream.trace_id(), TraceId::Present(Some("trace-1")));
         assert_eq!(stream.usage().unwrap().output, 1.0);
         assert_eq!(stream.finish_reason(), Some(FinishReason::Completed));
         let part = stream.next().await.unwrap().unwrap();

@@ -68,7 +68,7 @@ pub enum ToolCallType {
     Function,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum StreamIndex {
     Number(i64),

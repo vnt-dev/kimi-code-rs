@@ -1,5 +1,6 @@
 pub mod capability;
 pub mod errors;
+pub mod generate;
 pub mod inspection;
 pub mod message;
 pub mod provider;
