@@ -8,15 +8,18 @@ use crate::agent_core_v2::kosong::contract::message::{
 use crate::agent_core_v2::kosong::contract::provider::{
     GenerateOptions, ResponseFormat, ThinkingEffort, ToolCallIdPolicy,
 };
+use crate::agent_core_v2::kosong::contract::tool::Tool;
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::{
     ConvertedToolMessageContent, OPENAI_REASONING_CAPABILITY, OPENAI_TEXT_TOOL_CAPABILITY,
     OPENAI_VISION_TOOL_CAPABILITY, OPENAI_VISION_TOOL_PREFIXES, OpenAiContentPart,
     TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_PROMPT, ToolMessageConversion,
     convert_content_part, convert_tool_message_content, has_model_prefix,
-    is_openai_reasoning_model,
+    is_openai_reasoning_model, tool_to_openai,
 };
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_hooks::OpenAiChatHooks;
-use crate::agent_core_v2::kosong::provider::bases::tool_call_id::sanitize_tool_call_id;
+use crate::agent_core_v2::kosong::provider::bases::tool_call_id::{
+    ToolCallIdError, normalize_tool_call_ids_for_provider, sanitize_tool_call_id,
+};
 
 pub const KNOWN_REASONING_KEYS: [&str; 3] = ["reasoning_content", "reasoning_details", "reasoning"];
 pub const DEFAULT_OUTBOUND_REASONING_KEY: &str = KNOWN_REASONING_KEYS[0];
@@ -475,6 +478,127 @@ pub fn get_openai_legacy_model_capability(model_name: &str) -> Option<&'static M
     }
 }
 
+// Original: openai-legacy.ts, OpenAILegacyChatProvider.generate() request
+// construction before the SDK call.
+#[allow(clippy::too_many_arguments)]
+pub fn build_openai_legacy_request(
+    model: &str,
+    stream: bool,
+    reasoning_key: Option<&str>,
+    generation_kwargs: &OpenAiLegacyGenerationKwargs,
+    default_thinking_effort: Option<&ThinkingEffort>,
+    tool_message_conversion: ToolMessageConversion,
+    hooks: Option<&OpenAiChatHooks>,
+    system_prompt: &str,
+    tools: &[Tool],
+    history: &[Message],
+    options: Option<&GenerateOptions>,
+) -> Result<Map<String, Value>, ToolCallIdError> {
+    let resolved = resolve_request_kwargs(
+        model,
+        generation_kwargs,
+        default_thinking_effort,
+        hooks,
+        history,
+        options,
+    );
+    let preserve_thinking = hooks
+        .and_then(|hooks| hooks.preserve_thinking.as_ref())
+        .and_then(|hook| hook(&resolved.kwargs))
+        .unwrap_or(false);
+    let policy = hooks
+        .and_then(|hooks| hooks.tool_call_id_policy.as_ref())
+        .and_then(|hook| hook())
+        .unwrap_or_else(|| OPENAI_CHAT_TOOL_CALL_ID_POLICY.clone());
+    let normalized_history = normalize_tool_call_ids_for_provider(history.to_vec(), &policy)?;
+
+    let mut messages = Vec::new();
+    if !system_prompt.is_empty() {
+        messages.push(Map::from_iter([
+            ("role".to_owned(), Value::String("system".to_owned())),
+            (
+                "content".to_owned(),
+                Value::String(system_prompt.to_owned()),
+            ),
+        ]));
+    }
+    if let Some(convert_message_hook) = hooks.and_then(|hooks| hooks.convert_message.as_ref()) {
+        for message in &normalized_history {
+            let converted = convert_message(
+                message,
+                reasoning_key,
+                ToolMessageConversion::Parts,
+                preserve_thinking,
+                false,
+            );
+            if let Some(shaped) = convert_message_hook(message, converted) {
+                messages.push(shaped);
+            }
+        }
+    } else {
+        messages.extend(convert_history_messages(
+            &normalized_history,
+            reasoning_key,
+            tool_message_conversion,
+            preserve_thinking,
+        ));
+    }
+    if let Some(merge_history) = hooks.and_then(|hooks| hooks.merge_history.as_ref()) {
+        messages = merge_history(&messages);
+    }
+
+    let mut params = Map::from_iter([
+        ("model".to_owned(), Value::String(model.to_owned())),
+        (
+            "messages".to_owned(),
+            Value::Array(messages.into_iter().map(Value::Object).collect()),
+        ),
+        ("stream".to_owned(), Value::Bool(stream)),
+    ]);
+    params.extend(resolved.kwargs);
+    if !tools.is_empty() {
+        let converted = tools
+            .iter()
+            .map(|tool| {
+                hooks
+                    .and_then(|hooks| hooks.convert_tool.as_ref())
+                    .and_then(|hook| hook(tool))
+                    .map(Value::Object)
+                    .unwrap_or_else(|| {
+                        if hooks.is_some_and(|hooks| hooks.convert_tool.is_some()) {
+                            Value::Null
+                        } else {
+                            serde_json::json!(tool_to_openai(tool))
+                        }
+                    })
+            })
+            .collect();
+        params.insert("tools".to_owned(), Value::Array(converted));
+    }
+    if let Some(response_format) = options.and_then(|options| options.response_format.as_ref()) {
+        params.insert(
+            "response_format".to_owned(),
+            Value::Object(response_format_to_openai(response_format)),
+        );
+    }
+    if stream {
+        params.insert(
+            "stream_options".to_owned(),
+            serde_json::json!({"include_usage":true}),
+        );
+    }
+    if let Some(reasoning_effort) = resolved.reasoning_effort {
+        params.insert(
+            "reasoning_effort".to_owned(),
+            Value::String(reasoning_effort),
+        );
+    }
+    if let Some(build_params) = hooks.and_then(|hooks| hooks.build_params.as_ref()) {
+        params = build_params(params);
+    }
+    Ok(params)
+}
+
 // MIGRATION-TODO:
 // Original: openai-legacy.ts, OpenAILegacyStreamedMessage,
 // OpenAILegacyChatProvider network/stream methods.
@@ -775,5 +899,77 @@ mod tests {
         ] {
             assert_eq!(get_openai_legacy_model_capability(model), expected);
         }
+    }
+
+    #[test]
+    fn request_builder_runs_trait_mode_and_build_params_last() {
+        let mut declaration = Message::new(Role::User, Vec::new(), Vec::new());
+        declaration.tools = Some(vec![Tool {
+            name: "declared".to_owned(),
+            description: "declaration message".to_owned(),
+            parameters: Map::new(),
+            deferred: None,
+        }]);
+        let user = Message::new(
+            Role::User,
+            vec![ContentPart::Text {
+                text: "hello".to_owned(),
+            }],
+            Vec::new(),
+        );
+        let hooks = OpenAiChatHooks {
+            convert_message: Some(Arc::new(|message, mut converted| {
+                if message.tools.is_some() {
+                    None
+                } else {
+                    converted.insert("shaped".to_owned(), Value::Bool(true));
+                    Some(converted)
+                }
+            })),
+            merge_history: Some(Arc::new(|messages| {
+                let mut messages = messages.to_vec();
+                messages.push(Map::from_iter([(
+                    "role".to_owned(),
+                    Value::String("merge-marker".to_owned()),
+                )]));
+                messages
+            })),
+            build_params: Some(Arc::new(|mut params| {
+                assert_eq!(params["stream_options"]["include_usage"], true);
+                assert_eq!(params["response_format"]["type"], "json_object");
+                params.insert("built_last".to_owned(), Value::Bool(true));
+                params
+            })),
+            ..OpenAiChatHooks::default()
+        };
+        let options = GenerateOptions {
+            response_format: Some(ResponseFormat::JsonObject),
+            ..GenerateOptions::default()
+        };
+        let params = build_openai_legacy_request(
+            "gpt-4o",
+            true,
+            None,
+            &Map::new(),
+            None,
+            ToolMessageConversion::Parts,
+            Some(&hooks),
+            "system",
+            &[Tool {
+                name: "read".to_owned(),
+                description: "Read".to_owned(),
+                parameters: Map::new(),
+                deferred: None,
+            }],
+            &[declaration, user],
+            Some(&options),
+        )
+        .unwrap();
+        assert_eq!(params["messages"].as_array().unwrap().len(), 3);
+        assert_eq!(params["messages"][0]["role"], "system");
+        assert_eq!(params["messages"][1]["shaped"], true);
+        assert_eq!(params["messages"][2]["role"], "merge-marker");
+        assert_eq!(params["tools"][0]["type"], "function");
+        assert_eq!(params["built_last"], true);
     }
 }
