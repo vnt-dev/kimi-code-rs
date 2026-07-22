@@ -723,6 +723,229 @@ pub enum ServerSystemMessage {
     Error(WsErrorMessage),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WsOperationDirection {
+    ClientToServer,
+    ServerToClient,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WsOperationKind {
+    Control,
+    System,
+    Event,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WsMessageSchema {
+    ClientHello,
+    ClientHelloAck,
+    Subscribe,
+    SubscribeAck,
+    Unsubscribe,
+    UnsubscribeAck,
+    WatchFsAdd,
+    WatchFsRemove,
+    WatchFsAck,
+    Abort,
+    AbortAck,
+    TerminalAttach,
+    TerminalAttachAck,
+    TerminalDetach,
+    TerminalDetachAck,
+    TerminalInput,
+    TerminalInputAck,
+    TerminalResize,
+    TerminalResizeAck,
+    TerminalClose,
+    TerminalCloseAck,
+    Pong,
+    ServerHello,
+    Ping,
+    ResyncRequired,
+    Error,
+    SessionEvent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WsOperationDefinition {
+    pub operation_type: &'static str,
+    pub direction: WsOperationDirection,
+    pub kind: WsOperationKind,
+    pub message_schema: WsMessageSchema,
+    pub ack_schema: Option<WsMessageSchema>,
+    pub description: &'static str,
+}
+
+const fn client_operation(
+    operation_type: &'static str,
+    message_schema: WsMessageSchema,
+    ack_schema: Option<WsMessageSchema>,
+    description: &'static str,
+) -> WsOperationDefinition {
+    WsOperationDefinition {
+        operation_type,
+        direction: WsOperationDirection::ClientToServer,
+        kind: WsOperationKind::Control,
+        message_schema,
+        ack_schema,
+        description,
+    }
+}
+
+pub const CLIENT_CONTROL_OPERATIONS: [WsOperationDefinition; 12] = [
+    client_operation(
+        "client_hello",
+        WsMessageSchema::ClientHello,
+        Some(WsMessageSchema::ClientHelloAck),
+        "Start a client session and optionally subscribe to existing daemon sessions.",
+    ),
+    client_operation(
+        "subscribe",
+        WsMessageSchema::Subscribe,
+        Some(WsMessageSchema::SubscribeAck),
+        "Subscribe the connection to one or more session event streams.",
+    ),
+    client_operation(
+        "unsubscribe",
+        WsMessageSchema::Unsubscribe,
+        Some(WsMessageSchema::UnsubscribeAck),
+        "Remove one or more session event stream subscriptions.",
+    ),
+    client_operation(
+        "watch_fs_add",
+        WsMessageSchema::WatchFsAdd,
+        Some(WsMessageSchema::WatchFsAck),
+        "Add filesystem watch paths for a subscribed session.",
+    ),
+    client_operation(
+        "watch_fs_remove",
+        WsMessageSchema::WatchFsRemove,
+        Some(WsMessageSchema::WatchFsAck),
+        "Remove filesystem watch paths for a subscribed session.",
+    ),
+    client_operation(
+        "abort",
+        WsMessageSchema::Abort,
+        Some(WsMessageSchema::AbortAck),
+        "Abort a running prompt in a session.",
+    ),
+    client_operation(
+        "terminal_attach",
+        WsMessageSchema::TerminalAttach,
+        Some(WsMessageSchema::TerminalAttachAck),
+        "Attach this connection to a terminal stream.",
+    ),
+    client_operation(
+        "terminal_detach",
+        WsMessageSchema::TerminalDetach,
+        Some(WsMessageSchema::TerminalDetachAck),
+        "Detach this connection from a terminal stream.",
+    ),
+    client_operation(
+        "terminal_input",
+        WsMessageSchema::TerminalInput,
+        Some(WsMessageSchema::TerminalInputAck),
+        "Write raw input bytes to a terminal.",
+    ),
+    client_operation(
+        "terminal_resize",
+        WsMessageSchema::TerminalResize,
+        Some(WsMessageSchema::TerminalResizeAck),
+        "Resize a terminal.",
+    ),
+    client_operation(
+        "terminal_close",
+        WsMessageSchema::TerminalClose,
+        Some(WsMessageSchema::TerminalCloseAck),
+        "Close a terminal.",
+    ),
+    client_operation(
+        "pong",
+        WsMessageSchema::Pong,
+        None,
+        "Reply to a server ping with the same nonce.",
+    ),
+];
+
+const fn server_operation(
+    operation_type: &'static str,
+    message_schema: WsMessageSchema,
+    description: &'static str,
+) -> WsOperationDefinition {
+    WsOperationDefinition {
+        operation_type,
+        direction: WsOperationDirection::ServerToClient,
+        kind: WsOperationKind::System,
+        message_schema,
+        ack_schema: None,
+        description,
+    }
+}
+
+pub const SERVER_SYSTEM_OPERATIONS: [WsOperationDefinition; 4] = [
+    server_operation(
+        "server_hello",
+        WsMessageSchema::ServerHello,
+        "Initial server greeting sent immediately after the socket opens.",
+    ),
+    server_operation(
+        "ping",
+        WsMessageSchema::Ping,
+        "Heartbeat ping sent by the server; clients must answer with pong.",
+    ),
+    server_operation(
+        "resync_required",
+        WsMessageSchema::ResyncRequired,
+        "Signals that a client must rebuild local session state from REST history.",
+    ),
+    server_operation(
+        "error",
+        WsMessageSchema::Error,
+        "Server-side WebSocket protocol or runtime error.",
+    ),
+];
+
+pub const SESSION_EVENT_OPERATION: WsOperationDefinition = WsOperationDefinition {
+    operation_type: "session_event",
+    direction: WsOperationDirection::ServerToClient,
+    kind: WsOperationKind::Event,
+    message_schema: WsMessageSchema::SessionEvent,
+    ack_schema: None,
+    description: "Session-scoped agent event envelope; frame type is the payload event type.",
+};
+
+pub const WS_OPERATIONS: [WsOperationDefinition; 17] = [
+    CLIENT_CONTROL_OPERATIONS[0],
+    CLIENT_CONTROL_OPERATIONS[1],
+    CLIENT_CONTROL_OPERATIONS[2],
+    CLIENT_CONTROL_OPERATIONS[3],
+    CLIENT_CONTROL_OPERATIONS[4],
+    CLIENT_CONTROL_OPERATIONS[5],
+    CLIENT_CONTROL_OPERATIONS[6],
+    CLIENT_CONTROL_OPERATIONS[7],
+    CLIENT_CONTROL_OPERATIONS[8],
+    CLIENT_CONTROL_OPERATIONS[9],
+    CLIENT_CONTROL_OPERATIONS[10],
+    CLIENT_CONTROL_OPERATIONS[11],
+    SERVER_SYSTEM_OPERATIONS[0],
+    SERVER_SYSTEM_OPERATIONS[1],
+    SERVER_SYSTEM_OPERATIONS[2],
+    SERVER_SYSTEM_OPERATIONS[3],
+    SESSION_EVENT_OPERATION,
+];
+
+// Original: ws-control.ts, getClientControlOperation().
+pub fn get_client_control_operation(
+    operation_type: &str,
+) -> Option<&'static WsOperationDefinition> {
+    CLIENT_CONTROL_OPERATIONS
+        .iter()
+        .find(|operation| operation.operation_type == operation_type)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -773,5 +996,9 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(exit.payload.exit_code, OptionalNullable::Null);
+        let subscribe = get_client_control_operation("subscribe").unwrap();
+        assert_eq!(subscribe.ack_schema, Some(WsMessageSchema::SubscribeAck));
+        assert_eq!(WS_OPERATIONS.len(), 17);
+        assert!(get_client_control_operation("ping").is_none());
     }
 }
