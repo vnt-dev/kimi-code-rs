@@ -10,6 +10,7 @@ pub mod minidb;
 pub mod query;
 pub mod recovery;
 pub mod rename_replace;
+pub mod server;
 pub mod skiplist;
 pub mod snapshot;
 pub mod store;

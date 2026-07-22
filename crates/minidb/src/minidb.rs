@@ -1864,6 +1864,14 @@ impl<V: Send + Sync + 'static> MiniDb<V> {
             .clone())
     }
 
+    pub fn compaction_stats(&self) -> Result<crate::compaction::CompactionStats, MiniDbError> {
+        Ok(*self
+            .compaction()
+            .stats
+            .lock()
+            .map_err(|_| MiniDbError::StatePoisoned)?)
+    }
+
     pub async fn close(&self) -> Result<(), MiniDbError> {
         if self
             .inner
