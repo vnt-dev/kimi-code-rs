@@ -11,7 +11,10 @@ use std::{
 use async_trait::async_trait;
 use kimi_code_rs::cli::{
     build_info::KIMI_BUILD_INFO,
-    commands::{CommandInvocation, ProviderCommand, ServerArgs, parse_command_from},
+    commands::{
+        CommandInvocation, DoctorArgs, DoctorCommand, ProviderCommand, ServerArgs,
+        parse_command_from,
+    },
     entrypoint::{
         EntrypointDisposition, EntrypointRuntime, EntrypointRuntimeError, SubcommandOutcome,
         run_entrypoint,
@@ -20,6 +23,8 @@ use kimi_code_rs::cli::{
     options::CliOptions,
     startup_error::{StartupErrorFormatOptions, StartupFailure, format_startup_error},
     sub::{
+        doctor::{DoctorOptions, DoctorTarget, handle_doctor},
+        doctor_runtime::SystemDoctorRuntime,
         provider::{KIMI_REGISTRY_API_KEY_ENV, run_provider_command},
         provider_runtime::ProviderCommandRuntime,
         upgrade::{UpgradeError, handle_upgrade},
@@ -129,6 +134,9 @@ impl EntrypointRuntime for SystemEntrypointRuntime {
         if matches!(command, CommandInvocation::Upgrade) {
             return run_upgrade_subcommand(version).await;
         }
+        if let CommandInvocation::Doctor(arguments) = command {
+            return run_doctor_subcommand(arguments).await;
+        }
         if let CommandInvocation::Server(arguments) = command
             && !is_legacy_kill(arguments)
         {
@@ -149,6 +157,30 @@ impl EntrypointRuntime for SystemEntrypointRuntime {
             completion: "compose the migrated handler with its concrete process runtime",
         }))
     }
+}
+
+// Original:
+//   apps/kimi-code/src/cli/sub/doctor.ts
+//   registerDoctorCommand(), resolveDeps()
+async fn run_doctor_subcommand(
+    arguments: &DoctorArgs,
+) -> Result<SubcommandOutcome, EntrypointRuntimeError> {
+    let options = match &arguments.command {
+        None => DoctorOptions::default(),
+        Some(DoctorCommand::Config { path }) => DoctorOptions {
+            target: Some(DoctorTarget::Config),
+            path: path.as_deref().map(Into::into),
+        },
+        Some(DoctorCommand::Tui { path }) => DoctorOptions {
+            target: Some(DoctorTarget::Tui),
+            path: path.as_deref().map(Into::into),
+        },
+    };
+    let runtime = SystemDoctorRuntime::new().map_err(EntrypointRuntimeError::new)?;
+    let exit_code = handle_doctor(&runtime, &options)
+        .await
+        .map_err(EntrypointRuntimeError::new)?;
+    Ok(SubcommandOutcome { exit_code })
 }
 
 // Original:

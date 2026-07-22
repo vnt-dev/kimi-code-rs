@@ -165,6 +165,18 @@ fn read_config(path: &Path, for_update: bool) -> Result<ProviderConfig, Provider
     provider_config_from_table(&table, path)
 }
 
+// Original:
+//   packages/agent-core/src/config/rpc.ts
+//   KimiConfigRpc.validateConfigToml()
+//
+// Rust adaptation:
+//   Validation consumes the caller-provided snapshot instead of rereading the
+//   file, so `kimi doctor` reports on exactly the bytes it loaded.
+pub fn validate_provider_config_toml(text: &str, path: &Path) -> Result<(), ProviderError> {
+    let table = parse_table(text, path, false)?;
+    provider_config_from_table(&table, path).map(drop)
+}
+
 fn read_table_for_update(path: &Path) -> Result<toml::Table, ProviderError> {
     if !path.exists() {
         return Ok(toml::Table::new());
@@ -591,5 +603,20 @@ max_context_size = 1024
             invalid
         );
         std::fs::remove_file(path).expect("cleanup");
+    }
+
+    #[test]
+    fn validates_the_provided_config_snapshot_without_file_io() {
+        let path = Path::new("/virtual/config.toml");
+        validate_provider_config_toml(
+            "telemetry = false\n\n[providers.example]\ntype = \"openai\"\n",
+            path,
+        )
+        .expect("valid config");
+
+        let error = validate_provider_config_toml("[providers.broken]\ntype = 1\n", path)
+            .expect_err("invalid provider");
+        assert!(error.to_string().contains("providers.broken"));
+        assert!(error.to_string().contains("/virtual/config.toml"));
     }
 }
