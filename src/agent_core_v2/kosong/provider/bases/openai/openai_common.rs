@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
+use crate::agent_core_v2::kosong::contract::errors::{
+    ChatProviderError, classify_base_api_error, normalize_api_status_error, parse_retry_after_ms,
+    parse_trace_id,
+};
 use crate::agent_core_v2::kosong::contract::message::{
     ContentPart, MediaUrl, Message, extract_text,
 };
@@ -65,13 +69,40 @@ pub fn tool_to_openai(tool: &Tool) -> OpenAiToolParam {
     }
 }
 
-// MIGRATION-TODO:
 // Original: openai-common.ts, convertOpenAIError()
-// Missing dependency: the selected Rust OpenAI transport has not been wired,
-// so its SDK-specific timeout/connection/status error types are unavailable.
-// Temporary behavior: none; callers must not substitute a generic converter.
-// Completion condition: select the transport crate, map its typed errors to
-// ChatProviderError with the abort guard first, and port errors.test.ts.
+//
+// Rust adaptation:
+//   reqwest does not represent non-success HTTP statuses as transport errors,
+//   so the original method is split into transport and status counterparts.
+//   Cancellation is guarded before reqwest futures are polled by each caller;
+//   it therefore remains impossible for an abort to reach this classifier.
+pub fn convert_openai_error(error: reqwest::Error) -> ChatProviderError {
+    if error.is_timeout() {
+        ChatProviderError::timeout(error.to_string())
+    } else if error.is_connect() || error.is_request() || error.is_body() {
+        ChatProviderError::connection(error.to_string())
+    } else {
+        classify_base_api_error(&error.to_string())
+    }
+}
+
+pub fn convert_openai_status_error(
+    status_code: u16,
+    message: &str,
+    headers: &reqwest::header::HeaderMap,
+) -> ChatProviderError {
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    normalize_api_status_error(
+        i32::from(status_code),
+        message,
+        request_id,
+        parse_retry_after_ms(Some(headers)),
+        parse_trace_id(Some(headers)),
+    )
+}
 
 pub fn is_function_tool_call(call_type: &str) -> bool {
     call_type == "function"

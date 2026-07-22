@@ -6,14 +6,14 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_core_v2::kosong::contract::errors::{
-    ChatProviderError, classify_base_api_error, normalize_api_status_error, parse_retry_after_ms,
-    parse_trace_id,
-};
+use crate::agent_core_v2::kosong::contract::errors::{ChatProviderError, parse_trace_id};
 use crate::agent_core_v2::kosong::contract::message::StreamIndex;
 use crate::agent_core_v2::kosong::contract::provider::ProviderError;
 use crate::agent_core_v2::kosong::provider::bases::openai::chat_completions_stream::{
     ChatCompletionStreamToolCallDelta, ChatCompletionStreamToolFunctionDelta,
+};
+use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::{
+    convert_openai_error, convert_openai_status_error,
 };
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_legacy::{
     OpenAiLegacyChoice, OpenAiLegacyChunk, OpenAiLegacyCompletion, OpenAiLegacyDelta,
@@ -32,16 +32,6 @@ pub enum OpenAiLegacyHttpResponse {
         value: OpenAiLegacyChunkStream,
         trace_id: Option<String>,
     },
-}
-
-fn transport_error(error: reqwest::Error) -> ChatProviderError {
-    if error.is_timeout() {
-        ChatProviderError::timeout(error.to_string())
-    } else if error.is_connect() || error.is_request() || error.is_body() {
-        ChatProviderError::connection(error.to_string())
-    } else {
-        classify_base_api_error(&error.to_string())
-    }
 }
 
 fn boxed(error: ChatProviderError) -> ProviderError {
@@ -127,7 +117,7 @@ pub async fn send_openai_legacy_request(
     let response = await_or_cancel(signal, request.send())
         .await
         .map_err(boxed)?
-        .map_err(transport_error)
+        .map_err(convert_openai_error)
         .map_err(boxed)?;
     let status = response.status();
     let response_headers = response.headers().clone();
@@ -137,20 +127,14 @@ pub async fn send_openai_legacy_request(
         let body = await_or_cancel(signal, response.text())
             .await
             .map_err(boxed)?
-            .map_err(transport_error)
+            .map_err(convert_openai_error)
             .map_err(boxed)?;
         let parsed = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
         let message = response_error_message(&parsed, &body);
-        let request_id = response_headers
-            .get("x-request-id")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        return Err(boxed(normalize_api_status_error(
-            i32::from(status.as_u16()),
+        return Err(boxed(convert_openai_status_error(
+            status.as_u16(),
             &message,
-            request_id,
-            parse_retry_after_ms(Some(&response_headers)),
-            trace_id,
+            &response_headers,
         )));
     }
 
@@ -158,7 +142,7 @@ pub async fn send_openai_legacy_request(
         let bytes = response.bytes_stream().map(|result| {
             result
                 .map(|bytes| bytes.to_vec())
-                .map_err(transport_error)
+                .map_err(convert_openai_error)
                 .map_err(boxed)
         });
         let state = SseState {
@@ -182,7 +166,7 @@ pub async fn send_openai_legacy_request(
         let value = await_or_cancel(signal, response.json::<Value>())
             .await
             .map_err(boxed)?
-            .map_err(transport_error)
+            .map_err(convert_openai_error)
             .map_err(boxed)
             .and_then(parse_completion)?;
         Ok(OpenAiLegacyHttpResponse::Completion { value, trace_id })
