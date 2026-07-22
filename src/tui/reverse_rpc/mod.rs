@@ -5,7 +5,7 @@ pub mod question;
 pub mod registration;
 pub mod types;
 
-pub use approval::ApprovalController;
+pub use approval::{ApprovalController, adapt_approval_request, adapt_panel_response};
 pub use base_controller::{ReverseRpcController, ReverseRpcUiHooks};
 pub use modal_coordinator::{
     ReverseRpcModalCoordinator, ReverseRpcModalOwner, ReverseRpcModalUiHooks,
