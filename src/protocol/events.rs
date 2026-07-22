@@ -1787,6 +1787,110 @@ pub struct McpServerStatusEvent {
     pub server: McpServerStatusPayload,
 }
 
+// Original: events.ts, agentEventSchema.
+// ConfigChangedEvent is intentionally not a variant: the TypeScript interface
+// union includes it, but the authoritative runtime Zod union does not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AgentEvent {
+    Error(ErrorEvent),
+    Warning(WarningEvent),
+    AgentStatusUpdated(AgentStatusUpdatedEvent),
+    SessionMetaUpdated(SessionMetaUpdatedEvent),
+    SessionCreated(SessionCreatedEvent),
+    WorkspaceCreated(WorkspaceCreatedEvent),
+    WorkspaceUpdated(WorkspaceUpdatedEvent),
+    WorkspaceDeleted(WorkspaceDeletedEvent),
+    SessionWorkChanged(SessionWorkChangedEvent),
+    SessionStatusChanged(SessionStatusChangedEvent),
+    ModelCatalogChanged(ModelCatalogChangedEvent),
+    GoalUpdated(GoalUpdatedEvent),
+    SkillActivated(SkillActivatedEvent),
+    PluginCommandActivated(PluginCommandActivatedEvent),
+    TurnStarted(TurnStartedEvent),
+    TurnEnded(TurnEndedEvent),
+    TurnStepStarted(TurnStepStartedEvent),
+    TurnStepCompleted(TurnStepCompletedEvent),
+    TurnStepRetrying(TurnStepRetryingEvent),
+    TurnStepInterrupted(TurnStepInterruptedEvent),
+    AssistantDelta(AssistantDeltaEvent),
+    HookResult(HookResultEvent),
+    ThinkingDelta(ThinkingDeltaEvent),
+    ToolCallDelta(ToolCallDeltaEvent),
+    ToolCallStarted(ToolCallStartedEvent),
+    ToolProgress(ToolProgressEvent),
+    ShellOutput(ShellOutputEvent),
+    ShellStarted(ShellStartedEvent),
+    ShellCompleted(ShellCompletedEvent),
+    ToolResult(ToolResultEvent),
+    ToolListUpdated(ToolListUpdatedEvent),
+    McpServerStatus(McpServerStatusEvent),
+    SubagentSpawned(SubagentSpawnedEvent),
+    SubagentStarted(SubagentStartedEvent),
+    SubagentSuspended(SubagentSuspendedEvent),
+    SubagentCompleted(SubagentCompletedEvent),
+    SubagentFailed(SubagentFailedEvent),
+    CompactionStarted(CompactionStartedEvent),
+    CompactionBlocked(CompactionBlockedEvent),
+    CompactionCancelled(CompactionCancelledEvent),
+    CompactionCompleted(CompactionCompletedEvent),
+    TaskStarted(TaskStartedEvent),
+    TaskTerminated(TaskTerminatedEvent),
+    BackgroundTaskStarted(BackgroundTaskStartedEvent),
+    BackgroundTaskTerminated(BackgroundTaskTerminatedEvent),
+    CronFired(CronFiredEvent),
+    PromptSubmitted(PromptSubmittedEvent),
+    PromptCompleted(PromptCompletedEvent),
+    PromptAborted(PromptAbortedEvent),
+    PromptSteered(PromptSteeredEvent),
+}
+
+// Original: events.ts, eventSchema intersection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Event {
+    #[serde(flatten)]
+    pub event: AgentEvent,
+    pub agent_id: String,
+    pub session_id: String,
+}
+
+pub const VOLATILE_EVENT_TYPES: [&str; 8] = [
+    "assistant.delta",
+    "thinking.delta",
+    "tool.call.delta",
+    "tool.progress",
+    "shell.output",
+    "shell.started",
+    "shell.completed",
+    "agent.status.updated",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum VolatileEventType {
+    #[serde(rename = "assistant.delta")]
+    AssistantDelta,
+    #[serde(rename = "thinking.delta")]
+    ThinkingDelta,
+    #[serde(rename = "tool.call.delta")]
+    ToolCallDelta,
+    #[serde(rename = "tool.progress")]
+    ToolProgress,
+    #[serde(rename = "shell.output")]
+    ShellOutput,
+    #[serde(rename = "shell.started")]
+    ShellStarted,
+    #[serde(rename = "shell.completed")]
+    ShellCompleted,
+    #[serde(rename = "agent.status.updated")]
+    AgentStatusUpdated,
+}
+
+// Original: events.ts, isVolatileEventType().
+pub fn is_volatile_event_type(event_type: &str) -> bool {
+    VOLATILE_EVENT_TYPES.contains(&event_type)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1895,6 +1999,20 @@ mod tests {
         assert!(
             serde_json::from_value::<McpServerStatusPayload>(serde_json::json!({
                 "name": "server", "transport": "sse", "status": "connected", "toolCount": 2
+            }))
+            .is_err()
+        );
+        let event: Event = serde_json::from_value(serde_json::json!({
+            "type": "assistant.delta", "agentId": "main", "sessionId": "sess-1",
+            "turnId": 1, "delta": "hello"
+        }))
+        .unwrap();
+        assert!(matches!(event.event, AgentEvent::AssistantDelta(_)));
+        assert!(is_volatile_event_type("assistant.delta"));
+        assert!(!is_volatile_event_type("turn.ended"));
+        assert!(
+            serde_json::from_value::<AgentEvent>(serde_json::json!({
+                "type": "unknown.event"
             }))
             .is_err()
         );
