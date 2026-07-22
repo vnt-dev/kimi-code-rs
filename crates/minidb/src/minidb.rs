@@ -43,7 +43,8 @@ use crate::{
 
 const MAX_KEY_LEN: usize = 128;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CodecName {
     Buffer,
     String,
@@ -222,6 +223,8 @@ pub struct SearchDocumentRecord<V> {
     pub score: f64,
 }
 
+pub type TextIndexDefinitionInfo = (String, Option<Vec<String>>);
+
 #[derive(Debug, Clone, Default)]
 pub struct KeyQuery {
     pub exact: Option<String>,
@@ -354,9 +357,16 @@ struct MiniDbInner<V> {
     stats: Mutex<MiniDbStats>,
 }
 
-#[derive(Clone)]
 pub struct MiniDb<V> {
     inner: Arc<MiniDbInner<V>>,
+}
+
+impl<V> Clone for MiniDb<V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 struct PreparedOp {
@@ -1562,6 +1572,18 @@ impl<V: Send + Sync + 'static> MiniDb<V> {
         }
         self.persist_text_indexes().await?;
         Ok(dropped)
+    }
+
+    pub fn list_text_indexes(&self) -> Result<Vec<TextIndexDefinitionInfo>, MiniDbError> {
+        Ok(self
+            .inner
+            .derived
+            .lock()
+            .map_err(|_| MiniDbError::StatePoisoned)?
+            .text_definitions
+            .iter()
+            .map(|definition| (definition.name.clone(), definition.fields.clone()))
+            .collect())
     }
 
     pub fn search(
