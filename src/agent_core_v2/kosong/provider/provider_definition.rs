@@ -264,12 +264,67 @@ pub fn get_provider_definition(
         .get(id, protocol))
 }
 
+pub fn get_provider_definitions(
+    id: &str,
+) -> Result<Vec<Arc<ProviderDefinition>>, ProviderDefinitionRegistryError> {
+    Ok(PROVIDER_DEFINITIONS
+        .read()
+        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
+        .get_all(id))
+}
+
+pub fn has_provider_definition(id: &str) -> Result<bool, ProviderDefinitionRegistryError> {
+    Ok(PROVIDER_DEFINITIONS
+        .read()
+        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
+        .contains(id))
+}
+
+pub fn is_oauth_catalog_vendor(id: Option<&str>) -> Result<bool, ProviderDefinitionRegistryError> {
+    Ok(PROVIDER_DEFINITIONS
+        .read()
+        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
+        .is_oauth_catalog_vendor(id))
+}
+
 pub fn list_provider_definitions()
 -> Result<Vec<Arc<ProviderDefinition>>, ProviderDefinitionRegistryError> {
     Ok(PROVIDER_DEFINITIONS
         .read()
         .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .list())
+}
+
+pub fn explain_provider_endpoint(
+    provider_type: &str,
+    env: &IndexMap<String, String>,
+) -> Result<ExplainedProviderEndpoint, ProviderDefinitionRegistryError> {
+    Ok(PROVIDER_DEFINITIONS
+        .read()
+        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
+        .explain_endpoint(provider_type, env))
+}
+
+pub fn resolve_provider_endpoint(
+    provider_type: &str,
+    env: &IndexMap<String, String>,
+) -> Result<ResolvedProviderEndpoint, ProviderDefinitionRegistryError> {
+    Ok(PROVIDER_DEFINITIONS
+        .read()
+        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
+        .resolve_endpoint(provider_type, env))
+}
+
+pub fn explain_provider_endpoint_from_process_env(
+    provider_type: &str,
+) -> Result<ExplainedProviderEndpoint, ProviderDefinitionRegistryError> {
+    explain_provider_endpoint(provider_type, &std::env::vars().collect())
+}
+
+pub fn resolve_provider_endpoint_from_process_env(
+    provider_type: &str,
+) -> Result<ResolvedProviderEndpoint, ProviderDefinitionRegistryError> {
+    resolve_provider_endpoint(provider_type, &std::env::vars().collect())
 }
 
 #[cfg(test)]
@@ -428,6 +483,31 @@ mod tests {
                 .base_url
                 .as_deref(),
             Some("https://last")
+        );
+    }
+
+    #[test]
+    fn module_level_queries_and_env_wrappers_use_the_shared_registry() {
+        use crate::agent_core_v2::kosong::provider::providers::standard::ensure_standard_provider_definitions_registered;
+
+        ensure_standard_provider_definitions_registered().unwrap();
+        assert!(has_provider_definition("openai").unwrap());
+        assert_eq!(get_provider_definitions("openai").unwrap().len(), 1);
+        assert!(!is_oauth_catalog_vendor(Some("openai")).unwrap());
+        assert_eq!(
+            resolve_provider_endpoint(
+                "openai",
+                &IndexMap::from([("OPENAI_API_KEY".to_owned(), "sk-test".to_owned())])
+            )
+            .unwrap(),
+            ResolvedProviderEndpoint {
+                api_key: Some("sk-test".to_owned()),
+                base_url: None,
+            }
+        );
+        assert_eq!(
+            explain_provider_endpoint("missing", &IndexMap::new()).unwrap(),
+            ExplainedProviderEndpoint::default()
         );
     }
 }
