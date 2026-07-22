@@ -88,7 +88,7 @@ impl ProtocolBaseRegistry {
     }
 }
 
-static PROTOCOL_BASES: LazyLock<RwLock<ProtocolBaseRegistry>> =
+pub(crate) static PROTOCOL_BASES: LazyLock<RwLock<ProtocolBaseRegistry>> =
     LazyLock::new(|| RwLock::new(ProtocolBaseRegistry::default()));
 
 pub fn register_protocol_base(

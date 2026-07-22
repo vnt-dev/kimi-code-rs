@@ -242,7 +242,7 @@ fn first_env_hit(names: &[String], env: &IndexMap<String, String>) -> Option<Env
     })
 }
 
-static PROVIDER_DEFINITIONS: LazyLock<RwLock<ProviderDefinitionRegistry>> =
+pub(crate) static PROVIDER_DEFINITIONS: LazyLock<RwLock<ProviderDefinitionRegistry>> =
     LazyLock::new(|| RwLock::new(ProviderDefinitionRegistry::default()));
 
 pub fn register_provider_definition(
