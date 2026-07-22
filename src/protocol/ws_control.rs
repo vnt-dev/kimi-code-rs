@@ -1,8 +1,12 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use super::display::OptionalJsonValue;
+use super::events::Event;
 use super::time::IsoDateTime;
-use super::validation::{optional_non_null, positive_u64};
+use super::validation::{
+    OptionalNullable, literal_true, non_empty, optional_non_null, positive_u64,
+};
 
 pub const WS_PROTOCOL_VERSION: u64 = 2;
 
@@ -387,6 +391,338 @@ pub struct AbortAckPayload {
 
 pub type AbortAckMessage = WsAckEnvelope<AbortAckPayload>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalAttachPayload {
+    #[serde(deserialize_with = "non_empty")]
+    pub session_id: String,
+    #[serde(deserialize_with = "non_empty")]
+    pub terminal_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub since_seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalAttachType {
+    TerminalAttach,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalAttachMessage {
+    #[serde(rename = "type")]
+    pub message_type: TerminalAttachType,
+    pub id: String,
+    pub payload: TerminalAttachPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalAttachAckPayload {
+    #[serde(deserialize_with = "literal_true")]
+    pub attached: bool,
+    pub replayed: u64,
+}
+
+pub type TerminalAttachAckMessage = WsAckEnvelope<TerminalAttachAckPayload>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalTargetPayload {
+    #[serde(deserialize_with = "non_empty")]
+    pub session_id: String,
+    #[serde(deserialize_with = "non_empty")]
+    pub terminal_id: String,
+}
+
+pub type TerminalDetachPayload = TerminalTargetPayload;
+pub type TerminalClosePayload = TerminalTargetPayload;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalDetachType {
+    TerminalDetach,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalDetachMessage {
+    #[serde(rename = "type")]
+    pub message_type: TerminalDetachType,
+    pub id: String,
+    pub payload: TerminalDetachPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalDetachAckPayload {
+    #[serde(deserialize_with = "literal_true")]
+    pub detached: bool,
+}
+
+pub type TerminalDetachAckMessage = WsAckEnvelope<TerminalDetachAckPayload>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalInputPayload {
+    #[serde(deserialize_with = "non_empty")]
+    pub session_id: String,
+    #[serde(deserialize_with = "non_empty")]
+    pub terminal_id: String,
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalInputType {
+    TerminalInput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalInputMessage {
+    #[serde(rename = "type")]
+    pub message_type: TerminalInputType,
+    pub id: String,
+    pub payload: TerminalInputPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalInputAckPayload {
+    #[serde(deserialize_with = "literal_true")]
+    pub accepted: bool,
+}
+
+pub type TerminalInputAckMessage = WsAckEnvelope<TerminalInputAckPayload>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalResizePayload {
+    #[serde(deserialize_with = "non_empty")]
+    pub session_id: String,
+    #[serde(deserialize_with = "non_empty")]
+    pub terminal_id: String,
+    #[serde(deserialize_with = "positive_u64")]
+    pub cols: u64,
+    #[serde(deserialize_with = "positive_u64")]
+    pub rows: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalResizeType {
+    TerminalResize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalResizeMessage {
+    #[serde(rename = "type")]
+    pub message_type: TerminalResizeType,
+    pub id: String,
+    pub payload: TerminalResizePayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalResizeAckPayload {
+    #[serde(deserialize_with = "literal_true")]
+    pub resized: bool,
+}
+
+pub type TerminalResizeAckMessage = WsAckEnvelope<TerminalResizeAckPayload>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalCloseType {
+    TerminalClose,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalCloseMessage {
+    #[serde(rename = "type")]
+    pub message_type: TerminalCloseType,
+    pub id: String,
+    pub payload: TerminalClosePayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalCloseAckPayload {
+    #[serde(deserialize_with = "literal_true")]
+    pub closed: bool,
+}
+
+pub type TerminalCloseAckMessage = WsAckEnvelope<TerminalCloseAckPayload>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PingPayload {
+    pub nonce: String,
+}
+
+pub type PongPayload = PingPayload;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PingType {
+    Ping,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PingMessage {
+    #[serde(rename = "type")]
+    pub message_type: PingType,
+    pub timestamp: IsoDateTime,
+    pub payload: PingPayload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PongType {
+    Pong,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PongMessage {
+    #[serde(rename = "type")]
+    pub message_type: PongType,
+    pub payload: PongPayload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResyncRequiredReason {
+    BufferOverflow,
+    SessionRecreated,
+    EpochChanged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResyncRequiredPayload {
+    pub session_id: String,
+    pub reason: ResyncRequiredReason,
+    pub current_seq: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_empty"
+    )]
+    pub epoch: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResyncRequiredType {
+    ResyncRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResyncRequiredMessage {
+    #[serde(rename = "type")]
+    pub message_type: ResyncRequiredType,
+    pub timestamp: IsoDateTime,
+    pub payload: ResyncRequiredPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WsErrorPayload {
+    pub code: i64,
+    pub msg: String,
+    pub fatal: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "OptionalJsonValue::is_absent")]
+    pub details: OptionalJsonValue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WsErrorType {
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WsErrorMessage {
+    #[serde(rename = "type")]
+    pub message_type: WsErrorType,
+    pub timestamp: IsoDateTime,
+    pub payload: WsErrorPayload,
+}
+
+pub type SessionEventMessage = WsEventEnvelope<Event>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalOutputPayload {
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalOutputType {
+    TerminalOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalOutputMessage {
+    #[serde(rename = "type")]
+    pub message_type: TerminalOutputType,
+    #[serde(deserialize_with = "positive_u64")]
+    pub seq: u64,
+    #[serde(deserialize_with = "non_empty")]
+    pub session_id: String,
+    #[serde(deserialize_with = "non_empty")]
+    pub terminal_id: String,
+    pub timestamp: IsoDateTime,
+    pub payload: TerminalOutputPayload,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalExitPayload {
+    #[serde(default, skip_serializing_if = "OptionalNullable::is_absent")]
+    pub exit_code: OptionalNullable<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalExitType {
+    TerminalExit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalExitMessage {
+    #[serde(rename = "type")]
+    pub message_type: TerminalExitType,
+    #[serde(deserialize_with = "non_empty")]
+    pub session_id: String,
+    #[serde(deserialize_with = "non_empty")]
+    pub terminal_id: String,
+    pub timestamp: IsoDateTime,
+    pub payload: TerminalExitPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ClientControlMessage {
+    ClientHello(ClientHelloMessage),
+    Subscribe(SubscribeMessage),
+    Unsubscribe(UnsubscribeMessage),
+    WatchFsAdd(WatchFsAddMessage),
+    WatchFsRemove(WatchFsRemoveMessage),
+    Abort(AbortMessage),
+    TerminalAttach(TerminalAttachMessage),
+    TerminalDetach(TerminalDetachMessage),
+    TerminalInput(TerminalInputMessage),
+    TerminalResize(TerminalResizeMessage),
+    TerminalClose(TerminalCloseMessage),
+    Pong(PongMessage),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ServerSystemMessage {
+    ServerHello(ServerHelloMessage),
+    Ping(PingMessage),
+    ResyncRequired(ResyncRequiredMessage),
+    Error(WsErrorMessage),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,5 +753,25 @@ mod tests {
             }))
             .is_err()
         );
+        let resize: ClientControlMessage = serde_json::from_value(serde_json::json!({
+            "type": "terminal_resize", "id": "c2", "payload": {
+                "session_id": "sess", "terminal_id": "term", "cols": 120, "rows": 32
+            }
+        }))
+        .unwrap();
+        assert!(matches!(resize, ClientControlMessage::TerminalResize(_)));
+        assert!(
+            serde_json::from_value::<TerminalAttachAckMessage>(serde_json::json!({
+                "type": "ack", "id": "c", "code": 0, "msg": "ok",
+                "payload": {"attached": false, "replayed": 0}
+            }))
+            .is_err()
+        );
+        let exit: TerminalExitMessage = serde_json::from_value(serde_json::json!({
+            "type": "terminal_exit", "session_id": "sess", "terminal_id": "term",
+            "timestamp": "2026-06-04T10:30:00Z", "payload": {"exit_code": null}
+        }))
+        .unwrap();
+        assert_eq!(exit.payload.exit_code, OptionalNullable::Null);
     }
 }
