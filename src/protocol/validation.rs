@@ -59,3 +59,23 @@ where
 {
     Option::<T>::deserialize(deserializer)
 }
+
+pub fn literal_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match bool::deserialize(deserializer)? {
+        true => Ok(true),
+        false => Err(serde::de::Error::custom("must be true")),
+    }
+}
+
+pub fn literal_false<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match bool::deserialize(deserializer)? {
+        false => Ok(false),
+        true => Err(serde::de::Error::custom("must be false")),
+    }
+}
