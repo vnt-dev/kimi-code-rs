@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::validation::{literal_true, optional_non_empty};
-use crate::protocol::{McpServer, ToolDescriptor};
+use crate::validation::{literal_true, optional_non_empty};
+use crate::{McpServer, ToolDescriptor};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ListToolsQuery {

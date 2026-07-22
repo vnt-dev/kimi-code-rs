@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::display::OptionalJsonValue;
-use crate::protocol::validation::{non_empty, required_nullable};
-use crate::protocol::{ApprovalRequest, Message, QuestionRequest, Session, Task};
+use crate::display::OptionalJsonValue;
+use crate::validation::{non_empty, required_nullable};
+use crate::{ApprovalRequest, Message, QuestionRequest, Session, Task};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::validation::literal_true;
-use crate::protocol::{Workspace, WorkspaceCreate, WorkspaceId, WorkspaceUpdate};
+use crate::validation::literal_true;
+use crate::{Workspace, WorkspaceCreate, WorkspaceId, WorkspaceUpdate};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListWorkspacesResponse {

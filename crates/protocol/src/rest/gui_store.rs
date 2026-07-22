@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::protocol::validation::required_nullable;
+use crate::validation::required_nullable;
 
 fn deserialize_key<'de, D>(deserializer: D) -> Result<String, D::Error>
 where

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::protocol::validation::{literal_true, non_empty};
+use crate::validation::{literal_true, non_empty};
 
 // Original: rest/fsBrowse.ts, fsBrowseQuerySchema.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

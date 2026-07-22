@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::time::IsoDateTime;
-use crate::protocol::validation::{
-    absolute_url, literal_true, non_empty, optional_non_empty, positive_u64,
-};
+use crate::time::IsoDateTime;
+use crate::validation::{absolute_url, literal_true, non_empty, optional_non_empty, positive_u64};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

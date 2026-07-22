@@ -1,8 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::protocol::rest::fs::FsOpenInAppId;
-use crate::protocol::time::IsoDateTime;
-use crate::protocol::validation::non_empty;
+use crate::rest::fs::FsOpenInAppId;
+use crate::time::IsoDateTime;
+use crate::validation::non_empty;
 
 fn deserialize_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
@@ -55,7 +55,7 @@ pub struct MetaResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::rest::{AuthSummary, Connection, GuiStoreGetItemResponse};
+    use crate::rest::{AuthSummary, Connection, GuiStoreGetItemResponse};
 
     #[test]
     fn low_dependency_rest_schemas_enforce_literals_and_required_nulls() {

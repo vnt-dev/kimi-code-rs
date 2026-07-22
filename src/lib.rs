@@ -4,7 +4,7 @@ pub mod cli;
 pub mod feedback;
 pub mod migration;
 pub mod oauth;
-pub mod protocol;
+pub use kimi_code_protocol as protocol;
 pub mod sdk;
 pub mod tui;
 pub mod utils;

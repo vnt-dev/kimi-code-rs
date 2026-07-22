@@ -2,8 +2,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::protocol::display::OptionalJsonValue;
-use crate::protocol::validation::optional_non_null;
+use crate::display::OptionalJsonValue;
+use crate::validation::optional_non_null;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfigResponse {

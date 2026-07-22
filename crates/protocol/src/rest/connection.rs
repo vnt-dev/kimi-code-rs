@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::time::IsoDateTime;
-use crate::protocol::validation::{non_empty, required_nullable};
+use crate::time::IsoDateTime;
+use crate::validation::{non_empty, required_nullable};
 
 // Original: rest/connection.ts, connectionSchema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

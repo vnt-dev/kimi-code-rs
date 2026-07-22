@@ -1,8 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::protocol::validation::{literal_true, non_empty};
-use crate::protocol::{
+use crate::validation::{literal_true, non_empty};
+use crate::{
     CursorQuery, GoalSnapshot, Message, PageResponse, Session, SessionChildCreate, SessionCreate,
     SessionFork, SessionUpdate,
 };

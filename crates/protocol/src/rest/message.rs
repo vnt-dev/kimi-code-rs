@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::{CursorQuery, Message, MessageRole};
+use crate::{CursorQuery, Message, MessageRole};
 
 // Original: rest/message.ts, cursorQuerySchema.and({ role }).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

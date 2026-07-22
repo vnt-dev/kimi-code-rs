@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::SkillDescriptor;
-use crate::protocol::validation::{literal_true, non_empty};
+use crate::SkillDescriptor;
+use crate::validation::{literal_true, non_empty};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListSkillsResponse {

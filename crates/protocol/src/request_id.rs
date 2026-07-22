@@ -23,7 +23,7 @@ pub fn parse_or_generate_request_id(header_value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{
+    use crate::{
         CursorQuery, ERROR_CODE_REASON, ErrorCode, err_envelope, ok_envelope,
         pagination::PaginationValidationError, time::parse_iso_date_time,
     };
@@ -63,7 +63,7 @@ mod tests {
             parse_iso_date_time("2026-06-04T18:30:00+08:00").unwrap(),
             "2026-06-04T10:30:00.000Z"
         );
-        let normalized: crate::protocol::IsoDateTime =
+        let normalized: crate::IsoDateTime =
             serde_json::from_str("\"2026-06-04T18:30:00+08:00\"").unwrap();
         assert_eq!(normalized, "2026-06-04T10:30:00.000Z");
         assert!(

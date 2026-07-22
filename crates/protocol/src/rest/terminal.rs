@@ -1,7 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::protocol::time::IsoDateTime;
-use crate::protocol::validation::{
+use crate::time::IsoDateTime;
+use crate::validation::{
     OptionalNullable, literal_true, non_empty, optional_non_null, positive_u64,
 };
 

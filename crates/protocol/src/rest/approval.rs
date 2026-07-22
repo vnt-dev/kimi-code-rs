@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::validation::{literal_false, literal_true};
-use crate::protocol::{ApprovalRequest, ApprovalResponse, IsoDateTime};
+use crate::validation::{literal_false, literal_true};
+use crate::{ApprovalRequest, ApprovalResponse, IsoDateTime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

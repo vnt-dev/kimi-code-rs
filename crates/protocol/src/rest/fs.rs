@@ -1,8 +1,8 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::protocol::fs::{FsEntry, FsGitStatus, FsGrepFileHit, FsSearchHit};
-use crate::protocol::validation::{
+use crate::fs::{FsEntry, FsGitStatus, FsGrepFileHit, FsSearchHit};
+use crate::validation::{
     absolute_url, literal_true, non_empty, optional_non_null, positive_u64, required_nullable,
 };
 

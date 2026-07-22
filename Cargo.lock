@@ -835,6 +835,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kimi-code-protocol"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "indexmap",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "ulid",
+ "url",
+]
+
+[[package]]
 name = "kimi-code-rs"
 version = "0.1.0"
 dependencies = [
@@ -848,6 +862,7 @@ dependencies = [
  "futures-util",
  "if-addrs",
  "indexmap",
+ "kimi-code-protocol",
  "md-5",
  "pulldown-cmark",
  "regex",

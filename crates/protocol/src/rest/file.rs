@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::FileMeta;
-use crate::protocol::validation::{literal_true, non_empty};
+use crate::FileMeta;
+use crate::validation::{literal_true, non_empty};
 
 pub type UploadFileResponse = FileMeta;
 

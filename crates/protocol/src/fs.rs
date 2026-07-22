@@ -136,7 +136,7 @@ pub struct FsChangeEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Message, MessageContent, QuestionRequest};
+    use crate::{Message, MessageContent, QuestionRequest};
 
     #[test]
     fn union_and_filesystem_schemas_enforce_wire_constraints() {

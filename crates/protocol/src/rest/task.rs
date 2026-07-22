@@ -1,8 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::protocol::validation::{literal_false, literal_true};
-use crate::protocol::{Task, TaskStatus};
+use crate::validation::{literal_false, literal_true};
+use crate::{Task, TaskStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ListTasksQuery {
@@ -86,7 +86,7 @@ pub struct TaskAlreadyFinishedData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::rest::{ApprovalResolveResult, RefreshProviderModelsResponse};
+    use crate::rest::{ApprovalResolveResult, RefreshProviderModelsResponse};
 
     #[test]
     fn domain_rest_adapters_preserve_aliases_literals_and_query_coercion() {

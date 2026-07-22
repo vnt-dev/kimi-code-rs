@@ -3,9 +3,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::fmt;
 
-use crate::protocol::message::MessageContent;
-use crate::protocol::time::IsoDateTime;
-use crate::protocol::validation::{non_empty, optional_non_empty};
+use crate::message::MessageContent;
+use crate::time::IsoDateTime;
+use crate::validation::{non_empty, optional_non_empty};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PromptThinking(String);

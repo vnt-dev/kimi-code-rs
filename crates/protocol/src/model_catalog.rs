@@ -81,7 +81,7 @@ pub struct ProviderRefreshFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{file::FileMeta, workspace::Workspace};
+    use crate::{file::FileMeta, workspace::Workspace};
 
     #[test]
     fn simple_domain_schemas_validate_and_preserve_wire_names() {
@@ -135,7 +135,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            serde_json::from_value::<crate::protocol::WorkspaceCreate>(serde_json::json!({
+            serde_json::from_value::<crate::WorkspaceCreate>(serde_json::json!({
                 "root":"/repo","name":null
             }))
             .is_err()

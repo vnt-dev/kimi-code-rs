@@ -1,9 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::protocol::validation::non_empty;
-use crate::protocol::{
-    ModelCatalogItem, ProviderCatalogItem, ProviderRefreshChange, ProviderRefreshFailure,
-};
+use crate::validation::non_empty;
+use crate::{ModelCatalogItem, ProviderCatalogItem, ProviderRefreshChange, ProviderRefreshFailure};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListModelsResponse {
