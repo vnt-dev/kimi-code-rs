@@ -1,15 +1,24 @@
+use futures_util::{Stream, StreamExt};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
+use std::collections::VecDeque;
+use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
+use std::task::{Context, Poll};
 
 use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
 use crate::agent_core_v2::kosong::contract::errors::ChatProviderError;
 use crate::agent_core_v2::kosong::contract::message::is_tool_declaration_only_message;
-use crate::agent_core_v2::kosong::contract::message::{ContentPart, Message, Role};
+use crate::agent_core_v2::kosong::contract::message::{
+    ContentPart, Message, Role, StreamIndex, StreamedMessagePart, ToolCall, ToolCallPart,
+    ToolCallPartType, ToolCallType,
+};
 use crate::agent_core_v2::kosong::contract::provider::{
-    FinishReason, GenerateOptions, ProviderError, ResponseFormat, ThinkingEffort, ToolCallIdPolicy,
+    FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage, ThinkingEffort,
+    ToolCallIdPolicy, TraceId,
 };
 use crate::agent_core_v2::kosong::contract::tool::Tool;
+use crate::agent_core_v2::kosong::contract::usage::TokenUsage;
 use crate::agent_core_v2::kosong::provider::bases::anthropic::anthropic_hooks::AnthropicHooks;
 use crate::agent_core_v2::kosong::provider::bases::anthropic::anthropic_profile::{
     AnthropicModelFamily, AnthropicModelVersion, AnthropicThinkingMode,
@@ -794,6 +803,297 @@ pub fn build_anthropic_request(
     })
 }
 
+enum AnthropicResponseEvent {
+    Message(Value),
+    Stream(Value),
+}
+
+// Original: anthropic.ts, AnthropicStreamedMessage
+pub struct AnthropicStreamedMessage {
+    source: Pin<Box<dyn Stream<Item = Result<AnthropicResponseEvent, ProviderError>> + Send>>,
+    pending: VecDeque<StreamedMessagePart>,
+    id: Option<String>,
+    usage: TokenUsage,
+    finish_reason: Option<FinishReason>,
+    raw_finish_reason: Option<String>,
+}
+
+impl AnthropicStreamedMessage {
+    pub fn from_response(response: Value) -> Self {
+        Self::new(futures_util::stream::iter([Ok(
+            AnthropicResponseEvent::Message(response),
+        )]))
+    }
+
+    pub fn from_stream<S>(response: S) -> Self
+    where
+        S: Stream<Item = Result<Value, ProviderError>> + Send + 'static,
+    {
+        Self::new(response.map(|event| event.map(AnthropicResponseEvent::Stream)))
+    }
+
+    fn new<S>(source: S) -> Self
+    where
+        S: Stream<Item = Result<AnthropicResponseEvent, ProviderError>> + Send + 'static,
+    {
+        Self {
+            source: Box::pin(source),
+            pending: VecDeque::new(),
+            id: None,
+            usage: TokenUsage {
+                input_other: 0.0,
+                output: 0.0,
+                input_cache_read: 0.0,
+                input_cache_creation: 0.0,
+            },
+            finish_reason: None,
+            raw_finish_reason: None,
+        }
+    }
+
+    fn capture_stop_reason(&mut self, raw: Option<&str>) {
+        let normalized = normalize_anthropic_stop_reason(raw);
+        self.finish_reason = normalized.finish_reason;
+        self.raw_finish_reason = normalized.raw_finish_reason;
+    }
+
+    fn extract_usage(&mut self, usage: Option<&Value>) {
+        let number = |key| {
+            usage
+                .and_then(|usage| usage.get(key))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+        };
+        self.usage = TokenUsage {
+            input_other: number("input_tokens"),
+            output: number("output_tokens"),
+            input_cache_read: number("cache_read_input_tokens"),
+            input_cache_creation: number("cache_creation_input_tokens"),
+        };
+    }
+
+    fn push_content_block(&mut self, block: &Value, streaming: bool, index: Option<i64>) {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    self.pending
+                        .push_back(StreamedMessagePart::Content(ContentPart::Text {
+                            text: text.to_owned(),
+                        }));
+                }
+            }
+            Some("thinking") => {
+                let think = block
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                let encrypted = (!streaming)
+                    .then(|| {
+                        block
+                            .get("signature")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .flatten();
+                self.pending
+                    .push_back(StreamedMessagePart::Content(ContentPart::Think {
+                        think,
+                        encrypted,
+                    }));
+            }
+            Some("redacted_thinking") => {
+                self.pending
+                    .push_back(StreamedMessagePart::Content(ContentPart::Think {
+                        think: String::new(),
+                        encrypted: block.get("data").and_then(Value::as_str).map(str::to_owned),
+                    }));
+            }
+            Some("tool_use") => {
+                let arguments = if streaming {
+                    Some(String::new())
+                } else {
+                    block
+                        .get("input")
+                        .map(serde_json::to_string)
+                        .transpose()
+                        .ok()
+                        .flatten()
+                };
+                self.pending
+                    .push_back(StreamedMessagePart::ToolCall(ToolCall {
+                        call_type: ToolCallType::Function,
+                        id: block
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                        name: block
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        arguments,
+                        extras: None,
+                        stream_index: index.map(StreamIndex::Number),
+                    }));
+            }
+            _ => {}
+        }
+    }
+
+    fn process_message(&mut self, response: Value) {
+        self.id = response
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        self.extract_usage(response.get("usage"));
+        self.capture_stop_reason(response.get("stop_reason").and_then(Value::as_str));
+        if let Some(content) = response.get("content").and_then(Value::as_array) {
+            for block in content {
+                self.push_content_block(block, false, None);
+            }
+        }
+    }
+
+    fn process_stream_event(&mut self, event: Value) {
+        match event.get("type").and_then(Value::as_str) {
+            Some("message_start") => {
+                if let Some(message) = event.get("message") {
+                    self.id = message.get("id").and_then(Value::as_str).map(str::to_owned);
+                    self.extract_usage(message.get("usage"));
+                }
+            }
+            Some("content_block_start") => {
+                let index = event.get("index").and_then(Value::as_i64);
+                if let Some(block) = event.get("content_block") {
+                    self.push_content_block(block, true, index);
+                }
+            }
+            Some("content_block_delta") => {
+                let Some(delta) = event.get("delta") else {
+                    return;
+                };
+                let index = event.get("index").and_then(Value::as_i64);
+                match delta.get("type").and_then(Value::as_str) {
+                    Some("text_delta") => {
+                        self.pending
+                            .push_back(StreamedMessagePart::Content(ContentPart::Text {
+                                text: delta
+                                    .get("text")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                            }))
+                    }
+                    Some("thinking_delta") => {
+                        self.pending
+                            .push_back(StreamedMessagePart::Content(ContentPart::Think {
+                                think: delta
+                                    .get("thinking")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                                encrypted: None,
+                            }));
+                    }
+                    Some("input_json_delta") => {
+                        self.pending
+                            .push_back(StreamedMessagePart::ToolCallPart(ToolCallPart {
+                                part_type: ToolCallPartType::ToolCallPart,
+                                arguments_part: delta
+                                    .get("partial_json")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned),
+                                index: index.map(StreamIndex::Number),
+                            }))
+                    }
+                    Some("signature_delta") => {
+                        self.pending
+                            .push_back(StreamedMessagePart::Content(ContentPart::Think {
+                                think: String::new(),
+                                encrypted: delta
+                                    .get("signature")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned),
+                            }));
+                    }
+                    _ => {}
+                }
+            }
+            Some("message_delta") => {
+                if let Some(usage) = event.get("usage") {
+                    for (key, target) in [
+                        ("output_tokens", &mut self.usage.output),
+                        ("cache_read_input_tokens", &mut self.usage.input_cache_read),
+                        (
+                            "cache_creation_input_tokens",
+                            &mut self.usage.input_cache_creation,
+                        ),
+                        ("input_tokens", &mut self.usage.input_other),
+                    ] {
+                        if let Some(value) = usage.get(key).and_then(Value::as_f64) {
+                            *target = value;
+                        }
+                    }
+                }
+                if let Some(delta) = event.get("delta")
+                    && delta.get("stop_reason").is_some()
+                {
+                    self.capture_stop_reason(delta.get("stop_reason").and_then(Value::as_str));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Stream for AnthropicStreamedMessage {
+    type Item = Result<StreamedMessagePart, ProviderError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            if let Some(part) = self.pending.pop_front() {
+                return Poll::Ready(Some(Ok(part)));
+            }
+            match self.source.as_mut().poll_next(context) {
+                Poll::Ready(Some(Ok(AnthropicResponseEvent::Message(response)))) => {
+                    self.process_message(response);
+                }
+                Poll::Ready(Some(Ok(AnthropicResponseEvent::Stream(event)))) => {
+                    self.process_stream_event(event);
+                }
+                Poll::Ready(Some(Err(error))) => return Poll::Ready(Some(Err(error))),
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+impl StreamedMessage for AnthropicStreamedMessage {
+    fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    fn usage(&self) -> Option<&TokenUsage> {
+        Some(&self.usage)
+    }
+
+    fn finish_reason(&self) -> Option<FinishReason> {
+        self.finish_reason
+    }
+
+    fn raw_finish_reason(&self) -> Option<&str> {
+        self.raw_finish_reason.as_deref()
+    }
+
+    fn trace_id(&self) -> TraceId<'_> {
+        TraceId::Absent
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1036,5 +1336,55 @@ mod tests {
             request.params["betas"],
             serde_json::json!([CONTEXT_MANAGEMENT_BETA])
         );
+    }
+
+    #[tokio::test]
+    async fn streamed_message_converts_non_stream_and_incremental_events() {
+        let mut message = AnthropicStreamedMessage::from_response(serde_json::json!({
+            "id":"msg-1",
+            "stop_reason":"tool_use",
+            "usage":{"input_tokens":3,"output_tokens":4},
+            "content":[
+                {"type":"text","text":"answer"},
+                {"type":"thinking","thinking":"why","signature":"signed"},
+                {"type":"tool_use","id":"call-1","name":"read","input":{"path":"a"}}
+            ]
+        }));
+        let parts = message.by_ref().collect::<Vec<_>>().await;
+        assert_eq!(parts.len(), 3);
+        assert_eq!(message.id(), Some("msg-1"));
+        assert_eq!(message.finish_reason(), Some(FinishReason::ToolCalls));
+        assert_eq!(message.usage().unwrap().output, 4.0);
+
+        let events = futures_util::stream::iter([
+            Ok(serde_json::json!({
+                "type":"message_start",
+                "message":{"id":"msg-2","usage":{"input_tokens":8,"output_tokens":0}}
+            })),
+            Ok(serde_json::json!({
+                "type":"content_block_start","index":2,
+                "content_block":{"type":"tool_use","id":"call-2","name":"write"}
+            })),
+            Ok(serde_json::json!({
+                "type":"content_block_delta","index":2,
+                "delta":{"type":"input_json_delta","partial_json":"{\"path\":"}
+            })),
+            Ok(serde_json::json!({
+                "type":"message_delta",
+                "usage":{"output_tokens":6},
+                "delta":{"stop_reason":"end_turn"}
+            })),
+        ]);
+        let mut message = AnthropicStreamedMessage::from_stream(events);
+        let parts = message.by_ref().collect::<Vec<_>>().await;
+        assert_eq!(parts.len(), 2);
+        let StreamedMessagePart::ToolCall(call) = parts[0].as_ref().unwrap() else {
+            panic!("expected tool call")
+        };
+        assert_eq!(call.stream_index, Some(StreamIndex::Number(2)));
+        assert_eq!(message.id(), Some("msg-2"));
+        assert_eq!(message.finish_reason(), Some(FinishReason::Completed));
+        assert_eq!(message.usage().unwrap().input_other, 8.0);
+        assert_eq!(message.usage().unwrap().output, 6.0);
     }
 }
