@@ -18,6 +18,7 @@ pub mod time;
 pub mod tool;
 mod validation;
 pub mod workspace;
+pub mod ws_control;
 
 pub use approval::{ApprovalDecision, ApprovalRequest, ApprovalResponse, ApprovalScope};
 pub use display::*;
@@ -45,3 +46,4 @@ pub use task::{
 pub use time::{IsoDateTime, IsoDateTimeError, now_iso_date_time, parse_iso_date_time};
 pub use tool::{McpServer, McpServerStatus, McpServerTransport, ToolDescriptor, ToolSource};
 pub use workspace::{Workspace, WorkspaceCreate, WorkspaceId, WorkspaceIdError, WorkspaceUpdate};
+pub use ws_control::*;
