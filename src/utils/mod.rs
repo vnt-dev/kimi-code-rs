@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod git;
 pub mod history;
+pub mod image;
 pub mod open_url;
 pub mod paths;
 pub mod persistence;
