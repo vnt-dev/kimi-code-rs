@@ -888,6 +888,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "indexmap",
+ "kimi-code-protocol",
  "regex",
  "reqwest",
  "serde",
