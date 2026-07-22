@@ -5,7 +5,7 @@ edition = "2024"
 autobins = false
 
 [workspace]
-members = [".", "crates/oauth", "crates/protocol"]
+members = [".", "crates/minidb", "crates/oauth", "crates/protocol"]
 resolver = "3"
 
 [[bin]]

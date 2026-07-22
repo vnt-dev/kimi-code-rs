@@ -1,0 +1,17 @@
+[package]
+name = "kimi-code-minidb"
+version = "0.2.0"
+edition = "2024"
+description = "Embedded log-structured key-value and document database"
+license = "MIT"
+publish = false
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
