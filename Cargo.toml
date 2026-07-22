@@ -25,6 +25,7 @@ regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
+serde_repr = "0.1"
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.11"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt", "sync", "test-util", "time"] }
@@ -35,4 +36,5 @@ url = "2"
 unicode-width = "0.2"
 unicode-segmentation = "1.12"
 uuid = { version = "1", features = ["v4"] }
+ulid = "1"
 zip = { version = "8.6.0", default-features = false, features = ["chrono", "deflate"] }
