@@ -1,6 +1,7 @@
 use serde_json::{Map, Value};
 use std::sync::{Arc, LazyLock};
 
+use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
 use crate::agent_core_v2::kosong::contract::message::{
     ContentPart, Message, Role, is_tool_declaration_only_message,
 };
@@ -8,9 +9,11 @@ use crate::agent_core_v2::kosong::contract::provider::{
     GenerateOptions, ResponseFormat, ThinkingEffort, ToolCallIdPolicy,
 };
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::{
-    ConvertedToolMessageContent, OpenAiContentPart, TOOL_RESULT_MEDIA_PLACEHOLDER,
-    TOOL_RESULT_MEDIA_PROMPT, ToolMessageConversion, convert_content_part,
-    convert_tool_message_content,
+    ConvertedToolMessageContent, OPENAI_REASONING_CAPABILITY, OPENAI_TEXT_TOOL_CAPABILITY,
+    OPENAI_VISION_TOOL_CAPABILITY, OPENAI_VISION_TOOL_PREFIXES, OpenAiContentPart,
+    TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_PROMPT, ToolMessageConversion,
+    convert_content_part, convert_tool_message_content, has_model_prefix,
+    is_openai_reasoning_model,
 };
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_hooks::OpenAiChatHooks;
 use crate::agent_core_v2::kosong::provider::bases::tool_call_id::sanitize_tool_call_id;
@@ -458,6 +461,20 @@ pub fn resolve_request_kwargs(
     }
 }
 
+// Original: openai-legacy.ts, getOpenAILegacyModelCapability()
+pub fn get_openai_legacy_model_capability(model_name: &str) -> Option<&'static ModelCapability> {
+    let normalized = model_name.to_ascii_lowercase();
+    if is_openai_reasoning_model(&normalized) {
+        Some(&OPENAI_REASONING_CAPABILITY)
+    } else if has_model_prefix(&normalized, &OPENAI_VISION_TOOL_PREFIXES) {
+        Some(&OPENAI_VISION_TOOL_CAPABILITY)
+    } else if normalized.starts_with("gpt-3.5-turbo") {
+        Some(&OPENAI_TEXT_TOOL_CAPABILITY)
+    } else {
+        None
+    }
+}
+
 // MIGRATION-TODO:
 // Original: openai-legacy.ts, OpenAILegacyStreamedMessage,
 // OpenAILegacyChatProvider network/stream methods.
@@ -746,5 +763,17 @@ mod tests {
         let off =
             resolve_request_kwargs("o1", &Map::new(), Some(&off_effort), None, &history, None);
         assert_eq!(off.reasoning_effort, None);
+    }
+
+    #[test]
+    fn legacy_capability_catalog_routes_known_model_families() {
+        for (model, expected) in [
+            ("O1-mini", Some(&OPENAI_REASONING_CAPABILITY)),
+            ("gpt-4.1-mini", Some(&OPENAI_VISION_TOOL_CAPABILITY)),
+            ("GPT-3.5-TURBO-0125", Some(&OPENAI_TEXT_TOOL_CAPABILITY)),
+            ("unknown-model", None),
+        ] {
+            assert_eq!(get_openai_legacy_model_capability(model), expected);
+        }
     }
 }
