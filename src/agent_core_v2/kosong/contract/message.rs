@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::sync::OnceLock;
 
 use super::tool::Tool;
 
@@ -10,6 +11,17 @@ pub enum Role {
     User,
     Assistant,
     Tool,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::Tool => "tool",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,7 +125,7 @@ pub enum StreamedMessagePart {
 // Original:
 //   packages/agent-core-v2/src/kosong/contract/message.ts
 //   Message
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     pub role: Role,
@@ -127,6 +139,57 @@ pub struct Message {
     pub partial: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
+    #[serde(skip, default)]
+    token_estimate_cache: OnceLock<usize>,
+}
+
+impl Message {
+    pub fn new(role: Role, content: Vec<ContentPart>, tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            role,
+            name: None,
+            content,
+            tool_calls,
+            tool_call_id: None,
+            partial: None,
+            tools: None,
+            token_estimate_cache: OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn token_estimate_or_init(&self, compute: impl FnOnce() -> usize) -> usize {
+        *self.token_estimate_cache.get_or_init(compute)
+    }
+}
+
+// Cloning a Rust value creates a new message identity. Its estimate must be
+// computed from the clone's current fields rather than shared with the source
+// object's WeakMap entry.
+impl Clone for Message {
+    fn clone(&self) -> Self {
+        Self {
+            role: self.role,
+            name: self.name.clone(),
+            content: self.content.clone(),
+            tool_calls: self.tool_calls.clone(),
+            tool_call_id: self.tool_call_id.clone(),
+            partial: self.partial,
+            tools: self.tools.clone(),
+            token_estimate_cache: OnceLock::new(),
+        }
+    }
+}
+
+impl PartialEq for Message {
+    fn eq(&self, other: &Self) -> bool {
+        self.role == other.role
+            && self.name == other.name
+            && self.content == other.content
+            && self.tool_calls == other.tool_calls
+            && self.tool_call_id == other.tool_call_id
+            && self.partial == other.partial
+            && self.tools == other.tools
+    }
 }
 
 // Original: message.ts, isContentPart()
@@ -227,17 +290,13 @@ pub fn get_text_content(message: &Message) -> String {
 
 // Original: message.ts, createUserMessage()
 pub fn create_user_message(content: impl Into<String>) -> Message {
-    Message {
-        role: Role::User,
-        name: None,
-        content: vec![ContentPart::Text {
+    Message::new(
+        Role::User,
+        vec![ContentPart::Text {
             text: content.into(),
         }],
-        tool_calls: Vec::new(),
-        tool_call_id: None,
-        partial: None,
-        tools: None,
-    }
+        Vec::new(),
+    )
 }
 
 // Original: message.ts, createAssistantMessage()
@@ -245,15 +304,7 @@ pub fn create_assistant_message(
     content: Vec<ContentPart>,
     tool_calls: Option<Vec<ToolCall>>,
 ) -> Message {
-    Message {
-        role: Role::Assistant,
-        name: None,
-        content,
-        tool_calls: tool_calls.unwrap_or_default(),
-        tool_call_id: None,
-        partial: None,
-        tools: None,
-    }
+    Message::new(Role::Assistant, content, tool_calls.unwrap_or_default())
 }
 
 pub enum ToolOutput {
@@ -267,15 +318,9 @@ pub fn create_tool_message(tool_call_id: impl Into<String>, output: ToolOutput) 
         ToolOutput::Text(text) => vec![ContentPart::Text { text }],
         ToolOutput::Parts(parts) => parts,
     };
-    Message {
-        role: Role::Tool,
-        name: None,
-        content,
-        tool_calls: Vec::new(),
-        tool_call_id: Some(tool_call_id.into()),
-        partial: None,
-        tools: None,
-    }
+    let mut message = Message::new(Role::Tool, content, Vec::new());
+    message.tool_call_id = Some(tool_call_id.into());
+    message
 }
 
 #[cfg(test)]
@@ -295,10 +340,9 @@ mod tests {
 
     #[test]
     fn message_serialization_preserves_discriminants_and_camel_case_fields() {
-        let message = Message {
-            role: Role::Assistant,
-            name: None,
-            content: vec![
+        let mut message = Message::new(
+            Role::Assistant,
+            vec![
                 ContentPart::Text {
                     text: "answer".to_owned(),
                 },
@@ -313,11 +357,9 @@ mod tests {
                     },
                 },
             ],
-            tool_calls: vec![function_call(Some("{}"))],
-            tool_call_id: None,
-            partial: Some(true),
-            tools: None,
-        };
+            vec![function_call(Some("{}"))],
+        );
+        message.partial = Some(true);
         let value = serde_json::to_value(&message).unwrap();
         assert_eq!(value["role"], "assistant");
         assert_eq!(
