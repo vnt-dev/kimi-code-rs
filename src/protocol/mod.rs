@@ -23,7 +23,10 @@ pub use approval::{ApprovalDecision, ApprovalRequest, ApprovalResponse, Approval
 pub use display::*;
 pub use envelope::{Envelope, err_envelope, ok_envelope};
 pub use error_codes::{ERROR_CODE_REASON, ErrorCode};
-pub use events::SkillSource;
+pub use events::{
+    GoalActor, GoalBudgetLimits, GoalBudgetReport, GoalChange, GoalChangeKind, GoalChangeStats,
+    GoalSnapshot, GoalStatus, GoalToolResult, SkillSource,
+};
 pub use file::FileMeta;
 pub use fs::*;
 pub use message::*;
