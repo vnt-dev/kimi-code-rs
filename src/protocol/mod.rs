@@ -1,4 +1,5 @@
 pub mod approval;
+pub mod display;
 pub mod envelope;
 pub mod error_codes;
 pub mod events;
@@ -19,6 +20,7 @@ mod validation;
 pub mod workspace;
 
 pub use approval::{ApprovalDecision, ApprovalRequest, ApprovalResponse, ApprovalScope};
+pub use display::*;
 pub use envelope::{Envelope, err_envelope, ok_envelope};
 pub use error_codes::{ERROR_CODE_REASON, ErrorCode};
 pub use events::SkillSource;
