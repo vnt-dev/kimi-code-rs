@@ -1,9 +1,6 @@
-use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
-use super::ws_control::{
-    WS_OPERATIONS, WsMessageSchema, WsOperationDefinition, WsOperationDirection,
-};
+use super::ws_control::{WS_OPERATIONS, WsOperationDefinition, WsOperationDirection};
 
 const ASYNCAPI_VERSION: &str = "3.1.0";
 const DEFAULT_TITLE: &str = "Kimi Code WebSocket API";
@@ -100,30 +97,14 @@ pub fn create_async_api_document(options: AsyncApiDocumentOptions) -> Value {
     })
 }
 
+// Generated from the original `createAsyncApiDocument()` using zod 4.3.6.
+// The operation registry remains native Rust; this asset preserves Zod's
+// complete draft-7 payload schemas, including nested unions and constraints.
+const ASYNCAPI_MESSAGES_JSON: &str = include_str!("asyncapi_messages.json");
+
 fn build_messages() -> Map<String, Value> {
-    let mut messages = Map::new();
-    for operation in WS_OPERATIONS {
-        let id = message_id(operation.operation_type);
-        messages.insert(
-            id.clone(),
-            async_api_message(
-                operation.operation_type,
-                operation.description,
-                operation.message_schema,
-            ),
-        );
-        if let Some(ack_schema) = operation.ack_schema {
-            messages.insert(
-                format!("{id}_ack"),
-                async_api_message(
-                    &format!("{}.ack", operation.operation_type),
-                    &format!("Acknowledgement for {}.", operation.operation_type),
-                    ack_schema,
-                ),
-            );
-        }
-    }
-    messages
+    serde_json::from_str(ASYNCAPI_MESSAGES_JSON)
+        .expect("generated AsyncAPI message schemas must be valid JSON")
 }
 
 fn operation_message_refs(direction: WsOperationDirection) -> Vec<Value> {
@@ -153,124 +134,6 @@ fn ack_message_refs() -> impl Iterator<Item = Value> {
         })
 }
 
-fn async_api_message(name: &str, summary: &str, schema: WsMessageSchema) -> Value {
-    json!({
-        "name": name,
-        "title": title_from_name(name),
-        "summary": summary,
-        "contentType": "application/json",
-        "payload": json_schema(schema)
-    })
-}
-
-fn object_schema(required: &[&str], properties: IndexMap<&str, Value>) -> Value {
-    json!({
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": false
-    })
-}
-
-fn string_schema() -> Value {
-    json!({"type": "string"})
-}
-
-fn payload_object_schema() -> Value {
-    // MIGRATION-TODO:
-    // Original: packages/protocol/src/asyncapi.ts, jsonSchema().
-    // Rust adaptation: operation roots and references are complete, but nested
-    // payload properties currently remain open objects because Rust has no Zod
-    // runtime schema graph. Completion condition: derive or hand-author the
-    // nested JSON Schema graph from the migrated serde types.
-    json!({"type": "object"})
-}
-
-fn json_schema(schema: WsMessageSchema) -> Value {
-    use WsMessageSchema as S;
-
-    let control = |wire_type: &str| {
-        object_schema(
-            &["type", "id", "payload"],
-            IndexMap::from([
-                ("type", json!({"type": "string", "const": wire_type})),
-                ("id", string_schema()),
-                ("payload", payload_object_schema()),
-            ]),
-        )
-    };
-    let ack = || {
-        object_schema(
-            &["type", "id", "code", "msg", "payload"],
-            IndexMap::from([
-                ("type", json!({"type": "string", "const": "ack"})),
-                ("id", string_schema()),
-                ("code", json!({"type": "integer"})),
-                ("msg", string_schema()),
-                ("payload", payload_object_schema()),
-            ]),
-        )
-    };
-
-    match schema {
-        S::ClientHello => control("client_hello"),
-        S::Subscribe => control("subscribe"),
-        S::Unsubscribe => control("unsubscribe"),
-        S::WatchFsAdd => control("watch_fs_add"),
-        S::WatchFsRemove => control("watch_fs_remove"),
-        S::Abort => control("abort"),
-        S::TerminalAttach => control("terminal_attach"),
-        S::TerminalDetach => control("terminal_detach"),
-        S::TerminalInput => control("terminal_input"),
-        S::TerminalResize => control("terminal_resize"),
-        S::TerminalClose => control("terminal_close"),
-        S::Pong => object_schema(
-            &["type", "payload"],
-            IndexMap::from([
-                ("type", json!({"type": "string", "const": "pong"})),
-                ("payload", payload_object_schema()),
-            ]),
-        ),
-        S::ClientHelloAck
-        | S::SubscribeAck
-        | S::UnsubscribeAck
-        | S::WatchFsAck
-        | S::AbortAck
-        | S::TerminalAttachAck
-        | S::TerminalDetachAck
-        | S::TerminalInputAck
-        | S::TerminalResizeAck
-        | S::TerminalCloseAck => ack(),
-        S::ServerHello => system_schema("server_hello", true),
-        S::Ping => system_schema("ping", true),
-        S::ResyncRequired => system_schema("resync_required", true),
-        S::Error => system_schema("error", true),
-        S::SessionEvent => object_schema(
-            &["type", "seq", "timestamp", "payload"],
-            IndexMap::from([
-                ("type", string_schema()),
-                ("seq", json!({"type": "integer", "minimum": 0})),
-                ("timestamp", string_schema()),
-                ("payload", payload_object_schema()),
-            ]),
-        ),
-    }
-}
-
-fn system_schema(wire_type: &str, timestamp: bool) -> Value {
-    let mut properties = IndexMap::from([
-        ("type", json!({"type": "string", "const": wire_type})),
-        ("payload", payload_object_schema()),
-    ]);
-    let required = if timestamp {
-        properties.insert("timestamp", string_schema());
-        vec!["type", "timestamp", "payload"]
-    } else {
-        vec!["type", "payload"]
-    };
-    object_schema(&required, properties)
-}
-
 fn message_id(message_type: &str) -> String {
     let mut id = String::new();
     let mut last_was_separator = true;
@@ -287,20 +150,6 @@ fn message_id(message_type: &str) -> String {
         id.pop();
     }
     id
-}
-
-fn title_from_name(name: &str) -> String {
-    name.split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut characters = part.chars();
-            characters
-                .next()
-                .map(|first| first.to_ascii_uppercase().to_string() + characters.as_str())
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 #[cfg(test)]
@@ -325,6 +174,17 @@ mod tests {
         assert_eq!(
             document["components"]["messages"]["client_hello"]["payload"]["type"],
             "object"
+        );
+        assert_eq!(
+            document["components"]["messages"]["terminal_resize"]["payload"]["properties"]["payload"]
+                ["properties"]["cols"]["exclusiveMinimum"],
+            0
+        );
+        assert!(
+            document["components"]["messages"]["session_event"]["payload"]["properties"]["payload"]
+                ["allOf"][0]["oneOf"]
+                .as_array()
+                .is_some_and(|variants| variants.len() > 40)
         );
     }
 }
