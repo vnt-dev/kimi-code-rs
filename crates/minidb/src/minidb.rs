@@ -132,6 +132,25 @@ pub struct OpenOptions<V> {
     pub max_memory_policy: MemoryPolicy,
 }
 
+impl<V> Clone for OpenOptions<V> {
+    fn clone(&self) -> Self {
+        Self {
+            directory: self.directory.clone(),
+            codec: Arc::clone(&self.codec),
+            fsync_policy: self.fsync_policy,
+            compact_threshold_bytes: self.compact_threshold_bytes,
+            auto_compact: self.auto_compact,
+            active_expire_interval: self.active_expire_interval,
+            recovery_mode: self.recovery_mode,
+            read_only: self.read_only,
+            readonly_on_lock_fail: self.readonly_on_lock_fail,
+            value_mode: self.value_mode,
+            max_memory_bytes: self.max_memory_bytes,
+            max_memory_policy: self.max_memory_policy,
+        }
+    }
+}
+
 impl<V> OpenOptions<V> {
     pub fn new(directory: impl Into<PathBuf>, codec: Arc<dyn ValueCodec<V>>) -> Self {
         Self {
@@ -498,6 +517,38 @@ impl<V: Send + Sync + 'static> MiniDb<V> {
             database.compact().await?;
         }
         Ok(database)
+    }
+
+    // Original: packages/minidb/src/index.ts, MiniDb.openOrRebuild().
+    pub async fn open_or_rebuild(
+        options: OpenOptions<V>,
+        on_rebuild: Option<&(dyn Fn(&MiniDbError) + Send + Sync)>,
+    ) -> Result<Self, MiniDbError> {
+        let error = match Self::open(options.clone()).await {
+            Ok(database) => return Ok(database),
+            Err(error) => error,
+        };
+        if !is_rebuildable_open_error(&error) {
+            return Err(error);
+        }
+        if let Some(on_rebuild) = on_rebuild {
+            on_rebuild(&error);
+        }
+        if is_json_open_error(&error) {
+            for name in [
+                "db.indexes.json",
+                "db.textindexes.json",
+                "db.compound-indexes.json",
+            ] {
+                let _ = tokio::fs::remove_file(options.directory.join(name)).await;
+                let _ = tokio::fs::remove_file(options.directory.join(format!("{name}.tmp"))).await;
+            }
+            if let Ok(database) = Self::open(options.clone()).await {
+                return Ok(database);
+            }
+        }
+        let _ = tokio::fs::remove_dir_all(&options.directory).await;
+        Self::open(options).await
     }
 
     fn compaction(&self) -> &Arc<CompactionTarget> {
@@ -2236,6 +2287,22 @@ async fn cleanup_temporary_files(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn is_json_open_error(error: &MiniDbError) -> bool {
+    matches!(
+        error,
+        MiniDbError::Json(_) | MiniDbError::Recovery(RecoveryError::Metadata(_))
+    )
+}
+
+fn is_rebuildable_open_error(error: &MiniDbError) -> bool {
+    is_json_open_error(error)
+        || matches!(
+            error,
+            MiniDbError::FrameCodec(CodecError::CorruptFrame { .. })
+                | MiniDbError::Recovery(RecoveryError::Codec(CodecError::CorruptFrame { .. }))
+        )
+}
+
 fn text_postings_path(directory: &Path, name: &str) -> PathBuf {
     let safe = name
         .chars()
@@ -2342,6 +2409,33 @@ mod tests {
         database.expire("a", -1.0).await.unwrap();
         assert_eq!(database.get("a").unwrap(), None);
         database.backup(backup.path(), false).await.unwrap();
+        database.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn open_or_rebuild_drops_corrupt_derived_metadata_before_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = MiniDb::<String>::string_options(directory.path());
+        let database = MiniDb::open(options.clone()).await.unwrap();
+        database
+            .set("kept", "value".into(), SetOptions::default())
+            .await
+            .unwrap();
+        database.close().await.unwrap();
+        tokio::fs::write(directory.path().join("db.indexes.json"), b"{")
+            .await
+            .unwrap();
+
+        let rebuilt = std::sync::atomic::AtomicBool::new(false);
+        let on_rebuild = |_: &MiniDbError| {
+            rebuilt.store(true, std::sync::atomic::Ordering::Release);
+        };
+        let database = MiniDb::open_or_rebuild(options, Some(&on_rebuild))
+            .await
+            .unwrap();
+
+        assert!(rebuilt.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(database.get("kept").unwrap().as_deref(), Some("value"));
         database.close().await.unwrap();
     }
 }
