@@ -845,6 +845,7 @@ name = "kimi-code-minidb"
 version = "0.2.0"
 dependencies = [
  "futures-util",
+ "libc",
  "regex",
  "serde",
  "serde_json",

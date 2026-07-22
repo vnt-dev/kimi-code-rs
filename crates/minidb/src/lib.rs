@@ -4,6 +4,7 @@ pub mod compound_index;
 pub mod crc32;
 pub mod dt_index;
 pub mod index_manager;
+pub mod lockfile;
 pub mod query;
 pub mod recovery;
 pub mod rename_replace;
