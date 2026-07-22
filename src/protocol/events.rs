@@ -3,10 +3,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::fmt;
 
+use super::MessageContent;
 use super::display::{OptionalJsonValue, ToolInputDisplay};
 use super::model_catalog::{ProviderRefreshChange, ProviderRefreshFailure};
 use super::rest::config::ConfigResponse;
+use super::rest::prompt::{PromptCompletedReason, PromptStatus};
 use super::session::{Session, SessionLastTurnReason, SessionPendingInteraction};
+use super::time::IsoDateTime;
 use super::validation::{optional_non_null, required_nullable};
 use super::workspace::Workspace;
 
@@ -1465,6 +1468,325 @@ pub struct ToolResultEvent {
     pub synthetic: Option<bool>,
 }
 
+event_type!(SubagentSpawnedEventType, "subagent.spawned");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentSpawnedEvent {
+    #[serde(rename = "type")]
+    pub event_type: SubagentSpawnedEventType,
+    pub subagent_id: String,
+    pub subagent_name: String,
+    pub parent_tool_call_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub parent_tool_call_uuid: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub parent_agent_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub caller_agent_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub description: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub swarm_index: Option<f64>,
+    pub run_in_background: bool,
+}
+
+event_type!(SubagentStartedEventType, "subagent.started");
+event_type!(SubagentSuspendedEventType, "subagent.suspended");
+event_type!(SubagentCompletedEventType, "subagent.completed");
+event_type!(SubagentFailedEventType, "subagent.failed");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentStartedEvent {
+    #[serde(rename = "type")]
+    pub event_type: SubagentStartedEventType,
+    pub subagent_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentSuspendedEvent {
+    #[serde(rename = "type")]
+    pub event_type: SubagentSuspendedEventType,
+    pub subagent_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentCompletedEvent {
+    #[serde(rename = "type")]
+    pub event_type: SubagentCompletedEventType,
+    pub subagent_id: String,
+    pub result_summary: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub usage: Option<TokenUsage>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub context_tokens: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentFailedEvent {
+    #[serde(rename = "type")]
+    pub event_type: SubagentFailedEventType,
+    pub subagent_id: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CompactionTrigger {
+    Manual,
+    Auto,
+}
+
+event_type!(CompactionStartedEventType, "compaction.started");
+event_type!(CompactionBlockedEventType, "compaction.blocked");
+event_type!(CompactionCancelledEventType, "compaction.cancelled");
+event_type!(CompactionCompletedEventType, "compaction.completed");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactionStartedEvent {
+    #[serde(rename = "type")]
+    pub event_type: CompactionStartedEventType,
+    pub trigger: CompactionTrigger,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub instruction: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactionBlockedEvent {
+    #[serde(rename = "type")]
+    pub event_type: CompactionBlockedEventType,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub turn_id: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactionCancelledEvent {
+    #[serde(rename = "type")]
+    pub event_type: CompactionCancelledEventType,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompactionCompletedEvent {
+    #[serde(rename = "type")]
+    pub event_type: CompactionCompletedEventType,
+    pub result: CompactionResult,
+}
+
+event_type!(TaskStartedEventType, "task.started");
+event_type!(TaskTerminatedEventType, "task.terminated");
+event_type!(BackgroundTaskStartedEventType, "background.task.started");
+event_type!(
+    BackgroundTaskTerminatedEventType,
+    "background.task.terminated"
+);
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskStartedEvent {
+    #[serde(rename = "type")]
+    pub event_type: TaskStartedEventType,
+    pub info: TaskInfo,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskTerminatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: TaskTerminatedEventType,
+    pub info: TaskInfo,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackgroundTaskStartedEvent {
+    #[serde(rename = "type")]
+    pub event_type: BackgroundTaskStartedEventType,
+    pub info: TaskInfo,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackgroundTaskTerminatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: BackgroundTaskTerminatedEventType,
+    pub info: TaskInfo,
+}
+
+event_type!(CronJobOriginKind, "cron_job");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CronJobOrigin {
+    pub kind: CronJobOriginKind,
+    pub job_id: String,
+    pub cron: String,
+    pub recurring: bool,
+    pub coalesced_count: f64,
+    pub stale: bool,
+}
+
+event_type!(CronFiredEventType, "cron.fired");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CronFiredEvent {
+    #[serde(rename = "type")]
+    pub event_type: CronFiredEventType,
+    pub origin: CronJobOrigin,
+    pub prompt: String,
+}
+
+event_type!(PromptSubmittedEventType, "prompt.submitted");
+event_type!(PromptCompletedEventType, "prompt.completed");
+event_type!(PromptAbortedEventType, "prompt.aborted");
+event_type!(PromptSteeredEventType, "prompt.steered");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSubmittedEvent {
+    #[serde(rename = "type")]
+    pub event_type: PromptSubmittedEventType,
+    pub prompt_id: String,
+    pub user_message_id: String,
+    pub status: PromptStatus,
+    pub content: Vec<MessageContent>,
+    pub created_at: IsoDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptCompletedEvent {
+    #[serde(rename = "type")]
+    pub event_type: PromptCompletedEventType,
+    pub prompt_id: String,
+    pub finished_at: IsoDateTime,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub reason: Option<PromptCompletedReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptAbortedEvent {
+    #[serde(rename = "type")]
+    pub event_type: PromptAbortedEventType,
+    pub prompt_id: String,
+    pub aborted_at: IsoDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSteeredEvent {
+    #[serde(rename = "type")]
+    pub event_type: PromptSteeredEventType,
+    pub active_prompt_id: String,
+    pub prompt_ids: Vec<String>,
+    pub content: Vec<MessageContent>,
+    pub steered_at: IsoDateTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolListUpdatedReason {
+    #[serde(rename = "mcp.connected")]
+    McpConnected,
+    #[serde(rename = "mcp.disconnected")]
+    McpDisconnected,
+    #[serde(rename = "mcp.failed")]
+    McpFailed,
+}
+
+event_type!(ToolListUpdatedEventType, "tool.list.updated");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolListUpdatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: ToolListUpdatedEventType,
+    pub reason: ToolListUpdatedReason,
+    pub server_name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    Stdio,
+    Http,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpServerStatus {
+    Pending,
+    Connected,
+    Failed,
+    Disabled,
+    NeedsAuth,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStatusPayload {
+    pub name: String,
+    pub transport: McpTransport,
+    pub status: McpServerStatus,
+    pub tool_count: f64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub error: Option<String>,
+}
+
+event_type!(McpServerStatusEventType, "mcp.server.status");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpServerStatusEvent {
+    #[serde(rename = "type")]
+    pub event_type: McpServerStatusEventType,
+    pub server: McpServerStatusPayload,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1560,6 +1882,19 @@ mod tests {
         assert!(
             serde_json::from_value::<ShellCompletedEvent>(serde_json::json!({
                 "type": "shell.started", "commandId": "cmd", "isError": false
+            }))
+            .is_err()
+        );
+        let prompt: PromptSubmittedEvent = serde_json::from_value(serde_json::json!({
+            "type": "prompt.submitted", "promptId": "p", "userMessageId": "m",
+            "status": "blocked", "content": [{"type": "text", "text": "hello"}],
+            "createdAt": "2026-06-11T00:00:00Z"
+        }))
+        .unwrap();
+        assert_eq!(prompt.created_at, "2026-06-11T00:00:00.000Z");
+        assert!(
+            serde_json::from_value::<McpServerStatusPayload>(serde_json::json!({
+                "name": "server", "transport": "sse", "status": "connected", "toolCount": 2
             }))
             .is_err()
         );
