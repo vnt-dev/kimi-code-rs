@@ -7,7 +7,9 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
-use crate::agent_core_v2::kosong::contract::errors::ChatProviderError;
+use crate::agent_core_v2::kosong::contract::errors::{
+    ChatProviderError, classify_base_api_error, normalize_api_status_error, parse_retry_after_ms,
+};
 use crate::agent_core_v2::kosong::contract::message::is_tool_declaration_only_message;
 use crate::agent_core_v2::kosong::contract::message::{
     ContentPart, Message, Role, StreamIndex, StreamedMessagePart, ToolCall, ToolCallPart,
@@ -64,6 +66,42 @@ pub fn normalize_anthropic_stop_reason(raw: Option<&str>) -> NormalizedFinishRea
         finish_reason: Some(finish_reason),
         raw_finish_reason: Some(raw.to_owned()),
     }
+}
+
+// Original: anthropic.ts, convertAnthropicError()
+// Cancellation is selected before the reqwest future, preserving the source
+// method's abort-first guard.
+pub fn convert_anthropic_error(error: reqwest::Error) -> ChatProviderError {
+    if error.is_timeout() {
+        ChatProviderError::timeout(error.to_string())
+    } else if error.is_connect() || error.is_request() || error.is_body() {
+        ChatProviderError::connection(error.to_string())
+    } else if error.is_decode() {
+        ChatProviderError::ChatProvider {
+            message: format!("Anthropic error: {error}"),
+        }
+    } else {
+        classify_base_api_error(&error.to_string())
+    }
+}
+
+pub fn convert_anthropic_status_error(
+    status_code: u16,
+    message: &str,
+    headers: &reqwest::header::HeaderMap,
+) -> ChatProviderError {
+    let request_id = headers
+        .get("request-id")
+        .or_else(|| headers.get("x-request-id"))
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    normalize_api_status_error(
+        i32::from(status_code),
+        message,
+        request_id,
+        parse_retry_after_ms(Some(headers)),
+        None,
+    )
 }
 
 // Original: anthropic.ts, applyResponseFormat()

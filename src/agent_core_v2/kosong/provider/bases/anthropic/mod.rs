@@ -3,3 +3,4 @@
 pub mod anthropic;
 pub mod anthropic_hooks;
 pub mod anthropic_profile;
+pub mod anthropic_transport;
