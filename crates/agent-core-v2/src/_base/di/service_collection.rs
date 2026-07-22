@@ -12,7 +12,10 @@ pub type ServiceValue = Arc<dyn Any + Send + Sync>;
 
 #[derive(Clone)]
 pub enum ServiceEntry {
-    Instance(ServiceValue),
+    Instance {
+        value: ServiceValue,
+        disposable: Option<super::lifecycle::DisposableHandle>,
+    },
     Descriptor(ErasedSyncDescriptor),
 }
 
@@ -34,8 +37,13 @@ impl ServiceCollection {
     where
         T: Send + Sync + 'static,
     {
-        self.entries
-            .insert(id.erase(), ServiceEntry::Instance(instance))
+        self.entries.insert(
+            id.erase(),
+            ServiceEntry::Instance {
+                value: instance,
+                disposable: None,
+            },
+        )
     }
 
     pub fn set_descriptor<T>(
@@ -67,7 +75,7 @@ impl ServiceCollection {
         T: Send + Sync + 'static,
     {
         match self.entries.get(&id.erase()) {
-            Some(ServiceEntry::Instance(value)) => Arc::clone(value)
+            Some(ServiceEntry::Instance { value, .. }) => Arc::clone(value)
                 .downcast::<T>()
                 .map(Some)
                 .map_err(|_| DiError::TypeMismatch(id.erase())),
@@ -98,7 +106,7 @@ mod tests {
                 .is_none()
         );
         let previous = collection.set_instance(id, Arc::new("second".to_owned()));
-        assert!(matches!(previous, Some(ServiceEntry::Instance(_))));
+        assert!(matches!(previous, Some(ServiceEntry::Instance { .. })));
         assert_eq!(collection.get(id).unwrap().unwrap().as_str(), "second");
         assert!(collection.has(id));
     }

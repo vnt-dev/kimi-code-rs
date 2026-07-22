@@ -97,8 +97,9 @@ pub trait ServicesAccessorExt: ServicesAccessor {
 
 impl<T: ServicesAccessor + ?Sized> ServicesAccessorExt for T {}
 
-pub const INSTANTIATION_SERVICE_ID: ServiceIdentifier<dyn Send + Sync> =
-    ServiceIdentifier::new("instantiationService");
+pub const INSTANTIATION_SERVICE_ID: ServiceIdentifier<
+    super::instantiation_service::InstantiationService,
+> = ServiceIdentifier::new("instantiationService");
 
 #[cfg(test)]
 mod tests {
