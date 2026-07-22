@@ -1,14 +1,25 @@
+use futures_util::{Stream, StreamExt};
+use regex::Regex;
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
+use std::task::{Context, Poll};
+use tokio_util::sync::CancellationToken;
 
+use crate::agent_core_v2::kosong::contract::errors::{
+    ApiStatusData, ChatProviderError, is_context_overflow_error_code,
+};
 use crate::agent_core_v2::kosong::contract::message::{
-    ContentPart, Message, Role, extract_text, is_tool_declaration_only_message,
+    ContentPart, Message, Role, StreamIndex, StreamedMessagePart, ToolCall, ToolCallPart,
+    ToolCallPartType, ToolCallType, extract_text, is_tool_declaration_only_message,
 };
 use crate::agent_core_v2::kosong::contract::provider::{
-    FinishReason, GenerateOptions, ResponseFormat, ThinkingEffort, ToolCallIdPolicy,
+    FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage, ThinkingEffort,
+    ToolCallIdPolicy, TraceId,
 };
 use crate::agent_core_v2::kosong::contract::tool::Tool;
+use crate::agent_core_v2::kosong::contract::usage::TokenUsage;
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::{
     NormalizedFinishReason, TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_PROMPT,
     ToolMessageConversion, is_media_part,
@@ -423,6 +434,686 @@ pub fn build_openai_responses_request(
     Ok(params)
 }
 
+#[derive(Debug)]
+enum ResponseOutputItem {
+    Message {
+        content: Vec<Map<String, Value>>,
+    },
+    FunctionCall {
+        item_id: Option<String>,
+        call_id: Option<String>,
+        name: Option<String>,
+        arguments: Option<String>,
+    },
+    Reasoning {
+        encrypted_content: Option<String>,
+        summary: Vec<Map<String, Value>>,
+    },
+    Other,
+}
+
+fn read_string_field<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    object.get(key).and_then(Value::as_str)
+}
+
+fn read_number_field(object: &Map<String, Value>, key: &str) -> Option<i64> {
+    object.get(key).and_then(Value::as_i64)
+}
+
+fn read_object_field<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> Option<&'a Map<String, Value>> {
+    object.get(key).and_then(Value::as_object)
+}
+
+fn read_object_array_field(
+    object: &Map<String, Value>,
+    key: &str,
+) -> Option<Vec<Map<String, Value>>> {
+    object.get(key).and_then(Value::as_array).map(|values| {
+        values
+            .iter()
+            .filter_map(Value::as_object)
+            .cloned()
+            .collect()
+    })
+}
+
+fn responses_decode_error(context: &str, detail: &str) -> ChatProviderError {
+    ChatProviderError::ChatProvider {
+        message: format!("OpenAI Responses decode error: {context} {detail}"),
+    }
+}
+
+fn require_string_field<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+    context: &str,
+) -> Result<&'a str, ChatProviderError> {
+    read_string_field(object, key)
+        .ok_or_else(|| responses_decode_error(&format!("{context}.{key}"), "must be a string."))
+}
+
+fn require_object_field<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+    context: &str,
+) -> Result<&'a Map<String, Value>, ChatProviderError> {
+    read_object_field(object, key)
+        .ok_or_else(|| responses_decode_error(&format!("{context}.{key}"), "must be an object."))
+}
+
+fn read_response_output_item(
+    value: &Value,
+    context: &str,
+) -> Result<ResponseOutputItem, ChatProviderError> {
+    let item = value
+        .as_object()
+        .ok_or_else(|| responses_decode_error(context, "must be an object."))?;
+    match require_string_field(item, "type", context)? {
+        "message" => Ok(ResponseOutputItem::Message {
+            content: read_object_array_field(item, "content").unwrap_or_default(),
+        }),
+        "function_call" => Ok(ResponseOutputItem::FunctionCall {
+            item_id: read_string_field(item, "id").map(str::to_owned),
+            call_id: read_string_field(item, "call_id").map(str::to_owned),
+            name: read_string_field(item, "name").map(str::to_owned),
+            arguments: read_string_field(item, "arguments").map(str::to_owned),
+        }),
+        "reasoning" => Ok(ResponseOutputItem::Reasoning {
+            encrypted_content: read_string_field(item, "encrypted_content").map(str::to_owned),
+            summary: read_object_array_field(item, "summary").unwrap_or_default(),
+        }),
+        _ => Ok(ResponseOutputItem::Other),
+    }
+}
+
+fn response_stream_index(item_id: Option<&str>, output_index: Option<i64>) -> Option<StreamIndex> {
+    item_id
+        .map(|id| StreamIndex::String(id.to_owned()))
+        .or_else(|| output_index.map(StreamIndex::Number))
+}
+
+fn format_response_stream_index(index: Option<&StreamIndex>) -> String {
+    match index {
+        Some(StreamIndex::String(index)) => index.clone(),
+        Some(StreamIndex::Number(index)) => index.to_string(),
+        None => "<unindexed>".to_owned(),
+    }
+}
+
+fn require_function_call_name(name: Option<String>) -> Result<String, ChatProviderError> {
+    name.ok_or_else(|| ChatProviderError::ChatProvider {
+        message: "OpenAI Responses function_call item is missing a name.".to_owned(),
+    })
+}
+
+fn function_call_id(call_id: Option<String>) -> String {
+    call_id
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
+fn format_responses_error_event(code: Option<&str>, message: &str, param: Option<&str>) -> String {
+    let code = code.unwrap_or("unknown");
+    let param = param.map_or_else(String::new, |param| format!(" (param: {param})"));
+    format!("{code}: {message}{param}")
+}
+
+static EMBEDDED_STATUS_CODE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bstatus_code\s*[:=]\s*(\d{3})\b").expect("static regex must compile")
+});
+
+fn read_embedded_status_code(message: &str) -> Option<i32> {
+    EMBEDDED_STATUS_CODE_RE
+        .captures(message)
+        .and_then(|capture| capture.get(1))
+        .and_then(|value| value.as_str().parse().ok())
+}
+
+fn error_from_openai_responses_event(
+    prefix: &str,
+    code: Option<&str>,
+    message: &str,
+    param: Option<&str>,
+) -> ChatProviderError {
+    let message = format!(
+        "{prefix}: {}",
+        format_responses_error_event(code, message, param)
+    );
+    if is_context_overflow_error_code(code) {
+        ChatProviderError::ApiContextOverflow {
+            message,
+            data: ApiStatusData::new(400, None, None, None),
+        }
+    } else if code == Some("rate_limit_exceeded")
+        || read_embedded_status_code(&message) == Some(429)
+    {
+        ChatProviderError::ApiProviderRateLimit {
+            message,
+            data: ApiStatusData::new(429, None, None, None),
+        }
+    } else {
+        ChatProviderError::ChatProvider { message }
+    }
+}
+
+fn parse_nested_gateway_stream_error(
+    message: &str,
+) -> Option<(Option<String>, String, Option<String>)> {
+    let marker = "received error while streaming:";
+    let json = message.split_once(marker)?.1.trim();
+    if json.is_empty() {
+        return None;
+    }
+    let error: Value = serde_json::from_str(json).ok()?;
+    let error = error.as_object()?;
+    Some((
+        read_string_field(error, "code").map(str::to_owned),
+        read_string_field(error, "message")?.to_owned(),
+        read_string_field(error, "param").map(str::to_owned),
+    ))
+}
+
+fn malformed_stream_error_event(message: &str) -> ChatProviderError {
+    if let Some((code, message, param)) = parse_nested_gateway_stream_error(message) {
+        return error_from_openai_responses_event(
+            "OpenAI Responses malformed stream error",
+            code.as_deref(),
+            &message,
+            param.as_deref(),
+        );
+    }
+    error_from_openai_responses_event(
+        "OpenAI Responses malformed stream error",
+        None,
+        message,
+        None,
+    )
+}
+
+fn read_failed_response_error(response: &Map<String, Value>) -> Option<(String, String)> {
+    let error = read_object_field(response, "error")?;
+    Some((
+        read_string_field(error, "code")
+            .unwrap_or("unknown")
+            .to_owned(),
+        read_string_field(error, "message")
+            .unwrap_or("no message")
+            .to_owned(),
+    ))
+}
+
+fn format_failed_response(response: &Map<String, Value>) -> String {
+    if let Some((code, message)) = read_failed_response_error(response) {
+        return format_responses_error_event(Some(&code), &message, None);
+    }
+    read_object_field(response, "incomplete_details")
+        .and_then(|details| read_string_field(details, "reason"))
+        .map_or_else(
+            || "Unknown error (no error details in response)".to_owned(),
+            |reason| format!("incomplete: {reason}"),
+        )
+}
+
+enum OpenAiResponsesEvent {
+    Response(Value),
+    Chunk(Value),
+}
+
+// Original: openai-responses.ts, OpenAIResponsesStreamedMessage
+pub struct OpenAiResponsesStreamedMessage {
+    source: Pin<Box<dyn Stream<Item = Result<OpenAiResponsesEvent, ProviderError>> + Send>>,
+    pending: VecDeque<StreamedMessagePart>,
+    function_arguments: HashMap<StreamIndex, String>,
+    unindexed_function_arguments: Option<String>,
+    signal: Option<CancellationToken>,
+    abort_emitted: bool,
+    terminated: bool,
+    id: Option<String>,
+    usage: Option<TokenUsage>,
+    finish_reason: Option<FinishReason>,
+    raw_finish_reason: Option<String>,
+}
+
+impl OpenAiResponsesStreamedMessage {
+    pub fn from_response(response: Value, signal: Option<CancellationToken>) -> Self {
+        Self::new(
+            futures_util::stream::iter([Ok(OpenAiResponsesEvent::Response(response))]),
+            signal,
+        )
+    }
+
+    pub fn from_stream<S>(source: S, signal: Option<CancellationToken>) -> Self
+    where
+        S: Stream<Item = Result<Value, ProviderError>> + Send + 'static,
+    {
+        Self::new(
+            source.map(|item| item.map(OpenAiResponsesEvent::Chunk)),
+            signal,
+        )
+    }
+
+    fn new<S>(source: S, signal: Option<CancellationToken>) -> Self
+    where
+        S: Stream<Item = Result<OpenAiResponsesEvent, ProviderError>> + Send + 'static,
+    {
+        Self {
+            source: Box::pin(source),
+            pending: VecDeque::new(),
+            function_arguments: HashMap::new(),
+            unindexed_function_arguments: None,
+            signal,
+            abort_emitted: false,
+            terminated: false,
+            id: None,
+            usage: None,
+            finish_reason: None,
+            raw_finish_reason: None,
+        }
+    }
+
+    fn capture_finish_reason(&mut self, response: &Map<String, Value>) {
+        let incomplete_reason = read_object_field(response, "incomplete_details")
+            .and_then(|details| read_string_field(details, "reason"));
+        let normalized = normalize_responses_finish_reason(
+            read_string_field(response, "status"),
+            incomplete_reason,
+        );
+        self.finish_reason = normalized.finish_reason;
+        self.raw_finish_reason = normalized.raw_finish_reason;
+    }
+
+    fn extract_usage(&mut self, usage: &Map<String, Value>) {
+        let input = usage
+            .get("input_tokens")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let output = usage
+            .get("output_tokens")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let cached = read_object_field(usage, "input_tokens_details")
+            .and_then(|details| details.get("cached_tokens"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        self.usage = Some(TokenUsage {
+            input_other: input - cached,
+            output,
+            input_cache_read: cached,
+            input_cache_creation: 0.0,
+        });
+    }
+
+    fn push_reasoning(&mut self, text: String, encrypted: Option<String>) {
+        self.pending
+            .push_back(StreamedMessagePart::Content(ContentPart::Think {
+                think: text,
+                encrypted,
+            }));
+    }
+
+    fn process_non_stream_response(&mut self, response: Value) -> Result<(), ChatProviderError> {
+        let response = response
+            .as_object()
+            .ok_or_else(|| responses_decode_error("response", "must be an object."))?;
+        self.id = read_string_field(response, "id").map(str::to_owned);
+        if let Some(usage) = read_object_field(response, "usage") {
+            self.extract_usage(usage);
+        }
+        self.capture_finish_reason(response);
+        let Some(output) = response.get("output").and_then(Value::as_array) else {
+            return Ok(());
+        };
+        for item in output {
+            match read_response_output_item(item, "response.output item")? {
+                ResponseOutputItem::Message { content } => {
+                    for item in content {
+                        if read_string_field(&item, "type") == Some("output_text")
+                            && let Some(text) = read_string_field(&item, "text")
+                        {
+                            self.pending.push_back(StreamedMessagePart::Content(
+                                ContentPart::Text {
+                                    text: text.to_owned(),
+                                },
+                            ));
+                        }
+                    }
+                }
+                ResponseOutputItem::FunctionCall {
+                    call_id,
+                    name,
+                    arguments,
+                    ..
+                } => self
+                    .pending
+                    .push_back(StreamedMessagePart::ToolCall(ToolCall {
+                        call_type: ToolCallType::Function,
+                        id: function_call_id(call_id),
+                        name: require_function_call_name(name)?,
+                        arguments,
+                        extras: None,
+                        stream_index: None,
+                    })),
+                ResponseOutputItem::Reasoning {
+                    encrypted_content,
+                    summary,
+                } => {
+                    let mut found = false;
+                    for item in summary {
+                        if let Some(text) = read_string_field(&item, "text") {
+                            found = true;
+                            self.push_reasoning(text.to_owned(), encrypted_content.clone());
+                        }
+                    }
+                    if !found {
+                        self.push_reasoning(String::new(), encrypted_content);
+                    }
+                }
+                ResponseOutputItem::Other => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn arguments_mut(&mut self, index: Option<&StreamIndex>) -> Option<&mut String> {
+        match index {
+            Some(index) => self.function_arguments.get_mut(index),
+            None => self.unindexed_function_arguments.as_mut(),
+        }
+    }
+
+    fn set_arguments(&mut self, index: Option<StreamIndex>, arguments: String) {
+        match index {
+            Some(index) => {
+                self.function_arguments.insert(index, arguments);
+            }
+            None => self.unindexed_function_arguments = Some(arguments),
+        }
+    }
+
+    fn append_arguments(
+        &mut self,
+        index: Option<&StreamIndex>,
+        part: &str,
+        event_type: &str,
+    ) -> Result<(), ChatProviderError> {
+        let formatted = format_response_stream_index(index);
+        let arguments = self.arguments_mut(index).ok_or_else(|| {
+            responses_decode_error(
+                event_type,
+                &format!("received function-call arguments for unknown stream index {formatted}."),
+            )
+        })?;
+        arguments.push_str(part);
+        Ok(())
+    }
+
+    fn push_final_arguments_suffix(
+        &mut self,
+        index: Option<StreamIndex>,
+        final_arguments: String,
+        event_type: &str,
+    ) -> Result<(), ChatProviderError> {
+        let formatted = format_response_stream_index(index.as_ref());
+        let accumulated = self.arguments_mut(index.as_ref()).ok_or_else(|| {
+            responses_decode_error(
+                event_type,
+                &format!(
+                    "received final function-call arguments for unknown stream index {formatted}."
+                ),
+            )
+        })?;
+        if *accumulated == final_arguments {
+            return Ok(());
+        }
+        let Some(suffix) = final_arguments.strip_prefix(accumulated.as_str()) else {
+            return Err(ChatProviderError::ChatProvider {
+                message: format!(
+                    "OpenAI Responses final function-call arguments for stream index {formatted} do not match the streamed argument deltas."
+                ),
+            });
+        };
+        let suffix = suffix.to_owned();
+        accumulated.clone_from(&final_arguments);
+        if !suffix.is_empty() {
+            self.pending
+                .push_back(StreamedMessagePart::ToolCallPart(ToolCallPart {
+                    part_type: ToolCallPartType::ToolCallPart,
+                    arguments_part: Some(suffix),
+                    index,
+                }));
+        }
+        Ok(())
+    }
+
+    fn process_stream_event(&mut self, chunk: Value) -> Result<(), ChatProviderError> {
+        let chunk = chunk
+            .as_object()
+            .ok_or_else(|| responses_decode_error("stream event", "must be an object."))?;
+        let event_type = match read_string_field(chunk, "type") {
+            Some(event_type) => event_type,
+            None if !chunk.contains_key("type") => {
+                if let Some(message) = read_string_field(chunk, "message") {
+                    return Err(malformed_stream_error_event(message));
+                }
+                return Err(responses_decode_error(
+                    "stream event.type",
+                    "must be a string.",
+                ));
+            }
+            None => {
+                return Err(responses_decode_error(
+                    "stream event.type",
+                    "must be a string.",
+                ));
+            }
+        };
+        match event_type {
+            "response.output_text.delta" => {
+                let text = require_string_field(chunk, "delta", event_type)?;
+                self.pending
+                    .push_back(StreamedMessagePart::Content(ContentPart::Text {
+                        text: text.to_owned(),
+                    }));
+            }
+            "response.created" | "response.in_progress" => {
+                let response = require_object_field(chunk, "response", event_type)?;
+                if let Some(id) = read_string_field(response, "id") {
+                    self.id = Some(id.to_owned());
+                }
+            }
+            "response.output_item.added" => {
+                let item = read_response_output_item(
+                    chunk.get("item").unwrap_or(&Value::Null),
+                    &format!("{event_type}.item"),
+                )?;
+                if let ResponseOutputItem::FunctionCall {
+                    item_id,
+                    call_id,
+                    name,
+                    arguments,
+                } = item
+                {
+                    let index = response_stream_index(
+                        item_id.as_deref(),
+                        read_number_field(chunk, "output_index"),
+                    );
+                    self.set_arguments(index.clone(), arguments.clone().unwrap_or_default());
+                    self.pending
+                        .push_back(StreamedMessagePart::ToolCall(ToolCall {
+                            call_type: ToolCallType::Function,
+                            id: function_call_id(call_id),
+                            name: require_function_call_name(name)?,
+                            arguments,
+                            extras: None,
+                            stream_index: index,
+                        }));
+                }
+            }
+            "response.output_item.done" => {
+                let item = read_response_output_item(
+                    chunk.get("item").unwrap_or(&Value::Null),
+                    &format!("{event_type}.item"),
+                )?;
+                match item {
+                    ResponseOutputItem::Reasoning {
+                        encrypted_content, ..
+                    } => self.push_reasoning(String::new(), encrypted_content),
+                    ResponseOutputItem::FunctionCall {
+                        item_id,
+                        arguments: Some(arguments),
+                        ..
+                    } => {
+                        let index = response_stream_index(
+                            item_id.as_deref(),
+                            read_number_field(chunk, "output_index"),
+                        );
+                        self.push_final_arguments_suffix(index, arguments, event_type)?;
+                    }
+                    _ => {}
+                }
+            }
+            "response.function_call_arguments.delta" => {
+                let index = response_stream_index(
+                    read_string_field(chunk, "item_id"),
+                    read_number_field(chunk, "output_index"),
+                );
+                let part = require_string_field(chunk, "delta", event_type)?.to_owned();
+                self.append_arguments(index.as_ref(), &part, event_type)?;
+                self.pending
+                    .push_back(StreamedMessagePart::ToolCallPart(ToolCallPart {
+                        part_type: ToolCallPartType::ToolCallPart,
+                        arguments_part: Some(part),
+                        index,
+                    }));
+            }
+            "response.function_call_arguments.done" => {
+                let arguments = require_string_field(chunk, "arguments", event_type)?.to_owned();
+                let index = response_stream_index(
+                    read_string_field(chunk, "item_id"),
+                    read_number_field(chunk, "output_index"),
+                );
+                self.push_final_arguments_suffix(index, arguments, event_type)?;
+            }
+            "response.reasoning_summary_part.added" => {
+                self.push_reasoning(String::new(), None);
+            }
+            "response.reasoning_summary_text.delta" => {
+                let text = require_string_field(chunk, "delta", event_type)?.to_owned();
+                self.push_reasoning(text, None);
+            }
+            "response.completed" | "response.incomplete" => {
+                let response = require_object_field(chunk, "response", event_type)?;
+                if let Some(id) = read_string_field(response, "id") {
+                    self.id = Some(id.to_owned());
+                }
+                if let Some(usage) = read_object_field(response, "usage") {
+                    self.extract_usage(usage);
+                }
+                self.capture_finish_reason(response);
+            }
+            "error" => {
+                let message = require_string_field(chunk, "message", event_type)?;
+                return Err(error_from_openai_responses_event(
+                    "OpenAI Responses stream error",
+                    read_string_field(chunk, "code"),
+                    message,
+                    read_string_field(chunk, "param"),
+                ));
+            }
+            "response.failed" => {
+                let response = require_object_field(chunk, "response", event_type)?;
+                if let Some((code, message)) = read_failed_response_error(response) {
+                    return Err(error_from_openai_responses_event(
+                        "OpenAI Responses response.failed",
+                        Some(&code),
+                        &message,
+                        None,
+                    ));
+                }
+                return Err(ChatProviderError::ChatProvider {
+                    message: format!(
+                        "OpenAI Responses response.failed: {}",
+                        format_failed_response(response)
+                    ),
+                });
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+impl Stream for OpenAiResponsesStreamedMessage {
+    type Item = Result<StreamedMessagePart, ProviderError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.terminated {
+            return Poll::Ready(None);
+        }
+        if self
+            .signal
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            if self.abort_emitted {
+                return Poll::Ready(None);
+            }
+            self.abort_emitted = true;
+            self.pending.clear();
+            return Poll::Ready(Some(Err(Box::new(ChatProviderError::Abort))));
+        }
+        loop {
+            if let Some(part) = self.pending.pop_front() {
+                return Poll::Ready(Some(Ok(part)));
+            }
+            let event = match self.source.as_mut().poll_next(context) {
+                Poll::Ready(Some(event)) => event,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            };
+            let result = match event {
+                Ok(OpenAiResponsesEvent::Response(response)) => {
+                    self.process_non_stream_response(response)
+                }
+                Ok(OpenAiResponsesEvent::Chunk(chunk)) => self.process_stream_event(chunk),
+                Err(error) => {
+                    self.terminated = true;
+                    return Poll::Ready(Some(Err(error)));
+                }
+            };
+            if let Err(error) = result {
+                self.terminated = true;
+                return Poll::Ready(Some(Err(Box::new(error))));
+            }
+        }
+    }
+}
+
+impl StreamedMessage for OpenAiResponsesStreamedMessage {
+    fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    fn usage(&self) -> Option<&TokenUsage> {
+        self.usage.as_ref()
+    }
+
+    fn finish_reason(&self) -> Option<FinishReason> {
+        self.finish_reason
+    }
+
+    fn raw_finish_reason(&self) -> Option<&str> {
+        self.raw_finish_reason.as_deref()
+    }
+
+    fn trace_id(&self) -> TraceId<'_> {
+        TraceId::Absent
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +1207,76 @@ mod tests {
         assert_eq!(request["instructions"], "be concise");
         assert_eq!(request["prompt_cache_key"], "cache-a");
         assert_eq!(request["tools"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn decodes_stream_state_and_strict_function_arguments() {
+        use futures_util::StreamExt;
+
+        let events = [
+            serde_json::json!({
+                "type":"response.output_item.added","output_index":0,
+                "item":{"type":"function_call","id":"item-a","call_id":"call-a",
+                    "name":"lookup","arguments":"{"}
+            }),
+            serde_json::json!({
+                "type":"response.function_call_arguments.delta","output_index":0,
+                "item_id":"item-a","delta":"\"x\":"
+            }),
+            serde_json::json!({
+                "type":"response.function_call_arguments.done","output_index":0,
+                "item_id":"item-a","arguments":"{\"x\":1}"
+            }),
+            serde_json::json!({
+                "type":"response.output_item.done",
+                "item":{"type":"reasoning","encrypted_content":"cipher","summary":[]}
+            }),
+            serde_json::json!({
+                "type":"response.completed","response":{"id":"resp-a","status":"completed",
+                    "usage":{"input_tokens":12,"output_tokens":3,
+                        "input_tokens_details":{"cached_tokens":2}}}
+            }),
+        ];
+        let source = futures_util::stream::iter(events.into_iter().map(Ok::<_, ProviderError>));
+        let mut response = OpenAiResponsesStreamedMessage::from_stream(source, None);
+        let mut parts = Vec::new();
+        while let Some(part) = response.next().await {
+            parts.push(part.unwrap());
+        }
+
+        assert!(matches!(
+            &parts[0],
+            StreamedMessagePart::ToolCall(ToolCall { id, name, .. })
+                if id == "call-a" && name == "lookup"
+        ));
+        assert!(matches!(
+            &parts[1],
+            StreamedMessagePart::ToolCallPart(ToolCallPart { arguments_part: Some(part), .. })
+                if part == "\"x\":"
+        ));
+        assert!(matches!(
+            &parts[2],
+            StreamedMessagePart::ToolCallPart(ToolCallPart { arguments_part: Some(part), .. })
+                if part == "1}"
+        ));
+        assert!(matches!(
+            &parts[3],
+            StreamedMessagePart::Content(ContentPart::Think { think, encrypted: Some(value) })
+                if think.is_empty() && value == "cipher"
+        ));
+        assert_eq!(response.id(), Some("resp-a"));
+        assert_eq!(response.finish_reason(), Some(FinishReason::Completed));
+        assert_eq!(response.usage().unwrap().input_other, 10.0);
+
+        let bad_source = futures_util::stream::iter([Ok::<_, ProviderError>(
+            serde_json::json!({"type":"response.output_text.delta","delta":7}),
+        )]);
+        let mut bad_response = OpenAiResponsesStreamedMessage::from_stream(bad_source, None);
+        let error = bad_response.next().await.unwrap().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "OpenAI Responses decode error: response.output_text.delta.delta must be a string."
+        );
+        assert!(bad_response.next().await.is_none());
     }
 }
