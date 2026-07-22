@@ -4,12 +4,15 @@ use std::sync::{Arc, LazyLock};
 use crate::agent_core_v2::kosong::contract::message::{
     ContentPart, Message, Role, is_tool_declaration_only_message,
 };
-use crate::agent_core_v2::kosong::contract::provider::{ResponseFormat, ToolCallIdPolicy};
+use crate::agent_core_v2::kosong::contract::provider::{
+    GenerateOptions, ResponseFormat, ThinkingEffort, ToolCallIdPolicy,
+};
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::{
     ConvertedToolMessageContent, OpenAiContentPart, TOOL_RESULT_MEDIA_PLACEHOLDER,
     TOOL_RESULT_MEDIA_PROMPT, ToolMessageConversion, convert_content_part,
     convert_tool_message_content,
 };
+use crate::agent_core_v2::kosong::provider::bases::openai::openai_hooks::OpenAiChatHooks;
 use crate::agent_core_v2::kosong::provider::bases::tool_call_id::sanitize_tool_call_id;
 
 pub const KNOWN_REASONING_KEYS: [&str; 3] = ["reasoning_content", "reasoning_details", "reasoning"];
@@ -319,9 +322,145 @@ pub fn convert_history_messages(
     messages
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedRequestKwargs {
+    pub kwargs: OpenAiLegacyGenerationKwargs,
+    pub reasoning_effort: Option<String>,
+}
+
+fn javascript_min(left: f64, right: f64) -> f64 {
+    if left.is_nan() || right.is_nan() {
+        f64::NAN
+    } else {
+        left.min(right)
+    }
+}
+
+fn javascript_max(left: f64, right: f64) -> f64 {
+    if left.is_nan() || right.is_nan() {
+        f64::NAN
+    } else {
+        left.max(right)
+    }
+}
+
+// Original: openai-legacy.ts, OpenAILegacyChatProvider._resolveRequestKwargs()
+pub fn resolve_request_kwargs(
+    model: &str,
+    generation_kwargs: &OpenAiLegacyGenerationKwargs,
+    default_thinking_effort: Option<&ThinkingEffort>,
+    hooks: Option<&OpenAiChatHooks>,
+    history: &[Message],
+    options: Option<&GenerateOptions>,
+) -> ResolvedRequestKwargs {
+    let mut kwargs = generation_kwargs.clone();
+
+    if let Some(cache_key) = options.and_then(|options| options.cache_key.as_deref()) {
+        let hooked = hooks
+            .and_then(|hooks| hooks.cache_key.as_ref())
+            .and_then(|hook| hook(cache_key));
+        kwargs.extend(hooked.unwrap_or_else(|| {
+            Map::from_iter([(
+                "prompt_cache_key".to_owned(),
+                Value::String(cache_key.to_owned()),
+            )])
+        }));
+    }
+    if let Some(temperature) = options
+        .and_then(|options| options.sampling.as_ref())
+        .and_then(|sampling| sampling.temperature)
+    {
+        kwargs.insert("temperature".to_owned(), Value::from(temperature));
+    }
+    if let Some(top_p) = options
+        .and_then(|options| options.sampling.as_ref())
+        .and_then(|sampling| sampling.top_p)
+    {
+        kwargs.insert("top_p".to_owned(), Value::from(top_p));
+    }
+
+    let thinking = options
+        .and_then(|options| options.thinking.as_ref())
+        .map(|thinking| (thinking.effort.clone(), thinking.keep.clone()))
+        .or_else(|| {
+            default_thinking_effort
+                .cloned()
+                .map(|effort| (effort, None))
+        });
+    let mut explicit_thinking_effort = None;
+    if let Some((effort, keep)) = thinking {
+        let hooked = hooks
+            .and_then(|hooks| hooks.with_thinking.as_ref())
+            .and_then(|hook| {
+                hook(
+                    &effort,
+                    &crate::agent_core_v2::kosong::protocol::protocol_trait::ThinkingHookOptions {
+                        keep,
+                    },
+                    &kwargs,
+                )
+            });
+        if let Some(hooked) = hooked {
+            kwargs.extend(hooked);
+        } else {
+            explicit_thinking_effort = Some(effort);
+        }
+    }
+
+    let mut reasoning_effort = explicit_thinking_effort
+        .as_ref()
+        .filter(|effort| !matches!(effort.as_str(), "off" | "on"))
+        .map(ToString::to_string);
+    let has_thinking_hook = hooks.is_some_and(|hooks| hooks.with_thinking.is_some());
+    if reasoning_effort.is_none()
+        && !explicit_thinking_effort
+            .as_ref()
+            .is_some_and(|effort| effort.is_off())
+        && !kwargs.contains_key("reasoning_effort")
+        && !has_thinking_hook
+        && history.iter().any(|message| {
+            message
+                .content
+                .iter()
+                .any(|part| matches!(part, ContentPart::Think { .. }))
+        })
+    {
+        reasoning_effort = Some("medium".to_owned());
+    }
+
+    if let Some(mut cap) = options.and_then(|options| options.max_completion_tokens) {
+        if let Some((used, max)) =
+            options.and_then(|options| options.used_context_tokens.zip(options.max_context_tokens))
+            && max > 0.0
+        {
+            cap = javascript_min(cap, max - used);
+        }
+        cap = javascript_max(1.0, cap);
+        let hooked = hooks
+            .and_then(|hooks| hooks.with_max_completion_tokens.as_ref())
+            .and_then(|hook| hook(cap));
+        if let Some(hooked) = hooked {
+            kwargs.extend(hooked);
+        } else {
+            kwargs.extend(completion_token_kwargs(
+                model,
+                javascript_max(
+                    1.0,
+                    javascript_min(cap, CHAT_COMPLETIONS_MAX_OUTPUT_TOKENS_CEILING),
+                ),
+            ));
+        }
+    }
+
+    ResolvedRequestKwargs {
+        kwargs,
+        reasoning_effort,
+    }
+}
+
 // MIGRATION-TODO:
 // Original: openai-legacy.ts, OpenAILegacyStreamedMessage,
-// OpenAILegacyChatProvider and request methods.
+// OpenAILegacyChatProvider network/stream methods.
 // Missing dependency: the selected async OpenAI HTTP transport and its stream
 // event types. Temporary behavior: none; this module exposes only completed
 // pure request-shaping methods. Completion condition: port message/history
@@ -333,6 +472,9 @@ mod tests {
     use super::*;
     use crate::agent_core_v2::kosong::contract::message::{MediaUrl, ToolCall, ToolCallType};
     use crate::agent_core_v2::kosong::contract::provider::JsonSchemaDefinition;
+    use crate::agent_core_v2::kosong::contract::provider::{
+        SamplingOptions, ThinkingRequestOptions,
+    };
     use crate::agent_core_v2::kosong::contract::tool::Tool;
     use serde_json::json;
 
@@ -527,5 +669,82 @@ mod tests {
         assert_eq!(history[1]["content"][0]["text"], TOOL_RESULT_MEDIA_PROMPT);
         assert_eq!(history[1]["content"][1]["type"], "image_url");
         assert_eq!(history[2]["content"], "next");
+    }
+
+    #[test]
+    fn request_kwargs_preserve_overlay_order_clamps_and_thinking_ownership() {
+        let history = vec![Message::new(
+            Role::Assistant,
+            vec![ContentPart::Think {
+                think: "reason".to_owned(),
+                encrypted: None,
+            }],
+            Vec::new(),
+        )];
+        let options = GenerateOptions {
+            cache_key: Some("session".to_owned()),
+            sampling: Some(SamplingOptions {
+                temperature: Some(0.4),
+                top_p: Some(0.8),
+            }),
+            max_completion_tokens: Some(100.0),
+            used_context_tokens: Some(95.0),
+            max_context_tokens: Some(100.0),
+            ..GenerateOptions::default()
+        };
+        let resolved =
+            resolve_request_kwargs("gpt-4o", &Map::new(), None, None, &history, Some(&options));
+        assert_eq!(resolved.kwargs["prompt_cache_key"], "session");
+        assert_eq!(resolved.kwargs["temperature"], 0.4);
+        assert_eq!(resolved.kwargs["top_p"], 0.8);
+        assert_eq!(resolved.kwargs["max_tokens"], 5.0);
+        assert_eq!(resolved.reasoning_effort.as_deref(), Some("medium"));
+
+        let hooks = OpenAiChatHooks {
+            cache_key: Some(Arc::new(|_| {
+                Some(Map::from_iter([("cache".to_owned(), Value::from(1))]))
+            })),
+            with_thinking: Some(Arc::new(|_, _, kwargs| {
+                assert_eq!(kwargs["cache"], 1);
+                assert_eq!(kwargs["temperature"], 0.4);
+                Some(Map::from_iter([("thinking".to_owned(), Value::from(1))]))
+            })),
+            with_max_completion_tokens: Some(Arc::new(|cap| {
+                assert_eq!(cap, 1.0);
+                Some(Map::from_iter([(
+                    "custom_max".to_owned(),
+                    Value::from(cap),
+                )]))
+            })),
+            ..OpenAiChatHooks::default()
+        };
+        let hooked_options = GenerateOptions {
+            cache_key: Some("session".to_owned()),
+            sampling: options.sampling,
+            thinking: Some(ThinkingRequestOptions {
+                effort: ThinkingEffort::from("high"),
+                keep: Some("all".to_owned()),
+            }),
+            max_completion_tokens: Some(100.0),
+            used_context_tokens: Some(120.0),
+            max_context_tokens: Some(100.0),
+            ..GenerateOptions::default()
+        };
+        let resolved = resolve_request_kwargs(
+            "o1",
+            &Map::new(),
+            None,
+            Some(&hooks),
+            &history,
+            Some(&hooked_options),
+        );
+        assert_eq!(resolved.kwargs["thinking"], 1);
+        assert_eq!(resolved.kwargs["custom_max"], 1.0);
+        assert_eq!(resolved.reasoning_effort, None);
+
+        let off_effort = ThinkingEffort::from("off");
+        let off =
+            resolve_request_kwargs("o1", &Map::new(), Some(&off_effort), None, &history, None);
+        assert_eq!(off.reasoning_effort, None);
     }
 }
