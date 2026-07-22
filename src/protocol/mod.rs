@@ -9,6 +9,7 @@ pub mod model_catalog;
 pub mod pagination;
 pub mod question;
 pub mod request_id;
+pub mod rest;
 pub mod skill;
 pub mod task;
 pub mod time;
