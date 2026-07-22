@@ -3,11 +3,14 @@ use regex::Regex;
 use serde_json::{Map, Value};
 use std::sync::LazyLock;
 
+use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
 use crate::agent_core_v2::kosong::contract::errors::ChatProviderError;
 use crate::agent_core_v2::kosong::contract::message::{
     ContentPart, Message, Role, is_tool_declaration_only_message,
 };
-use crate::agent_core_v2::kosong::contract::provider::{FinishReason, ResponseFormat};
+use crate::agent_core_v2::kosong::contract::provider::{
+    FinishReason, GenerateOptions, ResponseFormat, ThinkingEffort,
+};
 use crate::agent_core_v2::kosong::contract::tool::Tool;
 use crate::agent_core_v2::kosong::provider::bases::merge_user_messages::{
     ConsecutiveUserMessageMergePolicy, merge_consecutive_user_messages,
@@ -402,6 +405,180 @@ pub fn messages_to_google_gen_ai_contents(
     ))
 }
 
+// Original: google-genai.ts, GoogleGenAIChatProvider._encodeThinking()
+pub fn encode_thinking(model: &str, effort: &ThinkingEffort) -> Map<String, Value> {
+    let mut config = Map::from_iter([("includeThoughts".to_owned(), Value::Bool(true))]);
+    if model.contains("gemini-3") {
+        match effort.as_str() {
+            "off" => {
+                config.insert(
+                    "thinkingLevel".to_owned(),
+                    Value::String("MINIMAL".to_owned()),
+                );
+                config.insert("includeThoughts".to_owned(), Value::Bool(false));
+            }
+            "low" => {
+                config.insert("thinkingLevel".to_owned(), Value::String("LOW".to_owned()));
+            }
+            "medium" => {
+                config.insert(
+                    "thinkingLevel".to_owned(),
+                    Value::String("MEDIUM".to_owned()),
+                );
+            }
+            "high" | "xhigh" | "max" => {
+                config.insert("thinkingLevel".to_owned(), Value::String("HIGH".to_owned()));
+            }
+            _ => {}
+        }
+    } else {
+        let budget = match effort.as_str() {
+            "off" => Some(0),
+            "low" => Some(1_024),
+            "medium" => Some(4_096),
+            "high" | "xhigh" | "max" => Some(32_000),
+            _ => None,
+        };
+        if let Some(budget) = budget {
+            config.insert("thinkingBudget".to_owned(), Value::from(budget));
+        }
+        if effort.is_off() {
+            config.insert("includeThoughts".to_owned(), Value::Bool(false));
+        }
+    }
+    config
+}
+
+fn javascript_min(left: f64, right: f64) -> f64 {
+    if left.is_nan() || right.is_nan() {
+        f64::NAN
+    } else {
+        left.min(right)
+    }
+}
+
+fn javascript_max(left: f64, right: f64) -> f64 {
+    if left.is_nan() || right.is_nan() {
+        f64::NAN
+    } else {
+        left.max(right)
+    }
+}
+
+// Original: google-genai.ts, GoogleGenAIChatProvider.generate() pre-I/O path.
+#[allow(clippy::too_many_arguments)]
+pub fn build_google_gen_ai_request(
+    model: &str,
+    generation_kwargs: &GoogleGenAiGenerationKwargs,
+    default_thinking_effort: Option<&ThinkingEffort>,
+    system_prompt: &str,
+    tools: &[Tool],
+    history: &[Message],
+    options: Option<&GenerateOptions>,
+) -> Result<Map<String, Value>, ChatProviderError> {
+    if options
+        .and_then(|options| options.signal.as_ref())
+        .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+    {
+        return Err(ChatProviderError::Abort);
+    }
+    let contents = messages_to_google_gen_ai_contents(history)?;
+    let mut kwargs = generation_kwargs.clone();
+    if let Some(temperature) = options
+        .and_then(|options| options.sampling.as_ref())
+        .and_then(|sampling| sampling.temperature)
+    {
+        kwargs.insert("temperature".to_owned(), Value::from(temperature));
+    }
+    if let Some(top_p) = options
+        .and_then(|options| options.sampling.as_ref())
+        .and_then(|sampling| sampling.top_p)
+    {
+        kwargs.insert("topP".to_owned(), Value::from(top_p));
+    }
+    let thinking = options
+        .and_then(|options| options.thinking.as_ref())
+        .map(|thinking| &thinking.effort)
+        .or(default_thinking_effort);
+    if let Some(effort) = thinking {
+        kwargs.insert(
+            "thinkingConfig".to_owned(),
+            Value::Object(encode_thinking(model, effort)),
+        );
+    }
+    if let Some(mut cap) = options.and_then(|options| options.max_completion_tokens) {
+        if let Some((used, max)) =
+            options.and_then(|options| options.used_context_tokens.zip(options.max_context_tokens))
+            && max > 0.0
+        {
+            cap = javascript_min(cap, max - used);
+        }
+        kwargs.insert(
+            "maxOutputTokens".to_owned(),
+            Value::from(javascript_max(1.0, cap)),
+        );
+    }
+    let mut config = kwargs;
+    config.insert(
+        "systemInstruction".to_owned(),
+        Value::String(system_prompt.to_owned()),
+    );
+    if !tools.is_empty() {
+        config.insert(
+            "tools".to_owned(),
+            Value::Array(tools.iter().map(tool_to_google_gen_ai).collect()),
+        );
+    }
+    apply_response_format(
+        &mut config,
+        options.and_then(|options| options.response_format.as_ref()),
+    );
+    Ok(Map::from_iter([
+        ("model".to_owned(), Value::String(model.to_owned())),
+        ("contents".to_owned(), Value::Array(contents)),
+        ("config".to_owned(), Value::Object(config)),
+    ]))
+}
+
+pub const GEMINI_MULTIMODAL_TOOL_CAPABILITY: ModelCapability = ModelCapability {
+    image_in: true,
+    video_in: true,
+    audio_in: true,
+    thinking: false,
+    tool_use: true,
+    max_context_tokens: 0,
+    dynamically_loaded_tools: None,
+};
+
+pub const GEMINI_THINKING_MULTIMODAL_TOOL_CAPABILITY: ModelCapability = ModelCapability {
+    thinking: true,
+    ..GEMINI_MULTIMODAL_TOOL_CAPABILITY
+};
+
+// Original: google-genai.ts, getGoogleGenAIModelCapability()
+pub fn get_google_gen_ai_model_capability(model_name: &str) -> Option<&'static ModelCapability> {
+    let normalized = model_name.to_ascii_lowercase();
+    if !normalized.starts_with("gemini-")
+        || ![
+            "gemini-1.5-pro",
+            "gemini-1.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-pro",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+        ]
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix))
+    {
+        return None;
+    }
+    if normalized.starts_with("gemini-2.5-") || normalized.contains("thinking") {
+        Some(&GEMINI_THINKING_MULTIMODAL_TOOL_CAPABILITY)
+    } else {
+        Some(&GEMINI_MULTIMODAL_TOOL_CAPABILITY)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +623,42 @@ mod tests {
             contents[1]["parts"][0]["functionResponse"]["response"]["output"],
             "result"
         );
+    }
+
+    #[test]
+    fn request_policy_encodes_thinking_limits_and_structured_output() {
+        let options = GenerateOptions {
+            thinking: Some(
+                crate::agent_core_v2::kosong::contract::provider::ThinkingRequestOptions {
+                    effort: ThinkingEffort::from("high"),
+                    keep: Some("ignored-on-this-wire".to_owned()),
+                },
+            ),
+            max_completion_tokens: Some(9_000.0),
+            used_context_tokens: Some(98.0),
+            max_context_tokens: Some(100.0),
+            response_format: Some(ResponseFormat::JsonObject),
+            ..GenerateOptions::default()
+        };
+        let request = build_google_gen_ai_request(
+            "gemini-3-preview",
+            &Map::new(),
+            None,
+            "system",
+            &[],
+            &[],
+            Some(&options),
+        )
+        .unwrap();
+        assert_eq!(request["config"]["thinkingConfig"]["thinkingLevel"], "HIGH");
+        assert_eq!(request["config"]["maxOutputTokens"], 2.0);
+        assert_eq!(request["config"]["responseMimeType"], "application/json");
+        assert!(request["config"].get("responseJsonSchema").is_none());
+        assert!(
+            get_google_gen_ai_model_capability("gemini-2.5-pro")
+                .unwrap()
+                .thinking
+        );
+        assert!(get_google_gen_ai_model_capability("gemini-3-preview").is_none());
     }
 }
