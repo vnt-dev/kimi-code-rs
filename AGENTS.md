@@ -1,187 +1,103 @@
 # AGENTS.md
 
-## Project Objective
+## Objective
 
-The objective of this project is to migrate the existing project to Rust while preserving its behavior as closely as practical.
+Migrate the existing project to Rust while preserving its externally observable behavior.
 
-The migration should preserve:
+The migration should be performed primarily at the **method level**. Each significant original method should have a clearly identifiable Rust counterpart.
 
-* Functional behavior
-* Public interfaces
-* Method responsibilities
-* Method call relationships
-* Data structures
-* State transitions
-* Error conditions
-* Input and output formats
-* Protocol behavior
-* Side effects
-* Test results
+The Rust implementation must:
 
-The preferred migration granularity is the **method level**.
+* Preserve business logic and observable behavior.
+* Follow Rust naming and coding conventions.
+* Follow standard Cargo project conventions.
+* Prefer asynchronous APIs for blocking or waiting operations.
+* Remain easy to compare with the original implementation.
+* Be implemented and committed in small, verifiable units.
 
-Each meaningful method or function in the original project should normally have a clearly identifiable Rust counterpart.
+This is a migration project, not a full redesign.
 
-This is primarily a migration project, but the Rust implementation is expected to follow Rust naming conventions, Rust coding style, Cargo project conventions, ownership rules, error-handling practices, and asynchronous programming conventions.
+## Priority Order
 
-The goal is not a literal line-by-line translation.
+When requirements conflict, use the following priority:
 
-The goal is a method-level, behaviorally equivalent, idiomatic Rust implementation.
-
-## Core Migration Principle
-
-The migration should balance two requirements:
-
-1. Preserve the original behavior and method-level structure.
-2. Produce code that is natural, maintainable, and conventional in Rust.
-
-When these requirements conflict, preserve externally observable behavior first.
-
-Rust-specific structural adjustments are allowed when they:
-
-* Do not change business logic
-* Do not change external behavior
-* Do not change protocol formats
-* Do not change error semantics
-* Do not make comparison with the original implementation unnecessarily difficult
-* Improve safety, readability, maintainability, or compatibility with Rust conventions
+1. Preserve externally observable behavior.
+2. Preserve protocols, serialized data, and persistent formats.
+3. Preserve state transitions, errors, ordering, and side effects.
+4. Preserve method-level traceability.
+5. Satisfy Rust memory-safety requirements.
+6. Follow Rust project and naming conventions.
+7. Use idiomatic Rust.
+8. Prefer asynchronous I/O.
+9. Optimize only after equivalence is established.
 
 ## Method-Level Migration
 
-The preferred migration unit is one original method or one tightly related group of methods.
+Prefer translating one original method or one tightly coupled method group at a time.
 
-For every significant original method, the Rust implementation should make it possible to determine:
+For each migrated method, identify:
 
-* Which Rust method corresponds to it
-* Whether the parameters have the same meaning
-* Whether the return value has the same meaning
-* Whether the branches correspond to the original branches
-* Whether the same state is modified
-* Whether external calls happen in an equivalent order
-* Whether the same errors can occur
-* Whether the method became asynchronous
-* Whether Rust language constraints required structural changes
+* The original file and method.
+* The corresponding Rust file and method.
+* Inputs and outputs.
+* State changes and side effects.
+* Error conditions.
+* External call order.
+* Whether the Rust method is synchronous or asynchronous.
+* Any structural changes required by Rust.
 
-Whenever practical, preserve a one-to-one relationship such as:
+Prefer a clear mapping:
 
 ```text
-Original method                  Rust method
+Original                         Rust
 parsePacket()                    parse_packet()
-loadConfiguration()              load_configuration().await
-updateSessionState()             update_session_state()
-sendResponse()                   send_response().await
+loadConfiguration()             load_configuration().await
+updateSessionState()            update_session_state()
+sendResponse()                  send_response().await
 ```
 
 Do not unnecessarily:
 
-* Merge several unrelated original methods into one Rust method
-* Split one straightforward original method into many tiny methods
-* Move logic across unrelated modules
-* Hide original control flow behind complex abstractions
-* Replace understandable method-level logic with excessive macros
+* Merge unrelated original methods.
+* Split a simple method into many tiny helpers.
+* Move logic across unrelated modules.
+* Hide control flow behind complex abstractions.
+* Replace understandable code with excessive macros or generics.
 
-A method may be split when required for:
+A method may be split when required for ownership, async boundaries, error conversion, resource management, platform abstraction, or testing.
 
-* Ownership or borrowing
-* Reusable validation
-* Async and blocking separation
-* Resource lifecycle management
-* Error conversion
-* Platform abstraction
-* Testability
-* Rust trait implementations
+When splitting a method, keep one primary Rust method that clearly represents the original method.
 
-When splitting a method, keep one primary Rust method that clearly represents the original method whenever possible.
+## Behavioral Compatibility
 
-Example:
+Preserve:
 
-```rust
-pub async fn load_configuration(
-    &self,
-    path: &Path,
-) -> Result<Configuration, ConfigError> {
-    let content = self.read_configuration_file(path).await?;
-    self.parse_configuration(&content)
-}
-```
+* Input-to-output behavior.
+* Branch conditions.
+* State transitions.
+* Error conditions.
+* Side effects.
+* Ordering requirements.
+* Timeout and retry behavior.
+* Resource cleanup.
+* Boundary-case behavior.
 
-In this example, `load_configuration` remains the primary counterpart of the original method even though I/O and parsing are separated.
+Code may be reorganized when required by Rust, provided that observable behavior does not change.
 
-## Semantic Equivalence
+Do not silently fix suspected bugs in the original implementation. Preserve the behavior, document it, and handle any fix separately.
 
-A one-to-one migration means preserving semantics rather than reproducing individual source lines.
+Successful compilation alone does not prove equivalence.
 
-The Rust implementation should preserve:
+## Rust Naming and Style
 
-* The same input-to-output behavior
-* The same branch selection
-* The same operation dependencies
-* The same state transitions
-* Equivalent error conditions
-* Equivalent side effects
-* The same boundary-case behavior
-* The same externally visible ordering requirements
+Follow standard Rust naming conventions:
 
-Exact statement ordering may be adjusted when the adjustment:
+* `snake_case` for functions, methods, variables, modules, and files.
+* `UpperCamelCase` for structs, enums, traits, and enum variants.
+* `SCREAMING_SNAKE_CASE` for constants and statics.
+* Conventional names such as `new`, `default`, `from_*`, `try_*`, `as_*`, and `into_*`.
 
-* Is required by ownership or borrowing
-* Is required for asynchronous execution
-* Does not change observable behavior
-* Does not change state-transition semantics
-* Does not change synchronization behavior
-
-Do not claim equivalence based only on successful compilation.
-
-## Rust Naming Conventions
-
-All new Rust code must follow standard Rust naming conventions.
-
-Use:
-
-* `snake_case` for functions, methods, variables, modules, and file names
-* `UpperCamelCase` for structs, enums, traits, and enum variants
-* `SCREAMING_SNAKE_CASE` for constants and statics
-* `'a`, `'ctx`, or similarly meaningful names for lifetimes
-* Conventional names such as `new`, `default`, `from_*`, `into_*`, `as_*`, and `try_*` where appropriate
-
-Example:
-
-```rust
-pub struct SessionManager {
-    active_sessions: HashMap<SessionId, Session>,
-}
-
-impl SessionManager {
-    pub async fn load_session(
-        &self,
-        session_id: SessionId,
-    ) -> Result<Option<Session>, SessionError> {
-        // ...
-    }
-}
-```
-
-Do not preserve non-Rust naming forms such as:
-
-```text
-loadSession
-LoadSession
-load_session_data_impl_internal_v2
-m_activeSessions
-SESSIONmanager
-```
-
-unless the name is externally required by:
-
-* FFI
-* Serialization
-* Protocol definitions
-* Generated code
-* Public compatibility requirements
-
-External names should be preserved through attributes or adapters instead of violating internal Rust naming conventions.
-
-Example:
+Use Rust-style internal names even when external formats use another convention.
 
 ```rust
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -191,595 +107,81 @@ pub struct UserRequest {
 }
 ```
 
-## Rust Coding Style
-
-The migrated code should be idiomatic Rust when doing so does not change behavior.
-
 Prefer:
 
-* Explicit ownership
-* Borrowing instead of unnecessary cloning
-* `Result<T, E>` for recoverable errors
-* `Option<T>` for optional values
-* Pattern matching
-* Exhaustive enums
-* RAII-based resource management
-* Iterators when they remain readable
-* Traits for meaningful abstractions
-* Small, focused data types
-* Newtype wrappers for semantically distinct identifiers
-* Standard conversions such as `From`, `TryFrom`, `AsRef`, and `IntoIterator`
-* Structured error types
-* `async`/`await` for asynchronous I/O
+* `Option<T>` for optional values.
+* `Result<T, E>` for recoverable errors.
+* Typed error enums.
+* Pattern matching.
+* RAII for resource management.
+* Borrowing instead of unnecessary cloning.
+* Composition instead of inheritance.
+* Traits only for meaningful abstraction.
+* Narrow visibility such as `pub(crate)` or private items.
+* `From`, `TryFrom`, `AsRef`, and other standard conversion traits where appropriate.
 
 Avoid:
 
-* Mechanical translation of object-oriented patterns
-* Getter and setter methods for every field without a semantic reason
-* Deep inheritance-like structures
-* Excessive trait abstraction
-* Excessive generic parameters
-* Excessive macros
-* Unnecessary dynamic dispatch
-* Unnecessary `Arc<Mutex<T>>`
-* Large numbers of `clone()` calls
-* Large numbers of `unwrap()` calls
-* Java-style utility classes
-* C-style global mutable state
-* Boolean parameters with unclear meaning
-* Stringly typed state or error handling
+* Mechanical translation of object-oriented patterns.
+* Java-style utility classes.
+* C-style global mutable state.
+* Unnecessary getters and setters.
+* Excessive traits, generics, macros, or dynamic dispatch.
+* Unnecessary `Arc<Mutex<T>>`.
+* Excessive `clone()`.
+* Production use of `unwrap()` or `expect()` without justification.
+* Boolean parameters whose meaning is unclear.
+* String-based states that should be enums.
 
-Idiomatic Rust adjustments are allowed when they preserve the original logic.
+Rust-style adjustments are allowed when they preserve behavior and keep the original method mapping understandable.
 
-For example, an original nullable return value may become:
+## Rust Project Structure
 
-```rust
-fn find_session(&self, id: SessionId) -> Option<&Session>
-```
+Follow normal Cargo conventions.
 
-An original exception-based result may become:
+Use a Cargo workspace only when there are meaningful crate boundaries, such as separate binaries, reusable libraries, platform implementations, or clear dependency layers.
 
-```rust
-fn parse_packet(data: &[u8]) -> Result<Packet, ParseError>
-```
+Do not create extra crates only to reproduce the original directory tree.
 
-An original resource-owning class may become a Rust struct whose resources are released through `Drop`.
+Keep public APIs intentional and visibility as narrow as practical.
 
-## Rust Project Conventions
+## Type and Data Mapping
 
-The project must follow standard Cargo and Rust project conventions.
-
-Typical layout:
-
-```text
-Cargo.toml
-Cargo.lock
-src/
-    lib.rs
-    main.rs
-    module_name.rs
-    module_name/
-        mod.rs
-        submodule.rs
-tests/
-examples/
-benches/
-```
-
-Use a workspace when the project naturally contains multiple packages:
-
-```text
-Cargo.toml
-crates/
-    core/
-    protocol/
-    server/
-    client/
-```
-
-Do not create unnecessary crates merely to reproduce the original directory hierarchy.
-
-Use crates when there is a meaningful reason, such as:
-
-* Independent reuse
-* Separate binaries
-* Platform-specific implementations
-* Clear dependency boundaries
-* Compile-time isolation
-* Feature isolation
-
-Keep module visibility as narrow as practical:
-
-```rust
-pub
-pub(crate)
-pub(super)
-private
-```
-
-Do not make every migrated type and function public.
-
-Public APIs should be intentionally designed and documented.
-
-## Allowed Structural Adjustments
-
-The following adjustments are allowed when they do not change business behavior:
-
-* Renaming identifiers to Rust naming conventions
-* Reorganizing imports
-* Replacing nullable values with `Option<T>`
-* Replacing exception-based control flow with `Result<T, E>`
-* Replacing inheritance with composition or traits
-* Replacing callbacks with async functions or channels
-* Replacing manual cleanup with RAII
-* Replacing integer flags with bitflags or enums
-* Replacing magic state strings with enums
-* Separating blocking and asynchronous operations
-* Splitting parsing from I/O
-* Introducing private helper methods
-* Using newtype wrappers
-* Narrowing visibility
-* Removing code that exists only because of limitations in the original language
-
-These adjustments must not silently change:
-
-* Inputs
-* Outputs
-* State transitions
-* Error conditions
-* Protocol formats
-* Timing requirements
-* Concurrency guarantees
-* Persistence behavior
-
-## Source Mapping
-
-The Rust implementation must remain traceable to the original project.
-
-At module or method boundaries, add source mapping comments when useful:
-
-```rust
-// Original:
-//   src/session/SessionManager.java
-//   SessionManager.loadSession()
-```
-
-For a method that has been significantly adapted:
-
-```rust
-// Original:
-//   src/network/client.c
-//   client_send_request()
-//
-// Rust adaptation:
-//   Converted blocking socket I/O to Tokio async I/O.
-//   Request construction and response parsing preserve the original behavior.
-```
-
-Do not add source comments to every line.
-
-Use them for:
-
-* Significant methods
-* Complex control flow
-* State machines
-* Protocol processing
-* Methods whose structure changed substantially
-* Behavior that intentionally preserves an original quirk
-
-## Async-First Implementation
-
-Prefer asynchronous Rust for operations that may block or wait.
-
-The Rust project should use an async-first design for:
-
-* Network I/O
-* File I/O when an async implementation is available and beneficial
-* Database operations
-* IPC
-* Timers
-* Waiting for external processes
-* Message queues
-* Channels
-* Service calls
-* Concurrent request handling
-* Long-running server operations
-* Operations whose original implementation uses callbacks, futures, promises, tasks, or threads primarily for waiting
-
-The default async runtime should be the runtime already selected by the project.
-
-When no runtime has been selected and the project requires general-purpose asynchronous I/O, prefer Tokio unless project constraints indicate otherwise.
-
-Typical asynchronous signatures:
-
-```rust
-pub async fn connect(
-    &self,
-    address: SocketAddr,
-) -> Result<Connection, ConnectError>
-```
-
-```rust
-pub async fn read_packet(
-    stream: &mut TcpStream,
-) -> Result<Packet, PacketError>
-```
-
-```rust
-pub async fn save_record(
-    &self,
-    record: &Record,
-) -> Result<(), StorageError>
-```
-
-Do not make a method asynchronous merely because asynchronous code is preferred.
-
-Pure computation should normally remain synchronous.
-
-Examples that should usually remain synchronous:
-
-* Parsing an in-memory byte slice
-* Calculating a checksum
-* Updating a local state structure
-* Validating an already loaded value
-* Encoding a value into an in-memory buffer
-* Comparing records
-* Performing a short CPU-only transformation
-
-Example:
-
-```rust
-pub fn calculate_checksum(data: &[u8]) -> u16 {
-    // CPU-only work remains synchronous.
-}
-```
-
-A higher-level I/O method may call synchronous computation methods:
-
-```rust
-pub async fn receive_packet(
-    &mut self,
-) -> Result<Packet, ReceiveError> {
-    let bytes = self.read_packet_bytes().await?;
-    parse_packet(&bytes).map_err(ReceiveError::Parse)
-}
-```
-
-## Async Method Mapping
-
-When an original method performs blocking I/O, prefer converting it into an async Rust method.
-
-Example mapping:
-
-```text
-Original blocking method          Rust async method
-readFile()                        read_file().await
-connectSocket()                   connect_socket().await
-queryDatabase()                   query_database().await
-waitForResponse()                 wait_for_response().await
-sleepAndRetry()                   sleep_and_retry().await
-```
-
-The asynchronous conversion must preserve:
-
-* The same logical operation
-* The same result
-* The same timeout semantics
-* The same retry count
-* The same cancellation expectations
-* The same state changes
-* The same ordering dependencies
-* Equivalent cleanup behavior
-
-Do not introduce new concurrency simply because a method becomes asynchronous.
-
-The following:
-
-```rust
-let first = first_operation().await?;
-let second = second_operation().await?;
-```
-
-must not be changed to concurrent execution:
-
-```rust
-let (first, second) = tokio::try_join!(
-    first_operation(),
-    second_operation(),
-)?;
-```
-
-unless the operations are proven independent and concurrent execution does not change behavior.
-
-Async does not automatically mean concurrent.
-
-## Concurrency Rules
-
-Use concurrency only when:
-
-* The original implementation is concurrent
-* The operation is explicitly independent
-* Concurrency is required for performance or responsiveness
-* The behavior has been verified under concurrent execution
-
-Preserve:
-
-* Ordering guarantees
-* Shared-state semantics
-* Locking behavior
-* Task lifecycle
-* Cancellation behavior
-* Timeout behavior
-* Backpressure behavior
-* Maximum concurrency
-* Shutdown behavior
-
-Prefer structured concurrency.
-
-Examples include:
-
-```rust
-tokio::try_join!
-tokio::select!
-JoinSet
-Semaphore
-mpsc
-oneshot
-watch
-broadcast
-CancellationToken
-```
-
-Choose the primitive that matches the original semantics.
-
-Do not detach tasks without controlling their lifecycle.
-
-Avoid:
-
-```rust
-tokio::spawn(async move {
-    // Fire-and-forget work with no shutdown or error handling.
-});
-```
-
-unless the original behavior is explicitly fire-and-forget and task failures are intentionally ignored.
-
-Track background tasks and ensure that:
-
-* Their errors are handled
-* They can be cancelled when required
-* Shutdown waits for required cleanup
-* They do not outlive resources they depend on
-
-## Blocking Work in Async Code
-
-Do not execute blocking operations directly on async runtime worker threads.
-
-Blocking work includes:
-
-* Blocking file APIs
-* Blocking socket APIs
-* Long CPU-intensive calculations
-* Process waits
-* Blocking foreign-library calls
-* Synchronous database drivers
-* Long-held standard mutex operations
-
-When a blocking operation cannot be replaced with an asynchronous implementation, use an appropriate blocking boundary:
-
-```rust
-let result = tokio::task::spawn_blocking(move || {
-    perform_blocking_operation()
-})
-.await
-.map_err(TaskError::Join)??;
-```
-
-Do not wrap every small synchronous calculation in `spawn_blocking`.
-
-Use it only when the operation is sufficiently blocking or CPU-intensive to interfere with the async runtime.
-
-Prefer asynchronous libraries where practical:
-
-```text
-Blocking API                     Async alternative
-std::net                         tokio::net
-std::process                     tokio::process
-std::sync::Mutex                 tokio::sync::Mutex when held across await
-std::thread::sleep               tokio::time::sleep
-blocking database client         async database client
-```
-
-The choice between `std::sync::Mutex` and `tokio::sync::Mutex` must depend on lock usage.
-
-Use `std::sync::Mutex` when the critical section is short and does not cross `.await`.
-
-Use `tokio::sync::Mutex` when the lock must intentionally remain held across an `.await`, although designs that avoid holding locks across `.await` are preferred.
-
-## Async Trait Design
-
-Use native async trait methods when supported by the project's minimum Rust version and object-safety requirements.
-
-Example:
-
-```rust
-pub trait Storage {
-    async fn load(
-        &self,
-        key: &str,
-    ) -> Result<Option<Vec<u8>>, StorageError>;
-}
-```
-
-Use `async-trait` only when required by compatibility or dynamic-dispatch constraints.
-
-Do not add `async-trait` automatically if native async traits are sufficient.
-
-When dynamic dispatch is required, clearly document any:
-
-* Allocation overhead
-* `Send` requirements
-* Lifetime limitations
-* Object-safety constraints
-
-## Send and Sync Requirements
-
-Do not add `Send + Sync + 'static` constraints mechanically.
-
-Add them when required by:
-
-* Task spawning
-* Shared cross-thread ownership
-* Runtime executor requirements
-* Public API guarantees
-* Trait-object usage
-
-Prefer the narrowest valid bounds.
-
-Before using `tokio::spawn`, confirm that captured values satisfy the required ownership and `Send + 'static` constraints.
-
-Use local task execution only when the runtime and application architecture support it intentionally.
-
-## Cancellation Safety
-
-Async methods that may be cancelled must preserve consistent state.
-
-Pay special attention to methods used inside:
-
-```rust
-tokio::select!
-timeout
-task cancellation
-connection shutdown
-```
-
-A cancellable method must not leave:
-
-* Partially updated shared state
-* Corrupted protocol buffers
-* Unreleased logical resources
-* Half-written persistent records
-* Unclear transaction state
-
-When an operation must complete atomically, use an explicit transaction, state guard, temporary buffer, or non-cancellable critical section.
-
-Document methods that are not cancellation-safe.
-
-## Timeout and Retry Behavior
-
-Preserve original timeout and retry behavior.
-
-Explicitly define:
-
-* Timeout duration
-* Whether timeout covers one attempt or the entire operation
-* Maximum attempt count
-* Delay between attempts
-* Backoff strategy
-* Which errors are retryable
-* Whether state is reset between attempts
-* What error is returned after exhaustion
-
-Example:
-
-```rust
-pub async fn connect_with_retry(
-    &self,
-    address: SocketAddr,
-) -> Result<Connection, ConnectError> {
-    for attempt in 0..MAX_ATTEMPTS {
-        match tokio::time::timeout(
-            CONNECT_TIMEOUT,
-            self.connect_once(address),
-        )
-        .await
-        {
-            Ok(Ok(connection)) => return Ok(connection),
-            Ok(Err(error)) if error.is_retryable() => {
-                if attempt + 1 < MAX_ATTEMPTS {
-                    tokio::time::sleep(RETRY_DELAY).await;
-                }
-            }
-            Ok(Err(error)) => return Err(error),
-            Err(_) if attempt + 1 < MAX_ATTEMPTS => {
-                tokio::time::sleep(RETRY_DELAY).await;
-            }
-            Err(_) => return Err(ConnectError::Timeout),
-        }
-    }
-
-    Err(ConnectError::RetryExhausted)
-}
-```
-
-Do not improve or modify the retry algorithm during migration unless explicitly requested.
-
-## Data Structure Migration
-
-Preserve the semantic meaning of original data structures.
-
-Use Rust types that express the original constraints safely.
+Choose Rust types according to semantics, not only source-language names.
 
 Typical mappings:
 
 ```text
-Original concept                Rust representation
 Nullable value                  Option<T>
 Recoverable operation           Result<T, E>
 Dynamic array                   Vec<T>
 Byte buffer                     Vec<u8>, Bytes, BytesMut
-Read-only bytes                 &[u8], Bytes
 Map                             HashMap<K, V>, BTreeMap<K, V>
 Set                             HashSet<T>, BTreeSet<T>
 Shared immutable ownership      Arc<T>
 Single-thread shared ownership  Rc<T>
 Shared mutable state            Arc<Mutex<T>>, Arc<RwLock<T>>
-Fixed-size value                [T; N]
-Distinct identifier             Newtype struct
 Finite state                    enum
+Distinct identifier             Newtype struct
 Bit flags                       bitflags
 ```
 
-Select integer types based on:
+Select integer types according to:
 
-* Original bit width
-* Signedness
-* Protocol representation
-* File format
-* Database representation
-* Overflow semantics
-* Platform dependence
+* Bit width.
+* Signedness.
+* Protocol or file representation.
+* Database representation.
+* Overflow behavior.
+* Platform dependence.
 
-Do not use `usize` for protocol or persisted integer fields unless the format is explicitly platform-sized.
+Do not use `usize` for protocol, serialized, or persisted values unless they are explicitly platform-sized.
 
-## Object-Oriented Source Projects
+Preserve external field names, enum representations, byte order, time units, defaults, null behavior, numeric precision, and unknown-field behavior.
 
-Do not mechanically reproduce class inheritance.
+## Function Signatures
 
-Translate concepts according to Rust conventions:
-
-```text
-Original concept                Rust approach
-Data class                      struct
-Closed set of states            enum
-Interface                       trait
-Inheritance for reuse           composition
-Inheritance for polymorphism    trait or enum dispatch
-Static utility class            module functions
-Constructor                     new() or builder
-Destructor                      Drop
-Nullable reference              Option<&T> or Option<Arc<T>>
-```
-
-Preserve method-level responsibilities even when the type structure changes.
-
-When an original class contains unrelated responsibilities, do not perform a broad redesign during initial migration unless necessary.
-
-Small Rust-oriented separations are allowed when behavior remains clear and the original method mapping remains traceable.
-
-## Function and Method Signatures
-
-Rust signatures should follow Rust conventions rather than mechanically preserving original parameter forms.
+Use idiomatic Rust signatures while preserving method semantics.
 
 Prefer:
 
@@ -793,39 +195,151 @@ instead of:
 pub fn parse(data: &Vec<u8>) -> Result<Packet, ParseError>
 ```
 
-Prefer:
+Use:
+
+* `T` when the method consumes a value.
+* `&T` for read-only access.
+* `&mut T` for exclusive mutation.
+* `Arc<T>` only when shared ownership is required.
+* `Cow<'_, T>` only when both borrowed and owned forms are useful.
+
+Do not create complicated lifetime designs only to avoid a harmless clone, but do not use cloning as the default solution.
+
+## Async-First Design
+
+Prefer async Rust for operations that may block or wait:
+
+* Network I/O.
+* Database operations.
+* IPC.
+* Timers.
+* Message queues.
+* External services.
+* Process waiting.
+* Concurrent request handling.
+* Long-running server operations.
+* File I/O when async I/O is useful.
+
+Use the runtime already selected by the project. When no runtime exists and general-purpose async I/O is needed, prefer Tokio unless project constraints require something else.
+
+Pure computation should normally remain synchronous:
+
+* Parsing an in-memory buffer.
+* Checksums.
+* Encoding into memory.
+* Local validation.
+* Local state updates.
+* Short CPU-only transformations.
+
+Example:
 
 ```rust
-pub fn name(&self) -> &str
+pub async fn receive_packet(
+    &mut self,
+) -> Result<Packet, ReceiveError> {
+    let bytes = self.read_packet_bytes().await?;
+    parse_packet(&bytes).map_err(ReceiveError::Parse)
+}
+
+pub fn parse_packet(data: &[u8]) -> Result<Packet, ParseError> {
+    // Synchronous in-memory parsing.
+}
 ```
 
-instead of returning an unnecessary cloned `String`.
+Async does not automatically mean concurrent.
 
-Prefer:
+Do not replace sequential operations with `join!`, `try_join!`, or spawned tasks unless the operations are proven independent and concurrent execution preserves behavior.
+
+## Blocking Work in Async Code
+
+Do not run long blocking operations directly on async runtime worker threads.
+
+Prefer async libraries such as:
+
+```text
+std::net                 tokio::net
+std::process             tokio::process
+std::thread::sleep       tokio::time::sleep
+blocking database API    async database API
+```
+
+When blocking work cannot be replaced, use an explicit blocking boundary:
 
 ```rust
-pub async fn save(&self, value: &Value) -> Result<(), SaveError>
+let result = tokio::task::spawn_blocking(move || {
+    perform_blocking_operation()
+})
+.await
+.map_err(TaskError::Join)??;
 ```
 
-when the method performs asynchronous I/O.
+Do not use `spawn_blocking` for small and fast synchronous calculations.
 
-Use ownership intentionally:
+Use `std::sync::Mutex` for short critical sections that never cross `.await`.
 
-* `T` when the method consumes the value
-* `&T` for read-only borrowing
-* `&mut T` for exclusive mutation
-* `Arc<T>` for shared ownership
-* `Cow<'_, T>` only when both borrowed and owned data are genuinely useful
+Use `tokio::sync::Mutex` only when a lock must remain held across `.await`. Prefer designs that avoid holding locks across `.await`.
 
-Do not overcomplicate lifetimes merely to eliminate a harmless clone.
+## Concurrency and Task Lifecycle
 
-However, do not use cloning as the default solution to every borrowing issue.
+Introduce concurrency only when:
+
+* The original implementation is concurrent.
+* Operations are independent.
+* Concurrency is required for responsiveness or performance.
+* Behavior has been verified under concurrency.
+
+Preserve:
+
+* Ordering.
+* Locking semantics.
+* Maximum concurrency.
+* Backpressure.
+* Cancellation.
+* Timeout behavior.
+* Shutdown behavior.
+* Background-task lifecycle.
+
+Do not create unmanaged fire-and-forget tasks.
+
+Background tasks must have:
+
+* Error handling.
+* Defined ownership.
+* Cancellation or shutdown behavior.
+* A clear lifetime.
+* Cleanup when the application stops.
+
+Use structured concurrency primitives such as `JoinSet`, channels, semaphores, `select!`, and cancellation tokens when appropriate.
+
+## Cancellation, Timeout, and Retry
+
+Async methods must not leave corrupted or partially updated state when cancelled.
+
+Pay particular attention to methods used with:
+
+* `tokio::select!`
+* Timeouts.
+* Task cancellation.
+* Connection shutdown.
+
+Use transactions, temporary buffers, state guards, or explicit commit steps when an operation must be atomic.
+
+Preserve original timeout and retry semantics:
+
+* Timeout duration.
+* Per-attempt or total timeout.
+* Maximum attempts.
+* Retry delay.
+* Backoff behavior.
+* Retryable error types.
+* State reset between attempts.
+* Final error after exhaustion.
+
+Do not improve or change retry behavior during migration unless explicitly requested.
 
 ## Error Handling
 
-Use structured Rust error handling.
-
-Prefer dedicated error enums:
+Use structured error types.
 
 ```rust
 #[derive(Debug, thiserror::Error)]
@@ -843,107 +357,56 @@ pub enum LoadError {
 
 Preserve:
 
-* Error conditions
-* Error categories
-* Retryability
-* Error propagation
-* Externally visible messages when required
-* Error codes when part of an API or protocol
-
-Avoid:
-
-```rust
-unwrap()
-expect()
-panic!()
-todo!()
-unimplemented!()
-```
-
-in production paths unless the original behavior is intentionally unrecoverable.
-
-Do not convert all errors into generic strings.
-
-Use `anyhow` primarily at application boundaries where callers do not need to match specific error variants.
+* Error conditions.
+* Error categories.
+* Error codes.
+* Retryability.
+* Error propagation.
+* Externally visible messages when required.
 
 Use typed errors in libraries and domain logic.
 
-## Control Flow
+Use `anyhow` mainly at application boundaries where callers do not need to match individual error variants.
 
-Preserve the original logical control flow while expressing it clearly in Rust.
+Avoid `unwrap()`, `expect()`, `panic!()`, `todo!()`, and `unimplemented!()` in production paths unless the original behavior is intentionally unrecoverable or the code is explicitly marked incomplete.
 
-Using `match`, `if let`, `while let`, iterators, and the `?` operator is encouraged when it does not obscure the original behavior.
+## Serialization and Protocols
 
-Example:
-
-```rust
-let session = self
-    .sessions
-    .get(&session_id)
-    .ok_or(SessionError::NotFound(session_id))?;
-```
-
-Do not replace straightforward logic with deeply nested iterator combinators merely for stylistic reasons.
-
-Readable and reviewable code takes priority over maximum concision.
-
-## Serialization and Protocol Compatibility
-
-External formats must remain compatible.
+External compatibility takes priority over internal style.
 
 Preserve:
 
-* Field names
-* Field types
-* Optional fields
-* Null values
-* Default values
-* Unknown-field behavior
-* Enum representations
-* Numeric precision
-* Time formats
-* Time units
-* Byte order
-* Length encoding
-* Alignment where externally relevant
-* Error codes
-* Message ordering where required
+* Field names and types.
+* Optional and null fields.
+* Default values.
+* Enum representations.
+* Unknown-field behavior.
+* Numeric precision.
+* Time formats and units.
+* Byte order.
+* Length encoding.
+* Message ordering.
+* Error codes.
+* Binary layout where externally relevant.
 
-Use attributes to preserve external names:
+Use Serde attributes or adapters to keep external formats stable while using Rust naming internally.
 
-```rust
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionRequest {
-    pub session_id: String,
-
-    #[serde(default)]
-    pub force_reload: bool,
-}
-```
-
-Internal Rust naming should remain idiomatic even when external names are not.
-
-For binary protocols, add byte-for-byte compatibility tests.
+For binary protocols, add byte-for-byte compatibility tests where practical.
 
 ## Numeric Behavior
 
 Preserve:
 
-* Signedness
-* Bit width
-* Overflow behavior
-* Underflow behavior
-* Rounding
-* Truncation
-* Floating-point precision
-* Shift semantics
-* Endianness
-* NaN behavior
-* Infinity behavior
-* Division-by-zero behavior
+* Signedness and bit width.
+* Overflow and underflow behavior.
+* Rounding and truncation.
+* Floating-point precision.
+* Shift behavior.
+* Endianness.
+* Division-by-zero behavior.
+* NaN and infinity behavior.
 
-Use explicit arithmetic operations when semantics matter:
+Use explicit arithmetic when semantics matter:
 
 ```rust
 wrapping_add
@@ -952,347 +415,221 @@ saturating_add
 overflowing_add
 ```
 
-Do not depend accidentally on debug-versus-release overflow differences.
+Do not depend on differences between debug and release overflow behavior.
 
 ## Resource Management
 
-Use RAII for:
+Use RAII for files, sockets, locks, transactions, buffers, temporary files, and foreign handles.
 
-* Files
-* Sockets
-* Locks
-* Database transactions
-* Temporary files
-* Buffers
-* Foreign handles
-* Background task guards
+When explicit flushing, shutdown, commit, rollback, or cleanup order is required, implement it explicitly instead of relying only on `Drop`.
 
-When explicit shutdown or flushing is behaviorally required, do not rely only on `Drop`.
-
-Example:
-
-```rust
-pub async fn shutdown(&mut self) -> Result<(), ShutdownError> {
-    self.flush_pending_data().await?;
-    self.close_transport().await?;
-    Ok(())
-}
-```
-
-Preserve the original cleanup order when it is externally significant.
+Preserve the original cleanup order when it is observable.
 
 ## Unsafe Code
 
-Safe Rust is required by default.
+Use safe Rust by default.
 
-Use `unsafe` only when necessary for:
-
-* FFI
-* Operating-system APIs
-* Raw protocol memory
-* Memory-mapped hardware
-* Performance requirements demonstrated by measurement
-* Behavior that cannot reasonably be represented in safe Rust
+Use `unsafe` only when required for FFI, operating-system APIs, raw memory, memory-mapped hardware, or behavior that cannot reasonably be implemented safely.
 
 Every `unsafe` block must:
 
-* Be as small as practical
-* Include a `SAFETY` comment
-* State its invariants
-* Be wrapped by a safe API where practical
-* Have relevant tests
+* Be as small as practical.
+* Include a `SAFETY` comment.
+* State required invariants.
+* Be wrapped by a safe API where practical.
+* Have relevant tests.
 
-Do not use `unsafe` merely to bypass ownership or borrowing design.
+Do not use `unsafe` only to bypass ownership or borrowing problems.
 
 ## Dependencies
 
 Prefer stable, maintained, widely used crates.
 
-Before adding a dependency, verify:
+Before adding a dependency, check:
 
-* Whether the standard library is sufficient
-* Whether the project already has a suitable dependency
-* Whether the crate supports the target platforms
-* Whether the crate is compatible with the selected async runtime
-* Whether the dependency materially simplifies or improves the implementation
-* Whether it introduces an unnecessary runtime or large dependency tree
+* Whether the standard library is sufficient.
+* Whether an existing project dependency already provides the feature.
+* Target-platform support.
+* Async-runtime compatibility.
+* Maintenance status.
+* Runtime and dependency-tree cost.
 
-Do not replace core behavior simply because a crate offers a different implementation.
+Do not replace core behavior merely because a crate offers a different implementation.
 
-Record important source-to-Rust dependency mappings.
+## Source Traceability
+
+Add source mapping comments at significant module or method boundaries when useful.
+
+```rust
+// Original:
+//   src/session/SessionManager.java
+//   SessionManager.loadSession()
+//
+// Rust adaptation:
+//   Converted blocking storage access to async.
+//   Cache lookup order and not-found behavior are unchanged.
+```
+
+Use mapping comments for significant methods, state machines, protocol handling, complex control flow, and substantial Rust-specific adaptations.
+
+Do not add source comments to every line.
 
 ## Temporary Implementations
 
-Do not silently add:
+Do not silently add placeholders, fake values, empty functions, ignored errors, or incomplete branches.
 
-* Empty functions
-* Fake return values
-* Placeholder data
-* Ignored errors
-* Unimplemented branches
-* Production mocks
-* Incomplete platform logic
-
-Mark temporary work explicitly:
+Mark incomplete work explicitly:
 
 ```rust
 // MIGRATION-TODO:
 // Original: src/network/Client.java, Client.connect()
 // Missing dependency: TLS transport has not been migrated
 // Temporary behavior: returns ConnectError::TlsUnavailable
-// Completion condition: finish the TLS transport migration
+// Completion condition: migrate the TLS transport
 ```
 
-Temporary implementations must never be reported as complete.
+Temporary implementations must not be reported as complete.
 
-## Testing Requirements
+## Testing
 
-Tests are the primary evidence of behavioral equivalence.
+Tests are the primary evidence of equivalence.
 
-For every migrated method or method group, add or migrate relevant tests.
+For each migrated method or method group, test relevant cases:
 
-Cover:
+* Normal input.
+* Empty and invalid input.
+* Boundary values.
+* Error paths.
+* State transitions.
+* Repeated calls.
+* Timeout and retry behavior.
+* Cancellation.
+* Concurrent behavior.
+* Serialization.
+* Binary compatibility.
+* Resource cleanup.
+* Known quirks of the original implementation.
 
-* Normal behavior
-* Empty input
-* Invalid input
-* Boundary values
-* Minimum and maximum values
-* Error paths
-* State transitions
-* Repeated calls
-* Timeout behavior
-* Retry behavior
-* Cancellation behavior
-* Concurrent behavior
-* Serialization
-* Binary compatibility
-* Resource cleanup
-* Original implementation quirks
+When practical, run the same test vectors against both implementations and compare:
 
-When practical, run the same test vectors against both implementations.
+* Return values.
+* Errors.
+* State changes.
+* Serialized output.
+* Generated files.
+* Network messages.
+* Database changes.
+* Other externally visible effects.
 
-Compare:
-
-* Return values
-* Errors
-* Output data
-* State changes
-* Generated files
-* Network messages
-* Serialized bytes
-* Database changes
-* Logs when externally significant
-
-For asynchronous code, use deterministic test techniques where possible:
-
-```rust
-#[tokio::test]
-async fn loads_existing_session() {
-    // ...
-}
-```
-
-Use paused or controlled time for timeout and retry tests when supported.
-
-Avoid tests that depend unnecessarily on real sleep durations or external networks.
+Use deterministic async tests. Avoid real sleeps and external networks when controlled time or mocks can be used.
 
 ## Migration Workflow
 
-For each migration unit:
+For each unit:
 
-1. Read the original method and its callers.
-2. Read the original tests.
-3. Identify inputs, outputs, state changes, side effects, and errors.
-4. Determine whether the Rust method should be synchronous or asynchronous.
-5. Define the idiomatic Rust signature.
-6. Implement the method while preserving behavior.
-7. Add or migrate tests.
-8. Compare behavior with the original implementation.
-9. Run formatting and targeted validation.
-10. Review the diff.
-11. Commit the migration unit.
-12. Start the next unit only after the current unit has been committed.
+1. Read the original method, callers, dependencies, and tests.
+2. Identify inputs, outputs, state changes, errors, ordering, and side effects.
+3. Decide whether the Rust method should be synchronous or asynchronous.
+4. Define an idiomatic Rust signature.
+5. Implement the method while preserving behavior.
+6. Add or migrate tests.
+7. Compare behavior with the original implementation.
+8. Run formatting, compilation, tests, and Clippy.
+9. Review the diff.
+10. Commit the completed unit.
+11. Start the next independent unit only after committing the current unit.
 
 Prefer method-level units.
 
-A commit may contain several methods only when they are tightly coupled and cannot be meaningfully compiled, tested, or reviewed separately.
+Several methods may be included in one unit only when they are tightly coupled and cannot reasonably be compiled, tested, or reviewed separately.
 
 ## Implement One Unit, Commit One Unit
 
-Complete and commit one coherent migration unit before beginning the next independent unit.
+Complete one coherent and independently verifiable migration unit, test it, and commit it before starting the next independent unit.
 
-The normal workflow is:
-
-```text
-Implement method or method group A
-Test method or method group A
-Review the diff
-Commit A
-
-Implement method or method group B
-Test method or method group B
-Review the diff
-Commit B
-```
-
-Do not use this workflow:
+Expected workflow:
 
 ```text
-Implement many unrelated methods
-Modify several modules
-Run all tests at the end
-Create one large migration commit
+Implement unit A
+Test unit A
+Review unit A
+Commit unit A
+
+Implement unit B
+Test unit B
+Review unit B
+Commit unit B
 ```
+
+Do not accumulate many completed methods and create one large commit later.
 
 A migration unit may be:
 
-* One method
-* One tightly coupled method group
-* One struct and its core methods
-* One enum and its state-transition methods
-* One protocol message and its parser or encoder
-* One asynchronous I/O operation
-* One error type and its direct integration
-* One test fixture required by the current method
-* One small module when its methods cannot reasonably be separated
+* One method.
+* One tightly coupled method group.
+* One struct and its core methods.
+* One enum and its state transitions.
+* One parser or encoder.
+* One asynchronous I/O operation.
+* One error type and its direct integration.
+* One small module that cannot reasonably be separated.
 
-Each unit should be independently understandable, testable, reviewable, and revertible.
+Each commit should be understandable, testable, reviewable, revertible, and limited to one purpose.
 
-## Commit Boundary Requirements
+## Commit Requirements
 
-Before committing a unit:
+Before committing:
 
-* The code must be formatted.
-* The relevant package must compile.
-* Relevant tests must pass.
-* Relevant Clippy checks should pass.
-* No unexplained placeholder behavior may be present.
-* The staged files must belong to the same migration unit.
-* Unrelated user changes must remain untouched.
-* The commit must not depend on unstaged local modifications.
-* The commit must preserve all previously completed behavior.
+* Format the code.
+* Ensure the relevant package compiles.
+* Run relevant tests.
+* Run relevant Clippy checks.
+* Remove or document placeholders.
+* Review staged files.
+* Keep unrelated user changes untouched.
+* Ensure the commit does not depend on unstaged changes.
 
 Prefer explicit staging:
 
 ```bash
 git add src/session.rs tests/session_tests.rs
-```
-
-Avoid blindly staging the entire working tree:
-
-```bash
-git add .
-```
-
-unless every change has been reviewed and belongs to the current unit.
-
-Before committing, inspect:
-
-```bash
-git status --short
-git diff
-git diff --check
 git diff --cached
 ```
 
-## Commit Message Format
+Avoid `git add .` unless every change has been reviewed and belongs to the current unit.
 
-Use clear English commit messages.
-
-Preferred format:
-
-```text
-migrate: port <method or unit> to Rust
-```
-
-Examples:
+Use clear English commit messages:
 
 ```text
 migrate: port packet parsing to Rust
-migrate: port session lookup to Rust
 migrate: port async socket connection to Rust
-migrate: port configuration loading to Rust
-migrate: port retransmission timeout handling to Rust
-```
-
-For tests:
-
-```text
 test: add parity tests for packet parsing
-```
-
-For required project infrastructure:
-
-```text
 build: add Tokio runtime support
-build: add async database dependency
-chore: add migration test fixtures
 ```
 
-Do not use vague messages such as:
+For nontrivial commits, describe:
 
-```text
-update code
-fix things
-migration
-work in progress
-misc changes
-```
+* Original file and method.
+* Rust file and method.
+* Behavior migrated.
+* Rust-specific adjustments.
+* Async changes.
+* Tests executed.
+* Known limitations.
 
-## Commit Description
+Do not use vague messages such as `update code`, `fix things`, `migration`, or `work in progress`.
 
-For nontrivial commits, include:
-
-* Original file and method
-* Rust file and method
-* Behavior migrated
-* Rust-specific adjustments
-* Async conversion details
-* Tests executed
-* Known limitations
-
-Example:
-
-```text
-migrate: port async session loading to Rust
-
-Original:
-- src/session/SessionManager.java
-- SessionManager.loadSession()
-
-Rust:
-- src/session/manager.rs
-- SessionManager::load_session()
-
-Changes:
-- Converted blocking repository access to async/await.
-- Preserved cache lookup order and not-found behavior.
-- Replaced nullable return value with Option<Session>.
-- Replaced exceptions with typed SessionError variants.
-
-Tests:
-- cargo test session::manager::tests
-
-Known limitation:
-- Distributed cache integration is migrated separately.
-```
-
-## Git Safety Rules
+## Git Safety
 
 Do not:
 
-* Rewrite shared history
-* Force-push
-* Rebase shared branches
-* Amend shared commits
-* Squash existing commits without instruction
-* Delete existing commits
-* Reset or discard user changes
-* Commit secrets
-* Commit generated binaries
-* Commit editor files
-* Commit unrelated formatting changes
+* Rewrite shared history.
+* Force-push.
+* Rebase shared branches.
+* Amend shared commits.
+* Squash existing commits without instruction.
+* Reset or discard user changes.
+* Commit secrets, binaries, editor files, or unrelated formatting.
 
 Do not run the following without explicit instruction:
 
@@ -1305,13 +642,11 @@ git rebase
 git commit --amend
 ```
 
-If unrelated uncommitted changes exist, leave them untouched and stage only the current migration files.
+When unrelated changes exist, leave them untouched and stage only files belonging to the current migration unit.
 
-## Build and Validation
+## Validation Commands
 
-Before committing a migration unit, run relevant targeted checks.
-
-Examples:
+Run relevant targeted checks before each unit commit:
 
 ```bash
 cargo fmt --all --check
@@ -1329,142 +664,40 @@ cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-If a command cannot be run, report:
-
-* Which command was skipped
-* Why it was skipped
-* What validation was performed instead
+If a command cannot be run, report why and state what was validated instead.
 
 Do not silently omit failed checks.
 
 ## Completion Report
 
-After each completed unit, report:
+After completing each unit, report:
 
-* Original method or unit
-* Rust method or unit
-* Files added or changed
-* Whether the implementation is sync or async
-* Rust-specific structural adjustments
-* Tests executed
-* Test results
-* Commit message
-* Commit hash
-* Known limitations
-* Next recommended migration unit
+* Original method or unit.
+* Rust method or unit.
+* Files changed.
+* Whether the implementation is sync or async.
+* Rust-specific structural adjustments.
+* Tests and checks executed.
+* Test results.
+* Commit message and hash.
+* Known limitations.
+* Recommended next migration unit.
 
-Example:
-
-```text
-Completed unit:
-- SessionManager.loadSession()
-
-Rust implementation:
-- SessionManager::load_session().await
-
-Files:
-- src/session/manager.rs
-- tests/session_manager.rs
-
-Adjustments:
-- Renamed methods and fields to Rust naming conventions.
-- Converted blocking storage access to async.
-- Replaced nullable result with Option<Session>.
-- Replaced exceptions with SessionError.
-
-Validation:
-- cargo fmt --all --check
-- cargo test session_manager
-- cargo clippy --all-targets -- -D warnings
-
-Commit:
-- 3a9f812 migrate: port async session loading to Rust
-
-Known limitations:
-- Remote cache fallback is not included.
-
-Next unit:
-- SessionManager.saveSession()
-```
-
-Do not claim a commit was created unless Git confirms it succeeded.
-
-## Prohibited Actions
-
-Do not:
-
-* Translate code without reading the original method.
-* Guess behavior from method or variable names.
-* Perform an uncontrolled full-project rewrite.
-* Change business rules for a more elegant Rust design.
-* Change protocol formats.
-* Change default values.
-* Change error semantics silently.
-* Change execution order when order is observable.
-* Introduce concurrency without proving operations are independent.
-* Convert pure calculations to async without a reason.
-* Hold blocking operations on async runtime threads.
-* Spawn unmanaged background tasks.
-* Hold locks across `.await` without justification.
-* Hide incomplete work behind default values.
-* Present placeholder logic as completed.
-* Fix original bugs silently.
-* Mix unrelated migration units in one commit.
-* Start the next independent unit before committing the completed unit.
-* Modify or discard unrelated user changes.
-* Claim full equivalence without test evidence.
+Do not claim that a commit exists unless Git confirms it succeeded.
 
 ## Definition of Done
 
 A migration unit is complete only when:
 
-* The original method or unit has a clearly identifiable Rust counterpart.
-* The Rust code follows Rust naming conventions.
-* The Rust code follows Rust coding conventions.
-* The code fits the Cargo project structure.
-* Async is used where waiting or blocking I/O makes it appropriate.
-* Pure computation remains synchronous unless there is a concrete reason otherwise.
-* Inputs and outputs are equivalent.
-* State transitions are equivalent.
-* Error conditions are equivalent.
+* It has a clearly identifiable original counterpart.
+* Rust naming and project conventions are followed.
+* Async is used where appropriate.
+* Pure computation remains synchronous unless justified.
+* Inputs, outputs, state transitions, errors, ordering, and side effects are equivalent.
 * External formats remain compatible.
 * Relevant tests pass.
-* Rust-specific structural differences are documented.
-* No unexplained placeholder logic remains.
+* Structural differences are documented.
+* No unexplained placeholders remain.
 * Formatting and static checks pass.
-* The unit has been committed in an atomic Git commit.
+* The unit has been committed atomically.
 * The commit contains no unrelated changes.
-
-## Conflict Resolution Priority
-
-When requirements conflict, apply the following priority:
-
-1. Preserve externally observable behavior.
-2. Preserve protocol and data-format compatibility.
-3. Preserve state-transition and error semantics.
-4. Preserve method-level traceability.
-5. Satisfy Rust memory-safety requirements.
-6. Preserve concurrency, timeout, and cancellation semantics.
-7. Follow Rust project and naming conventions.
-8. Use idiomatic Rust abstractions.
-9. Prefer asynchronous I/O.
-10. Optimize performance only after behavioral equivalence has been established.
-
-## Final Review Questions
-
-Every migrated method or unit should make it possible to answer:
-
-1. Which original method does this Rust method represent?
-2. Are its inputs, outputs, errors, and side effects equivalent?
-3. Was the method renamed according to Rust conventions?
-4. Was the method made async, and was async appropriate?
-5. Did asynchronous conversion change ordering or concurrency?
-6. Did Rust ownership or borrowing require structural changes?
-7. Are those changes behaviorally neutral?
-8. Which tests demonstrate equivalence?
-9. Which Git commit introduced the unit?
-10. Can the commit be reviewed and reverted independently?
-11. Does the commit contain only the intended migration scope?
-12. Does the implementation contain any placeholder or unverified behavior?
-
-If these questions cannot be answered, the migration unit must not be considered complete.
