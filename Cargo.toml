@@ -5,7 +5,13 @@ edition = "2024"
 autobins = false
 
 [workspace]
-members = [".", "crates/minidb", "crates/oauth", "crates/protocol"]
+members = [
+    ".",
+    "crates/agent-core-v2",
+    "crates/minidb",
+    "crates/oauth",
+    "crates/protocol",
+]
 resolver = "3"
 
 [[bin]]
@@ -23,6 +29,7 @@ dirs = "6"
 futures-util = "0.3"
 if-addrs = "0.15"
 indexmap = { version = "2", features = ["serde"] }
+kimi-code-agent-core-v2 = { path = "crates/agent-core-v2" }
 kimi-code-oauth = { path = "crates/oauth" }
 kimi-code-protocol = { path = "crates/protocol" }
 md-5 = "0.11"

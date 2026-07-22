@@ -882,6 +882,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kimi-code-agent-core-v2"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "indexmap",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "kimi-code-minidb"
 version = "0.2.0"
 dependencies = [
@@ -942,6 +960,7 @@ dependencies = [
  "futures-util",
  "if-addrs",
  "indexmap",
+ "kimi-code-agent-core-v2",
  "kimi-code-oauth",
  "kimi-code-protocol",
  "md-5",

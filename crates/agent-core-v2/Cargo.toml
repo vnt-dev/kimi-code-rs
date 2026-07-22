@@ -1,0 +1,20 @@
+[package]
+name = "kimi-code-agent-core-v2"
+version = "0.1.0"
+edition = "2024"
+description = "Kimi Code agent core model and provider abstractions"
+publish = false
+
+[dependencies]
+async-trait = "0.1.91"
+futures-util = "0.3"
+indexmap = { version = "2", features = ["serde"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.11"
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+tokio-util = "0.7"
+url = "2"
+uuid = { version = "1", features = ["v4"] }

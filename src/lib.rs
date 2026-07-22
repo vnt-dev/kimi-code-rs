@@ -1,4 +1,4 @@
-pub mod agent_core_v2;
+pub use kimi_code_agent_core_v2 as agent_core_v2;
 pub mod built_in_catalog;
 pub mod cli;
 pub mod feedback;
