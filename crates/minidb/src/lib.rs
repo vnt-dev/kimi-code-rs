@@ -1,4 +1,5 @@
 pub mod cluster;
+pub mod codec;
 pub mod crc32;
 pub mod query;
 pub mod rename_replace;
