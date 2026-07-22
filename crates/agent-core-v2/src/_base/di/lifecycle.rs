@@ -1,6 +1,8 @@
 use std::{
+    collections::HashMap,
     error::Error,
     fmt,
+    hash::Hash,
     sync::{Arc, Mutex},
 };
 
@@ -285,6 +287,322 @@ pub struct RefCountedDisposable {
     inner: Mutex<RefCountedState>,
 }
 
+pub struct MandatoryMutableDisposable {
+    value: MutableDisposable,
+}
+
+impl MandatoryMutableDisposable {
+    pub fn new(initial_value: DisposableHandle) -> Self {
+        let value = MutableDisposable::default();
+        // A fresh MutableDisposable cannot reject the initial value.
+        let _ = value.set(Some(initial_value));
+        Self { value }
+    }
+
+    pub fn value(&self) -> Option<DisposableHandle> {
+        self.value.value()
+    }
+
+    pub fn set(&self, value: DisposableHandle) -> DisposeResult {
+        self.value.set(Some(value))
+    }
+}
+
+impl Disposable for MandatoryMutableDisposable {
+    fn dispose(&self) -> DisposeResult {
+        self.value.dispose()
+    }
+}
+
+pub struct DisposableMap<K> {
+    inner: Mutex<DisposableMapState<K>>,
+}
+
+struct DisposableMapState<K> {
+    values: HashMap<K, DisposableHandle>,
+    disposed: bool,
+}
+
+impl<K> Default for DisposableMap<K> {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(DisposableMapState {
+                values: HashMap::new(),
+                disposed: false,
+            }),
+        }
+    }
+}
+
+impl<K> DisposableMap<K>
+where
+    K: Eq + Hash,
+{
+    pub fn len(&self) -> usize {
+        self.inner.lock().unwrap().values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn has(&self, key: &K) -> bool {
+        self.inner.lock().unwrap().values.contains_key(key)
+    }
+
+    pub fn get(&self, key: &K) -> Option<DisposableHandle> {
+        self.inner.lock().unwrap().values.get(key).cloned()
+    }
+
+    pub fn set(
+        &self,
+        key: K,
+        value: DisposableHandle,
+        skip_dispose_on_overwrite: bool,
+    ) -> DisposeResult {
+        let previous = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.disposed {
+                // Source deliberately warns and leaks values added after disposal.
+                return Ok(());
+            }
+            let previous = inner.values.insert(key, Arc::clone(&value));
+            if skip_dispose_on_overwrite
+                || previous
+                    .as_ref()
+                    .is_some_and(|previous| Arc::ptr_eq(previous, &value))
+            {
+                None
+            } else {
+                previous
+            }
+        };
+        previous.map_or(Ok(()), |previous| previous.dispose())
+    }
+
+    pub fn delete_and_dispose(&self, key: &K) -> DisposeResult {
+        self.inner
+            .lock()
+            .unwrap()
+            .values
+            .remove(key)
+            .map_or(Ok(()), |value| value.dispose())
+    }
+
+    pub fn delete_and_leak(&self, key: &K) -> Option<DisposableHandle> {
+        self.inner.lock().unwrap().values.remove(key)
+    }
+
+    pub fn clear_and_dispose_all(&self) -> DisposeResult {
+        let values = std::mem::take(&mut self.inner.lock().unwrap().values).into_values();
+        dispose_all(values)
+    }
+}
+
+impl<K> Disposable for DisposableMap<K>
+where
+    K: Eq + Hash + Send,
+{
+    fn dispose(&self) -> DisposeResult {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.disposed {
+                return Ok(());
+            }
+            inner.disposed = true;
+        }
+        self.clear_and_dispose_all()
+    }
+}
+
+#[derive(Default)]
+pub struct DisposableSet {
+    inner: Mutex<DisposableSetState>,
+}
+
+#[derive(Default)]
+struct DisposableSetState {
+    values: Vec<DisposableHandle>,
+    disposed: bool,
+}
+
+impl DisposableSet {
+    pub fn len(&self) -> usize {
+        self.inner.lock().unwrap().values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn add(&self, value: DisposableHandle) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.disposed {
+            return;
+        }
+        if !inner
+            .values
+            .iter()
+            .any(|current| Arc::ptr_eq(current, &value))
+        {
+            inner.values.push(value);
+        }
+    }
+
+    pub fn delete_and_dispose(&self, value: &DisposableHandle) -> DisposeResult {
+        let removed = {
+            let mut inner = self.inner.lock().unwrap();
+            inner
+                .values
+                .iter()
+                .position(|current| Arc::ptr_eq(current, value))
+                .map(|index| inner.values.remove(index))
+        };
+        removed.map_or(Ok(()), |value| value.dispose())
+    }
+
+    pub fn delete_and_leak(&self, value: &DisposableHandle) -> Option<DisposableHandle> {
+        let mut inner = self.inner.lock().unwrap();
+        let index = inner
+            .values
+            .iter()
+            .position(|current| Arc::ptr_eq(current, value))?;
+        Some(inner.values.remove(index))
+    }
+
+    pub fn clear_and_dispose_all(&self) -> DisposeResult {
+        dispose_all(std::mem::take(&mut self.inner.lock().unwrap().values))
+    }
+}
+
+impl Disposable for DisposableSet {
+    fn dispose(&self) -> DisposeResult {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.disposed {
+                return Ok(());
+            }
+            inner.disposed = true;
+        }
+        self.clear_and_dispose_all()
+    }
+}
+
+type CreateReference<T> = dyn Fn(&str) -> Result<T, Box<dyn Error + Send + Sync>> + Send + Sync;
+type DestroyReference<T> = dyn Fn(&str, &T) -> DisposeResult + Send + Sync;
+
+struct ReferenceEntry<T> {
+    object: Arc<T>,
+    count: usize,
+}
+
+struct ReferenceState<T> {
+    values: Mutex<HashMap<String, ReferenceEntry<T>>>,
+    destroy: Arc<DestroyReference<T>>,
+}
+
+pub struct ReferenceCollection<T> {
+    state: Arc<ReferenceState<T>>,
+    create: Arc<CreateReference<T>>,
+}
+
+impl<T> ReferenceCollection<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub fn new(
+        create: impl Fn(&str) -> Result<T, Box<dyn Error + Send + Sync>> + Send + Sync + 'static,
+        destroy: impl Fn(&str, &T) -> DisposeResult + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            state: Arc::new(ReferenceState {
+                values: Mutex::new(HashMap::new()),
+                destroy: Arc::new(destroy),
+            }),
+            create: Arc::new(create),
+        }
+    }
+
+    // Original: ReferenceCollection.acquire(). Creation occurs once per live key.
+    pub fn acquire(
+        &self,
+        key: impl Into<String>,
+    ) -> Result<Reference<T>, Box<dyn Error + Send + Sync>> {
+        let key = key.into();
+        let object = {
+            let mut values = self.state.values.lock().unwrap();
+            if let Some(reference) = values.get_mut(&key) {
+                reference.count += 1;
+                Arc::clone(&reference.object)
+            } else {
+                let object = Arc::new((self.create)(&key)?);
+                values.insert(
+                    key.clone(),
+                    ReferenceEntry {
+                        object: Arc::clone(&object),
+                        count: 1,
+                    },
+                );
+                object
+            }
+        };
+        let state = Arc::downgrade(&self.state);
+        let release_key = key;
+        let release = to_fallible_disposable(move || {
+            let Some(state) = state.upgrade() else {
+                return Ok(());
+            };
+            let removed = {
+                let mut values = state.values.lock().unwrap();
+                let Some(reference) = values.get_mut(&release_key) else {
+                    return Ok(());
+                };
+                reference.count -= 1;
+                (reference.count == 0)
+                    .then(|| values.remove(&release_key))
+                    .flatten()
+            };
+            removed.map_or(Ok(()), |entry| (state.destroy)(&release_key, &entry.object))
+        });
+        Ok(Reference { object, release })
+    }
+}
+
+pub struct Reference<T> {
+    pub object: Arc<T>,
+    release: DisposableHandle,
+}
+
+impl<T> Disposable for Reference<T>
+where
+    T: Send + Sync,
+{
+    fn dispose(&self) -> DisposeResult {
+        self.release.dispose()
+    }
+}
+
+pub struct ImmortalReference<T> {
+    pub object: Arc<T>,
+}
+
+impl<T> ImmortalReference<T> {
+    pub fn new(object: T) -> Self {
+        Self {
+            object: Arc::new(object),
+        }
+    }
+}
+
+impl<T> Disposable for ImmortalReference<T>
+where
+    T: Send + Sync,
+{
+    fn dispose(&self) -> DisposeResult {
+        Ok(())
+    }
+}
+
 struct RefCountedState {
     count: usize,
     disposable: Option<DisposableHandle>,
@@ -377,5 +695,61 @@ mod tests {
         let error = combined_disposable(disposables).dispose().unwrap_err();
         assert_eq!(visited.load(Ordering::Relaxed), 2);
         assert_eq!(error.errors().len(), 2);
+    }
+
+    #[test]
+    fn disposable_collections_replace_remove_leak_and_clear() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let make = || {
+            let count = Arc::clone(&count);
+            to_disposable(move || {
+                count.fetch_add(1, Ordering::Relaxed);
+            })
+        };
+        let map = DisposableMap::default();
+        map.set("key", make(), false).unwrap();
+        map.set("key", make(), false).unwrap();
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+        let leaked = map.delete_and_leak(&"key").unwrap();
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+        leaked.dispose().unwrap();
+
+        let set = DisposableSet::default();
+        let value = make();
+        set.add(Arc::clone(&value));
+        set.add(Arc::clone(&value));
+        assert_eq!(set.len(), 1);
+        set.dispose().unwrap();
+        assert_eq!(count.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn reference_collection_creates_once_and_destroys_after_last_release() {
+        let creates = Arc::new(AtomicUsize::new(0));
+        let destroys = Arc::new(AtomicUsize::new(0));
+        let references = ReferenceCollection::new(
+            {
+                let creates = Arc::clone(&creates);
+                move |key| {
+                    creates.fetch_add(1, Ordering::Relaxed);
+                    Ok(key.to_owned())
+                }
+            },
+            {
+                let destroys = Arc::clone(&destroys);
+                move |_, _| {
+                    destroys.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                }
+            },
+        );
+        let first = references.acquire("shared").unwrap();
+        let second = references.acquire("shared").unwrap();
+        assert!(Arc::ptr_eq(&first.object, &second.object));
+        assert_eq!(creates.load(Ordering::Relaxed), 1);
+        first.dispose().unwrap();
+        assert_eq!(destroys.load(Ordering::Relaxed), 0);
+        second.dispose().unwrap();
+        assert_eq!(destroys.load(Ordering::Relaxed), 1);
     }
 }
