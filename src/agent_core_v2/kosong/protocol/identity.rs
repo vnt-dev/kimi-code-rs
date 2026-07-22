@@ -6,6 +6,9 @@ use std::str::FromStr;
 
 use crate::agent_core_v2::kosong::contract::capability::ModelCapability;
 use crate::agent_core_v2::kosong::contract::inspection::InspectionSource;
+use crate::agent_core_v2::kosong::contract::provider::{ChatProvider, ProviderError};
+
+use super::protocol_base::{ProtocolBaseId, ResolvedAdapterIdentity};
 
 // Original:
 //   packages/agent-core-v2/src/kosong/protocol/protocol.ts
@@ -142,15 +145,56 @@ pub struct ExplainedCapability {
     pub source: InspectionSource,
 }
 
-// MIGRATION-TODO:
 // Original: protocol.ts, IProtocolAdapterRegistry
-// Missing dependency: protocolBase.ts and protocolTrait.ts have not yet been
-// migrated, so their ResolvedAdapterIdentity/ResolvedTrait types do not exist.
-// Temporary behavior: none; no registry implementation is exposed here.
-// Completion condition: migrate those L1 contracts, then add the Rust
-// IProtocolAdapterRegistry trait with the same six resolution/construction
-// methods. The TypeScript DI decorator will map to the Rust service container
-// when that application-level dependency-injection unit is migrated.
+//
+// Rust adaptation:
+//   TypeScript factory exceptions become ProviderError results. The trait is
+//   object-safe so the application service container can bind the eventual L2
+//   implementation without exposing vendor definitions to this L1 contract.
+pub const PROTOCOL_ADAPTER_REGISTRY_SERVICE_ID: &str = "protocolAdapterRegistry";
+
+pub trait ProtocolAdapterRegistry: Send + Sync {
+    fn supported_protocols(&self) -> Vec<Protocol>;
+
+    fn resolve_adapter_identity(
+        &self,
+        protocol: Protocol,
+        provider_type: Option<&str>,
+    ) -> ResolvedAdapterIdentity;
+
+    fn resolve_provider_base_id(
+        &self,
+        protocol: Protocol,
+        provider_type: Option<&str>,
+    ) -> ProtocolBaseId;
+
+    fn resolve_capability(
+        &self,
+        protocol: Protocol,
+        model_name: &str,
+        provider_type: Option<&str>,
+    ) -> ModelCapability;
+
+    fn explain_capability(
+        &self,
+        protocol: Protocol,
+        model_name: &str,
+        provider_type: Option<&str>,
+    ) -> ExplainedCapability;
+
+    fn create_chat_provider(
+        &self,
+        config: ProtocolAdapterConfig,
+    ) -> Result<std::sync::Arc<dyn ChatProvider>, ProviderError>;
+}
+
+// MIGRATION-TODO:
+// Original: protocol.ts, IProtocolAdapterRegistry service identifier.
+// Missing dependency: the application-level Rust DI/service container.
+// Temporary behavior: none; callers can depend directly on
+// Arc<dyn ProtocolAdapterRegistry> until the container is migrated.
+// Completion condition: bind the stable "protocolAdapterRegistry" service id
+// while migrating the production L2 registry and application composition.
 
 #[cfg(test)]
 mod tests {
@@ -233,6 +277,14 @@ mod tests {
                     "location": "us-central1"
                 }
             })
+        );
+    }
+
+    #[test]
+    fn adapter_registry_keeps_the_established_service_identity() {
+        assert_eq!(
+            PROTOCOL_ADAPTER_REGISTRY_SERVICE_ID,
+            "protocolAdapterRegistry"
         );
     }
 }
