@@ -6,14 +6,16 @@ use crate::agent_core_v2::kosong::contract::message::{
     ContentPart, Message, Role, extract_text, is_tool_declaration_only_message,
 };
 use crate::agent_core_v2::kosong::contract::provider::{
-    FinishReason, ResponseFormat, ToolCallIdPolicy,
+    FinishReason, GenerateOptions, ResponseFormat, ThinkingEffort, ToolCallIdPolicy,
 };
 use crate::agent_core_v2::kosong::contract::tool::Tool;
 use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::{
     NormalizedFinishReason, TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_PROMPT,
     ToolMessageConversion, is_media_part,
 };
-use crate::agent_core_v2::kosong::provider::bases::tool_call_id::sanitize_openai_responses_call_id;
+use crate::agent_core_v2::kosong::provider::bases::tool_call_id::{
+    ToolCallIdError, normalize_tool_call_ids_for_provider, sanitize_openai_responses_call_id,
+};
 
 pub type OpenAiResponsesGenerationKwargs = Map<String, Value>;
 
@@ -317,6 +319,110 @@ pub fn convert_history_messages(
     input
 }
 
+// Original: openai-responses.ts, OpenAIResponsesChatProvider.generate()
+// request construction before client.responses.create().
+#[allow(clippy::too_many_arguments)]
+pub fn build_openai_responses_request(
+    model: &str,
+    stream: bool,
+    generation_kwargs: &OpenAiResponsesGenerationKwargs,
+    default_thinking_effort: Option<&ThinkingEffort>,
+    tool_message_conversion: ToolMessageConversion,
+    system_prompt: &str,
+    tools: &[Tool],
+    history: &[Message],
+    options: Option<&GenerateOptions>,
+) -> Result<Map<String, Value>, ToolCallIdError> {
+    let normalized_history = normalize_tool_call_ids_for_provider(
+        history.to_vec(),
+        &OPENAI_RESPONSES_TOOL_CALL_ID_POLICY,
+    )?;
+    let input = convert_history_messages(&normalized_history, model, tool_message_conversion);
+    let mut kwargs = generation_kwargs.clone();
+
+    if let Some(cache_key) = options.and_then(|options| options.cache_key.as_ref()) {
+        kwargs.insert(
+            "prompt_cache_key".to_owned(),
+            Value::String(cache_key.clone()),
+        );
+    }
+    if let Some(temperature) = options
+        .and_then(|options| options.sampling.as_ref())
+        .and_then(|sampling| sampling.temperature)
+    {
+        kwargs.insert("temperature".to_owned(), Value::from(temperature));
+    }
+    if let Some(top_p) = options
+        .and_then(|options| options.sampling.as_ref())
+        .and_then(|sampling| sampling.top_p)
+    {
+        kwargs.insert("top_p".to_owned(), Value::from(top_p));
+    }
+
+    let thinking_effort = options
+        .and_then(|options| options.thinking.as_ref())
+        .map(|thinking| &thinking.effort)
+        .or(default_thinking_effort);
+    if let Some(effort) = thinking_effort {
+        if matches!(effort.as_str(), "off" | "on") {
+            kwargs.remove("reasoning_effort");
+        } else {
+            kwargs.insert(
+                "reasoning_effort".to_owned(),
+                Value::String(effort.to_string()),
+            );
+        }
+    }
+
+    if let Some(mut cap) = options.and_then(|options| options.max_completion_tokens) {
+        if let Some((used, maximum)) = options.and_then(|options| {
+            Some((options.used_context_tokens?, options.max_context_tokens?))
+                .filter(|(_, maximum)| *maximum > 0.0)
+        }) {
+            cap = cap.min(maximum - used);
+        }
+        kwargs.insert("max_output_tokens".to_owned(), Value::from(cap.max(1.0)));
+    }
+
+    if let Some(reasoning_effort) = kwargs.remove("reasoning_effort") {
+        kwargs.insert(
+            "reasoning".to_owned(),
+            serde_json::json!({"effort":reasoning_effort,"summary":"auto"}),
+        );
+        kwargs.insert(
+            "include".to_owned(),
+            serde_json::json!(["reasoning.encrypted_content"]),
+        );
+    }
+
+    let mut params = Map::from_iter([
+        ("model".to_owned(), Value::String(model.to_owned())),
+        ("input".to_owned(), Value::Array(input)),
+        (
+            "tools".to_owned(),
+            Value::Array(tools.iter().map(convert_tool).collect()),
+        ),
+        ("store".to_owned(), Value::Bool(false)),
+        ("stream".to_owned(), Value::Bool(stream)),
+    ]);
+    params.extend(kwargs);
+    if !system_prompt.is_empty() {
+        params.insert(
+            "instructions".to_owned(),
+            Value::String(system_prompt.to_owned()),
+        );
+    }
+    if let Some(response_format) = options.and_then(|options| options.response_format.as_ref()) {
+        let mut text = params
+            .remove("text")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        text.extend(response_format_to_responses_text(response_format));
+        params.insert("text".to_owned(), Value::Object(text));
+    }
+    Ok(params)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,5 +467,54 @@ mod tests {
             convert_history_messages(&[tool], "gpt-4.1", ToolMessageConversion::ExtractText);
         assert_eq!(history[0]["output"], TOOL_RESULT_MEDIA_PLACEHOLDER);
         assert_eq!(history[1]["content"][1]["type"], "input_file");
+    }
+
+    #[test]
+    fn builds_request_overlays_in_contract_order() {
+        use crate::agent_core_v2::kosong::contract::provider::{
+            SamplingOptions, ThinkingRequestOptions,
+        };
+
+        let defaults = Map::from_iter([
+            ("max_output_tokens".to_owned(), Value::from(900)),
+            ("text".to_owned(), serde_json::json!({"verbosity":"low"})),
+        ]);
+        let options = GenerateOptions {
+            cache_key: Some("cache-a".to_owned()),
+            sampling: Some(SamplingOptions {
+                temperature: Some(0.4),
+                top_p: Some(0.8),
+            }),
+            thinking: Some(ThinkingRequestOptions {
+                effort: ThinkingEffort::from("high"),
+                keep: None,
+            }),
+            max_completion_tokens: Some(500.0),
+            used_context_tokens: Some(900.0),
+            max_context_tokens: Some(1_000.0),
+            response_format: Some(ResponseFormat::JsonObject),
+            ..GenerateOptions::default()
+        };
+        let request = build_openai_responses_request(
+            "gpt-5",
+            true,
+            &defaults,
+            Some(&ThinkingEffort::from("medium")),
+            ToolMessageConversion::Parts,
+            "be concise",
+            &[],
+            &[],
+            Some(&options),
+        )
+        .unwrap();
+
+        assert_eq!(request["max_output_tokens"], 100.0);
+        assert_eq!(request["reasoning"]["effort"], "high");
+        assert_eq!(request["include"][0], "reasoning.encrypted_content");
+        assert_eq!(request["text"]["verbosity"], "low");
+        assert_eq!(request["text"]["format"]["type"], "json_object");
+        assert_eq!(request["instructions"], "be concise");
+        assert_eq!(request["prompt_cache_key"], "cache-a");
+        assert_eq!(request["tools"], serde_json::json!([]));
     }
 }
