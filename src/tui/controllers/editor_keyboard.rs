@@ -14,6 +14,9 @@ use crate::tui::{
         image_placeholder::{ExtractionResult, extract_media_attachments},
     },
 };
+use crate::utils::process::external_editor::{
+    ExternalEditorRuntime, edit_in_external_editor_with, resolve_editor_command,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingPhase {
@@ -78,6 +81,12 @@ pub trait EditorKeyboardHost {
     fn recall_last_queued(&mut self) -> Option<QueuedMessage>;
     fn scroll_btw(&mut self, direction: BtwScrollDirection) -> bool;
     fn set_transient_hint(&mut self, hint: Option<&str>);
+    fn external_editor_running(&self) -> bool;
+    fn editor_command(&self) -> Option<&str>;
+    fn set_external_editor_running(&mut self, running: bool);
+    fn stop_ui(&mut self);
+    fn start_ui(&mut self);
+    fn focus_editor(&mut self);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,6 +241,40 @@ impl EditorKeyboardController {
     pub fn dispose(&mut self, host: &mut dyn EditorKeyboardHost) {
         self.clear_pending_exit(host);
         self.clear_pending_undo_escape();
+    }
+
+    // Original: EditorKeyboardController.openExternalEditor()
+    pub async fn open_external_editor(
+        &mut self,
+        editor: &mut CustomEditor,
+        host: &mut dyn EditorKeyboardHost,
+        runtime: &dyn ExternalEditorRuntime,
+    ) {
+        if host.external_editor_running() {
+            return;
+        }
+        let Some(command) = resolve_editor_command(host.editor_command()) else {
+            host.show_error(
+                "No editor configured. Set $VISUAL / $EDITOR, or run /editor <command>.".to_owned(),
+            );
+            return;
+        };
+        host.set_external_editor_running(true);
+        let seed = editor.expanded_text();
+        host.stop_ui();
+        tokio::task::yield_now().await;
+        match edit_in_external_editor_with(runtime, &seed, &command).await {
+            Ok(Some(result)) => {
+                let normalized = result.replace("\r\n", "\n");
+                editor.set_text(normalized.strip_suffix('\n').unwrap_or(&normalized));
+            }
+            Ok(None) => {}
+            Err(error) => host.show_error(format!("External editor failed: {error}")),
+        }
+        host.start_ui();
+        host.focus_editor();
+        host.request_render(true);
+        host.set_external_editor_running(false);
     }
 
     fn handle_ctrl_c(
@@ -515,6 +558,8 @@ mod tests {
         cancel_in_flight: bool,
         btw_running: bool,
         btw_close: bool,
+        external_editor_running: bool,
+        editor_command: Option<String>,
     }
 
     impl EditorKeyboardHost for Host {
@@ -617,6 +662,25 @@ mod tests {
         }
         fn set_transient_hint(&mut self, hint: Option<&str>) {
             self.hints.push(hint.map(str::to_owned));
+        }
+        fn external_editor_running(&self) -> bool {
+            self.external_editor_running
+        }
+        fn editor_command(&self) -> Option<&str> {
+            self.editor_command.as_deref()
+        }
+        fn set_external_editor_running(&mut self, running: bool) {
+            self.external_editor_running = running;
+            self.events.push(format!("editor-running:{running}"));
+        }
+        fn stop_ui(&mut self) {
+            self.events.push("stop-ui".to_owned());
+        }
+        fn start_ui(&mut self) {
+            self.events.push("start-ui".to_owned());
+        }
+        fn focus_editor(&mut self) {
+            self.events.push("focus-editor".to_owned());
         }
     }
 
@@ -994,6 +1058,99 @@ mod tests {
             )
             .await,
             EditorDispatch::AutocompleteRequested { force: true }
+        );
+    }
+
+    struct EditorRuntime {
+        replacement: Option<String>,
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl ExternalEditorRuntime for EditorRuntime {
+        async fn run_shell(&self, command: &str) -> std::io::Result<i32> {
+            if self.fail {
+                return Err(std::io::Error::other("spawn failed"));
+            }
+            if let Some(replacement) = &self.replacement {
+                let quote = if cfg!(windows) { '"' } else { '\'' };
+                let end = command.rfind(quote).expect("closing quote");
+                let start = command[..end].rfind(quote).expect("opening quote");
+                tokio::fs::write(&command[start + 1..end], replacement).await?;
+            }
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn external_editor_flow_normalizes_text_and_restores_ui() {
+        let mut controller = EditorKeyboardController::new();
+        let mut editor = CustomEditor::new();
+        editor.set_text("seed");
+        let mut host = Host {
+            editor_command: Some("fake-editor --wait".to_owned()),
+            ..Host::default()
+        };
+        controller
+            .open_external_editor(
+                &mut editor,
+                &mut host,
+                &EditorRuntime {
+                    replacement: Some("edited\r\ntext\r\n".to_owned()),
+                    fail: false,
+                },
+            )
+            .await;
+        assert_eq!(editor.text(), "edited\ntext");
+        assert_eq!(
+            host.events,
+            [
+                "editor-running:true",
+                "stop-ui",
+                "start-ui",
+                "focus-editor",
+                "render:true",
+                "editor-running:false"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn external_editor_reports_missing_command_and_spawn_failure() {
+        let mut controller = EditorKeyboardController::new();
+        let mut editor = CustomEditor::new();
+        let mut host = Host::default();
+        controller
+            .open_external_editor(
+                &mut editor,
+                &mut host,
+                &EditorRuntime {
+                    replacement: None,
+                    fail: false,
+                },
+            )
+            .await;
+        assert!(host.errors[0].starts_with("No editor configured."));
+
+        host.editor_command = Some("fake".to_owned());
+        controller
+            .open_external_editor(
+                &mut editor,
+                &mut host,
+                &EditorRuntime {
+                    replacement: None,
+                    fail: true,
+                },
+            )
+            .await;
+        assert_eq!(
+            host.errors.last().map(String::as_str),
+            Some("External editor failed: spawn failed")
+        );
+        assert!(!host.external_editor_running);
+        assert_eq!(
+            host.events.last().map(String::as_str),
+            Some("editor-running:false")
         );
     }
 }
