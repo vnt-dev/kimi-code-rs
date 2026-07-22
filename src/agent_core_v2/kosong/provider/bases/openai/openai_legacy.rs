@@ -1,7 +1,15 @@
 use serde_json::{Map, Value};
 use std::sync::{Arc, LazyLock};
 
+use crate::agent_core_v2::kosong::contract::message::{
+    ContentPart, Message, Role, is_tool_declaration_only_message,
+};
 use crate::agent_core_v2::kosong::contract::provider::{ResponseFormat, ToolCallIdPolicy};
+use crate::agent_core_v2::kosong::provider::bases::openai::openai_common::{
+    ConvertedToolMessageContent, OpenAiContentPart, TOOL_RESULT_MEDIA_PLACEHOLDER,
+    TOOL_RESULT_MEDIA_PROMPT, ToolMessageConversion, convert_content_part,
+    convert_tool_message_content,
+};
 use crate::agent_core_v2::kosong::provider::bases::tool_call_id::sanitize_tool_call_id;
 
 pub const KNOWN_REASONING_KEYS: [&str; 3] = ["reasoning_content", "reasoning_details", "reasoning"];
@@ -97,9 +105,223 @@ pub fn response_format_to_openai(format: &ResponseFormat) -> Map<String, Value> 
     }
 }
 
+pub const OMITTED_AUDIO_PLACEHOLDER: &str = "(audio omitted: not supported by this provider)";
+pub const OMITTED_VIDEO_PLACEHOLDER: &str = "(video omitted: not supported by this provider)";
+
+fn openai_content_part_value(part: OpenAiContentPart) -> Value {
+    match part {
+        OpenAiContentPart::Text { text } => serde_json::json!({"type":"text","text":text}),
+        OpenAiContentPart::ImageUrl { image_url } => {
+            serde_json::json!({"type":"image_url","image_url":image_url})
+        }
+        OpenAiContentPart::AudioUrl { audio_url } => {
+            serde_json::json!({"type":"audio_url","audio_url":audio_url})
+        }
+        OpenAiContentPart::VideoUrl { video_url } => {
+            serde_json::json!({"type":"video_url","video_url":video_url})
+        }
+    }
+}
+
+fn converted_parts_value(parts: Vec<OpenAiContentPart>) -> Value {
+    Value::Array(parts.into_iter().map(openai_content_part_value).collect())
+}
+
+fn convert_tool_message_content_for_chat(
+    message: &Message,
+    conversion: ToolMessageConversion,
+) -> Value {
+    match convert_tool_message_content(message, conversion) {
+        ConvertedToolMessageContent::Parts(parts) => converted_parts_value(parts),
+        ConvertedToolMessageContent::Text(content) => {
+            let mut lines = if content.is_empty() {
+                Vec::new()
+            } else {
+                vec![content]
+            };
+            if message
+                .content
+                .iter()
+                .any(|part| matches!(part, ContentPart::AudioUrl { .. }))
+            {
+                lines.push(OMITTED_AUDIO_PLACEHOLDER.to_owned());
+            }
+            if message
+                .content
+                .iter()
+                .any(|part| matches!(part, ContentPart::VideoUrl { .. }))
+            {
+                lines.push(OMITTED_VIDEO_PLACEHOLDER.to_owned());
+            }
+            if lines.is_empty()
+                && message
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, ContentPart::ImageUrl { .. }))
+            {
+                Value::String(TOOL_RESULT_MEDIA_PLACEHOLDER.to_owned())
+            } else {
+                Value::String(lines.join("\n"))
+            }
+        }
+    }
+}
+
+// Original: openai-legacy.ts, convertMessage()
+pub fn convert_message(
+    message: &Message,
+    reasoning_key: Option<&str>,
+    tool_message_conversion: ToolMessageConversion,
+    preserve_thinking: bool,
+    allow_tool_result_extraction: bool,
+) -> Map<String, Value> {
+    let mut reasoning_content = String::new();
+    let mut has_reasoning_part = false;
+    let mut non_think_parts = Vec::new();
+    for part in &message.content {
+        match part {
+            ContentPart::Think { think, .. } => {
+                has_reasoning_part = true;
+                reasoning_content.push_str(think);
+            }
+            _ => non_think_parts.push(part),
+        }
+    }
+
+    let mut result = Map::from_iter([(
+        "role".to_owned(),
+        Value::String(message.role.as_str().to_owned()),
+    )]);
+    if message.role == Role::Tool {
+        let has_non_text_part = message
+            .content
+            .iter()
+            .any(|part| !matches!(part, ContentPart::Text { .. } | ContentPart::Think { .. }));
+        let conversion = if allow_tool_result_extraction && has_non_text_part {
+            ToolMessageConversion::ExtractText
+        } else {
+            tool_message_conversion
+        };
+        result.insert(
+            "content".to_owned(),
+            convert_tool_message_content_for_chat(message, conversion),
+        );
+    } else if let [ContentPart::Text { text }] = non_think_parts.as_slice() {
+        result.insert("content".to_owned(), Value::String(text.clone()));
+    } else if !non_think_parts.is_empty() {
+        result.insert(
+            "content".to_owned(),
+            converted_parts_value(
+                non_think_parts
+                    .into_iter()
+                    .filter_map(convert_content_part)
+                    .collect(),
+            ),
+        );
+    }
+
+    if let Some(name) = message.name.as_ref() {
+        result.insert("name".to_owned(), Value::String(name.clone()));
+    }
+    if !message.tool_calls.is_empty() {
+        result.insert(
+            "tool_calls".to_owned(),
+            Value::Array(
+                message
+                    .tool_calls
+                    .iter()
+                    .map(|tool_call| {
+                        serde_json::json!({
+                            "type": "function",
+                            "id": tool_call.id,
+                            "function": {
+                                "name": tool_call.name,
+                                "arguments": tool_call.arguments,
+                            }
+                        })
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(tool_call_id) = message.tool_call_id.as_ref() {
+        result.insert(
+            "tool_call_id".to_owned(),
+            Value::String(tool_call_id.clone()),
+        );
+    }
+    if has_reasoning_part || (preserve_thinking && message.role == Role::Assistant) {
+        result.insert(
+            reasoning_key
+                .unwrap_or(DEFAULT_OUTBOUND_REASONING_KEY)
+                .to_owned(),
+            Value::String(reasoning_content),
+        );
+    }
+    result
+}
+
+fn tool_result_image_parts(message: &Message) -> Vec<OpenAiContentPart> {
+    message
+        .content
+        .iter()
+        .filter(|part| matches!(part, ContentPart::ImageUrl { .. }))
+        .filter_map(convert_content_part)
+        .collect()
+}
+
+fn append_tool_result_media_message(
+    messages: &mut Vec<Map<String, Value>>,
+    pending: &mut Vec<OpenAiContentPart>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let mut content = vec![serde_json::json!({
+        "type": "text",
+        "text": TOOL_RESULT_MEDIA_PROMPT,
+    })];
+    content.extend(pending.drain(..).map(openai_content_part_value));
+    messages.push(Map::from_iter([
+        ("role".to_owned(), Value::String("user".to_owned())),
+        ("content".to_owned(), Value::Array(content)),
+    ]));
+}
+
+// Original: openai-legacy.ts, convertHistoryMessages()
+pub fn convert_history_messages(
+    history: &[Message],
+    reasoning_key: Option<&str>,
+    tool_message_conversion: ToolMessageConversion,
+    preserve_thinking: bool,
+) -> Vec<Map<String, Value>> {
+    let mut messages = Vec::new();
+    let mut pending_tool_result_media = Vec::new();
+    for message in history {
+        if is_tool_declaration_only_message(message) {
+            continue;
+        }
+        if message.role != Role::Tool {
+            append_tool_result_media_message(&mut messages, &mut pending_tool_result_media);
+        }
+        messages.push(convert_message(
+            message,
+            reasoning_key,
+            tool_message_conversion,
+            preserve_thinking,
+            true,
+        ));
+        if message.role == Role::Tool {
+            pending_tool_result_media.extend(tool_result_image_parts(message));
+        }
+    }
+    append_tool_result_media_message(&mut messages, &mut pending_tool_result_media);
+    messages
+}
+
 // MIGRATION-TODO:
-// Original: openai-legacy.ts, convertMessage(), convertHistoryMessages(),
-// OpenAILegacyStreamedMessage, OpenAILegacyChatProvider and request methods.
+// Original: openai-legacy.ts, OpenAILegacyStreamedMessage,
+// OpenAILegacyChatProvider and request methods.
 // Missing dependency: the selected async OpenAI HTTP transport and its stream
 // event types. Temporary behavior: none; this module exposes only completed
 // pure request-shaping methods. Completion condition: port message/history
@@ -109,7 +331,9 @@ pub fn response_format_to_openai(format: &ResponseFormat) -> Map<String, Value> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_core_v2::kosong::contract::message::{MediaUrl, ToolCall, ToolCallType};
     use crate::agent_core_v2::kosong::contract::provider::JsonSchemaDefinition;
+    use crate::agent_core_v2::kosong::contract::tool::Tool;
     use serde_json::json;
 
     #[test]
@@ -219,5 +443,89 @@ mod tests {
         assert!(normalized.starts_with("call_"));
         assert_eq!(OPENAI_CHAT_TOOL_CALL_ID_POLICY.max_length, Some(64));
         assert_eq!(CHAT_COMPLETIONS_MAX_OUTPUT_TOKENS_CEILING, 131_072.0);
+    }
+
+    #[test]
+    fn message_and_history_conversion_preserve_reasoning_tools_and_media_projection() {
+        let mut assistant = Message::new(
+            Role::Assistant,
+            vec![
+                ContentPart::Think {
+                    think: "reason".to_owned(),
+                    encrypted: None,
+                },
+                ContentPart::Text {
+                    text: "answer".to_owned(),
+                },
+            ],
+            vec![ToolCall {
+                call_type: ToolCallType::Function,
+                id: "call-1".to_owned(),
+                name: "read".to_owned(),
+                arguments: Some("{}".to_owned()),
+                extras: None,
+                stream_index: None,
+            }],
+        );
+        assistant.name = Some("assistant-name".to_owned());
+        let converted = convert_message(
+            &assistant,
+            Some("reasoning_content"),
+            ToolMessageConversion::Parts,
+            false,
+            true,
+        );
+        assert_eq!(converted["content"], "answer");
+        assert_eq!(converted["reasoning_content"], "reason");
+        assert_eq!(converted["tool_calls"][0]["function"]["name"], "read");
+
+        let mut tool_result = Message::new(
+            Role::Tool,
+            vec![
+                ContentPart::ImageUrl {
+                    image_url: MediaUrl {
+                        url: "https://example.test/image.png".to_owned(),
+                        id: None,
+                    },
+                },
+                ContentPart::AudioUrl {
+                    audio_url: MediaUrl {
+                        url: "https://example.test/audio.wav".to_owned(),
+                        id: None,
+                    },
+                },
+            ],
+            Vec::new(),
+        );
+        tool_result.tool_call_id = Some("call-1".to_owned());
+        let mut declaration = Message::new(Role::User, Vec::new(), Vec::new());
+        declaration.tools = Some(vec![Tool {
+            name: "ignored".to_owned(),
+            description: "ignored".to_owned(),
+            parameters: Map::new(),
+            deferred: None,
+        }]);
+        let user = Message::new(
+            Role::User,
+            vec![ContentPart::Text {
+                text: "next".to_owned(),
+            }],
+            Vec::new(),
+        );
+        let history = convert_history_messages(
+            &[tool_result, declaration, user],
+            None,
+            ToolMessageConversion::Parts,
+            false,
+        );
+        assert_eq!(history.len(), 3);
+        assert_eq!(
+            history[0]["content"],
+            Value::String(OMITTED_AUDIO_PLACEHOLDER.to_owned())
+        );
+        assert_eq!(history[1]["role"], "user");
+        assert_eq!(history[1]["content"][0]["text"], TOOL_RESULT_MEDIA_PROMPT);
+        assert_eq!(history[1]["content"][1]["type"], "image_url");
+        assert_eq!(history[2]["content"], "next");
     }
 }
