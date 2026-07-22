@@ -5,10 +5,12 @@ use std::{
     fmt,
     io::{self, Write},
     process::ExitCode,
+    sync::Arc,
 };
 
 use async_trait::async_trait;
 use kimi_code_rs::cli::{
+    build_info::KIMI_BUILD_INFO,
     commands::{CommandInvocation, ProviderCommand, ServerArgs, parse_command_from},
     entrypoint::{
         EntrypointDisposition, EntrypointRuntime, EntrypointRuntimeError, SubcommandOutcome,
@@ -20,14 +22,17 @@ use kimi_code_rs::cli::{
     sub::{
         provider::{KIMI_REGISTRY_API_KEY_ENV, run_provider_command},
         provider_runtime::ProviderCommandRuntime,
+        upgrade::{UpgradeError, handle_upgrade},
+        upgrade_runtime::{SystemUpgradeRuntime, UpgradeObserver},
         web::deprecated_server::{
             DeprecatedServerDisposition, DeprecatedServerRuntime, handle_deprecated_server,
         },
     },
     update::types::UpdatePreflightResult,
-    version::{create_kimi_code_user_agent, get_version},
+    version::{create_kimi_code_user_agent, get_host_package_root, get_version},
 };
 use kimi_code_rs::utils::paths::get_data_dir;
+use serde_json::{Map, Value};
 
 #[derive(Debug)]
 struct MigrationPending {
@@ -48,6 +53,23 @@ impl fmt::Display for MigrationPending {
 impl Error for MigrationPending {}
 
 struct SystemEntrypointRuntime;
+
+#[derive(Debug, Clone, Copy)]
+struct PendingTelemetryObserver;
+
+impl UpgradeObserver for PendingTelemetryObserver {
+    fn track(&self, _: &str, _: &Map<String, Value>) -> Result<(), UpgradeError> {
+        Ok(())
+    }
+
+    fn log_info(&self, _: &str, _: &Map<String, Value>) -> Result<(), UpgradeError> {
+        Ok(())
+    }
+
+    fn log_warn(&self, _: &str, _: &Map<String, Value>) -> Result<(), UpgradeError> {
+        Ok(())
+    }
+}
 
 impl DeprecatedServerRuntime for SystemEntrypointRuntime {
     fn write_stderr(&self, text: &str) {
@@ -104,6 +126,9 @@ impl EntrypointRuntime for SystemEntrypointRuntime {
             )
             .await;
         }
+        if matches!(command, CommandInvocation::Upgrade) {
+            return run_upgrade_subcommand(version).await;
+        }
         if let CommandInvocation::Server(arguments) = command
             && !is_legacy_kill(arguments)
         {
@@ -124,6 +149,33 @@ impl EntrypointRuntime for SystemEntrypointRuntime {
             completion: "compose the migrated handler with its concrete process runtime",
         }))
     }
+}
+
+// Original:
+//   apps/kimi-code/src/main.ts
+//   handleUpgradeCommand()
+//
+// Rust adaptation:
+//   The migrated system upgrade runtime owns CDN I/O, prompt interaction, and
+//   installer process lifecycle. A compile-time build target replaces SEA
+//   detection for native Rust distributions.
+async fn run_upgrade_subcommand(
+    version: &str,
+) -> Result<SubcommandOutcome, EntrypointRuntimeError> {
+    // MIGRATION-TODO:
+    // Original: handleUpgradeCommand() initializes telemetry and diagnostic
+    // logging before running the upgrade.
+    // Temporary behavior: upgrade telemetry and logs are discarded.
+    // Completion condition: compose the process telemetry observer here.
+    let runtime = SystemUpgradeRuntime::new(
+        get_host_package_root(),
+        KIMI_BUILD_INFO.build_target.is_some(),
+        Arc::new(PendingTelemetryObserver),
+    );
+    let exit_code = handle_upgrade(&runtime, version)
+        .await
+        .map_err(EntrypointRuntimeError::new)?;
+    Ok(SubcommandOutcome { exit_code })
 }
 
 // Original:
