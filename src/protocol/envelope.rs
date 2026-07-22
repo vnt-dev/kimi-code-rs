@@ -1,16 +1,24 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+use super::display::OptionalJsonValue;
+use super::validation::{optional_non_null, required_nullable};
 
 // Original: packages/protocol/src/envelope.ts, Envelope<T>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
 pub struct Envelope<T> {
     pub code: i64,
     pub msg: String,
+    #[serde(deserialize_with = "required_nullable")]
     pub data: Option<T>,
     pub request_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "OptionalJsonValue::is_absent")]
+    pub details: OptionalJsonValue,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
     pub stack: Option<String>,
 }
 
@@ -21,7 +29,7 @@ pub fn ok_envelope<T>(data: T, request_id: impl Into<String>) -> Envelope<T> {
         msg: "success".to_owned(),
         data: Some(data),
         request_id: request_id.into(),
-        details: None,
+        details: OptionalJsonValue::Absent,
         stack: None,
     }
 }
@@ -38,7 +46,32 @@ pub fn err_envelope(
         msg: msg.into(),
         data: None,
         request_id: request_id.into(),
-        details: None,
+        details: OptionalJsonValue::Absent,
         stack,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_required_nullable_data_and_optional_unknown_details() {
+        assert!(
+            serde_json::from_value::<Envelope<serde_json::Value>>(serde_json::json!({
+                "code": 0, "msg": "success", "request_id": "req"
+            }))
+            .is_err()
+        );
+        let envelope: Envelope<serde_json::Value> = serde_json::from_value(serde_json::json!({
+            "code": 1, "msg": "failed", "data": null, "request_id": "req",
+            "details": null
+        }))
+        .unwrap();
+        assert_eq!(envelope.details.as_value(), Some(&serde_json::Value::Null));
+        assert_eq!(
+            serde_json::to_string(&err_envelope(1, "failed", "req", None)).unwrap(),
+            r#"{"code":1,"msg":"failed","data":null,"request_id":"req"}"#
+        );
     }
 }
