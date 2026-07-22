@@ -10,6 +10,7 @@ pub mod pagination;
 pub mod question;
 pub mod request_id;
 pub mod rest;
+pub mod session;
 pub mod skill;
 pub mod task;
 pub mod time;
@@ -31,6 +32,7 @@ pub use model_catalog::{
 pub use pagination::{CursorQuery, PageResponse, PaginationValidationError};
 pub use question::*;
 pub use request_id::{is_ulid, parse_or_generate_request_id};
+pub use session::*;
 pub use skill::SkillDescriptor;
 pub use task::{
     BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, Task, TaskKind, TaskStatus,
