@@ -449,6 +449,7 @@ fn resolve_capabilities(model: &CustomRegistryModelEntry) -> Vec<String> {
 }
 
 pub const DEFAULT_CATALOG_URL: &str = "https://models.dev/api.json";
+pub const KIMI_REGISTRY_API_KEY_ENV: &str = "KIMI_REGISTRY_API_KEY";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CatalogLimit {

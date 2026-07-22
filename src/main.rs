@@ -9,7 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use kimi_code_rs::cli::{
-    commands::{CommandInvocation, ServerArgs, parse_command_from},
+    commands::{CommandInvocation, ProviderCommand, ServerArgs, parse_command_from},
     entrypoint::{
         EntrypointDisposition, EntrypointRuntime, EntrypointRuntimeError, SubcommandOutcome,
         run_entrypoint,
@@ -17,12 +17,17 @@ use kimi_code_rs::cli::{
     main_command::{MainCommandRuntime, MainCommandRuntimeError},
     options::CliOptions,
     startup_error::{StartupErrorFormatOptions, StartupFailure, format_startup_error},
-    sub::web::deprecated_server::{
-        DeprecatedServerDisposition, DeprecatedServerRuntime, handle_deprecated_server,
+    sub::{
+        provider::{KIMI_REGISTRY_API_KEY_ENV, run_provider_command},
+        provider_runtime::ProviderCommandRuntime,
+        web::deprecated_server::{
+            DeprecatedServerDisposition, DeprecatedServerRuntime, handle_deprecated_server,
+        },
     },
     update::types::UpdatePreflightResult,
-    version::get_version,
+    version::{create_kimi_code_user_agent, get_version},
 };
+use kimi_code_rs::utils::paths::get_data_dir;
 
 #[derive(Debug)]
 struct MigrationPending {
@@ -86,8 +91,19 @@ impl EntrypointRuntime for SystemEntrypointRuntime {
     async fn run_subcommand(
         &self,
         command: &CommandInvocation,
-        _: &str,
+        version: &str,
     ) -> Result<SubcommandOutcome, EntrypointRuntimeError> {
+        if let CommandInvocation::Provider(arguments) = command {
+            let data_dir = get_data_dir().map_err(EntrypointRuntimeError::new)?;
+            let environment_api_key = env::var(KIMI_REGISTRY_API_KEY_ENV).ok();
+            return run_provider_subcommand(
+                &arguments.command,
+                version,
+                &data_dir,
+                environment_api_key.as_deref(),
+            )
+            .await;
+        }
         if let CommandInvocation::Server(arguments) = command
             && !is_legacy_kill(arguments)
         {
@@ -108,6 +124,25 @@ impl EntrypointRuntime for SystemEntrypointRuntime {
             completion: "compose the migrated handler with its concrete process runtime",
         }))
     }
+}
+
+// Original:
+//   apps/kimi-code/src/cli/sub/provider.ts
+//   resolveDeps(), registerProviderCommand().action()
+//
+// Rust adaptation:
+//   The SDK harness dependency is replaced by the migrated config store and
+//   HTTP runtime. The async handler and its config-write ordering are unchanged.
+async fn run_provider_subcommand(
+    command: &ProviderCommand,
+    version: &str,
+    data_dir: &std::path::Path,
+    environment_api_key: Option<&str>,
+) -> Result<SubcommandOutcome, EntrypointRuntimeError> {
+    let user_agent = create_kimi_code_user_agent(version).map_err(EntrypointRuntimeError::new)?;
+    let runtime = ProviderCommandRuntime::new(data_dir.join("config.toml"), user_agent);
+    let exit_code = run_provider_command(&runtime, command, environment_api_key).await;
+    Ok(SubcommandOutcome { exit_code })
 }
 
 fn is_legacy_kill(arguments: &ServerArgs) -> bool {
@@ -205,6 +240,7 @@ fn process_exit_code(code: i32) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     fn server(arguments: &[&str]) -> CommandInvocation {
         CommandInvocation::Server(ServerArgs {
@@ -255,5 +291,27 @@ mod tests {
 
         assert!(error.to_string().contains("handleLegacyKillCommand"));
         assert!(error.to_string().contains("safe process signaling"));
+    }
+
+    #[tokio::test]
+    async fn provider_list_uses_the_migrated_config_runtime() {
+        let data_dir = env::temp_dir().join(format!("kimi-entry-provider-{}", Uuid::new_v4()));
+        let outcome = run_provider_subcommand(
+            &ProviderCommand::List { json: false },
+            "1.2.3",
+            &data_dir,
+            None,
+        )
+        .await
+        .expect("provider list");
+
+        assert_eq!(outcome, SubcommandOutcome { exit_code: 0 });
+        let config = tokio::fs::read_to_string(data_dir.join("config.toml"))
+            .await
+            .expect("created config");
+        assert!(config.contains("built-in defaults can apply"));
+        tokio::fs::remove_dir_all(&data_dir)
+            .await
+            .expect("remove provider test directory");
     }
 }
