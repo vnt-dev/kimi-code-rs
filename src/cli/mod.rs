@@ -9,6 +9,7 @@ pub mod options;
 pub mod prompt_render;
 pub mod prompt_runtime;
 pub mod prompt_session;
+pub mod prompt_store;
 pub mod run_prompt;
 pub mod startup_error;
 pub mod sub;

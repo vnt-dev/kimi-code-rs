@@ -3,7 +3,7 @@ use std::{
     error::Error,
     fmt,
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, Weak,
         atomic::{AtomicU64, Ordering},
@@ -17,12 +17,13 @@ use serde_json::{Map, Value, json};
 
 use super::{
     options::{CliOptions, resolve_output_format},
-    prompt_render::PromptOutput,
+    prompt_render::{PromptOutput, write_resume_hint},
     prompt_session::{
         ApprovalHandler, CreateGoalInput, EventListener, PrintTurnAction, PromptEvent,
         PromptEventKind, PromptInput, PromptSession, PromptSessionError, QuestionHandler,
         Unsubscribe,
     },
+    prompt_store::{PromptSessionStore, StoredChatMessage, StoredPromptSession},
     run_prompt::run_prompt_turn,
     sub::{
         provider::{ModelDefinition, ProviderDefinition},
@@ -148,19 +149,16 @@ impl SystemPromptRuntime {
     // Rust adaptation:
     //   This first concrete process runtime connects the migrated CLI event
     //   renderer to OpenAI-compatible chat-completions providers. The source
-    //   harness still owns tools, durable history, hooks, goals, and alternate
-    //   wire protocols; those remain explicit migration boundaries below.
+    //   harness still owns tools, hooks, goals, and alternate wire protocols;
+    //   those remain explicit migration boundaries below. Session storage and
+    //   text history use the source wire format so either implementation can
+    //   resume the resulting session.
     pub async fn run(
         &self,
         options: &CliOptions,
         stdout: &mut dyn PromptOutput,
         stderr: &mut dyn PromptOutput,
     ) -> Result<(), SystemPromptError> {
-        if options.session.is_some() || options.continue_previous {
-            return Err(SystemPromptError::message(
-                "session resume is not yet available in the Rust prompt runtime",
-            ));
-        }
         if options
             .prompt
             .as_deref()
@@ -179,17 +177,67 @@ impl SystemPromptRuntime {
             .get_config()
             .await
             .map_err(|error| SystemPromptError::with_source("failed to read config.toml", error))?;
+        let work_dir = std::env::current_dir()
+            .map_err(|error| SystemPromptError::with_source("failed to resolve cwd", error))?
+            .to_string_lossy()
+            .into_owned();
+        let session_store = PromptSessionStore::new(&self.data_dir);
+        let stored_session = if let Some(session_id) = options.session.as_deref() {
+            let session = session_store
+                .find_by_id(session_id)
+                .await
+                .map_err(|error| {
+                    SystemPromptError::with_source(
+                        format!("failed to load session \"{session_id}\""),
+                        error,
+                    )
+                })?
+                .ok_or_else(|| {
+                    SystemPromptError::message(format!("Session \"{session_id}\" not found."))
+                })?;
+            if !same_runtime_work_dir(&session.work_dir, &work_dir) {
+                stderr.write(&format!(
+                    "Session \"{session_id}\" was created under a different directory.\n  cd \"{}\" && kimi -r {session_id}\n\n",
+                    session.work_dir
+                ));
+                return Err(SystemPromptError::message(format!(
+                    "Session \"{session_id}\" was created under a different directory."
+                )));
+            }
+            Some(session)
+        } else if options.continue_previous {
+            let session = session_store
+                .latest_for_work_dir(&work_dir)
+                .await
+                .map_err(|error| {
+                    SystemPromptError::with_source("failed to list prompt sessions", error)
+                })?;
+            if session.is_none() {
+                stderr.write(&format!(
+                    "No sessions to continue under \"{work_dir}\"; starting a fresh session.\n"
+                ));
+            }
+            session
+        } else {
+            None
+        };
         let alias = options
             .model
             .as_deref()
+            .or_else(|| {
+                stored_session
+                    .as_ref()
+                    .and_then(|session| session.model_alias.as_deref())
+            })
             .or(config.default_model.as_deref())
             .filter(|model| !model.trim().is_empty())
+            .map(str::to_owned)
             .ok_or_else(|| {
                 SystemPromptError::message(
                     "No model configured. Run `kimi` and use /login to sign in, then retry; or set default_model in config.toml.",
                 )
             })?;
-        let model = config.models.get(alias).ok_or_else(|| {
+        let model = config.models.get(&alias).ok_or_else(|| {
             SystemPromptError::message(format!(
                 "Configured model alias \"{alias}\" does not exist in config.toml."
             ))
@@ -201,20 +249,46 @@ impl SystemPromptRuntime {
             ))
         })?;
         let target = self
-            .resolve_target(alias, model, provider, &model.provider)
+            .resolve_target(&alias, model, provider, &model.provider)
             .await?;
+        let stored_session = match stored_session {
+            Some(session) => {
+                if session.model_alias.as_deref() != Some(alias.as_str()) {
+                    session.append_model_alias(&alias).await.map_err(|error| {
+                        SystemPromptError::with_source(
+                            format!("failed to update session \"{}\" model", session.id),
+                            error,
+                        )
+                    })?;
+                }
+                session
+            }
+            None => session_store
+                .create(&work_dir, &alias)
+                .await
+                .map_err(|error| {
+                    SystemPromptError::with_source("failed to create prompt session", error)
+                })?,
+        };
+        let history = stored_session.load_history().await.map_err(|error| {
+            SystemPromptError::with_source(
+                format!(
+                    "failed to restore session \"{}\" history",
+                    stored_session.id
+                ),
+                error,
+            )
+        })?;
         let session: Arc<dyn PromptSession> = Arc::new(HttpPromptSession::new(
             self.client.clone(),
-            std::env::current_dir()
-                .map_err(|error| SystemPromptError::with_source("failed to resolve cwd", error))?
-                .to_string_lossy()
-                .into_owned(),
+            Arc::new(stored_session),
             target,
+            history,
         ));
         let output_format = resolve_output_format(options, &self.environment)
             .map_err(|error| SystemPromptError::with_source("invalid output format", error))?;
         run_prompt_turn(
-            session,
+            Arc::clone(&session),
             options.prompt.as_deref().ok_or_else(|| {
                 SystemPromptError::message("prompt text is required in print mode")
             })?,
@@ -227,12 +301,7 @@ impl SystemPromptRuntime {
             message: error.to_string(),
             source: Some(error),
         })?;
-
-        // MIGRATION-TODO:
-        // Original: runPrompt() persists the session and prints a resume hint.
-        // Temporary behavior: this minimal session is intentionally ephemeral,
-        // so printing an unusable `kimi -r` command would be misleading.
-        // Completion condition: compose the migrated durable session store.
+        write_resume_hint(session.id(), output_format, stdout, stderr);
         Ok(())
     }
 
@@ -361,6 +430,10 @@ fn provider_config_api_key(provider: &ProviderDefinition) -> Option<&str> {
         "OPENAI_API_KEY"
     };
     provider_config_environment_value(provider, key)
+}
+
+fn same_runtime_work_dir(left: &str, right: &str) -> bool {
+    Path::new(left) == Path::new(right)
 }
 
 fn resolved_base_url<'a>(
@@ -512,10 +585,10 @@ impl ListenerRegistry {
 }
 
 struct HttpPromptSession {
-    id: String,
-    work_dir: String,
+    stored: Arc<StoredPromptSession>,
     client: Client,
     target: ChatCompletionTarget,
+    history: Vec<StoredChatMessage>,
     listeners: Arc<ListenerRegistry>,
     permission: Mutex<PermissionMode>,
     approval_handler: Mutex<Option<ApprovalHandler>>,
@@ -523,13 +596,17 @@ struct HttpPromptSession {
 }
 
 impl HttpPromptSession {
-    fn new(client: Client, work_dir: String, target: ChatCompletionTarget) -> Self {
-        let random = uuid::Uuid::new_v4().simple().to_string();
+    fn new(
+        client: Client,
+        stored: Arc<StoredPromptSession>,
+        target: ChatCompletionTarget,
+        history: Vec<StoredChatMessage>,
+    ) -> Self {
         Self {
-            id: format!("ses_{}", &random[..16]),
-            work_dir,
+            stored,
             client,
             target,
+            history,
             listeners: Arc::new(ListenerRegistry::new()),
             permission: Mutex::new(PermissionMode::Auto),
             approval_handler: Mutex::new(None),
@@ -539,7 +616,7 @@ impl HttpPromptSession {
 
     fn emit(&self, kind: PromptEventKind) {
         self.listeners.emit(PromptEvent {
-            session_id: self.id.clone(),
+            session_id: self.stored.id.clone(),
             agent_id: "main".to_owned(),
             kind,
         });
@@ -549,10 +626,22 @@ impl HttpPromptSession {
         // MIGRATION-TODO:
         // Original: the agent-core Session builds system instructions, durable
         // history, tools, hooks, retry policy, and a multi-step tool loop.
-        // Temporary behavior: one ephemeral user message is sent directly to
-        // the selected chat-completions model and only text/thinking deltas are
+        // Temporary behavior: durable text history is sent directly to the
+        // selected chat-completions model and only text/thinking deltas are
         // decoded. A 401 is surfaced without the original forced-refresh retry.
         // Completion condition: compose the migrated agent/session engine here.
+        self.stored.append_user_prompt(&prompt).await?;
+        let mut messages = self
+            .history
+            .iter()
+            .map(|message| {
+                json!({
+                    "role": message.role,
+                    "content": message.content,
+                })
+            })
+            .collect::<Vec<_>>();
+        messages.push(json!({ "role": "user", "content": prompt }));
         let request = self
             .client
             .post(&self.target.endpoint)
@@ -560,7 +649,7 @@ impl HttpPromptSession {
             .headers(self.target.headers.clone())
             .json(&json!({
                 "model": self.target.model,
-                "messages": [{ "role": "user", "content": prompt }],
+                "messages": messages,
                 "stream": true,
                 "stream_options": { "include_usage": true }
             }));
@@ -573,17 +662,21 @@ impl HttpPromptSession {
         self.emit(PromptEventKind::TurnStarted { turn_id: 1 });
         self.emit(PromptEventKind::TurnStepStarted { turn_id: 1 });
         let mut bytes = Vec::new();
+        let mut completion = CompletionAccumulator::default();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             bytes.extend_from_slice(&chunk?);
             while let Some(index) = bytes.iter().position(|byte| *byte == b'\n') {
                 let line = bytes.drain(..=index).collect::<Vec<_>>();
-                self.handle_sse_line(&line[..line.len().saturating_sub(1)])?;
+                self.handle_sse_line(&line[..line.len().saturating_sub(1)], &mut completion)?;
             }
         }
         if !bytes.is_empty() {
-            self.handle_sse_line(&bytes)?;
+            self.handle_sse_line(&bytes, &mut completion)?;
         }
+        self.stored
+            .append_assistant_message(&completion.thinking, &completion.content)
+            .await?;
         self.emit(PromptEventKind::TurnEnded {
             turn_id: 1,
             reason: super::run_prompt::TurnEndReason::Completed,
@@ -592,7 +685,11 @@ impl HttpPromptSession {
         Ok(())
     }
 
-    fn handle_sse_line(&self, line: &[u8]) -> Result<(), PromptSessionError> {
+    fn handle_sse_line(
+        &self,
+        line: &[u8],
+        completion: &mut CompletionAccumulator,
+    ) -> Result<(), PromptSessionError> {
         let line = std::str::from_utf8(line)?.trim_end_matches('\r');
         let Some(data) = line.strip_prefix("data:") else {
             return Ok(());
@@ -619,12 +716,14 @@ impl HttpPromptSession {
             return Ok(());
         };
         if let Some(thinking) = reasoning_delta(delta) {
+            completion.thinking.push_str(thinking);
             self.emit(PromptEventKind::ThinkingDelta {
                 turn_id: 1,
                 delta: thinking.to_owned(),
             });
         }
         if let Some(content) = delta.get("content").and_then(Value::as_str) {
+            completion.content.push_str(content);
             self.emit(PromptEventKind::AssistantDelta {
                 turn_id: 1,
                 delta: content.to_owned(),
@@ -632,6 +731,12 @@ impl HttpPromptSession {
         }
         Ok(())
     }
+}
+
+#[derive(Default)]
+struct CompletionAccumulator {
+    thinking: String,
+    content: String,
 }
 
 fn reasoning_delta(delta: &Map<String, Value>) -> Option<&str> {
@@ -663,11 +768,11 @@ async fn http_error(status: StatusCode, response: reqwest::Response) -> io::Erro
 #[async_trait]
 impl PromptSession for HttpPromptSession {
     fn id(&self) -> &str {
-        &self.id
+        &self.stored.id
     }
 
     fn work_dir(&self) -> &str {
-        &self.work_dir
+        &self.stored.work_dir
     }
 
     async fn get_status(&self) -> Result<SessionStatus, PromptSessionError> {
@@ -935,12 +1040,127 @@ mod tests {
             .expect("run prompt");
 
         assert_eq!(stdout.0, "• 你好\n\n");
-        assert_eq!(stderr.0, "• 想\n\n");
+        assert!(
+            stderr
+                .0
+                .starts_with("• 想\n\nTo resume this session: kimi -r session_")
+        );
         let request = server.join().expect("model server");
         assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
         assert!(request.contains("authorization: Bearer secret"));
         assert!(request.contains("\"model\":\"test-model\""));
         assert!(request.contains("\"content\":\"打个招呼\""));
+        fs::remove_dir_all(data_dir).expect("remove data dir");
+    }
+
+    #[tokio::test]
+    async fn resumed_prompt_sends_durable_history_and_reuses_session_id() {
+        let response = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"new answer\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (base_url, server) = fake_chat_server("200 OK", response);
+        let data_dir = temp_data_dir();
+        fs::create_dir_all(&data_dir).expect("create data dir");
+        fs::write(
+            data_dir.join("config.toml"),
+            format!(
+                "default_model = \"local/test\"\n\n[providers.local]\ntype = \"openai\"\nbase_url = \"{base_url}\"\napi_key = \"secret\"\n\n[models.\"local/test\"]\nprovider = \"local\"\nmodel = \"test-model\"\n"
+            ),
+        )
+        .expect("write config");
+        let work_dir = std::env::current_dir().expect("cwd");
+        let store = PromptSessionStore::new(&data_dir);
+        let stored = store
+            .create(work_dir.to_str().expect("utf8 cwd"), "local/test")
+            .await
+            .expect("create stored session");
+        stored
+            .append_user_prompt("old question")
+            .await
+            .expect("old prompt");
+        stored
+            .append_assistant_message("", "old answer")
+            .await
+            .expect("old answer");
+        let session_id = stored.id.clone();
+        let runtime = SystemPromptRuntime::with_client(
+            &data_dir,
+            HashMap::new(),
+            Client::builder().build().expect("client"),
+        );
+        let mut stdout = Capture::default();
+        let mut stderr = Capture::default();
+
+        runtime
+            .run(
+                &CliOptions {
+                    session: Some(session_id.clone()),
+                    prompt: Some("new question".to_owned()),
+                    ..CliOptions::default()
+                },
+                &mut stdout,
+                &mut stderr,
+            )
+            .await
+            .expect("resume prompt");
+
+        assert_eq!(stdout.0, "• new answer\n\n");
+        assert!(stderr.0.contains(&format!("kimi -r {session_id}")));
+        let request = server.join().expect("model server");
+        let old_question = request.find("old question").expect("old question sent");
+        let old_answer = request.find("old answer").expect("old answer sent");
+        let new_question = request.find("new question").expect("new question sent");
+        assert!(old_question < old_answer && old_answer < new_question);
+        let history = stored.load_history().await.expect("restored history");
+        assert_eq!(history.last().unwrap().content, "new answer");
+        fs::remove_dir_all(data_dir).expect("remove data dir");
+    }
+
+    #[tokio::test]
+    async fn continue_without_session_warns_then_creates_a_resumable_session() {
+        let response = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (base_url, server) = fake_chat_server("200 OK", response);
+        let data_dir = temp_data_dir();
+        fs::create_dir_all(&data_dir).expect("create data dir");
+        fs::write(
+            data_dir.join("config.toml"),
+            format!(
+                "default_model = \"local/test\"\n\n[providers.local]\ntype = \"openai\"\nbase_url = \"{base_url}\"\napi_key = \"secret\"\n\n[models.\"local/test\"]\nprovider = \"local\"\nmodel = \"test-model\"\n"
+            ),
+        )
+        .expect("write config");
+        let runtime = SystemPromptRuntime::with_client(
+            &data_dir,
+            HashMap::new(),
+            Client::builder().build().expect("client"),
+        );
+        let mut stderr = Capture::default();
+
+        runtime
+            .run(
+                &CliOptions {
+                    continue_previous: true,
+                    prompt: Some("question".to_owned()),
+                    ..CliOptions::default()
+                },
+                &mut Capture::default(),
+                &mut stderr,
+            )
+            .await
+            .expect("continue prompt");
+
+        assert!(stderr.0.starts_with("No sessions to continue under \""));
+        assert!(stderr.0.contains("starting a fresh session.\n"));
+        assert!(
+            stderr
+                .0
+                .contains("To resume this session: kimi -r session_")
+        );
+        server.join().expect("model server");
         fs::remove_dir_all(data_dir).expect("remove data dir");
     }
 
