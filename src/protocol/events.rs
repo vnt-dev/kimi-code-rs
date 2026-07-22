@@ -242,6 +242,150 @@ pub enum PluginCommandTrigger {
     UserSlash,
 }
 
+event_type!(UserPromptOriginKind, "user");
+event_type!(SkillActivationOriginKind, "skill_activation");
+event_type!(PluginCommandOriginKind, "plugin_command");
+event_type!(InjectionOriginKind, "injection");
+event_type!(ShellCommandOriginKind, "shell_command");
+event_type!(CompactionSummaryOriginKind, "compaction_summary");
+event_type!(SystemTriggerOriginKind, "system_trigger");
+event_type!(TaskOriginKind, "task");
+event_type!(BackgroundTaskOriginKind, "background_task");
+event_type!(CronMissedOriginKind, "cron_missed");
+event_type!(HookResultOriginKind, "hook_result");
+event_type!(RetryOriginKind, "retry");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserPromptOrigin {
+    pub kind: UserPromptOriginKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillActivationOrigin {
+    pub kind: SkillActivationOriginKind,
+    pub activation_id: String,
+    pub skill_name: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_args: Option<String>,
+    pub trigger: SkillActivationTrigger,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_type: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_path: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_source: Option<SkillSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCommandOrigin {
+    pub kind: PluginCommandOriginKind,
+    pub activation_id: String,
+    pub plugin_id: String,
+    pub command_name: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub command_args: Option<String>,
+    pub trigger: PluginCommandTrigger,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InjectionOrigin {
+    pub kind: InjectionOriginKind,
+    pub variant: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellCommandOrigin {
+    pub kind: ShellCommandOriginKind,
+    pub phase: ShellCommandPhase,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub is_error: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactionSummaryOrigin {
+    pub kind: CompactionSummaryOriginKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemTriggerOrigin {
+    pub kind: SystemTriggerOriginKind,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskOrigin {
+    pub kind: TaskOriginKind,
+    pub task_id: String,
+    pub status: TaskLifecycleStatus,
+    pub notification_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundTaskOrigin {
+    pub kind: BackgroundTaskOriginKind,
+    pub task_id: String,
+    pub status: TaskLifecycleStatus,
+    pub notification_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CronMissedOrigin {
+    pub kind: CronMissedOriginKind,
+    pub count: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookResultOrigin {
+    pub kind: HookResultOriginKind,
+    pub event: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub blocked: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryOrigin {
+    pub kind: RetryOriginKind,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub trigger: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GoalStatus {
@@ -544,6 +688,57 @@ pub struct TaskInfoBase {
         deserialize_with = "optional_non_null"
     )]
     pub timeout_ms: Option<f64>,
+}
+
+event_type!(ProcessTaskInfoKind, "process");
+event_type!(AgentTaskInfoKind, "agent");
+event_type!(QuestionTaskInfoKind, "question");
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessTaskInfo {
+    pub kind: ProcessTaskInfoKind,
+    #[serde(flatten)]
+    pub base: TaskInfoBase,
+    pub command: String,
+    pub pid: f64,
+    #[serde(deserialize_with = "required_nullable")]
+    pub exit_code: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTaskInfo {
+    pub kind: AgentTaskInfoKind,
+    #[serde(flatten)]
+    pub base: TaskInfoBase,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub agent_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub subagent_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionTaskInfo {
+    pub kind: QuestionTaskInfoKind,
+    #[serde(flatten)]
+    pub base: TaskInfoBase,
+    pub question_count: f64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub tool_call_id: Option<String>,
 }
 
 // Original: events.ts, taskInfoSchema discriminated union.
@@ -1945,6 +2140,14 @@ mod tests {
                 ..
             }
         ));
+        assert!(
+            serde_json::from_value::<ProcessTaskInfo>(serde_json::json!({
+                "kind": "process", "taskId": "bash-1", "description": "sleep",
+                "status": "running", "startedAt": 1, "endedAt": null,
+                "command": "sleep 1", "pid": 123, "exitCode": null
+            }))
+            .is_ok()
+        );
         assert!(
             serde_json::from_value::<KimiErrorPayload>(serde_json::json!({
                 "code": "unknown.code", "message": "bad", "retryable": false
