@@ -69,12 +69,15 @@ pub trait MainCommandRuntime: Send + Sync {
 //   entrypoint remains the sole owner of stderr and process exit, matching the
 //   source method's reusable-handler intent without terminating an embedding
 //   Rust process from library code.
-pub async fn handle_main_command(
-    runtime: &dyn MainCommandRuntime,
+pub async fn handle_main_command<R>(
+    runtime: &R,
     options: &CliOptions,
     version: &str,
     environment: &HashMap<String, String>,
-) -> Result<MainCommandDisposition, MainCommandRuntimeError> {
+) -> Result<MainCommandDisposition, MainCommandRuntimeError>
+where
+    R: MainCommandRuntime + ?Sized,
+{
     let validated = match validate_options(options, environment) {
         Ok(validated) => validated,
         Err(error) => {

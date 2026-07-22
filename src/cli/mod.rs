@@ -1,5 +1,6 @@
 pub mod build_info;
 pub mod commands;
+pub mod entrypoint;
 pub mod experimental_v2;
 pub mod goal_prompt;
 pub mod headless_exit;

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 autobins = false
 
+[[bin]]
+name = "kimi"
+path = "src/main.rs"
+
 [dependencies]
 async-trait = "0.1.91"
 atomic-write-file = "0.3"
