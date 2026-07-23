@@ -100,6 +100,16 @@ pub struct GetResult {
     pub stream: FileReadStreamFactory,
 }
 
+impl fmt::Debug for GetResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GetResult")
+            .field("meta", &self.meta)
+            .field("stream", &"<file stream factory>")
+            .finish()
+    }
+}
+
 #[async_trait]
 pub trait FileServiceContract: Send + Sync {
     async fn save(
