@@ -121,6 +121,7 @@ pub enum PromptOrigin {
     SystemTrigger {
         name: String,
     },
+    #[serde(alias = "background_task")]
     Task {
         task_id: String,
         status: AgentTaskStatus,

@@ -7,14 +7,16 @@ use std::sync::{Arc, LazyLock};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+use crate::agent::context_memory::{ContextAppendMessagePayload, PromptOrigin};
 use crate::wire::{
-    model::{ModelDef, ModelOptions, define_model},
+    model::{ModelCrossReducer, ModelDef, ModelOptions, define_model},
     op::{DefineOpOptions, DefinedOp, Op},
 };
 
 use super::types::AgentTaskInfo;
 
 pub type TaskModelState = IndexMap<String, AgentTaskInfo>;
+pub type TaskNotificationDeliveryState = Vec<String>;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct TaskInfoPayload {
@@ -23,6 +25,24 @@ pub struct TaskInfoPayload {
 
 pub static TASK_MODEL: LazyLock<ModelDef<TaskModelState>> =
     LazyLock::new(|| define_model("task", TaskModelState::new, ModelOptions::default()));
+
+// Original: taskService.ts, TaskNotificationDeliveryModel. This derived model
+// is persisted through context message records and restored before task
+// reconciliation so already delivered terminal notifications stay deduped.
+pub static TASK_NOTIFICATION_DELIVERY_MODEL: LazyLock<ModelDef<TaskNotificationDeliveryState>> =
+    LazyLock::new(|| {
+        define_model(
+            "task.notificationDelivery",
+            TaskNotificationDeliveryState::new,
+            ModelOptions {
+                blobs: None,
+                reducers: vec![ModelCrossReducer::typed(
+                    "context.append_message",
+                    apply_notification_delivery,
+                )],
+            },
+        )
+    });
 
 pub static TASK_STARTED: LazyLock<DefinedOp<TaskModelState, TaskInfoPayload>> =
     LazyLock::new(|| define_task_op("task.started"));
@@ -52,6 +72,28 @@ fn apply_task_info(mut state: TaskModelState, payload: &TaskInfoPayload) -> Task
     state
 }
 
+// Original: taskService.ts, TaskNotificationDeliveryModel reducer for
+// context.append_message.
+fn apply_notification_delivery(
+    mut state: TaskNotificationDeliveryState,
+    payload: &ContextAppendMessagePayload,
+) -> TaskNotificationDeliveryState {
+    let Some(PromptOrigin::Task {
+        task_id,
+        status,
+        notification_id,
+    }) = payload.message.origin.as_ref()
+    else {
+        return state;
+    };
+    let status = super::service_helpers::agent_task_status_text(*status);
+    let key = format!("{task_id}\0{status}\0{notification_id}");
+    if !state.contains(&key) {
+        state.push(key);
+    }
+    state
+}
+
 pub fn task_started(info: AgentTaskInfo) -> Result<Op, serde_json::Error> {
     TASK_STARTED.create(TaskInfoPayload { info })
 }
@@ -66,8 +108,15 @@ mod tests {
 
     use super::*;
     use crate::{
-        agent::task::types::{AgentTaskInfoBase, AgentTaskStatus},
-        wire::op::ErasedOpDescriptor,
+        agent::{
+            context_memory::ContextMessage,
+            task::types::{AgentTaskInfoBase, AgentTaskStatus},
+        },
+        kosong::contract::message::{Message, Role},
+        wire::{
+            model::{ErasedModelDef, model_cross_reducers},
+            op::ErasedOpDescriptor,
+        },
     };
 
     fn info(task_id: &str, status: AgentTaskStatus) -> AgentTaskInfo {
@@ -148,5 +197,81 @@ mod tests {
             assert_eq!(event["type"], event_type);
             assert_eq!(event["info"], op.payload_value["info"]);
         }
+    }
+
+    #[test]
+    fn notification_delivery_model_dedupes_context_task_origins() {
+        LazyLock::force(&TASK_NOTIFICATION_DELIVERY_MODEL);
+        let task_message = ContextAppendMessagePayload {
+            message: ContextMessage {
+                message: Message::new(Role::User, vec![], vec![]),
+                id: None,
+                provider_message_id: None,
+                origin: Some(PromptOrigin::Task {
+                    task_id: "agent-1".into(),
+                    status: AgentTaskStatus::Completed,
+                    notification_id: "notice-1".into(),
+                }),
+                is_error: None,
+                note: None,
+            },
+        };
+        let ordinary_message = ContextAppendMessagePayload {
+            message: ContextMessage {
+                origin: Some(PromptOrigin::User),
+                ..task_message.message.clone()
+            },
+        };
+
+        assert_eq!(
+            TASK_NOTIFICATION_DELIVERY_MODEL.name(),
+            "task.notificationDelivery"
+        );
+        assert!(TASK_NOTIFICATION_DELIVERY_MODEL.initial().is_empty());
+        let state = apply_notification_delivery(vec![], &ordinary_message);
+        let state = apply_notification_delivery(state, &task_message);
+        let state = apply_notification_delivery(state, &task_message);
+        assert_eq!(state, vec!["agent-1\0completed\0notice-1"]);
+
+        let reducers = model_cross_reducers("context.append_message");
+        let reducer = reducers
+            .iter()
+            .find(|entry| entry.model.id() == TASK_NOTIFICATION_DELIVERY_MODEL.id())
+            .unwrap();
+        let reduced = reducer
+            .apply(
+                TASK_NOTIFICATION_DELIVERY_MODEL.initial_state(),
+                &task_message,
+            )
+            .unwrap()
+            .downcast::<TaskNotificationDeliveryState>()
+            .unwrap();
+        assert_eq!(*reduced, vec!["agent-1\0completed\0notice-1"]);
+    }
+
+    #[test]
+    fn legacy_background_task_origin_deserializes_into_delivery_model() {
+        let payload: ContextAppendMessagePayload = serde_json::from_value(serde_json::json!({
+            "message": {
+                "role": "user",
+                "content": [],
+                "toolCalls": [],
+                "origin": {
+                    "kind": "background_task",
+                    "taskId": "bash-1",
+                    "status": "failed",
+                    "notificationId": "notice-old"
+                }
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            apply_notification_delivery(vec![], &payload),
+            vec!["bash-1\0failed\0notice-old"]
+        );
+        assert_eq!(
+            serde_json::to_value(payload).unwrap()["message"]["origin"]["kind"],
+            "task"
+        );
     }
 }

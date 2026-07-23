@@ -200,7 +200,7 @@ pub fn is_serialized_user_cancellation(reason: Option<&str>) -> bool {
     reason.is_some_and(|reason| reason == user_cancellation_reason().to_string())
 }
 
-fn agent_task_status_text(status: super::AgentTaskStatus) -> &'static str {
+pub(crate) fn agent_task_status_text(status: super::AgentTaskStatus) -> &'static str {
     match status {
         super::AgentTaskStatus::Running => "running",
         super::AgentTaskStatus::Completed => "completed",
