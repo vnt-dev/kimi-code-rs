@@ -1,5 +1,6 @@
 pub mod args_validator;
 pub mod input_schema;
+pub mod path_access;
 pub mod result_builder;
 pub mod tool_contract;
 
