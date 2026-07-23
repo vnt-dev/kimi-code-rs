@@ -1,6 +1,7 @@
 //! Layered application configuration.
 
 pub mod contract;
+pub mod migrations;
 pub mod overlay_contributions;
 pub mod pure;
 pub mod registry_service;
@@ -9,6 +10,7 @@ pub mod section_diff;
 pub mod toml;
 
 pub use contract::*;
+pub use migrations::migrate_thinking_effort_max_to_high;
 pub use overlay_contributions::{
     clear_config_overlay_contributions_for_tests, get_config_overlay_contributions,
     register_config_overlay,
