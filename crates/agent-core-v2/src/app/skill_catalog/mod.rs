@@ -6,6 +6,7 @@ pub mod errors;
 pub mod in_memory_discovery;
 pub mod parser;
 pub mod runtime_options;
+pub mod source;
 pub mod types;
 
 pub use config_section::{
@@ -29,6 +30,9 @@ pub use parser::{
 pub use runtime_options::{
     SKILL_CATALOG_RUNTIME_OPTIONS_ID, SkillCatalogRuntimeOptions,
     register_skill_catalog_runtime_options, skill_catalog_runtime_options_seed,
+};
+pub use source::{
+    SKILL_SOURCE_PRIORITY, SkillContribution, SkillSourceContract, SkillSourcePriorities,
 };
 pub use types::{
     SkillDefinition, SkillMetadata, SkillPluginContext, SkillRoot, SkillSource, SkillSummary,
