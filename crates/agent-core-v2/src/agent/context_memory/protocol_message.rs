@@ -1,5 +1,3 @@
-use std::fmt;
-
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
@@ -7,96 +5,53 @@ use crate::_base::utils::iso_date_time::IsoDateTime;
 
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct NonEmptyString(String);
+fn deserialize_non_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.is_empty() {
+        Err(serde::de::Error::custom(
+            "string must contain at least 1 character",
+        ))
+    } else {
+        Ok(value)
+    }
+}
 
-impl NonEmptyString {
-    pub fn new(value: impl Into<String>) -> Result<Self, NonEmptyStringError> {
-        let value = value.into();
+fn deserialize_optional_non_empty_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?.map_or(Ok(None), |value| {
         if value.is_empty() {
-            Err(NonEmptyStringError)
+            Err(serde::de::Error::custom(
+                "string must contain at least 1 character",
+            ))
         } else {
-            Ok(Self(value))
+            Ok(Some(value))
         }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
+    })
 }
 
-impl<'de> Deserialize<'de> for NonEmptyString {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
+fn deserialize_nonnegative_safe_integer<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    let number = value
+        .as_f64()
+        .filter(|number| {
+            number.is_finite()
+                && *number >= 0.0
+                && number.fract() == 0.0
+                && *number <= MAX_SAFE_INTEGER as f64
+        })
+        .ok_or_else(|| serde::de::Error::custom("number must be a nonnegative safe integer"))?;
+    Ok(number as u64)
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NonEmptyStringError;
-
-impl fmt::Display for NonEmptyStringError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("string must contain at least 1 character")
-    }
-}
-
-impl std::error::Error for NonEmptyStringError {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct NonNegativeSafeInteger(u64);
-
-impl NonNegativeSafeInteger {
-    pub fn new(value: u64) -> Result<Self, NonNegativeSafeIntegerError> {
-        if value <= MAX_SAFE_INTEGER {
-            Ok(Self(value))
-        } else {
-            Err(NonNegativeSafeIntegerError)
-        }
-    }
-
-    pub fn get(self) -> u64 {
-        self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for NonNegativeSafeInteger {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        let number = value
-            .as_f64()
-            .filter(|number| {
-                number.is_finite()
-                    && *number >= 0.0
-                    && number.fract() == 0.0
-                    && *number <= MAX_SAFE_INTEGER as f64
-            })
-            .ok_or_else(|| serde::de::Error::custom(NonNegativeSafeIntegerError))?;
-        Self::new(number as u64).map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NonNegativeSafeIntegerError;
-
-impl fmt::Display for NonNegativeSafeIntegerError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("number must be a nonnegative safe integer")
-    }
-}
-
-impl std::error::Error for NonNegativeSafeIntegerError {}
 
 // Original:
 //   packages/agent-core-v2/src/agent/contextMemory/protocolMessage.ts
@@ -114,14 +69,18 @@ pub enum MessageRole {
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ImageSource {
     Url {
-        url: NonEmptyString,
+        #[serde(deserialize_with = "deserialize_non_empty_string")]
+        url: String,
     },
     Base64 {
-        media_type: NonEmptyString,
-        data: NonEmptyString,
+        #[serde(deserialize_with = "deserialize_non_empty_string")]
+        media_type: String,
+        #[serde(deserialize_with = "deserialize_non_empty_string")]
+        data: String,
     },
     File {
-        file_id: NonEmptyString,
+        #[serde(deserialize_with = "deserialize_non_empty_string")]
+        file_id: String,
     },
 }
 
@@ -132,12 +91,15 @@ pub enum MessageContent {
         text: String,
     },
     ToolUse {
-        tool_call_id: NonEmptyString,
-        tool_name: NonEmptyString,
+        #[serde(deserialize_with = "deserialize_non_empty_string")]
+        tool_call_id: String,
+        #[serde(deserialize_with = "deserialize_non_empty_string")]
+        tool_name: String,
         input: Value,
     },
     ToolResult {
-        tool_call_id: NonEmptyString,
+        #[serde(deserialize_with = "deserialize_non_empty_string")]
+        tool_call_id: String,
         output: Value,
         #[serde(skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
@@ -149,10 +111,13 @@ pub enum MessageContent {
         source: ImageSource,
     },
     File {
-        file_id: NonEmptyString,
+        #[serde(deserialize_with = "deserialize_non_empty_string")]
+        file_id: String,
         name: String,
-        media_type: NonEmptyString,
-        size: NonNegativeSafeInteger,
+        #[serde(deserialize_with = "deserialize_non_empty_string")]
+        media_type: String,
+        #[serde(deserialize_with = "deserialize_nonnegative_safe_integer")]
+        size: u64,
     },
     Thinking {
         thinking: String,
@@ -164,15 +129,25 @@ pub enum MessageContent {
 // Original: protocolMessage.ts, messageSchema.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ProtocolMessage {
-    pub id: NonEmptyString,
-    pub session_id: NonEmptyString,
+    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    pub id: String,
+    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    pub session_id: String,
     pub role: MessageRole,
     pub content: Vec<MessageContent>,
     pub created_at: IsoDateTime,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt_id: Option<NonEmptyString>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_message_id: Option<NonEmptyString>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_empty_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub prompt_id: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_empty_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parent_message_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
 }
@@ -250,6 +225,9 @@ mod tests {
             candidate[field] = invalid;
             assert!(serde_json::from_value::<ProtocolMessage>(candidate).is_err());
         }
+        let mut candidate = base;
+        candidate["prompt_id"] = Value::String(String::new());
+        assert!(serde_json::from_value::<ProtocolMessage>(candidate).is_err());
     }
 
     #[test]
@@ -270,6 +248,15 @@ mod tests {
         assert!(serde_json::from_value::<MessageContent>(file(json!(1.5))).is_err());
         assert!(
             serde_json::from_value::<MessageContent>(file(json!(MAX_SAFE_INTEGER + 1))).is_err()
+        );
+    }
+
+    #[test]
+    fn direct_construction_is_not_stricter_than_typescript_output_types() {
+        let source = ImageSource::Url { url: String::new() };
+        assert_eq!(
+            serde_json::to_value(source).unwrap(),
+            json!({ "kind": "url", "url": "" })
         );
     }
 }
