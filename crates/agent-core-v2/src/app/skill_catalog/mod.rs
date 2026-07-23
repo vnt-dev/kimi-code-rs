@@ -3,6 +3,7 @@
 pub mod config_section;
 pub mod discovery;
 pub mod errors;
+pub mod file_discovery;
 pub mod in_memory_discovery;
 pub mod parser;
 pub mod roots;
@@ -22,6 +23,7 @@ pub use errors::{
     SKILL_ERRORS, SKILL_NAME_EMPTY, SKILL_NOT_FOUND, SKILL_TYPE_UNSUPPORTED,
     ensure_skill_errors_registered,
 };
+pub use file_discovery::{FileSkillDiscovery, discover_file_skills, register_file_skill_discovery};
 pub use in_memory_discovery::{InMemorySkillDiscovery, register_in_memory_skill_discovery};
 pub use parser::{
     FrontmatterError, ParseSkillError, ParseSkillTextOptions, ParsedFrontmatter, SkillParseError,
