@@ -113,6 +113,20 @@ pub fn check_task_registration(
     }
 }
 
+// Original: taskService.ts, markLoadedTasksLost() per-entry state transition.
+// Persistence remains the caller's async responsibility so entries can be
+// written sequentially in the same order as the source loop.
+pub fn mark_loaded_task_lost(mut info: AgentTaskInfo, now_ms: i64) -> Option<AgentTaskInfo> {
+    if info.base.status.is_terminal() {
+        return None;
+    }
+    info.base.status = AgentTaskStatus::Lost;
+    if info.base.ended_at.is_none() {
+        info.base.ended_at = Some(now_ms);
+    }
+    Some(info)
+}
+
 // Original: taskService.ts, emptyOutputSnapshot().
 pub fn empty_output_snapshot() -> AgentTaskOutputSnapshot {
     AgentTaskOutputSnapshot::default()
@@ -679,5 +693,30 @@ mod tests {
             TooManyBackgroundTasksError.to_string(),
             "Too many background tasks are already running."
         );
+    }
+
+    #[test]
+    fn restored_active_tasks_become_lost_without_overwriting_end_time() {
+        let running = task(AgentTaskStatus::Running, Some(true), None, "running");
+        let lost = mark_loaded_task_lost(running, 50).unwrap();
+        assert_eq!(lost.base.status, AgentTaskStatus::Lost);
+        assert_eq!(lost.base.ended_at, Some(50));
+
+        let ended = task(AgentTaskStatus::Running, Some(true), Some(30), "ended");
+        let lost = mark_loaded_task_lost(ended, 50).unwrap();
+        assert_eq!(lost.base.ended_at, Some(30));
+
+        for status in [
+            AgentTaskStatus::Completed,
+            AgentTaskStatus::Failed,
+            AgentTaskStatus::TimedOut,
+            AgentTaskStatus::Killed,
+            AgentTaskStatus::Lost,
+        ] {
+            assert_eq!(
+                mark_loaded_task_lost(task(status, Some(true), Some(20), "terminal"), 50),
+                None
+            );
+        }
     }
 }
