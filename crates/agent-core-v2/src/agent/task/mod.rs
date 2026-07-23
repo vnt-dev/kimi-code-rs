@@ -3,6 +3,7 @@ pub mod errors;
 pub mod notification_xml;
 pub mod persist;
 pub mod task_ops;
+pub mod tools;
 pub mod types;
 
 pub use config_section::*;
