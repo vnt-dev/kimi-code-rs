@@ -9,3 +9,4 @@ pub mod host_folder_browser;
 pub mod task;
 pub mod telemetry;
 pub mod workspace_local_config;
+pub mod workspace_registry;
