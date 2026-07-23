@@ -1153,6 +1153,7 @@ dependencies = [
  "url",
  "uuid",
  "uzers",
+ "yaml-rust",
  "zip",
 ]
 
