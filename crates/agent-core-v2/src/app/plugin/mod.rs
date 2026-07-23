@@ -3,6 +3,7 @@
 pub mod archive;
 pub mod commands;
 pub mod errors;
+pub mod github_resolver;
 pub mod manifest;
 pub mod source;
 pub mod store;
@@ -15,6 +16,10 @@ pub use commands::{
 };
 pub use errors::{
     PLUGIN_ERRORS, PLUGIN_LOAD_FAILED, PLUGIN_NOT_FOUND, ensure_plugin_errors_registered,
+};
+pub use github_resolver::{
+    GithubResolverError, GithubSourceInput, GithubSourceResolution, resolve_github_commit_sha,
+    resolve_github_source,
 };
 pub use manifest::{ParsedManifestResult, parse_manifest};
 pub use source::{
