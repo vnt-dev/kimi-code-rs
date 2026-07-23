@@ -1,0 +1,657 @@
+//! Agent-scoped wire aggregate implementation.
+//!
+//! Original: `packages/agent-core-v2/src/wire/wireService.ts`.
+//!
+//! Rust adaptation: model state is protected by a short standard mutex because
+//! reducers are synchronous. Blob transforms are serialized through a Tokio
+//! task chain, preserving journal order without holding model locks over await.
+
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+};
+
+use async_trait::async_trait;
+use futures_util::StreamExt;
+use serde_json::{Map, Value};
+use tokio::task::JoinHandle;
+
+use crate::{
+    _base::{
+        di::lifecycle::{Disposable, DisposableStore},
+        errors::{
+            errors::{BugIndicatingError, Error2Options},
+            unexpected_error::on_unexpected_error,
+        },
+    },
+    persistence::interface::{
+        append_log_store::{AppendLogError, AppendLogOptions, AppendLogStoreHandle},
+        storage::{STORAGE_CORRUPTED, StorageError},
+    },
+};
+
+use super::{
+    contract::{CycleError, MAX_DRAIN, WireHooks},
+    migration::{
+        MIGRATE_V1_4_TO_V1_5, MissingWireMigrationError, WIRE_PROTOCOL_VERSION, WireMigration,
+        is_newer_wire_version, migrate_wire_record, resolve_wire_migrations,
+    },
+    model::{ErasedModelDef, ErasedState, ModelDef, PartsTransformer, model_cross_reducers},
+    op::{Op, OpTypeError, registered_op},
+    record::{
+        AGENT_WIRE_RECORD_KEY, WireRecord, create_wire_metadata_record, is_wire_metadata_record,
+        is_wire_record, op_to_wire_record, wire_record_to_payload,
+    },
+};
+
+#[async_trait]
+pub trait WireBlobService: Send + Sync {
+    async fn offload_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String>;
+    async fn load_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String>;
+}
+
+pub trait DomainEventPublisher: Send + Sync {
+    fn publish(&self, event: Value);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RestorePhase {
+    New,
+    Restoring,
+    Ready,
+    Failed,
+}
+
+struct ModelInstance {
+    definition: Arc<dyn ErasedModelDef>,
+    state: ErasedState,
+}
+
+struct RuntimeState {
+    models: HashMap<u64, ModelInstance>,
+    restore_phase: RestorePhase,
+    dispatching: bool,
+    queue: VecDeque<Op>,
+    drain_depth: usize,
+}
+
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self {
+            models: HashMap::new(),
+            restore_phase: RestorePhase::New,
+            dispatching: false,
+            queue: VecDeque::new(),
+            drain_depth: 0,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WireServiceError {
+    #[error(transparent)]
+    Cycle(Box<CycleError>),
+    #[error(transparent)]
+    AppendLog(#[from] AppendLogError),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+    #[error(transparent)]
+    Migration(#[from] MissingWireMigrationError),
+    #[error(transparent)]
+    Bug(#[from] BugIndicatingError),
+    #[error(transparent)]
+    OpType(#[from] OpTypeError),
+    #[error("wire model transform failed: {0}")]
+    Transform(String),
+    #[error("wire restore hook failed: {0}")]
+    RestoreHook(String),
+    #[error("wire persistence task failed: {0}")]
+    PersistenceTask(String),
+}
+
+impl From<CycleError> for WireServiceError {
+    fn from(error: CycleError) -> Self {
+        Self::Cycle(Box::new(error))
+    }
+}
+
+pub struct WireService {
+    hooks: WireHooks,
+    scope: String,
+    log: AppendLogStoreHandle,
+    blob_service: Arc<dyn WireBlobService>,
+    event_publisher: Arc<dyn DomainEventPublisher>,
+    runtime: Mutex<RuntimeState>,
+    persist_tail: Mutex<Option<JoinHandle<()>>>,
+    disposables: DisposableStore,
+}
+
+impl WireService {
+    pub fn new(
+        scope: impl Into<String>,
+        log: AppendLogStoreHandle,
+        blob_service: Arc<dyn WireBlobService>,
+        event_publisher: Arc<dyn DomainEventPublisher>,
+    ) -> Self {
+        let scope = scope.into();
+        let disposables = DisposableStore::new();
+        disposables.add(log.acquire(&scope, AGENT_WIRE_RECORD_KEY));
+        Self {
+            hooks: WireHooks::default(),
+            scope,
+            log,
+            blob_service,
+            event_publisher,
+            runtime: Mutex::new(RuntimeState::default()),
+            persist_tail: Mutex::new(None),
+            disposables,
+        }
+    }
+
+    pub fn hooks(&self) -> &WireHooks {
+        &self.hooks
+    }
+
+    pub fn restore_phase(&self) -> RestorePhase {
+        self.runtime.lock().unwrap().restore_phase
+    }
+
+    // Original: getModel(). Rust returns a snapshot so the mutex guard cannot
+    // escape; wire model states are expected to be cheap immutable values.
+    pub fn get_model<S>(&self, model: &ModelDef<S>) -> S
+    where
+        S: Clone + Send + Sync + 'static,
+    {
+        let mut runtime = self.runtime.lock().unwrap();
+        let instance = ensure_model(&mut runtime.models, model.erased());
+        instance
+            .state
+            .downcast_ref::<S>()
+            .expect("model ID always maps to its defining state type")
+            .clone()
+    }
+
+    // Original: dispatch(). Reentrant calls enqueue and are drained after the
+    // current group; event publication happens outside the model-state lock.
+    pub fn dispatch(&self, ops: impl IntoIterator<Item = Op>) -> Result<(), WireServiceError> {
+        let ops = ops.into_iter().collect::<Vec<_>>();
+        if ops.is_empty() {
+            return Ok(());
+        }
+        {
+            let mut runtime = self.runtime.lock().unwrap();
+            if runtime.dispatching {
+                runtime.queue.extend(ops);
+                return Ok(());
+            }
+            runtime.dispatching = true;
+        }
+
+        let result = self.drain(ops);
+        let mut runtime = self.runtime.lock().unwrap();
+        runtime.queue.clear();
+        runtime.dispatching = false;
+        runtime.drain_depth = 0;
+        result
+    }
+
+    fn drain(&self, mut group: Vec<Op>) -> Result<(), WireServiceError> {
+        loop {
+            self.execute_group(group, false)?;
+            let mut runtime = self.runtime.lock().unwrap();
+            if runtime.queue.is_empty() {
+                return Ok(());
+            }
+            runtime.drain_depth += 1;
+            if runtime.drain_depth > MAX_DRAIN {
+                let types = runtime
+                    .queue
+                    .iter()
+                    .map(|op| op.op_type.clone())
+                    .collect::<Vec<_>>();
+                return Err(CycleError::new(runtime.drain_depth, types).into());
+            }
+            group = runtime.queue.drain(..).collect();
+        }
+    }
+
+    fn execute_group(&self, group: Vec<Op>, silent: bool) -> Result<(), WireServiceError> {
+        for op in group {
+            let model = op.descriptor.model();
+            let (event, record) = {
+                let mut runtime = self.runtime.lock().unwrap();
+                let instance = ensure_model(&mut runtime.models, Arc::clone(&model));
+                let previous = std::mem::replace(&mut instance.state, model.initial_state());
+                instance.state = op.descriptor.apply(previous, op.payload())?;
+                let event = if silent {
+                    None
+                } else {
+                    op.descriptor
+                        .to_event(op.payload(), instance.state.as_ref())?
+                };
+                let record = (!silent && op.descriptor.persist() != Some(false))
+                    .then(|| op_to_wire_record(&op));
+
+                for entry in model_cross_reducers(&op.op_type) {
+                    if entry.model.id() == model.id() {
+                        continue;
+                    }
+                    let cross = ensure_model(&mut runtime.models, Arc::clone(&entry.model));
+                    let previous = std::mem::replace(&mut cross.state, entry.model.initial_state());
+                    cross.state = entry
+                        .apply(previous, op.payload())
+                        .map_err(WireServiceError::Transform)?;
+                }
+                (event, record)
+            };
+            if let Some(record) = record {
+                self.append_to_journal(record, model);
+            }
+            if let Some(event) = event {
+                self.event_publisher.publish(event);
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn seal(&self) -> Result<(), WireServiceError> {
+        let mut records = self.log.read::<Value>(&self.scope, AGENT_WIRE_RECORD_KEY);
+        if let Some(record) = records.next().await {
+            record?;
+            return Ok(());
+        }
+        self.append_record(create_wire_metadata_record().into_wire_record());
+        Ok(())
+    }
+
+    pub async fn restore(&self) -> Result<(), WireServiceError> {
+        {
+            let mut runtime = self.runtime.lock().unwrap();
+            if runtime.restore_phase != RestorePhase::New {
+                let message = format!(
+                    "Agent wire restore called while phase is {:?}",
+                    runtime.restore_phase
+                );
+                return Err(BugIndicatingError::new(Some(&message)).into());
+            }
+            runtime.restore_phase = RestorePhase::Restoring;
+        }
+        let mut result = self.restore_inner().await;
+        if result.is_ok() {
+            self.runtime.lock().unwrap().restore_phase = RestorePhase::Ready;
+            let mut context = ();
+            result = self
+                .hooks
+                .on_did_restore
+                .run(&mut context, None)
+                .await
+                .map_err(|error| WireServiceError::RestoreHook(error.to_string()));
+        }
+        if result.is_err() {
+            self.runtime.lock().unwrap().restore_phase = RestorePhase::Failed;
+        }
+        result
+    }
+
+    async fn restore_inner(&self) -> Result<(), WireServiceError> {
+        let mut source = self.log.read::<Value>(&self.scope, AGENT_WIRE_RECORD_KEY);
+        let mut migrations: Vec<WireMigration> = Vec::new();
+        let mut rewritten: Option<Vec<WireRecord>> = None;
+        let mut newer_version = false;
+        let mut index = 0usize;
+        let mut has_records = false;
+
+        while let Some(candidate) = source.next().await {
+            let candidate = candidate?;
+            if !is_wire_record(&candidate) {
+                report_skipped_record(None, index, true);
+                index += 1;
+                continue;
+            }
+            let source_record = candidate.as_object().cloned().expect("validated object");
+            if !has_records {
+                has_records = true;
+                if source_record.get("type").and_then(Value::as_str) != Some("metadata") {
+                    rewritten = Some(vec![create_wire_metadata_record().into_wire_record()]);
+                    migrations = vec![MIGRATE_V1_4_TO_V1_5];
+                } else if !is_wire_metadata_record(&source_record) {
+                    return Err(StorageError::new(
+                        STORAGE_CORRUPTED,
+                        "Agent wire metadata is malformed",
+                    )
+                    .into());
+                } else {
+                    let version = source_record["protocol_version"]
+                        .as_str()
+                        .expect("validated metadata version");
+                    if is_newer_wire_version(version) {
+                        newer_version = true;
+                    } else {
+                        migrations = resolve_wire_migrations(version)?;
+                        if version != WIRE_PROTOCOL_VERSION {
+                            rewritten = Some(Vec::new());
+                        }
+                    }
+                }
+            }
+            let mut record = migrate_wire_record(&source_record, &migrations);
+            if !newer_version && record.get("type").and_then(Value::as_str) == Some("metadata") {
+                record.insert(
+                    "protocol_version".into(),
+                    Value::String(WIRE_PROTOCOL_VERSION.into()),
+                );
+            }
+            if let Some(records) = &mut rewritten {
+                records.push(record.clone());
+            }
+            if record.get("type").and_then(Value::as_str) != Some("metadata") {
+                self.replay_record(record, index)?;
+                index += 1;
+            }
+        }
+        if !has_records {
+            rewritten = Some(vec![create_wire_metadata_record().into_wire_record()]);
+        }
+        if let Some(records) = rewritten {
+            self.log
+                .rewrite(&self.scope, AGENT_WIRE_RECORD_KEY, &records)
+                .await?;
+        }
+        self.rehydrate_models().await
+    }
+
+    fn replay_record(&self, record: WireRecord, index: usize) -> Result<(), WireServiceError> {
+        let op_type = record
+            .get("type")
+            .and_then(Value::as_str)
+            .expect("wire record type was validated");
+        let Some(descriptor) = registered_op(op_type) else {
+            report_skipped_record(Some(op_type), index, false);
+            return Ok(());
+        };
+        let payload = wire_record_to_payload(&record);
+        let op = match Op::from_wire(descriptor, payload) {
+            Ok(op) => op,
+            Err(_) => {
+                report_skipped_record(Some(op_type), index, true);
+                return Ok(());
+            }
+        };
+        self.execute_group(vec![op], true)
+    }
+
+    fn append_to_journal(&self, record: WireRecord, model: Arc<dyn ErasedModelDef>) {
+        let mut tail = self.persist_tail.lock().unwrap();
+        if !model.has_blob_codec() && tail.is_none() {
+            self.append_record(record);
+            return;
+        }
+        let previous = tail.take();
+        let log = self.log.clone();
+        let scope = self.scope.clone();
+        let blob_service = Arc::clone(&self.blob_service);
+        *tail = Some(tokio::spawn(async move {
+            if let Some(previous) = previous
+                && let Err(error) = previous.await
+            {
+                on_unexpected_error(&error);
+            }
+            let transformer = OffloadTransformer(blob_service);
+            let record = match model.dehydrate_record(record, &transformer).await {
+                Ok(record) => record,
+                Err(error) => {
+                    on_unexpected_error(&std::io::Error::other(error));
+                    return;
+                }
+            };
+            append_record_to(&log, &scope, record);
+        }));
+    }
+
+    fn append_record(&self, record: WireRecord) {
+        append_record_to(&self.log, &self.scope, record);
+    }
+
+    async fn rehydrate_models(&self) -> Result<(), WireServiceError> {
+        let pending = {
+            let mut runtime = self.runtime.lock().unwrap();
+            runtime
+                .models
+                .values_mut()
+                .filter(|instance| instance.definition.has_blob_codec())
+                .map(|instance| {
+                    let state =
+                        std::mem::replace(&mut instance.state, instance.definition.initial_state());
+                    (
+                        instance.definition.id(),
+                        Arc::clone(&instance.definition),
+                        state,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let transformer = LoadTransformer(Arc::clone(&self.blob_service));
+        for (id, definition, state) in pending {
+            let state = definition
+                .rehydrate_state(state, &transformer)
+                .await
+                .map_err(WireServiceError::Transform)?;
+            self.runtime
+                .lock()
+                .unwrap()
+                .models
+                .get_mut(&id)
+                .expect("rehydrated model remains registered")
+                .state = state;
+        }
+        Ok(())
+    }
+
+    pub async fn flush(&self) -> Result<(), WireServiceError> {
+        let tail = self.persist_tail.lock().unwrap().take();
+        if let Some(tail) = tail {
+            tail.await
+                .map_err(|error| WireServiceError::PersistenceTask(error.to_string()))?;
+        }
+        self.log.flush().await?;
+        Ok(())
+    }
+}
+
+impl Drop for WireService {
+    fn drop(&mut self) {
+        let _ = self.disposables.dispose();
+    }
+}
+
+fn ensure_model(
+    models: &mut HashMap<u64, ModelInstance>,
+    definition: Arc<dyn ErasedModelDef>,
+) -> &mut ModelInstance {
+    models
+        .entry(definition.id())
+        .or_insert_with(|| ModelInstance {
+            state: definition.initial_state(),
+            definition,
+        })
+}
+
+fn append_record_to(log: &AppendLogStoreHandle, scope: &str, record: WireRecord) {
+    let options = AppendLogOptions {
+        on_error: Some(Arc::new(|error| on_unexpected_error(error))),
+    };
+    if let Err(error) = log.append(scope, AGENT_WIRE_RECORD_KEY, &record, options) {
+        on_unexpected_error(&error);
+    }
+}
+
+fn report_skipped_record(op_type: Option<&str>, index: usize, malformed: bool) {
+    use super::errors::{WIRE_UNKNOWN_RECORD, WireError};
+
+    let message = match (op_type, malformed) {
+        (None, _) => "Malformed wire record skipped during restore".into(),
+        (Some(op_type), true) => {
+            format!("Malformed wire record type '{op_type}' skipped during restore")
+        }
+        (Some(op_type), false) => {
+            format!("Unknown wire record type '{op_type}' skipped during restore")
+        }
+    };
+    let details = Map::from_iter([
+        (
+            "type".into(),
+            op_type.map_or(Value::Null, |value| Value::String(value.into())),
+        ),
+        ("index".into(), Value::from(index as u64)),
+    ]);
+    let error = WireError::with_options(
+        WIRE_UNKNOWN_RECORD,
+        message,
+        Error2Options {
+            details: Some(details),
+            ..Error2Options::default()
+        },
+    );
+    on_unexpected_error(&error);
+}
+
+struct OffloadTransformer(Arc<dyn WireBlobService>);
+
+#[async_trait]
+impl PartsTransformer for OffloadTransformer {
+    async fn transform(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+        self.0.offload_parts(parts).await
+    }
+}
+
+struct LoadTransformer(Arc<dyn WireBlobService>);
+
+#[async_trait]
+impl PartsTransformer for LoadTransformer {
+    async fn transform(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+        self.0.load_parts(parts).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use futures_util::stream;
+
+    use super::*;
+    use crate::{
+        _base::di::lifecycle::disposable_none,
+        persistence::interface::append_log_store::{AppendLogStoreService, AppendLogValueStream},
+        wire::{
+            model::{ModelOptions, define_model},
+            op::DefineOpOptions,
+        },
+    };
+
+    #[derive(Default)]
+    struct MemoryLog {
+        records: Mutex<Vec<Value>>,
+    }
+
+    #[async_trait]
+    impl AppendLogStoreService for MemoryLog {
+        fn append_value(&self, _: &str, _: &str, record: Value, _: AppendLogOptions) {
+            self.records.lock().unwrap().push(record);
+        }
+
+        fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
+            Box::pin(stream::iter(
+                self.records.lock().unwrap().clone().into_iter().map(Ok),
+            ))
+        }
+
+        async fn rewrite_values(
+            &self,
+            _: &str,
+            _: &str,
+            records: Vec<Value>,
+        ) -> Result<(), AppendLogError> {
+            *self.records.lock().unwrap() = records;
+            Ok(())
+        }
+
+        async fn flush(&self) -> Result<(), AppendLogError> {
+            Ok(())
+        }
+
+        async fn close(&self) -> Result<(), AppendLogError> {
+            Ok(())
+        }
+
+        fn acquire(&self, _: &str, _: &str) -> crate::_base::di::lifecycle::DisposableHandle {
+            disposable_none()
+        }
+    }
+
+    struct IdentityBlobs;
+
+    #[async_trait]
+    impl WireBlobService for IdentityBlobs {
+        async fn offload_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+            Ok(parts)
+        }
+
+        async fn load_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+            Ok(parts)
+        }
+    }
+
+    #[derive(Default)]
+    struct Events(Mutex<Vec<Value>>);
+
+    impl DomainEventPublisher for Events {
+        fn publish(&self, event: Value) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    fn service(log: Arc<MemoryLog>) -> WireService {
+        WireService::new(
+            "agents/test",
+            AppendLogStoreHandle(log),
+            Arc::new(IdentityBlobs),
+            Arc::new(Events::default()),
+        )
+    }
+
+    #[tokio::test]
+    async fn dispatch_persists_applies_and_restore_replays_silently() {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let suffix = NEXT.fetch_add(1, Ordering::Relaxed);
+        let model = define_model("counter", || 0_i64, ModelOptions::default());
+        let mut options = DefineOpOptions::new(|state, amount: &i64| state + amount);
+        options.to_event = Some(Arc::new(|amount, state| {
+            Some(serde_json::json!({"amount": amount, "state": state}))
+        }));
+        let increment = model
+            .define_op(format!("wire.test.increment.{suffix}"), options)
+            .unwrap();
+        let log = Arc::new(MemoryLog::default());
+        let first = service(Arc::clone(&log));
+        first.dispatch([increment.create(3).unwrap()]).unwrap();
+        assert_eq!(first.get_model(&model), 3);
+        first.flush().await.unwrap();
+
+        let restored = service(log);
+        restored.restore().await.unwrap();
+        assert_eq!(restored.restore_phase(), RestorePhase::Ready);
+        assert_eq!(restored.get_model(&model), 3);
+    }
+
+    #[tokio::test]
+    async fn seal_only_initializes_an_empty_journal() {
+        let log = Arc::new(MemoryLog::default());
+        let wire = service(Arc::clone(&log));
+        wire.seal().await.unwrap();
+        wire.seal().await.unwrap();
+        let records = log.records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["type"], "metadata");
+    }
+}
