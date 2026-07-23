@@ -5,7 +5,9 @@
 
 use std::collections::VecDeque;
 
-use super::{MAX_RETAINED_OUTPUT_BYTES, MAX_TASK_OUTPUT_BYTES, output_limit_reason};
+use super::{
+    AgentTaskOutputSnapshot, MAX_RETAINED_OUTPUT_BYTES, MAX_TASK_OUTPUT_BYTES, output_limit_reason,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TaskOutputAction {
@@ -40,6 +42,26 @@ impl TaskOutputBuffer {
 
     pub fn retained_output_bytes(&self) -> usize {
         self.retained_output_bytes
+    }
+
+    // Original: taskService.ts, getOutputSnapshot() in-memory fallback after
+    // the persistence lookup returns no output.
+    pub fn snapshot(&self, max_preview_bytes: f64) -> AgentTaskOutputSnapshot {
+        let available = self.retained_output();
+        let available = available.as_bytes();
+        let preview_limit = nonnegative_truncating_index(max_preview_bytes);
+        let preview_bytes = preview_limit
+            .min(available.len())
+            .min(self.output_size_bytes);
+        let preview_offset = available.len().saturating_sub(preview_bytes);
+        AgentTaskOutputSnapshot {
+            output_path: None,
+            output_size_bytes: self.output_size_bytes,
+            preview_bytes,
+            truncated: self.output_size_bytes > preview_bytes,
+            full_output_available: false,
+            preview: String::from_utf8_lossy(&available[preview_offset..]).into_owned(),
+        }
     }
 
     pub fn pending_output_bytes(&self) -> usize {
@@ -116,6 +138,16 @@ impl TaskOutputBuffer {
             };
             self.retained_output_bytes = self.retained_output_bytes.saturating_sub(removed.len());
         }
+    }
+}
+
+fn nonnegative_truncating_index(value: f64) -> usize {
+    if value.is_nan() || value <= 0.0 {
+        0
+    } else if value.is_infinite() || value >= usize::MAX as f64 {
+        usize::MAX
+    } else {
+        value.trunc() as usize
     }
 }
 
@@ -208,5 +240,37 @@ mod tests {
         assert_eq!(output.pending_output_bytes(), 0);
         assert_eq!(output.retained_output(), "visible tail");
         assert!(!output.output_persist_started);
+    }
+
+    #[test]
+    fn memory_snapshot_uses_total_size_and_lossy_utf8_tail_windows() {
+        let mut output = TaskOutputBuffer::new(false);
+        output.append("a€b".into(), false);
+        assert_eq!(
+            output.snapshot(3.9),
+            AgentTaskOutputSnapshot {
+                output_path: None,
+                output_size_bytes: 5,
+                preview_bytes: 3,
+                truncated: true,
+                full_output_available: false,
+                preview: "��b".into(),
+            }
+        );
+        assert_eq!(output.snapshot(-1.0).preview, "");
+        assert_eq!(output.snapshot(f64::NAN).preview_bytes, 0);
+        assert_eq!(output.snapshot(f64::INFINITY).preview, "a€b");
+    }
+
+    #[test]
+    fn snapshot_clamps_reencoded_replacement_bytes_to_original_total() {
+        let mut output = TaskOutputBuffer::new(true);
+        let large = format!("€{}", "x".repeat(MAX_RETAINED_OUTPUT_BYTES - 2));
+        output.append(large, false);
+        let snapshot = output.snapshot(f64::INFINITY);
+        assert_eq!(snapshot.output_size_bytes, MAX_RETAINED_OUTPUT_BYTES + 1);
+        assert_eq!(snapshot.preview_bytes, MAX_RETAINED_OUTPUT_BYTES + 1);
+        assert!(snapshot.preview.starts_with('�'));
+        assert!(!snapshot.truncated);
     }
 }
