@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     _base::utils::abort::AbortSignal,
@@ -192,6 +192,36 @@ pub trait ExecutableTool: Send + Sync {
 pub trait BuiltinTool: ExecutableTool {}
 
 impl<T: ExecutableTool> BuiltinTool for T {}
+
+/// Object-safe form used by the heterogeneous per-agent tool registry.
+#[async_trait]
+pub trait ErasedExecutableTool: Send + Sync {
+    fn tool(&self) -> &Tool;
+
+    async fn resolve_execution_value(
+        &self,
+        input: serde_json::Value,
+    ) -> Result<ToolExecution, serde_json::Error>;
+}
+
+#[async_trait]
+impl<T> ErasedExecutableTool for T
+where
+    T: ExecutableTool,
+    T::Input: DeserializeOwned,
+{
+    fn tool(&self) -> &Tool {
+        ExecutableTool::tool(self)
+    }
+
+    async fn resolve_execution_value(
+        &self,
+        input: serde_json::Value,
+    ) -> Result<ToolExecution, serde_json::Error> {
+        let input = serde_json::from_value(input)?;
+        Ok(self.resolve_execution(input).await)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolDefinition {
@@ -475,7 +505,7 @@ mod tests {
                 deferred: None,
             },
         };
-        assert_eq!(tool.tool().name, "Echo");
+        assert_eq!(ExecutableTool::tool(&tool).name, "Echo");
         let ToolExecution::Runnable(mut execution) = tool.resolve_execution("hello".into()).await
         else {
             panic!("expected runnable execution")
@@ -502,6 +532,30 @@ mod tests {
         assert_eq!(result.output, ExecutableToolOutput::Text("hello".into()));
         assert!(!result.is_error);
         assert_eq!(updates.lock().unwrap()[0].text.as_deref(), Some("hello"));
+    }
+
+    #[tokio::test]
+    async fn erased_tool_decodes_heterogeneous_json_input() {
+        let tool: Arc<dyn ErasedExecutableTool> = Arc::new(EchoTool {
+            tool: Tool {
+                name: "Echo".into(),
+                description: "Echo input".into(),
+                parameters: serde_json::Map::new(),
+                deferred: None,
+            },
+        });
+        assert_eq!(tool.tool().name, "Echo");
+        assert!(matches!(
+            tool.resolve_execution_value(serde_json::json!("hello"))
+                .await
+                .unwrap(),
+            ToolExecution::Runnable(_)
+        ));
+        assert!(
+            tool.resolve_execution_value(serde_json::json!(1))
+                .await
+                .is_err()
+        );
     }
 
     #[test]

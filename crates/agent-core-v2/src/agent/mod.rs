@@ -18,5 +18,6 @@ pub mod swarm;
 pub mod system_reminder;
 pub mod task;
 pub mod tool_policy;
+pub mod tool_registry;
 pub mod tool_result_truncation;
 pub mod usage;
