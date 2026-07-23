@@ -14,11 +14,13 @@ use crate::{
             MessageStepRequest, MessageStepRequestOptions, StepRequestAdmission, StepRequestOptions,
         },
     },
+    app::event::event_bus::DomainEvent,
     kosong::contract::message::ContentPart,
 };
 
 use super::{
-    AgentTaskInfo, AgentTaskOutputSnapshot, AgentTaskStatus, TaskNotificationOrigin,
+    AgentTaskInfo, AgentTaskNotificationContext, AgentTaskNotificationSeverity,
+    AgentTaskOutputSnapshot, AgentTaskStatus, TaskNotificationOrigin,
     agent_task_notification_children, agent_task_status_text, build_agent_task_notification_body,
     notification_key, render_notification_xml,
 };
@@ -51,6 +53,7 @@ pub struct AgentTaskNotificationBuildContext {
     pub content: Vec<ContentPart>,
     pub origin: PromptOrigin,
     pub notification: Map<String, Value>,
+    pub hook_context: AgentTaskNotificationContext,
 }
 
 // Original: buildAgentTaskNotificationContext() admission through insertion
@@ -154,11 +157,54 @@ pub fn finish_task_notification(
         );
     }
     let xml = render_notification_xml(&notification);
+    let hook_context = AgentTaskNotificationContext {
+        notification_type: format!("task.{status}"),
+        title: format!("Background {} {status}", info.kind),
+        body: build_agent_task_notification_body(info),
+        severity: if info.base.status == AgentTaskStatus::Completed {
+            AgentTaskNotificationSeverity::Info
+        } else {
+            AgentTaskNotificationSeverity::Warning
+        },
+        source_kind: "background_task".into(),
+        source_id: info.base.task_id.clone(),
+    };
     Some(AgentTaskNotificationBuildContext {
         content: vec![ContentPart::Text { text: xml }],
         origin: scheduled.origin,
         notification,
+        hook_context,
     })
+}
+
+// Original: taskService.ts, fireNotificationHook().
+pub fn task_notification_domain_event(context: &AgentTaskNotificationContext) -> DomainEvent {
+    DomainEvent::new(
+        "task.notified",
+        Map::from_iter([
+            (
+                "notificationType".into(),
+                Value::String(context.notification_type.clone()),
+            ),
+            ("title".into(), Value::String(context.title.clone())),
+            ("body".into(), Value::String(context.body.clone())),
+            (
+                "severity".into(),
+                Value::String(
+                    match context.severity {
+                        AgentTaskNotificationSeverity::Info => "info",
+                        AgentTaskNotificationSeverity::Warning => "warning",
+                    }
+                    .into(),
+                ),
+            ),
+            (
+                "sourceKind".into(),
+                Value::String(context.source_kind.clone()),
+            ),
+            ("sourceId".into(), Value::String(context.source_id.clone())),
+        ]),
+    )
 }
 
 #[cfg(test)]
@@ -238,6 +284,17 @@ mod tests {
         assert_eq!(context.notification["severity"], "warning");
         assert_eq!(context.notification["agent_id"], "agent-42");
         assert_eq!(
+            context.hook_context,
+            AgentTaskNotificationContext {
+                notification_type: "task.failed".into(),
+                title: "Background agent failed".into(),
+                body: build_agent_task_notification_body(&info),
+                severity: AgentTaskNotificationSeverity::Warning,
+                source_kind: "background_task".into(),
+                source_id: "agent-task-12345678".into(),
+            }
+        );
+        assert_eq!(
             context.content,
             vec![ContentPart::Text {
                 text: "<notification id=\"task:agent-task-12345678:failed\" category=\"task\" type=\"task.failed\" source_kind=\"background_task\" source_id=\"agent-task-12345678\" agent_id=\"agent-42\">\nTitle: Background agent failed\nSeverity: warning\nExplore agent failed.\n\nTo recover or continue this subagent, call Agent(resume=\"agent-42\", prompt=\"Pick up where you left off; redo the last tool call if its result was never observed.\").\nUse agent_id (\"agent-42\"), NOT source_id / task_id (\"agent-task-12345678\") — the two look alike but only agent_id is accepted by the resume parameter.\nAdd run_in_background=true to keep it backgrounded, or omit it to take the result inline in the current turn.\nThe subagent retains its full prior context across the restart, but any in-flight tool call lost its result and may need to be redone.\n<output-preview bytes=\"4\" total_bytes=\"4\" truncated=\"false\">\nNo persisted full output is available; this preview is the currently buffered task output.\noops\n</output-preview>\n</notification>".into()
@@ -279,5 +336,29 @@ mod tests {
         assert!(!request.turn_scoped());
         assert_eq!(request.admission(), StepRequestAdmission::ActiveOrNewTurn);
         assert_eq!(request.resolve_context_messages(), [message]);
+    }
+
+    #[test]
+    fn notification_hook_event_preserves_exact_external_field_names() {
+        let event = task_notification_domain_event(&AgentTaskNotificationContext {
+            notification_type: "task.completed".into(),
+            title: "Background process completed".into(),
+            body: "command completed.".into(),
+            severity: AgentTaskNotificationSeverity::Info,
+            source_kind: "background_task".into(),
+            source_id: "bash-12345678".into(),
+        });
+        assert_eq!(
+            event.into_value(),
+            serde_json::json!({
+                "type": "task.notified",
+                "notificationType": "task.completed",
+                "title": "Background process completed",
+                "body": "command completed.",
+                "severity": "info",
+                "sourceKind": "background_task",
+                "sourceId": "bash-12345678"
+            })
+        );
     }
 }
