@@ -3,6 +3,7 @@
 //! Original package: `packages/transcript/src/index.ts`.
 
 pub mod granularity;
+pub mod history;
 pub mod model;
 pub mod ops;
 pub mod pagination;
@@ -12,6 +13,7 @@ pub mod view;
 mod serde_utils;
 
 pub use granularity::*;
+pub use history::*;
 pub use model::*;
 pub use ops::*;
 pub use pagination::*;
