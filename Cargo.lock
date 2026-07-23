@@ -1059,6 +1059,7 @@ dependencies = [
  "jsonschema",
  "kimi-code-minidb",
  "kimi-code-protocol",
+ "libc",
  "percent-encoding",
  "regex",
  "reqwest",

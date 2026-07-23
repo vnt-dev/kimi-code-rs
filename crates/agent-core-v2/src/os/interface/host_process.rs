@@ -62,7 +62,7 @@ pub fn ensure_os_process_errors_registered() {
     LazyLock::force(&OS_PROCESS_ERRORS_REGISTERED);
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct HostProcessError {
     inner: Box<Error2>,
 }
