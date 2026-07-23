@@ -32,14 +32,14 @@ use crate::{
 use super::{
     AgentTask, AgentTaskEntry, AgentTaskError, AgentTaskInfo, AgentTaskLifecycleRecorder,
     AgentTaskLoadOptions, AgentTaskNotificationBuildContext, AgentTaskNotificationEffects,
-    AgentTaskOutputSnapshot, AgentTaskPersistence, AgentTaskServiceResult, AgentTaskSettlement,
-    AgentTaskSettlementStatus, AgentTaskSink, AgentTaskTrackOptions, AgentTrackedTaskHandle,
-    ForegroundTaskReleaseReason, ManagedTaskState, NOTIFICATION_FALLBACK_PREVIEW_BYTES,
-    RegisterAgentTaskOptions, RestoredTaskRegistry, ScheduledTaskNotification, TaskModelState,
-    TaskNotificationDelivery, TaskOutputAction, check_task_registration, coerce_timeout_settlement,
-    empty_output_snapshot, finish_task_notification, generate_task_id,
-    needs_notification_fallback_preview, normalize_reason, resolve_agent_task_config,
-    should_list_task,
+    AgentTaskOutputSnapshot, AgentTaskPersistence, AgentTaskServiceContract,
+    AgentTaskServiceResult, AgentTaskSettlement, AgentTaskSettlementStatus, AgentTaskSink,
+    AgentTaskTrackOptions, AgentTrackedTaskHandle, ForegroundTaskReleaseReason, ManagedTaskState,
+    NOTIFICATION_FALLBACK_PREVIEW_BYTES, RegisterAgentTaskOptions, RestoredTaskRegistry,
+    ScheduledTaskNotification, TaskModelState, TaskNotificationDelivery, TaskOutputAction,
+    check_task_registration, coerce_timeout_settlement, empty_output_snapshot,
+    finish_task_notification, generate_task_id, needs_notification_fallback_preview,
+    normalize_reason, resolve_agent_task_config, should_list_task,
 };
 
 const JAVASCRIPT_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -1433,6 +1433,100 @@ impl Disposable for AgentTaskService {
     }
 }
 
+// Original: `AgentTaskService implements IAgentTaskService`. Keeping this as a
+// direct delegation layer preserves the method-level mapping while allowing the
+// concrete service to be stored behind the DI contract handle.
+#[async_trait]
+impl AgentTaskServiceContract for AgentTaskService {
+    fn track(
+        &self,
+        handle: Arc<dyn AgentTrackedTaskHandle>,
+        options: AgentTaskTrackOptions,
+    ) -> AgentTaskServiceResult<AgentTaskEntry> {
+        AgentTaskService::track(self, handle, options)
+    }
+
+    fn register_task(
+        &self,
+        task: Arc<dyn AgentTask>,
+        options: RegisterAgentTaskOptions,
+    ) -> AgentTaskServiceResult<String> {
+        AgentTaskService::register_task(self, task, options)
+    }
+
+    fn get_task(&self, task_id: &str) -> Option<AgentTaskInfo> {
+        AgentTaskService::get_task(self, task_id)
+    }
+
+    fn list(&self, active_only: Option<bool>, limit: Option<usize>) -> Vec<AgentTaskInfo> {
+        AgentTaskService::list(self, active_only, limit)
+    }
+
+    fn persist_output(&self, task_id: &str) {
+        AgentTaskService::persist_output(self, task_id);
+    }
+
+    async fn get_output_snapshot(
+        &self,
+        task_id: &str,
+        max_preview_bytes: f64,
+    ) -> AgentTaskServiceResult<AgentTaskOutputSnapshot> {
+        AgentTaskService::get_output_snapshot(self, task_id, max_preview_bytes).await
+    }
+
+    async fn read_output(
+        &self,
+        task_id: &str,
+        tail: Option<f64>,
+    ) -> AgentTaskServiceResult<String> {
+        AgentTaskService::read_output(self, task_id, tail).await
+    }
+
+    async fn suppress_terminal_notification(&self, task_id: &str) -> AgentTaskServiceResult<()> {
+        AgentTaskService::suppress_terminal_notification(self, task_id).await
+    }
+
+    fn detach(&self, task_id: &str) -> Option<AgentTaskInfo> {
+        AgentTaskService::detach(self, task_id)
+    }
+
+    async fn stop(
+        &self,
+        task_id: &str,
+        reason: Option<&str>,
+    ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
+        AgentTaskService::stop(self, task_id, reason).await
+    }
+
+    async fn stop_by_user(&self, task_id: &str) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
+        AgentTaskService::stop_by_user(self, task_id).await
+    }
+
+    async fn stop_all(&self, reason: Option<&str>) -> AgentTaskServiceResult<Vec<AgentTaskInfo>> {
+        AgentTaskService::stop_all(self, reason).await
+    }
+
+    async fn stop_all_on_exit(&self, reason: &str) -> AgentTaskServiceResult<Vec<AgentTaskInfo>> {
+        AgentTaskService::stop_all_on_exit(self, reason).await
+    }
+
+    async fn wait(
+        &self,
+        task_id: &str,
+        timeout_ms: Option<f64>,
+        signal: Option<AbortSignal>,
+    ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
+        AgentTaskService::wait(self, task_id, timeout_ms, signal).await
+    }
+
+    async fn wait_for_foreground_release(
+        &self,
+        task_id: &str,
+    ) -> AgentTaskServiceResult<Option<ForegroundTaskReleaseReason>> {
+        AgentTaskService::wait_for_foreground_release(self, task_id).await
+    }
+}
+
 fn utf16_tail(value: &str, tail: f64) -> String {
     let units = value.encode_utf16().collect::<Vec<_>>();
     let truncated = tail.trunc();
@@ -2270,6 +2364,21 @@ mod tests {
             service.get_task("bash-dispose1").unwrap().base.status,
             AgentTaskStatus::Running
         );
+    }
+
+    #[tokio::test]
+    async fn service_contract_delegates_to_the_concrete_task_service() {
+        let (_persistence, service) = service();
+        insert_live(&service, "bash-contract1", true);
+        let handle = crate::agent::task::AgentTaskServiceHandle(Arc::new(service));
+
+        assert_eq!(handle.list(Some(true), None).len(), 1);
+        let stopped = handle
+            .stop("bash-contract1", Some("contract"))
+            .await
+            .unwrap();
+        assert_eq!(stopped.unwrap().base.status, AgentTaskStatus::Killed);
+        assert_eq!(handle.list(Some(true), None).len(), 0);
     }
 
     #[tokio::test]
