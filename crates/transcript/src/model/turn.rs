@@ -138,6 +138,7 @@ pub struct TranscriptTurn {
     pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment_ids: Option<Vec<AttachmentId>>,
+    #[serde(with = "transcript_steps_wire")]
     pub steps: Vec<TranscriptStep>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
@@ -159,4 +160,57 @@ pub struct TranscriptStep {
     pub started_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
+}
+
+mod transcript_steps_wire {
+    use serde::de;
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::TranscriptStep;
+
+    #[derive(Serialize)]
+    struct StepWireRef<'a> {
+        kind: &'static str,
+        #[serde(flatten)]
+        step: &'a TranscriptStep,
+    }
+
+    #[derive(Deserialize)]
+    struct StepWireOwned {
+        kind: String,
+        #[serde(flatten)]
+        step: TranscriptStep,
+    }
+
+    pub fn serialize<S>(steps: &[TranscriptStep], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(steps.len()))?;
+        for step in steps {
+            sequence.serialize_element(&StepWireRef { kind: "step", step })?;
+        }
+        sequence.end()
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<TranscriptStep>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let steps = Vec::<StepWireOwned>::deserialize(deserializer)?;
+        steps
+            .into_iter()
+            .map(|wire| {
+                if wire.kind == "step" {
+                    Ok(wire.step)
+                } else {
+                    Err(de::Error::custom(format_args!(
+                        "expected kind `step`, got `{}`",
+                        wire.kind
+                    )))
+                }
+            })
+            .collect()
+    }
 }
