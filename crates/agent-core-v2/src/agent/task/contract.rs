@@ -19,7 +19,7 @@ use futures_util::{
 
 use crate::{
     _base::{di::instantiation::ServiceIdentifier, event::Event, utils::abort::AbortSignal},
-    app::task::contract::TaskState,
+    app::task::contract::{TaskHandle, TaskState},
 };
 
 use super::types::{AgentTask, AgentTaskInfo, AgentTaskInfoBase};
@@ -159,6 +159,60 @@ pub trait AgentTrackedTaskHandle: Send + Sync {
     fn on_did_change_state(&self) -> Event<TaskState>;
     fn on_did_output(&self) -> Event<String>;
     fn cancel(&self);
+}
+
+/// Rust adaptation of passing an `ITaskHandle<T>` to `AgentTaskService.track()`.
+/// The agent task layer observes settlement but deliberately does not expose the
+/// generic result value, matching the original `handle.result.then(() => {},
+/// () => {})` lifecycle promise.
+pub struct AgentTrackedTaskHandleAdapter<T> {
+    handle: Arc<dyn TaskHandle<T>>,
+}
+
+impl<T> AgentTrackedTaskHandleAdapter<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub fn new<H>(handle: Arc<H>) -> Self
+    where
+        H: TaskHandle<T> + 'static,
+    {
+        Self { handle }
+    }
+
+    pub fn from_handle(handle: Arc<dyn TaskHandle<T>>) -> Self {
+        Self { handle }
+    }
+}
+
+#[async_trait]
+impl<T> AgentTrackedTaskHandle for AgentTrackedTaskHandleAdapter<T>
+where
+    T: Send + Sync + 'static,
+{
+    fn id(&self) -> &str {
+        self.handle.id()
+    }
+
+    fn state(&self) -> TaskState {
+        self.handle.state()
+    }
+
+    async fn settled(&self) {
+        let _ = self.handle.result().await;
+    }
+
+    fn on_did_change_state(&self) -> Event<TaskState> {
+        self.handle.on_did_change_state()
+    }
+
+    fn on_did_output(&self) -> Event<String> {
+        self.handle.on_did_output()
+    }
+
+    fn cancel(&self) {
+        self.handle.cancel();
+    }
 }
 
 #[async_trait]
@@ -306,5 +360,20 @@ mod tests {
         assert_eq!(context.severity, AgentTaskNotificationSeverity::Info);
         context.severity = AgentTaskNotificationSeverity::Warning;
         assert_eq!(context.severity, AgentTaskNotificationSeverity::Warning);
+    }
+
+    #[tokio::test]
+    async fn tracked_handle_adapter_erases_results_and_preserves_cancellation() {
+        use crate::app::task::task_service::TaskService;
+
+        let handle = TaskService::new().defer::<String>();
+        let tracked = AgentTrackedTaskHandleAdapter::new(Arc::clone(&handle));
+        assert_eq!(tracked.id(), "task-0");
+        assert_eq!(tracked.state(), TaskState::Pending);
+
+        tracked.cancel();
+        tracked.settled().await;
+        assert_eq!(tracked.state(), TaskState::Cancelled);
+        assert!(handle.result().await.is_err());
     }
 }
