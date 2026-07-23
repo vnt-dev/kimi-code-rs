@@ -12,12 +12,15 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures_util::{FutureExt, future::BoxFuture};
+use futures_util::{
+    FutureExt,
+    future::{BoxFuture, join_all},
+};
 use indexmap::IndexMap;
 
 use crate::{
     _base::{
-        di::lifecycle::{DisposableHandle, combined_disposable},
+        di::lifecycle::{Disposable, DisposableHandle, DisposeResult, combined_disposable},
         errors::error_message::to_error_message,
         errors::unexpected_error::on_unexpected_error,
         utils::abort::{AbortError, AbortSignal, abort_error, abortable, user_cancellation_reason},
@@ -40,6 +43,7 @@ use super::{
 };
 
 const JAVASCRIPT_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+const SESSION_CLOSED_REASON: &str = "Session closed";
 
 type TaskWriteBarrier = futures_util::future::Shared<BoxFuture<'static, ()>>;
 
@@ -732,6 +736,105 @@ impl AgentTaskService {
         .await
     }
 
+    // Original: AgentTaskService.stopAll(). Calls begin together like
+    // Promise.all and results retain task Map order.
+    pub async fn stop_all(
+        &self,
+        reason: Option<&str>,
+    ) -> AgentTaskServiceResult<Vec<AgentTaskInfo>> {
+        let task_ids = self.state().tasks.keys().cloned().collect::<Vec<_>>();
+        let reason = reason.map(str::to_owned);
+        let results = join_all(task_ids.iter().map(|task_id| {
+            let reason = reason.clone();
+            async move { self.stop(task_id, reason.as_deref()).await }
+        }))
+        .await;
+        let mut stopped = Vec::new();
+        for result in results {
+            if let Some(info) = result? {
+                stopped.push(info);
+            }
+        }
+        Ok(stopped)
+    }
+
+    // Original: AgentTaskService.stopAllOnExit().
+    pub async fn stop_all_on_exit(
+        &self,
+        reason: &str,
+    ) -> AgentTaskServiceResult<Vec<AgentTaskInfo>> {
+        if self.keep_alive_on_exit() {
+            return Ok(Vec::new());
+        }
+        let detached_ids = self
+            .list(None, None)
+            .into_iter()
+            .filter(|info| info.base.detached == Some(true))
+            .map(|info| info.base.task_id)
+            .collect::<Vec<_>>();
+        let suppressions = join_all(
+            detached_ids
+                .iter()
+                .map(|task_id| self.suppress_terminal_notification(task_id)),
+        )
+        .await;
+        for suppression in suppressions {
+            suppression?;
+        }
+        self.stop_all(Some(reason)).await
+    }
+
+    fn keep_alive_on_exit(&self) -> bool {
+        self.inner
+            .effects
+            .task_config()
+            .is_some_and(|config| config.keep_alive_on_exit == Some(true))
+    }
+
+    // Original: AgentTaskService.dispose() and forceStopOnDispose().
+    fn dispose_tasks(&self) {
+        if self.keep_alive_on_exit() {
+            return;
+        }
+        let actions = {
+            let mut state = self.state();
+            state
+                .tasks
+                .values_mut()
+                .filter(|entry| !entry.state.status.is_terminal())
+                .map(|entry| {
+                    (
+                        entry.timeout_handle.take(),
+                        entry.tracked_handle.clone(),
+                        entry.state.abort_controller.clone(),
+                        entry.state.force_stop.clone(),
+                        entry.state.projection.registered_task(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        for (timeout, handle, abort_controller, callback, task) in actions {
+            if let Some(timeout) = timeout {
+                timeout.abort();
+            }
+            if let Some(handle) = handle {
+                handle.cancel();
+            } else {
+                abort_controller.abort(Some(AbortError::new(SESSION_CLOSED_REASON)));
+            }
+            let force_stop = catch_unwind(AssertUnwindSafe(|| {
+                callback
+                    .map(|callback| callback())
+                    .or_else(|| task.map(|task| async move { task.force_stop().await }.boxed()))
+            }));
+            if let Ok(Some(force_stop)) = force_stop {
+                tokio::spawn(async move {
+                    let _ = AssertUnwindSafe(force_stop).catch_unwind().await;
+                });
+            }
+        }
+    }
+
     async fn terminate_with_grace(
         &self,
         task_id: &str,
@@ -1323,6 +1426,13 @@ impl AgentTaskSink for ManagedAgentTaskSink {
     }
 }
 
+impl Disposable for AgentTaskService {
+    fn dispose(&self) -> DisposeResult {
+        self.dispose_tasks();
+        Ok(())
+    }
+}
+
 fn utf16_tail(value: &str, tail: f64) -> String {
     let units = value.encode_utf16().collect::<Vec<_>>();
     let truncated = tail.trunc();
@@ -1492,6 +1602,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingEffects {
         context: Mutex<Vec<ContextMessage>>,
+        keep_alive_on_exit: Mutex<Option<bool>>,
         max_running_tasks: Mutex<Option<u64>>,
         started: Mutex<Vec<String>>,
         terminated: Mutex<Vec<String>>,
@@ -1503,6 +1614,7 @@ mod tests {
         fn task_config(&self) -> Option<AgentTaskConfig> {
             Some(AgentTaskConfig {
                 kill_grace_period_ms: Some(0),
+                keep_alive_on_exit: *self.keep_alive_on_exit.lock().unwrap(),
                 max_running_tasks: *self.max_running_tasks.lock().unwrap(),
                 ..AgentTaskConfig::default()
             })
@@ -2090,6 +2202,73 @@ mod tests {
         assert_eq!(
             by_user.base.stop_reason,
             Some(user_cancellation_reason().to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_all_and_exit_policy_preserve_order_suppression_and_keep_alive() {
+        let (_persistence, service, effects) = service_with_effects();
+        insert_live(&service, "bash-all00001", true);
+        insert_live(&service, "bash-all00002", true);
+        let stopped = service.stop_all(Some("shutdown")).await.unwrap();
+        assert_eq!(
+            stopped
+                .iter()
+                .map(|info| info.base.task_id.as_str())
+                .collect::<Vec<_>>(),
+            ["bash-all00001", "bash-all00002"]
+        );
+        assert!(
+            stopped
+                .iter()
+                .all(|info| info.base.status == AgentTaskStatus::Killed)
+        );
+
+        insert_live(&service, "bash-exit0001", true);
+        let exited = service.stop_all_on_exit("exit").await.unwrap();
+        let exited_info = exited
+            .iter()
+            .find(|info| info.base.task_id == "bash-exit0001")
+            .unwrap();
+        assert_eq!(
+            exited_info.base.terminal_notification_suppressed,
+            Some(true)
+        );
+
+        insert_live(&service, "bash-keep0001", true);
+        *effects.keep_alive_on_exit.lock().unwrap() = Some(true);
+        assert!(
+            service
+                .stop_all_on_exit("ignored")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            service.get_task("bash-keep0001").unwrap().base.status,
+            AgentTaskStatus::Running
+        );
+    }
+
+    #[tokio::test]
+    async fn dispose_aborts_active_tasks_without_synthesizing_settlement() {
+        let (_persistence, service) = service();
+        insert_live(&service, "bash-dispose1", true);
+        let signal = service
+            .state()
+            .tasks
+            .get("bash-dispose1")
+            .unwrap()
+            .state
+            .abort_controller
+            .signal();
+        service.dispose().unwrap();
+        tokio::task::yield_now().await;
+        assert!(signal.aborted());
+        assert_eq!(signal.reason().unwrap().to_string(), SESSION_CLOSED_REASON);
+        assert_eq!(
+            service.get_task("bash-dispose1").unwrap().base.status,
+            AgentTaskStatus::Running
         );
     }
 
