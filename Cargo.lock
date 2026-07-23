@@ -886,6 +886,7 @@ name = "kimi-code-agent-core-v2"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "futures-util",
  "indexmap",
  "kimi-code-protocol",

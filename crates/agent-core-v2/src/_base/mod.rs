@@ -4,6 +4,7 @@ pub mod errors;
 pub mod event;
 pub mod exec_env;
 pub mod lifecycle;
+pub mod log;
 pub mod text;
 pub mod utils;
 pub mod version;
