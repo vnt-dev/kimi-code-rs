@@ -2,7 +2,7 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/event/eventBus.ts`.
 
-use std::fmt;
+use std::{fmt, ops::Deref, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -58,7 +58,18 @@ pub trait EventBusContract: Send + Sync {
     fn subscribe_type(&self, event_type: &str, handler: DomainEventHandler) -> DisposableHandle;
 }
 
-pub const EVENT_BUS_SERVICE_ID: ServiceIdentifier<dyn EventBusContract> =
+#[derive(Clone)]
+pub struct EventBusHandle(pub Arc<dyn EventBusContract>);
+
+impl Deref for EventBusHandle {
+    type Target = dyn EventBusContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const EVENT_BUS_SERVICE_ID: ServiceIdentifier<EventBusHandle> =
     ServiceIdentifier::new("eventBus");
 
 #[cfg(test)]

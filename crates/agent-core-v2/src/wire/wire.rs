@@ -3,13 +3,31 @@
 //! Original: `packages/agent-core-v2/src/wire/wire.ts` and the
 //! `CycleError` declaration in `wire/wireService.ts`.
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, ops::Deref, sync::Arc};
 
 use serde_json::{Map, Value};
 
-use crate::{_base::errors::errors::Error2Options, hooks::OrderedHookSlot};
+use crate::{
+    _base::{di::instantiation::ServiceIdentifier, errors::errors::Error2Options},
+    hooks::OrderedHookSlot,
+};
 
 use super::errors::{WIRE_CYCLE, WireError};
+use super::wire_service::WireService;
+
+#[derive(Clone)]
+pub struct WireServiceHandle(pub Arc<WireService>);
+
+impl Deref for WireServiceHandle {
+    type Target = WireService;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const WIRE_SERVICE_ID: ServiceIdentifier<WireServiceHandle> =
+    ServiceIdentifier::new("wireService");
 
 pub const MAX_DRAIN: usize = 100;
 
@@ -83,5 +101,10 @@ mod tests {
             error.error().error().details.as_ref().unwrap()["depth"],
             101
         );
+    }
+
+    #[test]
+    fn service_identifier_matches_source() {
+        assert_eq!(WIRE_SERVICE_ID.to_string(), "wireService");
     }
 }

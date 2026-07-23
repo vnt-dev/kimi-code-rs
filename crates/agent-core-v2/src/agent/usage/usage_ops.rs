@@ -11,10 +11,14 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_model: Option<IndexMap<String, TokenUsage>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<TokenUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_turn: Option<TokenUsage>,
 }
 
