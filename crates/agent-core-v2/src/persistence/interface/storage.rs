@@ -157,10 +157,7 @@ pub fn to_storage_io_error(
         ("op".into(), Value::String(operation.into())),
     ]);
     if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
-        let errno = io_error.raw_os_error().map_or_else(
-            || format!("{:?}", io_error.kind()),
-            |errno| errno.to_string(),
-        );
+        let errno = io_error_code(io_error);
         details.insert("errno".into(), Value::String(errno));
     }
     let cause: Arc<dyn Error + Send + Sync> = Arc::from(error);
@@ -175,14 +172,39 @@ pub fn to_storage_io_error(
     )
 }
 
+fn io_error_code(error: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+
+    let symbolic = match error.kind() {
+        ErrorKind::NotFound => Some("ENOENT"),
+        ErrorKind::PermissionDenied => Some("EACCES"),
+        ErrorKind::AlreadyExists => Some("EEXIST"),
+        ErrorKind::NotADirectory => Some("ENOTDIR"),
+        ErrorKind::IsADirectory => Some("EISDIR"),
+        ErrorKind::WouldBlock => Some("EWOULDBLOCK"),
+        _ => None,
+    };
+    symbolic.map(str::to_owned).unwrap_or_else(|| {
+        error
+            .raw_os_error()
+            .map_or_else(|| format!("{:?}", error.kind()), |errno| errno.to_string())
+    })
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StorageWriteOptions {
     pub atomic: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StorageAppendOptions {
     pub durable: bool,
+}
+
+impl Default for StorageAppendOptions {
+    fn default() -> Self {
+        Self { durable: true }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
