@@ -227,6 +227,9 @@ Validation completed:
 
 ### Unit 2: operation vocabulary
 
+Status: completed in commit `af56c70`
+(`migrate: port transcript operation vocabulary`).
+
 Original:
 
 - `src/ops/operation.ts`
@@ -250,9 +253,11 @@ Necessary tests:
 - representative serialization plus deserialization of every operation kind
 - explicit checks for dotted discriminants and camelCase fields
 
-Commit: `migrate: port transcript operation vocabulary`
-
 ### Unit 3: pure reducer
+
+Status: completed in commit `618c58d`
+(`migrate: port transcript operation reducer`), with the total frame-append
+branch cleanup in `debceb1`.
 
 Original:
 
@@ -285,9 +290,9 @@ Necessary tests:
 - meta mode set/keep/clear
 - anchored item ordering and snapshot immutability
 
-Commit: `migrate: port transcript operation reducer`
-
 ### Unit 4: agent and session stores
+
+Status: completed in commit `82c460c` (`migrate: port transcript stores`).
 
 Original:
 
@@ -320,9 +325,10 @@ Necessary tests:
 - snapshot tail window segmentation
 - lazy roster and disposal state
 
-Commit: `migrate: port transcript stores`
-
 ### Unit 5: granularity, pagination, and view registry
+
+Status: completed in commit `1a12f37`
+(`migrate: port transcript presentation layers`).
 
 Original:
 
@@ -351,9 +357,10 @@ Necessary tests:
 - pagination boundary table
 - one registry dispatch test
 
-Commit: `migrate: port transcript presentation layers`
-
 ### Unit 6: cold history reconstruction
+
+Status: completed in commit `eaffed3`
+(`migrate: port transcript history reconstruction`).
 
 Original:
 
@@ -386,9 +393,10 @@ Necessary tests:
 - user-slash versus mid-turn skill activation
 - cron and legacy background-task origin mapping
 
-Commit: `migrate: port transcript history reconstruction`
-
 ### Unit 7: wire validation and events
+
+Status: completed in commit `7311162`
+(`migrate: port transcript wire validation`).
 
 Original:
 
@@ -423,9 +431,10 @@ Necessary tests:
 - complete hostile-agent-id table
 - event round-trip
 
-Commit: `migrate: port transcript wire validation`
-
 ### Unit 8: completion audit
+
+Status: completed. Audit correction commit `b449b1e`
+(`fix: preserve transcript step wire discriminants`).
 
 Actions:
 
@@ -449,6 +458,77 @@ cargo clippy -p kimi-code-transcript --all-targets -- -D warnings
    separately and are not modified under this task.
 
 Any audit correction is committed as a focused transcript-only commit.
+
+## Completion audit results
+
+- All 21 original TypeScript source files have the Rust counterpart listed in
+  the module mapping above.
+- All 13 operation variants and both transcript event variants are represented
+  by closed Rust enums with their original dotted wire discriminants.
+- The original per-variant operation interfaces are consolidated into
+  `TranscriptOperation` variants. The named reset/ops event interfaces remain
+  identifiable as `TranscriptResetEvent` and `TranscriptOpsEvent`.
+- The original Zod schema constants are consolidated into the corresponding
+  Serde types plus `WireValidate`; `parse_wire_value` and `parse_wire_json` are
+  the common validated parse paths.
+- Literal `kind` fields that are redundant in Rust's in-memory enum variants
+  are restored by wire adapters. The audit found and corrected a missing
+  nested step discriminator; the complete response round-trip test covers
+  turn, step, frame, marker, taskref, task, interaction, attachment, todo,
+  metadata, roster, snake_case REST fields, camelCase model fields, open JSON,
+  and explicit null.
+- `TranscriptListener`, `RosterListener`, `TranscriptResetEvent`, and
+  `TranscriptOpsEvent` remain named public counterparts for source
+  traceability.
+- Searches found no production `TODO`, `MIGRATION-TODO`, `todo!`,
+  `unimplemented!`, or unexplained `unreachable!`.
+- Commits made after the migration branch point modify only
+  `crates/transcript`; the earlier crate-foundation commit additionally
+  contains only the allowed root workspace and lockfile entries.
+
+Final crate validation:
+
+```text
+cargo fmt --manifest-path crates/transcript/Cargo.toml -- --check   passed
+cargo check -p kimi-code-transcript                                passed
+cargo test -p kimi-code-transcript                                 passed (30 tests)
+cargo clippy -p kimi-code-transcript --all-targets -- -D warnings  passed
+```
+
+Workspace validation:
+
+```text
+cargo fmt --all -- --check                                         passed
+cargo check --workspace                                            passed
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+                                                                    passed
+cargo test --workspace                                             failed outside transcript:
+  348 passed, 2 failed in kimi-code-agent-core-v2
+```
+
+The two workspace failures are pre-existing and outside this task's allowed
+scope: a Windows path-separator assertion in `log_config` and an OpenAI
+capability pointer-identity assertion. No external crate was changed.
+
+## Rust-specific adaptations and known limitations
+
+- The package remains fully synchronous because every operation is in-memory;
+  no async runtime is needed.
+- Copy-on-write aggregate branches use `Arc`; JavaScript `Map`/`Set` insertion
+  order uses `IndexMap`/`IndexSet`.
+- JavaScript reference identity for nested reducer payloads and roster
+  descriptors has no direct value-type Rust equivalent. Rust uses value
+  equality for those fields. The source's observable modes-object recreation
+  behavior is preserved explicitly.
+- Listener storage uses shared single-threaded callback registries. Explicit
+  `dispose()` controls removal, and dropping a disposal handle alone does not
+  unregister the callback, matching the source lifecycle.
+- Append offsets use UTF-16 code units. Rust cannot represent an unpaired
+  surrogate string, so an append that would create one is reported as a gap
+  rather than creating an invalid Rust `String`.
+- The original TypeScript test runner remained unavailable in the source
+  checkout; the checked-in TypeScript source/tests and the pinned source
+  commit are the parity specification.
 
 ## Definition of done
 
