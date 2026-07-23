@@ -11,27 +11,30 @@ use std::{
     time::Duration,
 };
 
+use async_trait::async_trait;
 use futures_util::{FutureExt, future::BoxFuture};
 use indexmap::IndexMap;
 
 use crate::{
     _base::{
-        di::lifecycle::DisposableHandle,
+        di::lifecycle::{DisposableHandle, combined_disposable},
+        errors::error_message::to_error_message,
         errors::unexpected_error::on_unexpected_error,
-        utils::abort::{
-            AbortError, AbortLink, AbortSignal, abort_error, abortable, user_cancellation_reason,
-        },
+        utils::abort::{AbortError, AbortSignal, abort_error, abortable, user_cancellation_reason},
     },
     agent::context_memory::{ContextMessage, PromptOrigin},
+    app::task::contract::TaskState,
 };
 
 use super::{
-    AgentTaskInfo, AgentTaskLifecycleRecorder, AgentTaskLoadOptions,
-    AgentTaskNotificationBuildContext, AgentTaskNotificationEffects, AgentTaskOutputSnapshot,
-    AgentTaskPersistence, AgentTaskServiceResult, AgentTaskSettlement, AgentTaskSettlementStatus,
-    AgentTrackedTaskHandle, ForegroundTaskReleaseReason, ManagedTaskState,
-    NOTIFICATION_FALLBACK_PREVIEW_BYTES, RestoredTaskRegistry, ScheduledTaskNotification,
-    TaskModelState, TaskNotificationDelivery, empty_output_snapshot, finish_task_notification,
+    AgentTask, AgentTaskEntry, AgentTaskError, AgentTaskInfo, AgentTaskLifecycleRecorder,
+    AgentTaskLoadOptions, AgentTaskNotificationBuildContext, AgentTaskNotificationEffects,
+    AgentTaskOutputSnapshot, AgentTaskPersistence, AgentTaskServiceResult, AgentTaskSettlement,
+    AgentTaskSettlementStatus, AgentTaskSink, AgentTaskTrackOptions, AgentTrackedTaskHandle,
+    ForegroundTaskReleaseReason, ManagedTaskState, NOTIFICATION_FALLBACK_PREVIEW_BYTES,
+    RegisterAgentTaskOptions, RestoredTaskRegistry, ScheduledTaskNotification, TaskModelState,
+    TaskNotificationDelivery, TaskOutputAction, check_task_registration, coerce_timeout_settlement,
+    empty_output_snapshot, finish_task_notification, generate_task_id,
     needs_notification_fallback_preview, normalize_reason, resolve_agent_task_config,
     should_list_task,
 };
@@ -45,7 +48,7 @@ struct ManagedTaskRuntime {
     persist_write_queue: TaskWriteBarrier,
     output_write_queue: TaskWriteBarrier,
     timeout_handle: Option<tokio::task::JoinHandle<()>>,
-    foreground_signal_link: Option<AbortLink>,
+    foreground_signal_task: Option<tokio::task::JoinHandle<()>>,
     handle_subscription: Option<DisposableHandle>,
     settled: tokio::sync::watch::Sender<bool>,
     lifecycle_done: tokio::sync::watch::Sender<bool>,
@@ -61,7 +64,7 @@ impl ManagedTaskRuntime {
             persist_write_queue: futures_util::future::ready(()).boxed().shared(),
             output_write_queue: futures_util::future::ready(()).boxed().shared(),
             timeout_handle: None,
-            foreground_signal_link: None,
+            foreground_signal_task: None,
             handle_subscription: None,
             settled,
             lifecycle_done,
@@ -223,6 +226,201 @@ impl AgentTaskService {
             .tasks
             .insert(task_id.clone(), ManagedTaskRuntime::new(task));
         state.ghosts.remove(&task_id);
+    }
+
+    // Original: AgentTaskService.registerTask().
+    pub fn register_task(
+        &self,
+        task: Arc<dyn AgentTask>,
+        options: RegisterAgentTaskOptions,
+    ) -> AgentTaskServiceResult<String> {
+        let detached = options.detached.unwrap_or(true);
+        self.check_registration(detached)?;
+        let task_id = generate_task_id(task.id_prefix())?;
+        let managed = ManagedTaskState::registered(
+            task_id.clone(),
+            Arc::clone(&task),
+            options,
+            current_time_millis(),
+        );
+        let timeout_ms = managed.options.timeout_ms;
+        self.insert_managed_task(managed);
+        if let Some(timeout_ms) = timeout_ms
+            && timeout_ms > 0
+        {
+            self.arm_manager_timeout(&task_id, timeout_ms);
+        }
+
+        let task_signal = self
+            .state()
+            .tasks
+            .get(&task_id)
+            .map(|entry| entry.state.abort_controller.signal())
+            .ok_or_else(|| std::io::Error::other("registered task state disappeared"))?;
+        let (start_sender, start_receiver) = tokio::sync::oneshot::channel();
+
+        let service = self.clone();
+        let lifecycle_task_id = task_id.clone();
+        tokio::spawn(async move {
+            let _ = start_receiver.await;
+            let sink = ManagedAgentTaskSink {
+                service: service.clone(),
+                task_id: lifecycle_task_id.clone(),
+                signal: task_signal,
+            };
+            let start = catch_unwind(AssertUnwindSafe(|| task.start(&sink)));
+            let failure = match start {
+                Ok(start) => match AssertUnwindSafe(start).catch_unwind().await {
+                    Ok(Ok(())) => None,
+                    Ok(Err(error)) => Some(to_error_message(error.as_ref(), false)),
+                    Err(panic) => Some(panic_payload_message(panic)),
+                },
+                Err(panic) => Some(panic_payload_message(panic)),
+            };
+            if let Some(failure) = failure {
+                let (timed_out, aborted) = {
+                    let state = service.state();
+                    state
+                        .tasks
+                        .get(&lifecycle_task_id)
+                        .map(|entry| {
+                            (
+                                entry.state.timed_out,
+                                entry.state.abort_controller.signal().aborted(),
+                            )
+                        })
+                        .unwrap_or((false, false))
+                };
+                let status = if timed_out {
+                    AgentTaskSettlementStatus::TimedOut
+                } else if aborted {
+                    AgentTaskSettlementStatus::Killed
+                } else {
+                    AgentTaskSettlementStatus::Failed
+                };
+                let _ = service
+                    .settle_task(
+                        &lifecycle_task_id,
+                        AgentTaskSettlement {
+                            status,
+                            stop_reason: (status == AgentTaskSettlementStatus::Failed)
+                                .then_some(failure),
+                        },
+                        current_time_millis(),
+                    )
+                    .await;
+            }
+            service.mark_lifecycle_done(&lifecycle_task_id);
+        });
+        self.install_foreground_signal(&task_id);
+        let initial_record = self.record_initial_detached_task(&task_id);
+        let _ = start_sender.send(());
+        initial_record?;
+        Ok(task_id)
+    }
+
+    // Original: AgentTaskService.track().
+    pub fn track(
+        &self,
+        handle: Arc<dyn AgentTrackedTaskHandle>,
+        options: AgentTaskTrackOptions,
+    ) -> AgentTaskServiceResult<AgentTaskEntry> {
+        let detached = options.detached.unwrap_or(true);
+        self.check_registration(detached)?;
+        let task_id = generate_task_id(options.id_prefix.as_deref().unwrap_or("task"))?;
+        let timeout_ms = options.timeout_ms;
+        let managed = ManagedTaskState::tracked(task_id.clone(), options, current_time_millis());
+        let on_did_detach = managed.foreground_release_future();
+        self.insert_managed_task(managed);
+        if let Some(entry) = self.state().tasks.get_mut(&task_id) {
+            entry.tracked_handle = Some(Arc::clone(&handle));
+        }
+        if let Some(timeout_ms) = timeout_ms
+            && timeout_ms > 0
+        {
+            self.arm_manager_timeout(&task_id, timeout_ms);
+        }
+
+        let output_service = self.clone();
+        let output_task_id = task_id.clone();
+        let output_subscription = handle.on_did_output().subscribe(move |chunk| {
+            output_service.append_output(&output_task_id, chunk.clone());
+        });
+        let state_service = self.clone();
+        let state_task_id = task_id.clone();
+        let state_subscription = handle.on_did_change_state().subscribe(move |task_state| {
+            if !task_state.is_terminal() {
+                return;
+            }
+            let service = state_service.clone();
+            let task_id = state_task_id.clone();
+            let task_state = *task_state;
+            tokio::spawn(async move {
+                service.settle_tracked_state(&task_id, task_state).await;
+            });
+        });
+        let subscription = combined_disposable(vec![output_subscription, state_subscription]);
+        let dispose_immediately = {
+            let mut state = self.state();
+            match state.tasks.get_mut(&task_id) {
+                None => true,
+                Some(entry) if entry.state.status.is_terminal() => true,
+                Some(entry) => {
+                    entry.handle_subscription = Some(Arc::clone(&subscription));
+                    false
+                }
+            }
+        };
+        if dispose_immediately {
+            subscription.dispose()?;
+        }
+
+        let lifecycle_service = self.clone();
+        let lifecycle_task_id = task_id.clone();
+        let lifecycle_handle = Arc::clone(&handle);
+        tokio::spawn(async move {
+            lifecycle_handle.settled().await;
+            lifecycle_service.mark_lifecycle_done(&lifecycle_task_id);
+        });
+        self.install_foreground_signal(&task_id);
+        self.record_initial_detached_task(&task_id)?;
+        Ok(AgentTaskEntry {
+            task_id,
+            on_did_detach,
+        })
+    }
+
+    fn check_registration(&self, detached: bool) -> AgentTaskServiceResult<()> {
+        let state = self.state();
+        let active = state
+            .tasks
+            .values()
+            .filter(|entry| !entry.state.status.is_terminal() && entry.state.starts_detached())
+            .count();
+        drop(state);
+        let maximum = self
+            .inner
+            .effects
+            .task_config()
+            .and_then(|config| config.max_running_tasks);
+        check_task_registration(detached, active, maximum)?;
+        Ok(())
+    }
+
+    fn record_initial_detached_task(&self, task_id: &str) -> AgentTaskServiceResult<()> {
+        let info = {
+            let persistence = Arc::clone(&self.inner.persistence);
+            let mut state = self.state();
+            let Some(entry) = state.tasks.get_mut(task_id) else {
+                return Ok(());
+            };
+            if !entry.state.is_detached() {
+                return Ok(());
+            }
+            drop(entry.persist_live(persistence));
+            entry.state.to_info()
+        };
+        self.inner.effects.record_task_started(&info)
     }
 
     // Original: AgentTaskService.restoreGhostsFromWire().
@@ -417,7 +615,7 @@ impl AgentTaskService {
         settlement: AgentTaskSettlement,
         now_ms: i64,
     ) -> AgentTaskServiceResult<bool> {
-        let (timeout, signal_link, subscription, output_persist_started) = {
+        let (timeout, signal_task, subscription, output_persist_started) = {
             let mut state = self.state();
             let Some(entry) = state.tasks.get_mut(task_id) else {
                 return Ok(false);
@@ -427,7 +625,7 @@ impl AgentTaskService {
             }
             (
                 entry.timeout_handle.take(),
-                entry.foreground_signal_link.take(),
+                entry.foreground_signal_task.take(),
                 entry.handle_subscription.take(),
                 entry.state.output.output_persist_started,
             )
@@ -435,7 +633,9 @@ impl AgentTaskService {
         if let Some(timeout) = timeout {
             timeout.abort();
         }
-        drop(signal_link);
+        if let Some(signal_task) = signal_task {
+            signal_task.abort();
+        }
         if let Some(subscription) = subscription {
             subscription.dispose()?;
         }
@@ -630,7 +830,7 @@ impl AgentTaskService {
     }
 
     fn detach_entry(&self, task_id: &str, via_timeout: bool) -> Option<AgentTaskInfo> {
-        let (release, signal_link, old_timeout, detach_timeout, callback, task) = {
+        let (release, signal_task, old_timeout, detach_timeout, callback, task) = {
             let mut state = self.state();
             let entry = state.tasks.get_mut(task_id)?;
             if entry.state.status.is_terminal() || entry.state.is_detached() {
@@ -641,14 +841,16 @@ impl AgentTaskService {
             let old_timeout = detach_timeout.and_then(|_| entry.timeout_handle.take());
             (
                 release,
-                entry.foreground_signal_link.take(),
+                entry.foreground_signal_task.take(),
                 old_timeout,
                 detach_timeout,
                 entry.state.on_detach.clone(),
                 entry.state.projection.registered_task(),
             )
         };
-        drop(signal_link);
+        if let Some(signal_task) = signal_task {
+            signal_task.abort();
+        }
         if let Some(timeout) = old_timeout {
             timeout.abort();
         }
@@ -684,6 +886,125 @@ impl AgentTaskService {
             ForegroundTaskReleaseReason::Detached
         });
         Some(self.get_task(task_id).unwrap_or(info))
+    }
+
+    fn append_output(&self, task_id: &str, chunk: String) {
+        let stop_reason = {
+            let persistence = Arc::clone(&self.inner.persistence);
+            let mut state = self.state();
+            let Some(entry) = state.tasks.get_mut(task_id) else {
+                return;
+            };
+            let is_process = entry.state.projection.enforces_process_output_limit();
+            match entry.state.output.append(chunk, is_process) {
+                TaskOutputAction::None => None,
+                TaskOutputAction::AppendPersisted(chunk) => {
+                    entry.append_task_output(persistence, chunk);
+                    None
+                }
+                TaskOutputAction::StartPersisting(chunk) => {
+                    entry.append_task_output(persistence, chunk);
+                    None
+                }
+                TaskOutputAction::StopProcess(reason) => Some(reason),
+            }
+        };
+        if let Some(reason) = stop_reason {
+            let service = self.clone();
+            let task_id = task_id.to_owned();
+            tokio::spawn(async move {
+                let _ = service.stop(&task_id, Some(&reason)).await;
+            });
+        }
+    }
+
+    async fn settle_tracked_state(&self, task_id: &str, task_state: TaskState) {
+        let (timed_out, stop_reason) = {
+            let state = self.state();
+            let Some(entry) = state.tasks.get(task_id) else {
+                return;
+            };
+            (entry.state.timed_out, entry.state.stop_reason.clone())
+        };
+        let status = if timed_out {
+            AgentTaskSettlementStatus::TimedOut
+        } else {
+            match task_state {
+                TaskState::Cancelled => AgentTaskSettlementStatus::Killed,
+                TaskState::Failed => AgentTaskSettlementStatus::Failed,
+                TaskState::Completed => AgentTaskSettlementStatus::Completed,
+                TaskState::Pending | TaskState::Running => return,
+            }
+        };
+        let _ = self
+            .settle_task(
+                task_id,
+                AgentTaskSettlement {
+                    status,
+                    stop_reason,
+                },
+                current_time_millis(),
+            )
+            .await;
+    }
+
+    fn mark_lifecycle_done(&self, task_id: &str) {
+        if let Some(entry) = self.state().tasks.get(task_id) {
+            entry.lifecycle_done.send_replace(true);
+        }
+    }
+
+    // Original: AgentTaskService.installForegroundSignal().
+    fn install_foreground_signal(&self, task_id: &str) {
+        let signal = {
+            let state = self.state();
+            let Some(entry) = state.tasks.get(task_id) else {
+                return;
+            };
+            if entry.state.is_detached() {
+                return;
+            }
+            entry.state.options.signal.clone()
+        };
+        let Some(signal) = signal else {
+            return;
+        };
+        let service = self.clone();
+        let task_id_owned = task_id.to_owned();
+        let signal_for_task = signal.clone();
+        let task = tokio::spawn(async move {
+            let reason = signal_for_task.cancelled().await;
+            let should_stop = service
+                .state()
+                .tasks
+                .get(&task_id_owned)
+                .is_some_and(|entry| {
+                    !entry.state.is_detached() && !entry.state.status.is_terminal()
+                });
+            if !should_stop {
+                return;
+            }
+            let user_reason = user_cancellation_reason();
+            let _ = service
+                .terminate_with_grace(
+                    &task_id_owned,
+                    Some(user_reason.to_string()),
+                    (*reason).clone(),
+                    AgentTaskSettlementStatus::Killed,
+                )
+                .await;
+        });
+        let previous = {
+            let mut state = self.state();
+            let Some(entry) = state.tasks.get_mut(task_id) else {
+                task.abort();
+                return;
+            };
+            entry.foreground_signal_task.replace(task)
+        };
+        if let Some(previous) = previous {
+            previous.abort();
+        }
     }
 
     // Original: AgentTaskService.armManagerTimeout().
@@ -763,7 +1084,7 @@ impl AgentTaskService {
                 Some(entry) if entry.state.is_detached() => ForegroundWait::Detached,
                 Some(entry) => ForegroundWait::Pending(
                     entry.state.foreground_release_future(),
-                    entry.settled.subscribe(),
+                    entry.lifecycle_done.subscribe(),
                 ),
             }
         };
@@ -969,6 +1290,39 @@ impl AgentTaskService {
     }
 }
 
+struct ManagedAgentTaskSink {
+    service: AgentTaskService,
+    task_id: String,
+    signal: AbortSignal,
+}
+
+#[async_trait]
+impl AgentTaskSink for ManagedAgentTaskSink {
+    fn signal(&self) -> AbortSignal {
+        self.signal.clone()
+    }
+
+    fn append_output(&self, chunk: &str) {
+        self.service.append_output(&self.task_id, chunk.into());
+    }
+
+    async fn settle(&self, settlement: AgentTaskSettlement) -> Result<bool, AgentTaskError> {
+        let timed_out = self
+            .service
+            .state()
+            .tasks
+            .get(&self.task_id)
+            .is_some_and(|entry| entry.state.timed_out);
+        self.service
+            .settle_task(
+                &self.task_id,
+                coerce_timeout_settlement(timed_out, settlement),
+                current_time_millis(),
+            )
+            .await
+    }
+}
+
 fn utf16_tail(value: &str, tail: f64) -> String {
     let units = value.encode_utf16().collect::<Vec<_>>();
     let truncated = tail.trunc();
@@ -1002,8 +1356,18 @@ fn current_time_millis() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("task panicked")
+        .to_owned()
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::_base::event::{Emitter, Event};
     use async_trait::async_trait;
     use serde_json::{Map, Value};
 
@@ -1028,9 +1392,107 @@ mod tests {
 
     struct StubTask;
 
+    struct CompletingTask;
+
+    struct TestTrackedHandle {
+        id: String,
+        state: Mutex<TaskState>,
+        state_events: Emitter<TaskState>,
+        output_events: Emitter<String>,
+        lifecycle_done: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl TestTrackedHandle {
+        fn new(id: &str) -> Self {
+            let (lifecycle_done, _) = tokio::sync::watch::channel(false);
+            Self {
+                id: id.into(),
+                state: Mutex::new(TaskState::Running),
+                state_events: Emitter::new(),
+                output_events: Emitter::new(),
+                lifecycle_done,
+            }
+        }
+
+        fn emit_output(&self, output: &str) {
+            self.output_events.fire(&output.to_owned());
+        }
+
+        fn transition(&self, state: TaskState) {
+            *self.state.lock().unwrap() = state;
+            self.state_events.fire(&state);
+            if state.is_terminal() {
+                self.lifecycle_done.send_replace(true);
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentTrackedTaskHandle for TestTrackedHandle {
+        fn id(&self) -> &str {
+            &self.id
+        }
+
+        fn state(&self) -> TaskState {
+            *self.state.lock().unwrap()
+        }
+
+        async fn settled(&self) {
+            let mut receiver = self.lifecycle_done.subscribe();
+            wait_until_settled(&mut receiver).await;
+        }
+
+        fn on_did_change_state(&self) -> Event<TaskState> {
+            self.state_events.event()
+        }
+
+        fn on_did_output(&self) -> Event<String> {
+            self.output_events.event()
+        }
+
+        fn cancel(&self) {
+            self.transition(TaskState::Cancelled);
+        }
+    }
+
+    #[async_trait]
+    impl AgentTask for CompletingTask {
+        fn id_prefix(&self) -> &str {
+            "bash"
+        }
+
+        fn kind(&self) -> &str {
+            "process"
+        }
+
+        fn description(&self) -> &str {
+            "completing"
+        }
+
+        async fn start(&self, sink: &dyn AgentTaskSink) -> Result<(), AgentTaskError> {
+            assert!(!sink.signal().aborted());
+            sink.append_output("registered output");
+            sink.settle(AgentTaskSettlement {
+                status: AgentTaskSettlementStatus::Completed,
+                stop_reason: None,
+            })
+            .await?;
+            Ok(())
+        }
+
+        fn to_info(&self, base: AgentTaskInfoBase) -> AgentTaskInfo {
+            AgentTaskInfo {
+                base,
+                kind: "process".into(),
+                details: Map::new(),
+            }
+        }
+    }
+
     #[derive(Default)]
     struct RecordingEffects {
         context: Mutex<Vec<ContextMessage>>,
+        max_running_tasks: Mutex<Option<u64>>,
         started: Mutex<Vec<String>>,
         terminated: Mutex<Vec<String>>,
         enqueued: Mutex<Vec<String>>,
@@ -1041,6 +1503,7 @@ mod tests {
         fn task_config(&self) -> Option<AgentTaskConfig> {
             Some(AgentTaskConfig {
                 kill_grace_period_ms: Some(0),
+                max_running_tasks: *self.max_running_tasks.lock().unwrap(),
                 ..AgentTaskConfig::default()
             })
         }
@@ -1212,6 +1675,129 @@ mod tests {
             ["bash-live0001", "bash-ghost001"]
         );
         assert_eq!(service.list(Some(false), Some(1)).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn register_starts_task_routes_sink_and_records_detached_lifecycle() {
+        let (_persistence, service, effects) = service_with_effects();
+        let task_id = service
+            .register_task(
+                Arc::new(CompletingTask),
+                RegisterAgentTaskOptions::default(),
+            )
+            .unwrap();
+        assert!(task_id.starts_with("bash-"));
+        let completed = service
+            .wait(&task_id, Some(30_000.0), None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(completed.base.status, AgentTaskStatus::Completed);
+        assert_eq!(
+            service
+                .get_output_snapshot(&task_id, 100.0)
+                .await
+                .unwrap()
+                .preview,
+            "registered output"
+        );
+        assert_eq!(
+            effects.started.lock().unwrap().as_slice(),
+            [task_id.as_str()]
+        );
+        assert_eq!(
+            effects.terminated.lock().unwrap().as_slice(),
+            [task_id.as_str()]
+        );
+    }
+
+    #[tokio::test]
+    async fn registration_quota_counts_only_tasks_that_started_detached() {
+        let (_persistence, service, effects) = service_with_effects();
+        *effects.max_running_tasks.lock().unwrap() = Some(1);
+        service
+            .register_task(Arc::new(StubTask), RegisterAgentTaskOptions::default())
+            .unwrap();
+        assert!(
+            service
+                .register_task(Arc::new(StubTask), RegisterAgentTaskOptions::default())
+                .is_err()
+        );
+        assert!(
+            service
+                .register_task(
+                    Arc::new(StubTask),
+                    RegisterAgentTaskOptions {
+                        detached: Some(false),
+                        ..RegisterAgentTaskOptions::default()
+                    }
+                )
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn track_projects_handle_output_and_terminal_state_then_disposes_subscriptions() {
+        let (_persistence, service, effects) = service_with_effects();
+        let handle = Arc::new(TestTrackedHandle::new("app-task-1"));
+        let entry = service
+            .track(
+                handle.clone() as Arc<dyn AgentTrackedTaskHandle>,
+                AgentTaskTrackOptions {
+                    id_prefix: Some("job".into()),
+                    description: "tracked job".into(),
+                    detached: Some(true),
+                    timeout_ms: None,
+                    detach_timeout_ms: None,
+                    signal: None,
+                    force_stop: None,
+                    on_detach: None,
+                    to_info: Arc::new(|base| AgentTaskInfo {
+                        base,
+                        kind: "process".into(),
+                        details: Map::new(),
+                    }),
+                },
+            )
+            .unwrap();
+        assert!(entry.task_id.starts_with("job-"));
+        assert_eq!(
+            entry.on_did_detach.await,
+            ForegroundTaskReleaseReason::Terminal
+        );
+        handle.emit_output("tracked output");
+        handle.transition(TaskState::Completed);
+        let completed = service
+            .wait(&entry.task_id, Some(30_000.0), None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(completed.base.status, AgentTaskStatus::Completed);
+        assert_eq!(
+            service
+                .get_output_snapshot(&entry.task_id, 100.0)
+                .await
+                .unwrap()
+                .preview,
+            "tracked output"
+        );
+        handle.emit_output("ignored after settlement");
+        assert_eq!(
+            service
+                .get_output_snapshot(&entry.task_id, 100.0)
+                .await
+                .unwrap()
+                .preview,
+            "tracked output"
+        );
+        assert_eq!(
+            effects.started.lock().unwrap().as_slice(),
+            [entry.task_id.as_str()]
+        );
+        assert_eq!(
+            effects.terminated.lock().unwrap().as_slice(),
+            [entry.task_id.as_str()]
+        );
     }
 
     #[test]
