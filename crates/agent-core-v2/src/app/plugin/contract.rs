@@ -10,7 +10,13 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    _base::{di::instantiation::ServiceIdentifier, event::Event},
+    _base::{
+        di::{
+            instantiation::ServiceIdentifier,
+            lifecycle::{Disposable, DisposeResult},
+        },
+        event::Event,
+    },
     agent::{external_hooks::HookDef, mcp::McpServerConfig},
     app::skill_catalog::SkillRoot,
 };
@@ -54,7 +60,7 @@ pub type PluginServiceError = Box<dyn Error + Send + Sync>;
 pub type PluginServiceResult<T> = Result<T, PluginServiceError>;
 
 #[async_trait]
-pub trait PluginServiceContract: Send + Sync {
+pub trait PluginServiceContract: Disposable + Send + Sync {
     async fn list_plugins(&self) -> PluginServiceResult<Vec<PluginSummary>>;
     async fn install_plugin(&self, input: InstallPluginInput)
     -> PluginServiceResult<PluginSummary>;
@@ -83,6 +89,12 @@ impl Deref for PluginServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for PluginServiceHandle {
+    fn dispose(&self) -> DisposeResult {
+        self.0.dispose()
     }
 }
 

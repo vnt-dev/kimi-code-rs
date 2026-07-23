@@ -7,6 +7,7 @@ pub mod errors;
 pub mod github_resolver;
 pub mod manager;
 pub mod manifest;
+pub mod plugin_service;
 pub mod source;
 pub mod store;
 pub mod types;
@@ -30,6 +31,7 @@ pub use github_resolver::{
 };
 pub use manager::{PluginManager, PluginManagerError, PluginManagerOptions, PluginManagerResult};
 pub use manifest::{ParsedManifestResult, parse_manifest};
+pub use plugin_service::{PluginService, register_plugin_service};
 pub use source::{
     InstallSource, ResolveInstallSourceError, ResolvedSource, resolve_install_source,
 };
