@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use serde_json::{Map, Value};
 
 use crate::{
-    _base::{di::instantiation::ServiceIdentifier, utils::abort::AbortSignal},
+    _base::{
+        di::{instantiation::ServiceIdentifier, lifecycle::Disposable},
+        utils::abort::AbortSignal,
+    },
     agent::external_hooks::{HookBlockDecision, HookMatcherValue, HookResult},
 };
 
@@ -18,7 +21,7 @@ pub struct ExternalHooksRunnerTriggerArgs {
 }
 
 #[async_trait]
-pub trait ExternalHooksRunnerServiceContract: Send + Sync {
+pub trait ExternalHooksRunnerServiceContract: Disposable + Send + Sync {
     async fn trigger(&self, event: &str, args: ExternalHooksRunnerTriggerArgs) -> Vec<HookResult>;
 
     async fn trigger_block(
@@ -42,6 +45,12 @@ impl Deref for ExternalHooksRunnerServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for ExternalHooksRunnerServiceHandle {
+    fn dispose(&self) -> crate::_base::di::lifecycle::DisposeResult {
+        self.0.dispose()
     }
 }
 
