@@ -3,6 +3,7 @@
 //! Original: `packages/agent-core-v2/src/os/backends/node-local/hostProcessService.ts`.
 
 use std::{
+    collections::HashMap,
     error::Error,
     process::Stdio,
     sync::{
@@ -107,7 +108,17 @@ impl HostProcess for LocalHostProcess {
 }
 
 #[derive(Default)]
-pub struct LocalHostProcessService;
+pub struct LocalHostProcessService {
+    base_environment: Option<Arc<HashMap<String, String>>>,
+}
+
+impl LocalHostProcessService {
+    pub fn with_environment(environment: Arc<HashMap<String, String>>) -> Self {
+        Self {
+            base_environment: Some(environment),
+        }
+    }
+}
 
 #[async_trait]
 impl HostProcessService for LocalHostProcessService {
@@ -117,7 +128,7 @@ impl HostProcessService for LocalHostProcessService {
         args: &[String],
         options: HostProcessOptions,
     ) -> Result<Arc<dyn HostProcess>, HostProcessError> {
-        let mut process = build_command(command, args, &options);
+        let mut process = build_command(command, args, &options, self.base_environment.as_deref());
         process
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -182,7 +193,12 @@ impl HostProcessService for LocalHostProcessService {
     }
 }
 
-fn build_command(command: &str, args: &[String], options: &HostProcessOptions) -> Command {
+fn build_command(
+    command: &str,
+    args: &[String],
+    options: &HostProcessOptions,
+    base_environment: Option<&HashMap<String, String>>,
+) -> Command {
     let mut process = match &options.shell {
         None => {
             let mut process = Command::new(command);
@@ -205,6 +221,9 @@ fn build_command(command: &str, args: &[String], options: &HostProcessOptions) -
             process
         }
     };
+    if let Some(environment) = base_environment {
+        process.env_clear().envs(environment);
+    }
     if let Some(cwd) = &options.cwd {
         process.current_dir(cwd);
     }
@@ -355,7 +374,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawns_captures_output_merges_environment_and_caches_exit() {
-        let service = LocalHostProcessService;
+        let service = LocalHostProcessService::default();
         let process = service
             .spawn(
                 "sh",
@@ -382,8 +401,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_environment_is_base_then_spawn_overrides_win() {
+        let service = LocalHostProcessService::with_environment(Arc::new(
+            [
+                ("KIMI_BASE".into(), "base".into()),
+                ("KIMI_OVERRIDE".into(), "old".into()),
+            ]
+            .into(),
+        ));
+        let process = service
+            .spawn(
+                "/bin/sh",
+                &[
+                    "-c".into(),
+                    "printf '%s:%s' \"$KIMI_BASE\" \"$KIMI_OVERRIDE\"".into(),
+                ],
+                HostProcessOptions {
+                    env: Some([("KIMI_OVERRIDE".into(), "new".into())].into()),
+                    ..HostProcessOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        let mut output = String::new();
+        process
+            .stdout()
+            .lock()
+            .await
+            .read_to_string(&mut output)
+            .await
+            .unwrap();
+        assert_eq!(output, "base:new");
+        assert_eq!(process.wait().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn missing_command_returns_coded_error_with_details_and_cause() {
-        let error = LocalHostProcessService
+        let error = LocalHostProcessService::default()
             .spawn(
                 "definitely-not-a-real-command-42",
                 &[],
@@ -404,7 +458,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn terminates_a_running_process_group() {
-        let process = LocalHostProcessService
+        let process = LocalHostProcessService::default()
             .spawn(
                 "sh",
                 &["-c".into(), "sleep 30".into()],

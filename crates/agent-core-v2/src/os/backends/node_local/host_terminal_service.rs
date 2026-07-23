@@ -3,6 +3,7 @@
 //! Original: `packages/agent-core-v2/src/os/backends/node-local/hostTerminalService.ts`.
 
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     sync::{Arc, Mutex, Weak},
 };
@@ -67,6 +68,16 @@ impl TerminalProcess for LocalTerminalProcess {
 #[derive(Default)]
 pub struct LocalHostTerminalService {
     processes: Mutex<Vec<Weak<LocalTerminalProcess>>>,
+    environment: Option<Arc<HashMap<String, String>>>,
+}
+
+impl LocalHostTerminalService {
+    pub fn with_environment(environment: Arc<HashMap<String, String>>) -> Self {
+        Self {
+            processes: Mutex::new(Vec::new()),
+            environment: Some(environment),
+        }
+    }
 }
 
 #[async_trait]
@@ -76,7 +87,8 @@ impl HostTerminalService for LocalHostTerminalService {
         options: TerminalSpawnOptions,
     ) -> Result<Arc<dyn TerminalProcess>, TerminalProcessError> {
         let size = pty_size(options.cols, options.rows)?;
-        let spawned = tokio::task::spawn_blocking(move || spawn_pty(options, size))
+        let environment = self.environment.clone();
+        let spawned = tokio::task::spawn_blocking(move || spawn_pty(options, size, environment))
             .await
             .map_err(terminal_error)??;
         let child = spawned.child;
@@ -124,10 +136,17 @@ impl Drop for LocalHostTerminalService {
 fn spawn_pty(
     options: TerminalSpawnOptions,
     size: PtySize,
+    environment: Option<Arc<HashMap<String, String>>>,
 ) -> Result<SpawnedPty, TerminalProcessError> {
     let pair = native_pty_system().openpty(size).map_err(terminal_error)?;
     let mut command = CommandBuilder::new(options.shell);
     command.cwd(options.cwd);
+    if let Some(environment) = environment {
+        command.env_clear();
+        for (key, value) in environment.iter() {
+            command.env(key, value);
+        }
+    }
     let child = pair.slave.spawn_command(command).map_err(terminal_error)?;
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(terminal_error)?;
@@ -233,7 +252,16 @@ mod tests {
 
     #[tokio::test]
     async fn spawns_writes_resizes_emits_output_and_exit() {
-        let service = LocalHostTerminalService::default();
+        let service = LocalHostTerminalService::with_environment(Arc::new(
+            [
+                ("KIMI_PTY_ENV".into(), "snapshot".into()),
+                (
+                    "PATH".into(),
+                    std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
+                ),
+            ]
+            .into(),
+        ));
         let process = service
             .spawn(TerminalSpawnOptions {
                 cwd: std::env::temp_dir().to_string_lossy().into_owned(),
@@ -252,12 +280,14 @@ mod tests {
             let _ = exit_tx.send(*exit);
         });
         process.resize(100, 30).unwrap();
-        process.write("printf __PTY_OK__; exit\n").unwrap();
+        process
+            .write("printf __PTY_OK__:$KIMI_PTY_ENV; exit\n")
+            .unwrap();
         let output = tokio::time::timeout(Duration::from_secs(3), async {
             let mut output = String::new();
             while let Some(chunk) = data_rx.recv().await {
                 output.push_str(&chunk);
-                if output.contains("__PTY_OK__") {
+                if output.contains("__PTY_OK__:snapshot") {
                     break;
                 }
             }
@@ -265,7 +295,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert!(output.contains("__PTY_OK__"));
+        assert!(output.contains("__PTY_OK__:snapshot"));
         let exit = tokio::time::timeout(Duration::from_secs(3), exit_rx.recv())
             .await
             .unwrap()
