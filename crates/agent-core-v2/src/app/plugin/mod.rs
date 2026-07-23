@@ -2,6 +2,7 @@
 
 pub mod archive;
 pub mod commands;
+pub mod contract;
 pub mod errors;
 pub mod github_resolver;
 pub mod manifest;
@@ -13,6 +14,11 @@ pub use archive::{PluginArchiveError, download_zip, extract_zip};
 pub use commands::{
     LoadPluginCommandOptions, ParseCommandError, ParseCommandTextOptions, expand_command_arguments,
     load_plugin_command, parse_command_text,
+};
+pub use contract::{
+    GetPluginInfoInput, InstallPluginInput, PLUGIN_SERVICE_ID, PluginServiceContract,
+    PluginServiceError, PluginServiceHandle, PluginServiceResult, RemovePluginInput,
+    SetPluginEnabledInput, SetPluginMcpServerEnabledInput,
 };
 pub use errors::{
     PLUGIN_ERRORS, PLUGIN_LOAD_FAILED, PLUGIN_NOT_FOUND, ensure_plugin_errors_registered,
