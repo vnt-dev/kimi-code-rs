@@ -2,13 +2,16 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/git/git.ts`.
 
-use std::{collections::HashSet, ops::Deref, sync::Arc};
+use std::{collections::HashSet, error::Error, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use crate::_base::{di::instantiation::ServiceIdentifier, errors::errors::Error2};
+use crate::_base::di::instantiation::ServiceIdentifier;
+
+pub type GitServiceError = Box<dyn Error + Send + Sync>;
+pub type GitServiceResult<T> = Result<T, GitServiceError>;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -75,14 +78,14 @@ pub trait GitServiceContract: Send + Sync {
         &self,
         cwd: &str,
         path_filter: Option<&HashSet<String>>,
-    ) -> Result<FsGitStatusResponse, Error2>;
+    ) -> GitServiceResult<FsGitStatusResponse>;
 
     async fn diff(
         &self,
         cwd: &str,
         relative_path: &str,
         absolute_path: &str,
-    ) -> Result<FsDiffResponse, Error2>;
+    ) -> GitServiceResult<FsDiffResponse>;
 }
 
 #[derive(Clone)]
