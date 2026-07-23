@@ -30,6 +30,44 @@ pub enum SkillActivationTrigger {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SkillActivationOriginKind {
+    #[serde(rename = "skill_activation")]
+    SkillActivation,
+}
+
+// Original: contextMemory/types.ts, SkillActivationOrigin.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillActivationOrigin {
+    pub kind: SkillActivationOriginKind,
+    pub activation_id: String,
+    pub skill_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_args: Option<String>,
+    pub trigger: SkillActivationTrigger,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<SkillSource>,
+}
+
+impl From<SkillActivationOrigin> for PromptOrigin {
+    fn from(origin: SkillActivationOrigin) -> Self {
+        Self::SkillActivation {
+            activation_id: origin.activation_id,
+            skill_name: origin.skill_name,
+            skill_args: origin.skill_args,
+            trigger: origin.trigger,
+            skill_type: origin.skill_type,
+            skill_path: origin.skill_path,
+            skill_source: origin.skill_source,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PluginCommandTrigger {
     UserSlash,
@@ -182,6 +220,24 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&USER_PROMPT_ORIGIN).unwrap(),
             json!({ "kind": "user" })
+        );
+    }
+
+    #[test]
+    fn standalone_skill_activation_origin_matches_prompt_origin_wire_shape() {
+        let origin = SkillActivationOrigin {
+            kind: SkillActivationOriginKind::SkillActivation,
+            activation_id: "activation-1".into(),
+            skill_name: "review".into(),
+            skill_args: None,
+            trigger: SkillActivationTrigger::ModelTool,
+            skill_type: Some("flow".into()),
+            skill_path: Some("/skills/review/SKILL.md".into()),
+            skill_source: Some(SkillSource::Builtin),
+        };
+        assert_eq!(
+            serde_json::to_value(&origin).unwrap(),
+            serde_json::to_value(PromptOrigin::from(origin)).unwrap()
         );
     }
 
