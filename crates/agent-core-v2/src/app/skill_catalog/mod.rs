@@ -1,6 +1,7 @@
 //! Skill discovery, parsing, and catalog services.
 
 pub mod builtin;
+pub mod builtin_source;
 pub mod config_section;
 pub mod discovery;
 pub mod errors;
@@ -16,6 +17,10 @@ pub use builtin::{
     BUILTIN_SKILLS, CHECK_KIMI_CODE_DOCS_SKILL, CUSTOM_THEME_SKILL, IMPORT_FROM_CC_CODEX_SKILL,
     MCP_CONFIG_SKILL, SUB_SKILL_CONSOLIDATE, SUB_SKILL_PARENT, SUB_SKILL_REVIEW,
     UPDATE_CONFIG_SKILL, WRITE_GOAL_SKILL,
+};
+pub use builtin_source::{
+    BUILTIN_SKILL_SOURCE_ID, BuiltinSkillSource, BuiltinSkillSourceHandle,
+    register_builtin_skill_source,
 };
 pub use config_section::{
     EXTRA_SKILL_DIRS_CONFIG_SCHEMA, EXTRA_SKILL_DIRS_SECTION,
