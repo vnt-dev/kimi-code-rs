@@ -28,6 +28,29 @@ pub enum HookEventType {
     Notification,
 }
 
+impl HookEventType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PreToolUse => "PreToolUse",
+            Self::PostToolUse => "PostToolUse",
+            Self::PostToolUseFailure => "PostToolUseFailure",
+            Self::PermissionRequest => "PermissionRequest",
+            Self::PermissionResult => "PermissionResult",
+            Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::Stop => "Stop",
+            Self::StopFailure => "StopFailure",
+            Self::Interrupt => "Interrupt",
+            Self::SessionStart => "SessionStart",
+            Self::SessionEnd => "SessionEnd",
+            Self::SubagentStart => "SubagentStart",
+            Self::SubagentStop => "SubagentStop",
+            Self::PreCompact => "PreCompact",
+            Self::PostCompact => "PostCompact",
+            Self::Notification => "Notification",
+        }
+    }
+}
+
 pub const HOOK_EVENT_TYPES: [HookEventType; 16] = [
     HookEventType::PreToolUse,
     HookEventType::PostToolUse,
