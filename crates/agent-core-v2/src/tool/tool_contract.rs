@@ -1,6 +1,22 @@
+//! Foundational tool metadata, execution, result, and resource-access contracts.
+//!
+//! Original: `packages/agent-core-v2/src/tool/toolContract.ts` and
+//! `packages/agent-core-v2/src/tool/toolInputDisplay.ts`.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
-use crate::kosong::contract::message::{ContentPart, ToolCall};
+use crate::{
+    _base::utils::abort::AbortSignal,
+    kosong::contract::{
+        message::{ContentPart, ToolCall},
+        request_trace::LlmRequestTrace,
+        tool::Tool,
+    },
+};
 
 pub use kimi_code_protocol::ToolInputDisplay;
 
@@ -33,12 +49,18 @@ impl From<&str> for ExecutableToolOutput {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolDeliveryMessage {
     pub content: Vec<ContentPart>,
-    pub tool_calls: Vec<ToolCall>,
+    pub tool_calls: Option<Vec<ToolCall>>,
     pub origin: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolDeliveryKind {
+    Steer,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolDelivery {
+    pub kind: ToolDeliveryKind,
     pub message: ToolDeliveryMessage,
 }
 
@@ -96,6 +118,81 @@ pub struct ToolUpdate {
     pub custom_data: Option<serde_json::Value>,
 }
 
+pub type ToolUpdateCallback = Arc<dyn Fn(ToolUpdate) + Send + Sync>;
+pub type ForegroundTaskStartCallback = Arc<dyn Fn(String) + Send + Sync>;
+
+#[derive(Clone)]
+pub struct ExecutableToolContext {
+    pub turn_id: u64,
+    pub tool_call_id: String,
+    pub trace: Option<LlmRequestTrace>,
+    pub metadata: Option<serde_json::Value>,
+    pub signal: AbortSignal,
+    pub on_update: Option<ToolUpdateCallback>,
+    pub on_foreground_task_start: Option<ForegroundTaskStartCallback>,
+}
+
+pub type ToolExecute =
+    Arc<dyn Fn(ExecutableToolContext) -> BoxFuture<'static, ExecutableToolResult> + Send + Sync>;
+pub type ToolRuleMatcher = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+#[derive(Clone)]
+pub struct RunnableToolExecution {
+    pub accesses: Option<ToolAccesses>,
+    pub display: Option<ToolInputDisplay>,
+    pub description: Option<String>,
+    pub stop_batch_after_this: Option<bool>,
+    pub approval_rule: String,
+    pub matches_rule: Option<ToolRuleMatcher>,
+    execute: ToolExecute,
+}
+
+impl RunnableToolExecution {
+    pub fn new(approval_rule: impl Into<String>, execute: ToolExecute) -> Self {
+        Self {
+            accesses: None,
+            display: None,
+            description: None,
+            stop_batch_after_this: None,
+            approval_rule: approval_rule.into(),
+            matches_rule: None,
+            execute,
+        }
+    }
+
+    // Original: RunnableToolExecution.execute(ctx).
+    pub async fn execute(&self, context: ExecutableToolContext) -> ExecutableToolResult {
+        (self.execute)(context).await
+    }
+
+    pub fn matches_rule(&self, rule_args: &str) -> bool {
+        self.matches_rule
+            .as_ref()
+            .is_some_and(|matches| matches(rule_args))
+    }
+}
+
+#[derive(Clone)]
+pub enum ToolExecution {
+    Runnable(RunnableToolExecution),
+    Error(ExecutableToolResult),
+}
+
+// Original: ExecutableTool.resolveExecution(). Promise-based implementations
+// become async methods while synchronous implementations can return immediately.
+#[async_trait]
+pub trait ExecutableTool: Send + Sync {
+    type Input: Send;
+
+    fn tool(&self) -> &Tool;
+
+    async fn resolve_execution(&self, input: Self::Input) -> ToolExecution;
+}
+
+pub trait BuiltinTool: ExecutableTool {}
+
+impl<T: ExecutableTool> BuiltinTool for T {}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolDefinition {
     pub name: String,
@@ -103,6 +200,58 @@ pub struct ToolDefinition {
     pub parameters: Option<serde_json::Map<String, serde_json::Value>>,
     pub source: Option<ToolSource>,
     pub info: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+    pub parameters: Option<serde_json::Map<String, serde_json::Value>>,
+    pub source: ToolSource,
+    pub info: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl ToolDefinition {
+    pub fn with_source(self, default_source: ToolSource) -> ToolInfo {
+        ToolInfo {
+            name: self.name,
+            description: self.description,
+            parameters: self.parameters,
+            source: self.source.unwrap_or(default_source),
+            info: self.info,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolResult {
+    pub output: ExecutableToolOutput,
+    pub is_error: bool,
+    pub stop_turn: Option<bool>,
+    pub truncated: Option<bool>,
+    pub note: Option<String>,
+    pub delivery: Option<ToolDelivery>,
+    pub description: Option<String>,
+    pub display: Option<ToolInputDisplay>,
+    pub approval_rule: Option<String>,
+    pub stop_batch_after_this: Option<bool>,
+}
+
+impl From<ExecutableToolResult> for ToolResult {
+    fn from(result: ExecutableToolResult) -> Self {
+        Self {
+            output: result.output,
+            is_error: result.is_error,
+            stop_turn: result.stop_turn,
+            truncated: result.truncated,
+            note: result.note,
+            delivery: result.delivery,
+            description: None,
+            display: None,
+            approval_rule: None,
+            stop_batch_after_this: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -248,6 +397,7 @@ pub fn is_mcp_tool_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::_base::utils::abort::AbortController;
 
     #[test]
     fn access_conflicts_preserve_write_recursive_and_normalization_rules() {
@@ -281,5 +431,105 @@ mod tests {
     fn mcp_name_requires_exact_prefix() {
         assert!(is_mcp_tool_name("mcp__server__tool"));
         assert!(!is_mcp_tool_name("mcp_server__tool"));
+    }
+
+    struct EchoTool {
+        tool: Tool,
+    }
+
+    #[async_trait]
+    impl ExecutableTool for EchoTool {
+        type Input = String;
+
+        fn tool(&self) -> &Tool {
+            &self.tool
+        }
+
+        async fn resolve_execution(&self, input: Self::Input) -> ToolExecution {
+            let execute = Arc::new(move |context: ExecutableToolContext| {
+                let input = input.clone();
+                Box::pin(async move {
+                    if let Some(update) = context.on_update {
+                        update(ToolUpdate {
+                            kind: ToolUpdateKind::Stdout,
+                            text: Some(input.clone()),
+                            percent: None,
+                            custom_kind: None,
+                            custom_data: None,
+                        });
+                    }
+                    ExecutableToolResult::success(input)
+                }) as BoxFuture<'static, ExecutableToolResult>
+            });
+            ToolExecution::Runnable(RunnableToolExecution::new("Echo(*)", execute))
+        }
+    }
+
+    #[tokio::test]
+    async fn executable_tool_resolves_then_runs_with_context_callbacks() {
+        let tool = EchoTool {
+            tool: Tool {
+                name: "Echo".into(),
+                description: "Echo input".into(),
+                parameters: serde_json::Map::new(),
+                deferred: None,
+            },
+        };
+        assert_eq!(tool.tool().name, "Echo");
+        let ToolExecution::Runnable(mut execution) = tool.resolve_execution("hello".into()).await
+        else {
+            panic!("expected runnable execution")
+        };
+        execution.matches_rule = Some(Arc::new(|rule| rule == "*"));
+        assert!(execution.matches_rule("*"));
+        assert!(!execution.matches_rule("other"));
+
+        let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let updates_for_callback = Arc::clone(&updates);
+        let result = execution
+            .execute(ExecutableToolContext {
+                turn_id: 7,
+                tool_call_id: "call-1".into(),
+                trace: None,
+                metadata: None,
+                signal: AbortController::new().signal(),
+                on_update: Some(Arc::new(move |update| {
+                    updates_for_callback.lock().unwrap().push(update);
+                })),
+                on_foreground_task_start: None,
+            })
+            .await;
+        assert_eq!(result.output, ExecutableToolOutput::Text("hello".into()));
+        assert!(!result.is_error);
+        assert_eq!(updates.lock().unwrap()[0].text.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn definitions_resolve_default_source_and_delivery_preserves_optional_calls() {
+        let info = ToolDefinition {
+            name: "Read".into(),
+            description: "Read a file".into(),
+            parameters: None,
+            source: None,
+            info: None,
+        }
+        .with_source(ToolSource::Builtin);
+        assert_eq!(info.source, ToolSource::Builtin);
+
+        let result = ExecutableToolResult {
+            delivery: Some(ToolDelivery {
+                kind: ToolDeliveryKind::Steer,
+                message: ToolDeliveryMessage {
+                    content: Vec::new(),
+                    tool_calls: None,
+                    origin: None,
+                },
+            }),
+            ..ExecutableToolResult::success("done")
+        };
+        assert_eq!(result.delivery.unwrap().kind, ToolDeliveryKind::Steer);
+        let finalized = ToolResult::from(ExecutableToolResult::success("done"));
+        assert_eq!(finalized.output, ExecutableToolOutput::Text("done".into()));
+        assert!(!finalized.is_error);
     }
 }
