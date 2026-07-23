@@ -1,6 +1,7 @@
 pub mod config_section;
 pub mod contract;
 pub mod errors;
+pub mod lifecycle_recorder;
 pub mod managed_task;
 pub mod notification_builder;
 pub mod notification_xml;
@@ -16,6 +17,7 @@ pub mod types;
 pub use config_section::*;
 pub use contract::*;
 pub use errors::*;
+pub use lifecycle_recorder::*;
 pub use managed_task::*;
 pub use notification_builder::*;
 pub use notification_xml::*;
