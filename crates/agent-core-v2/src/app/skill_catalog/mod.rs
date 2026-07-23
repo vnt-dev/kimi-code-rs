@@ -12,6 +12,7 @@ pub mod roots;
 pub mod runtime_options;
 pub mod source;
 pub mod types;
+pub mod user_source;
 
 pub use builtin::{
     BUILTIN_SKILLS, CHECK_KIMI_CODE_DOCS_SKILL, CUSTOM_THEME_SKILL, IMPORT_FROM_CC_CODEX_SKILL,
@@ -54,4 +55,8 @@ pub use types::{
     SkillDefinition, SkillMetadata, SkillPluginContext, SkillRoot, SkillSource, SkillSummary,
     SkippedSkill, is_inline_skill_type, is_supported_skill_type, is_user_activatable_skill_type,
     normalize_skill_name, summarize_skill,
+};
+pub use user_source::{
+    USER_FILE_SKILL_SOURCE_ID, UserFileSkillSource, UserFileSkillSourceHandle,
+    register_user_file_skill_source,
 };
