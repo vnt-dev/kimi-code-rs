@@ -524,12 +524,27 @@ fn apply_frame_append(
         return ApplyResult::unchanged(state);
     }
 
-    let mut next_frame = frame.clone();
-    match &mut next_frame {
-        TranscriptFrame::Text(frame) => frame.text = merged.text,
-        TranscriptFrame::Thinking(frame) => frame.text = merged.text,
-        _ => unreachable!("frame kind was checked above"),
-    }
+    let next_frame = match frame {
+        TranscriptFrame::Text(frame) => {
+            let mut frame = frame.clone();
+            frame.text = merged.text;
+            TranscriptFrame::Text(frame)
+        }
+        TranscriptFrame::Thinking(frame) => {
+            let mut frame = frame.clone();
+            frame.text = merged.text;
+            TranscriptFrame::Thinking(frame)
+        }
+        _ => {
+            return ApplyResult::gap(
+                state,
+                OffsetGap {
+                    expected: 0,
+                    got: offset,
+                },
+            );
+        }
+    };
     let mut next_step = step.clone();
     for candidate in &mut next_step.frames {
         if candidate.frame_id() == frame_id {
