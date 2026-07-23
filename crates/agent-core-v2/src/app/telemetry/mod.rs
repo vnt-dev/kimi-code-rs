@@ -2,6 +2,7 @@
 
 pub mod agent_telemetry_context;
 pub mod agent_telemetry_context_service;
+pub mod cloud_appender;
 pub mod cloud_transport;
 pub mod console_appender;
 pub mod contract;
@@ -15,6 +16,7 @@ pub use agent_telemetry_context::*;
 pub use agent_telemetry_context_service::{
     AgentTelemetryContextService, register_agent_telemetry_context_service,
 };
+pub use cloud_appender::*;
 pub use cloud_transport::*;
 pub use console_appender::{ConsoleAppender, ConsoleAppenderOptions};
 pub use contract::*;
