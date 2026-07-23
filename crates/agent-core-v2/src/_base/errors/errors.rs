@@ -116,6 +116,7 @@ pub struct Error2Options {
     pub name: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct Error2 {
     pub name: String,
     pub code: String,

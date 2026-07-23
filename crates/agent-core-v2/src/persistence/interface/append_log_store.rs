@@ -20,7 +20,7 @@ use crate::_base::{
 
 use super::storage::{STORAGE_CORRUPTED, STORAGE_DECODE_FAILED, StorageError};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AppendLogCorruptedError {
     inner: StorageError,
 }
@@ -77,7 +77,7 @@ impl Error for AppendLogCorruptedError {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum AppendLogError {
     #[error(transparent)]
     Storage(#[from] StorageError),

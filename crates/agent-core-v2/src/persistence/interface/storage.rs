@@ -93,7 +93,7 @@ pub fn ensure_storage_errors_registered() {
     std::sync::LazyLock::force(&STORAGE_ERRORS_REGISTERED);
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct StorageError {
     inner: Box<Error2>,
 }
