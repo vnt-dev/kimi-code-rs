@@ -37,6 +37,8 @@ use crate::{
         event::event_bus::{DomainEvent, EventBusHandle},
         task::contract::TaskState,
     },
+    hooks::HookRegisterOptions,
+    wire::contract::WireServiceHandle,
 };
 
 use super::{
@@ -46,10 +48,10 @@ use super::{
     AgentTaskPersistence, AgentTaskServiceContract, AgentTaskServiceResult, AgentTaskSettlement,
     AgentTaskSettlementStatus, AgentTaskSink, AgentTaskTrackOptions, AgentTrackedTaskHandle,
     ForegroundTaskReleaseReason, ManagedTaskState, NOTIFICATION_FALLBACK_PREVIEW_BYTES,
-    RegisterAgentTaskOptions, RestoredTaskRegistry, ScheduledTaskNotification, TaskModelState,
-    TaskNotificationDelivery, TaskOutputAction, active_background_task_reminder,
-    check_task_registration, coerce_timeout_settlement, empty_output_snapshot,
-    finish_task_notification, generate_task_id, is_compaction_splice,
+    RegisterAgentTaskOptions, RestoredTaskRegistry, ScheduledTaskNotification, TASK_MODEL,
+    TASK_NOTIFICATION_DELIVERY_MODEL, TaskModelState, TaskNotificationDelivery, TaskOutputAction,
+    active_background_task_reminder, check_task_registration, coerce_timeout_settlement,
+    empty_output_snapshot, finish_task_notification, generate_task_id, is_compaction_splice,
     needs_notification_fallback_preview, normalize_reason, resolve_agent_task_config,
     should_list_task,
 };
@@ -521,6 +523,35 @@ impl AgentTaskService {
         self.inner
             .disposables
             .add(injector.register(ACTIVE_BACKGROUND_TASK_INJECTION_VARIANT.into(), provider));
+    }
+
+    // Original: AgentTaskService constructor's Wire onDidRestore hook. Models
+    // must be registered before replay begins; the hook itself runs restoration
+    // before forwarding to the next ordered handler.
+    pub fn install_restore_hook(&self, wire: &WireServiceHandle) -> AgentTaskServiceResult<()> {
+        std::sync::LazyLock::force(&TASK_MODEL);
+        std::sync::LazyLock::force(&TASK_NOTIFICATION_DELIVERY_MODEL);
+        let service = self.clone();
+        let wire_for_hook = wire.clone();
+        let disposable = wire.hooks().on_did_restore.register(
+            "task",
+            Arc::new(move |context, next| {
+                let service = service.clone();
+                let wire = wire_for_hook.clone();
+                async move {
+                    let wire_tasks = wire.get_model(&TASK_MODEL);
+                    let delivered = wire.get_model(&TASK_NOTIFICATION_DELIVERY_MODEL);
+                    service
+                        .restore_after_replay(&wire_tasks, &delivered, current_time_millis())
+                        .await?;
+                    next(context).await
+                }
+                .boxed()
+            }),
+            HookRegisterOptions::default(),
+        )?;
+        self.inner.disposables.add(disposable);
+        Ok(())
     }
 
     // Original: AgentTaskService.activeBackgroundTaskReminder(). The pending
@@ -1673,16 +1704,17 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
 mod tests {
     use crate::_base::event::{Emitter, Event};
     use async_trait::async_trait;
+    use futures_util::stream;
     use serde_json::{Map, Value};
 
     use super::*;
     use crate::{
-        _base::di::lifecycle::{DisposableHandle, to_disposable},
+        _base::di::lifecycle::{DisposableHandle, disposable_none, to_disposable},
         agent::context_injector::{ContextInjectionContext, ContextInjectionError},
         agent::task::{
             AgentTask, AgentTaskConfig, AgentTaskError, AgentTaskInfoBase,
             AgentTaskSettlementStatus, AgentTaskSink, AgentTaskStatus, AgentTaskTrackOptions,
-            RegisterAgentTaskOptions, TaskOutputAction,
+            RegisterAgentTaskOptions, TaskOutputAction, task_started,
         },
         app::event::{event_bus::EventBusContract, event_bus_service::EventBusService},
         kosong::contract::message::{Message, Role},
@@ -1692,13 +1724,70 @@ mod tests {
                 node_fs::atomic_document_store::JsonAtomicDocumentStore,
             },
             interface::{
+                append_log_store::{
+                    AppendLogError, AppendLogOptions, AppendLogStoreHandle, AppendLogStoreService,
+                    AppendLogValueStream,
+                },
                 atomic_document_store::{AtomicDocumentStoreHandle, AtomicDocumentStoreService},
                 storage::{FileSystemStorageService, FileSystemStorageServiceHandle},
             },
         },
+        wire::wire_service::{DomainEventPublisher, WireBlobService, WireService},
     };
 
     struct StubTask;
+
+    #[derive(Default)]
+    struct EmptyAppendLog;
+
+    #[async_trait]
+    impl AppendLogStoreService for EmptyAppendLog {
+        fn append_value(&self, _: &str, _: &str, _: Value, _: AppendLogOptions) {}
+
+        fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
+            Box::pin(stream::empty())
+        }
+
+        async fn rewrite_values(
+            &self,
+            _: &str,
+            _: &str,
+            _: Vec<Value>,
+        ) -> Result<(), AppendLogError> {
+            Ok(())
+        }
+
+        async fn flush(&self) -> Result<(), AppendLogError> {
+            Ok(())
+        }
+
+        async fn close(&self) -> Result<(), AppendLogError> {
+            Ok(())
+        }
+
+        fn acquire(&self, _: &str, _: &str) -> DisposableHandle {
+            disposable_none()
+        }
+    }
+
+    struct IdentityBlobs;
+
+    #[async_trait]
+    impl WireBlobService for IdentityBlobs {
+        async fn offload_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+            Ok(parts)
+        }
+
+        async fn load_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+            Ok(parts)
+        }
+    }
+
+    struct NoopDomainEvents;
+
+    impl DomainEventPublisher for NoopDomainEvents {
+        fn publish(&self, _: Value) {}
+    }
 
     #[derive(Default)]
     struct TestContextInjector {
@@ -2561,6 +2650,48 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn restore_hook_reconciles_wire_models_before_next_and_is_disposable() {
+        let (_persistence, service, effects) = service_with_effects();
+        let wire = WireServiceHandle(Arc::new(WireService::new(
+            "agents/main",
+            AppendLogStoreHandle(Arc::new(EmptyAppendLog)),
+            Arc::new(IdentityBlobs),
+            Arc::new(NoopDomainEvents),
+        )));
+        service.install_restore_hook(&wire).unwrap();
+        wire.dispatch([
+            task_started(task("bash-wire0001", AgentTaskStatus::Running, true)).unwrap(),
+        ])
+        .unwrap();
+
+        wire.hooks()
+            .on_did_restore
+            .run(&mut (), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            service.get_task("bash-wire0001").unwrap().base.status,
+            AgentTaskStatus::Lost
+        );
+        assert_eq!(
+            effects.terminated.lock().unwrap().as_slice(),
+            ["bash-wire0001"]
+        );
+
+        service.dispose().unwrap();
+        wire.dispatch([
+            task_started(task("bash-wire0002", AgentTaskStatus::Running, true)).unwrap(),
+        ])
+        .unwrap();
+        wire.hooks()
+            .on_did_restore
+            .run(&mut (), None)
+            .await
+            .unwrap();
+        assert!(service.get_task("bash-wire0002").is_none());
+    }
+
     #[test]
     fn context_splice_arms_and_consumes_active_task_reminder_and_delivery() {
         let (_persistence, service) = service();
@@ -2604,17 +2735,20 @@ mod tests {
             Some(ACTIVE_BACKGROUND_TASK_INJECTION_VARIANT)
         );
 
-        bus.publish(DomainEvent::new(
-            "context.spliced",
-            Map::from_iter([
-                ("deleteCount".into(), Value::from(1)),
-                (
-                    "messages".into(),
-                    serde_json::to_value([context_message(PromptOrigin::CompactionSummary)])
-                        .unwrap(),
-                ),
-            ]),
-        ));
+        EventBusContract::publish(
+            &*bus,
+            DomainEvent::new(
+                "context.spliced",
+                Map::from_iter([
+                    ("deleteCount".into(), Value::from(1)),
+                    (
+                        "messages".into(),
+                        serde_json::to_value([context_message(PromptOrigin::CompactionSummary)])
+                            .unwrap(),
+                    ),
+                ]),
+            ),
+        );
         let provider = injector.provider.lock().unwrap().clone().unwrap();
         let injected = provider(ContextInjectionContext {
             injected_positions: vec![],
