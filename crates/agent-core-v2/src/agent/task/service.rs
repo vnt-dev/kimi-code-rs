@@ -17,6 +17,7 @@ use indexmap::IndexMap;
 use crate::{
     _base::{
         di::lifecycle::DisposableHandle,
+        errors::unexpected_error::on_unexpected_error,
         utils::abort::{
             AbortError, AbortLink, AbortSignal, abort_error, abortable, user_cancellation_reason,
         },
@@ -623,6 +624,108 @@ impl AgentTaskService {
         Ok(self.terminal_info(task_id).await)
     }
 
+    // Original: AgentTaskService.detach() and detachEntry().
+    pub fn detach(&self, task_id: &str) -> Option<AgentTaskInfo> {
+        self.detach_entry(task_id, false)
+    }
+
+    fn detach_entry(&self, task_id: &str, via_timeout: bool) -> Option<AgentTaskInfo> {
+        let (release, signal_link, old_timeout, detach_timeout, callback, task) = {
+            let mut state = self.state();
+            let entry = state.tasks.get_mut(task_id)?;
+            if entry.state.status.is_terminal() || entry.state.is_detached() {
+                return Some(entry.state.to_info());
+            }
+            let release = entry.state.take_foreground_release()?;
+            let detach_timeout = entry.state.apply_detach_timeout();
+            let old_timeout = detach_timeout.and_then(|_| entry.timeout_handle.take());
+            (
+                release,
+                entry.foreground_signal_link.take(),
+                old_timeout,
+                detach_timeout,
+                entry.state.on_detach.clone(),
+                entry.state.projection.registered_task(),
+            )
+        };
+        drop(signal_link);
+        if let Some(timeout) = old_timeout {
+            timeout.abort();
+        }
+        if let Some(timeout_ms) = detach_timeout
+            && timeout_ms > 0
+        {
+            self.arm_manager_timeout(task_id, timeout_ms);
+        }
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            if let Some(callback) = callback {
+                callback();
+            } else if let Some(task) = task {
+                task.on_detach();
+            }
+        }));
+
+        let info = {
+            let persistence = Arc::clone(&self.inner.persistence);
+            let mut state = self.state();
+            let entry = state.tasks.get_mut(task_id)?;
+            if let Some(pending) = entry.state.output.start_output_persist() {
+                entry.append_task_output(Arc::clone(&persistence), pending);
+            }
+            drop(entry.persist_live(persistence));
+            entry.state.to_info()
+        };
+        if let Err(error) = self.inner.effects.record_task_started(&info) {
+            on_unexpected_error(error.as_ref());
+        }
+        release.resolve(if via_timeout {
+            ForegroundTaskReleaseReason::TimeoutDetached
+        } else {
+            ForegroundTaskReleaseReason::Detached
+        });
+        Some(self.get_task(task_id).unwrap_or(info))
+    }
+
+    // Original: AgentTaskService.armManagerTimeout().
+    fn arm_manager_timeout(&self, task_id: &str, timeout_ms: u64) {
+        let service = self.clone();
+        let task_id_owned = task_id.to_owned();
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
+            let auto_background = {
+                let mut state = service.state();
+                let Some(entry) = state.tasks.get_mut(&task_id_owned) else {
+                    return;
+                };
+                entry.timeout_handle = None;
+                entry.state.can_auto_background_on_timeout()
+            };
+            if auto_background {
+                service.detach_entry(&task_id_owned, true);
+            } else {
+                let _ = service
+                    .terminate_with_grace(
+                        &task_id_owned,
+                        None,
+                        AbortError::new("Timed out"),
+                        AgentTaskSettlementStatus::TimedOut,
+                    )
+                    .await;
+            }
+        });
+        let previous = {
+            let mut state = self.state();
+            let Some(entry) = state.tasks.get_mut(task_id) else {
+                handle.abort();
+                return;
+            };
+            entry.timeout_handle.replace(handle)
+        };
+        if let Some(previous) = previous {
+            previous.abort();
+        }
+    }
+
     async fn terminal_info(&self, task_id: &str) -> Option<AgentTaskInfo> {
         let barrier = {
             let state = self.state();
@@ -908,8 +1011,8 @@ mod tests {
     use crate::{
         agent::task::{
             AgentTask, AgentTaskConfig, AgentTaskError, AgentTaskInfoBase,
-            AgentTaskSettlementStatus, AgentTaskSink, AgentTaskStatus, RegisterAgentTaskOptions,
-            TaskOutputAction,
+            AgentTaskSettlementStatus, AgentTaskSink, AgentTaskStatus, AgentTaskTrackOptions,
+            RegisterAgentTaskOptions, TaskOutputAction,
         },
         persistence::{
             backends::{
@@ -1401,6 +1504,102 @@ mod tests {
         assert_eq!(
             by_user.base.stop_reason,
             Some(user_cancellation_reason().to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn detach_runs_callback_persists_pending_output_and_records_started_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (_persistence, service, effects) = service_with_effects();
+        let detach_calls = Arc::new(AtomicUsize::new(0));
+        let detach_calls_for_callback = Arc::clone(&detach_calls);
+        service.insert_managed_task(ManagedTaskState::tracked(
+            "task-detach01".into(),
+            AgentTaskTrackOptions {
+                id_prefix: None,
+                description: "tracked".into(),
+                detached: Some(false),
+                timeout_ms: None,
+                detach_timeout_ms: Some(0),
+                signal: None,
+                force_stop: None,
+                on_detach: Some(Arc::new(move || {
+                    detach_calls_for_callback.fetch_add(1, Ordering::SeqCst);
+                })),
+                to_info: Arc::new(|base| AgentTaskInfo {
+                    base,
+                    kind: "process".into(),
+                    details: Map::new(),
+                }),
+            },
+            10,
+        ));
+        let release = service
+            .state()
+            .tasks
+            .get("task-detach01")
+            .unwrap()
+            .state
+            .foreground_release_future();
+        service
+            .state()
+            .tasks
+            .get_mut("task-detach01")
+            .unwrap()
+            .state
+            .output
+            .append("pending output".into(), false);
+
+        let detached = service.detach("task-detach01").unwrap();
+        assert_eq!(detached.base.detached, Some(true));
+        assert_eq!(detached.base.timeout_ms, Some(0));
+        assert_eq!(release.await, ForegroundTaskReleaseReason::Detached);
+        assert_eq!(detach_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *effects.started.lock().unwrap(),
+            ["task-detach01".to_owned()]
+        );
+        assert_eq!(
+            service
+                .get_output_snapshot("task-detach01", 100.0)
+                .await
+                .unwrap()
+                .preview,
+            "pending output"
+        );
+        service.detach("task-detach01");
+        assert_eq!(detach_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(effects.started.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn manager_timeout_auto_backgrounds_eligible_foreground_task() {
+        let (_persistence, service) = service();
+        service.insert_managed_task(ManagedTaskState::registered(
+            "bash-timeout1".into(),
+            Arc::new(StubTask),
+            RegisterAgentTaskOptions {
+                detached: Some(false),
+                auto_background_on_timeout: Some(true),
+                ..RegisterAgentTaskOptions::default()
+            },
+            10,
+        ));
+        let release = service
+            .state()
+            .tasks
+            .get("bash-timeout1")
+            .unwrap()
+            .state
+            .foreground_release_future();
+        service.arm_manager_timeout("bash-timeout1", 25);
+        tokio::time::advance(Duration::from_millis(25)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(release.await, ForegroundTaskReleaseReason::TimeoutDetached);
+        assert_eq!(
+            service.get_task("bash-timeout1").unwrap().base.detached,
+            Some(true)
         );
     }
 
