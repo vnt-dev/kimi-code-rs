@@ -21,6 +21,6 @@ pub use section_contributions::{
 };
 pub use section_diff::{RecordDiff, diff_records};
 pub use toml::{
-    camel_to_snake, clone_record, plain_object_to_toml, set_defined, snake_to_camel,
-    transform_plain_object,
+    apply_section_to_toml, camel_to_snake, clone_record, plain_object_to_toml, set_defined,
+    snake_to_camel, transform_plain_object, transform_toml_data,
 };
