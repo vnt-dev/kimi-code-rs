@@ -48,6 +48,80 @@ pub struct ScheduledTaskNotification {
     pub origin: PromptOrigin,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TaskNotificationDelivery {
+    scheduled_keys: HashSet<String>,
+    delivered_keys: HashSet<String>,
+}
+
+impl TaskNotificationDelivery {
+    // Original: taskService.ts restore hook initialization from
+    // TaskNotificationDeliveryModel.
+    pub fn restore_delivered(&mut self, keys: impl IntoIterator<Item = String>) {
+        self.delivered_keys.extend(keys);
+    }
+
+    // Original: taskService.ts, markDeliveredNotification().
+    pub fn mark_delivered(&mut self, origin: &PromptOrigin) {
+        if let Some(key) = prompt_task_notification_key(origin) {
+            self.delivered_keys.insert(key);
+        }
+    }
+
+    // Original: buildAgentTaskNotificationContext() admission, including
+    // hasDeliveredNotification()'s scan of current context messages.
+    pub fn try_schedule(
+        &mut self,
+        info: &AgentTaskInfo,
+        context: &[ContextMessage],
+    ) -> Option<ScheduledTaskNotification> {
+        let status = agent_task_status_text(info.base.status);
+        let notification_id = format!("task:{}:{status}", info.base.task_id);
+        let key = notification_key(&TaskNotificationOrigin {
+            task_id: info.base.task_id.clone(),
+            status: status.into(),
+            notification_id,
+        });
+        let delivered_in_context = context.iter().any(|message| {
+            message
+                .origin
+                .as_ref()
+                .and_then(prompt_task_notification_key)
+                .is_some_and(|candidate| candidate == key)
+        });
+        try_schedule_task_notification(
+            &mut self.scheduled_keys,
+            &self.delivered_keys,
+            info,
+            delivered_in_context,
+        )
+    }
+
+    pub fn is_scheduled(&self, key: &str) -> bool {
+        self.scheduled_keys.contains(key)
+    }
+
+    pub fn is_delivered(&self, key: &str) -> bool {
+        self.delivered_keys.contains(key)
+    }
+}
+
+fn prompt_task_notification_key(origin: &PromptOrigin) -> Option<String> {
+    let PromptOrigin::Task {
+        task_id,
+        status,
+        notification_id,
+    } = origin
+    else {
+        return None;
+    };
+    Some(notification_key(&TaskNotificationOrigin {
+        task_id: task_id.clone(),
+        status: agent_task_status_text(*status).into(),
+        notification_id: notification_id.clone(),
+    }))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentTaskNotificationBuildContext {
     pub content: Vec<ContentPart>,
@@ -360,5 +434,43 @@ mod tests {
                 "sourceId": "bash-12345678"
             })
         );
+    }
+
+    #[test]
+    fn delivery_state_combines_wire_context_and_splice_deduplication() {
+        let info = task(AgentTaskStatus::Completed);
+        let key = "agent-task-12345678\0completed\0task:agent-task-12345678:completed";
+        let origin = PromptOrigin::Task {
+            task_id: "agent-task-12345678".into(),
+            status: AgentTaskStatus::Completed,
+            notification_id: "task:agent-task-12345678:completed".into(),
+        };
+        let message = ContextMessage {
+            message: Message::new(Role::User, vec![], vec![]),
+            id: None,
+            provider_message_id: None,
+            origin: Some(origin.clone()),
+            is_error: None,
+            note: None,
+        };
+
+        let mut from_wire = TaskNotificationDelivery::default();
+        from_wire.restore_delivered([key.into()]);
+        assert!(from_wire.is_delivered(key));
+        assert!(from_wire.try_schedule(&info, &[]).is_none());
+
+        let mut from_context = TaskNotificationDelivery::default();
+        assert!(from_context.try_schedule(&info, &[message]).is_none());
+
+        let mut from_splice = TaskNotificationDelivery::default();
+        from_splice.mark_delivered(&origin);
+        assert!(from_splice.is_delivered(key));
+        assert!(from_splice.try_schedule(&info, &[]).is_none());
+
+        let mut scheduled = TaskNotificationDelivery::default();
+        let reservation = scheduled.try_schedule(&info, &[]).unwrap();
+        assert_eq!(reservation.key, key);
+        assert!(scheduled.is_scheduled(key));
+        assert!(scheduled.try_schedule(&info, &[]).is_none());
     }
 }
