@@ -13,3 +13,4 @@ pub use errors::*;
 pub use notification_xml::*;
 pub use persist::*;
 pub use task_ops::*;
+pub use types::*;
