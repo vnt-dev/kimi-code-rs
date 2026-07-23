@@ -75,7 +75,7 @@ impl AbortSignal {
         }
     }
 
-    async fn cancelled(&self) -> Arc<AbortError> {
+    pub async fn cancelled(&self) -> Arc<AbortError> {
         if let Some(reason) = self.reason() {
             return reason;
         }
