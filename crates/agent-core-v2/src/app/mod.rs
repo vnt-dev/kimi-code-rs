@@ -7,3 +7,4 @@ pub mod flag;
 pub mod git;
 pub mod task;
 pub mod telemetry;
+pub mod workspace_local_config;
