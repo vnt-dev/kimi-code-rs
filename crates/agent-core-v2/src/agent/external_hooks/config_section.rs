@@ -32,26 +32,36 @@ pub type HooksConfig = Vec<HookDefConfig>;
 
 pub static HOOKS_CONFIG_SCHEMA: LazyLock<ConfigSchema> = LazyLock::new(|| {
     ConfigSchema::new(|value| {
-        let hooks = serde_json::from_value::<HooksConfig>(value.clone())
-            .map_err(|error| ConfigValidationError::new(error.to_string()))?;
-        for hook in &hooks {
-            if hook.command.is_empty() {
-                return Err(ConfigValidationError::new(
-                    "hook command must contain at least one character",
-                ));
-            }
-            if hook
-                .timeout
-                .is_some_and(|timeout| !(1..=600).contains(&timeout))
-            {
-                return Err(ConfigValidationError::new(
-                    "hook timeout must be an integer from 1 through 600",
-                ));
-            }
-        }
+        let entries = value
+            .as_array()
+            .ok_or_else(|| ConfigValidationError::new("hooks must be an array"))?;
+        let hooks = entries
+            .iter()
+            .map(parse_hook_def_config)
+            .collect::<Result<HooksConfig, _>>()?;
         serde_json::to_value(hooks).map_err(|error| ConfigValidationError::new(error.to_string()))
     })
 });
+
+// Original: configSection.ts, HookDefSchema.safeParse() for one entry.
+pub fn parse_hook_def_config(value: &Value) -> Result<HookDefConfig, ConfigValidationError> {
+    let hook = serde_json::from_value::<HookDefConfig>(value.clone())
+        .map_err(|error| ConfigValidationError::new(error.to_string()))?;
+    if hook.command.is_empty() {
+        return Err(ConfigValidationError::new(
+            "hook command must contain at least one character",
+        ));
+    }
+    if hook
+        .timeout
+        .is_some_and(|timeout| !(1..=600).contains(&timeout))
+    {
+        return Err(ConfigValidationError::new(
+            "hook timeout must be an integer from 1 through 600",
+        ));
+    }
+    Ok(hook)
+}
 
 static HOOKS_FROM_TOML: LazyLock<ConfigFromToml> = LazyLock::new(|| Arc::new(hooks_from_toml));
 static HOOKS_TO_TOML: LazyLock<ConfigToToml> = LazyLock::new(|| Arc::new(hooks_to_toml));
@@ -127,6 +137,17 @@ mod tests {
         ] {
             assert!(HOOKS_CONFIG_SCHEMA.parse(&invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn parses_one_hook_for_manifest_consumers() {
+        let hook = parse_hook_def_config(&json!({
+            "event": "Stop", "command": "cleanup", "timeout": 2
+        }))
+        .unwrap();
+        assert_eq!(hook.event, HookEventType::Stop);
+        assert_eq!(hook.command, "cleanup");
+        assert!(parse_hook_def_config(&json!({"event": "Stop", "command": ""})).is_err());
     }
 
     #[test]
