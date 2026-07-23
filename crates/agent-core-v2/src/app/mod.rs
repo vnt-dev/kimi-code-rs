@@ -4,3 +4,4 @@ pub mod config;
 pub mod event;
 pub mod flag;
 pub mod task;
+pub mod telemetry;
