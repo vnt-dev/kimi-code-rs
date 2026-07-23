@@ -3,3 +3,4 @@
 pub mod process;
 pub mod session_context;
 pub mod session_fs;
+pub mod workspace_context;
