@@ -1134,6 +1134,7 @@ dependencies = [
  "indexmap",
  "jsonschema",
  "kimi-code-minidb",
+ "kimi-code-oauth",
  "kimi-code-protocol",
  "libc",
  "notify",
