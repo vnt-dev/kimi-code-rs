@@ -3,11 +3,11 @@
 //! Original: `packages/agent-core-v2/src/app/flag/flag.ts`.
 
 use std::{
-    collections::HashMap,
     ops::Deref,
     sync::{Arc, LazyLock},
 };
 
+use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -20,8 +20,8 @@ use crate::{
 
 use super::flag_registry::{FlagId, FlagRegistry, FlagSurface};
 
-pub type ExperimentalFlagMap = HashMap<String, bool>;
-pub type ExperimentalFlagConfig = HashMap<FlagId, bool>;
+pub type ExperimentalFlagMap = IndexMap<String, bool>;
+pub type ExperimentalFlagConfig = IndexMap<FlagId, bool>;
 
 pub const EXPERIMENTAL_SECTION: &str = "experimental";
 
@@ -97,7 +97,7 @@ pub struct ExperimentalFeatureState {
     pub config_value: Option<bool>,
 }
 
-pub trait FlagServiceContract: Send + Sync {
+pub trait FlagServiceContract: crate::_base::di::lifecycle::Disposable + Send + Sync {
     fn registry(&self) -> Arc<dyn FlagRegistry>;
     fn enabled(&self, id: &str) -> bool;
     fn snapshot(&self) -> ExperimentalFlagMap;
@@ -115,6 +115,12 @@ impl Deref for FlagServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl crate::_base::di::lifecycle::Disposable for FlagServiceHandle {
+    fn dispose(&self) -> crate::_base::di::lifecycle::DisposeResult {
+        self.0.dispose()
     }
 }
 

@@ -3,6 +3,7 @@
 pub mod contract;
 pub mod flag_registry;
 pub mod flag_registry_service;
+pub mod flag_service;
 
 pub use contract::*;
 pub use flag_registry::{
@@ -10,3 +11,4 @@ pub use flag_registry::{
     FlagRegistryHandle, FlagSurface, get_contributed_flags, register_flag_definition,
 };
 pub use flag_registry_service::{FlagRegistryService, register_flag_registry_service};
+pub use flag_service::{FlagService, MASTER_ENV, register_flag_service};
