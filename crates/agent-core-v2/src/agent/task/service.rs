@@ -12,15 +12,18 @@ use std::{
 use futures_util::{FutureExt, future::BoxFuture};
 use indexmap::IndexMap;
 
-use crate::agent::context_memory::{ContextMessage, PromptOrigin};
+use crate::{
+    _base::{di::lifecycle::DisposableHandle, utils::abort::AbortLink},
+    agent::context_memory::{ContextMessage, PromptOrigin},
+};
 
 use super::{
     AgentTaskInfo, AgentTaskLifecycleRecorder, AgentTaskLoadOptions,
     AgentTaskNotificationBuildContext, AgentTaskNotificationEffects, AgentTaskOutputSnapshot,
-    AgentTaskPersistence, AgentTaskServiceResult, ForegroundTaskReleaseReason, ManagedTaskState,
-    NOTIFICATION_FALLBACK_PREVIEW_BYTES, RestoredTaskRegistry, TaskModelState,
-    TaskNotificationDelivery, empty_output_snapshot, finish_task_notification,
-    needs_notification_fallback_preview, should_list_task,
+    AgentTaskPersistence, AgentTaskServiceResult, AgentTaskSettlement, ForegroundTaskReleaseReason,
+    ManagedTaskState, NOTIFICATION_FALLBACK_PREVIEW_BYTES, RestoredTaskRegistry,
+    ScheduledTaskNotification, TaskModelState, TaskNotificationDelivery, empty_output_snapshot,
+    finish_task_notification, needs_notification_fallback_preview, should_list_task,
 };
 
 const JAVASCRIPT_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -31,14 +34,23 @@ struct ManagedTaskRuntime {
     state: ManagedTaskState,
     persist_write_queue: TaskWriteBarrier,
     output_write_queue: TaskWriteBarrier,
+    timeout_handle: Option<tokio::task::JoinHandle<()>>,
+    foreground_signal_link: Option<AbortLink>,
+    handle_subscription: Option<DisposableHandle>,
+    settled: tokio::sync::watch::Sender<bool>,
 }
 
 impl ManagedTaskRuntime {
     fn new(state: ManagedTaskState) -> Self {
+        let (settled, _) = tokio::sync::watch::channel(false);
         Self {
             state,
             persist_write_queue: futures_util::future::ready(()).boxed().shared(),
             output_write_queue: futures_util::future::ready(()).boxed().shared(),
+            timeout_handle: None,
+            foreground_signal_link: None,
+            handle_subscription: None,
+            settled,
         }
     }
 
@@ -81,6 +93,7 @@ struct AgentTaskServiceState {
     notifications: TaskNotificationDelivery,
 }
 
+#[derive(Clone)]
 pub struct AgentTaskService {
     inner: Arc<AgentTaskServiceInner>,
 }
@@ -374,6 +387,91 @@ impl AgentTaskService {
         Ok(())
     }
 
+    // Original: AgentTaskService.settleTask().
+    pub async fn settle_task(
+        &self,
+        task_id: &str,
+        settlement: AgentTaskSettlement,
+        now_ms: i64,
+    ) -> AgentTaskServiceResult<bool> {
+        let (timeout, signal_link, subscription, output_persist_started) = {
+            let mut state = self.state();
+            let Some(entry) = state.tasks.get_mut(task_id) else {
+                return Ok(false);
+            };
+            if !entry.state.apply_settlement(settlement, now_ms) {
+                return Ok(false);
+            }
+            (
+                entry.timeout_handle.take(),
+                entry.foreground_signal_link.take(),
+                entry.handle_subscription.take(),
+                entry.state.output.output_persist_started,
+            )
+        };
+        if let Some(timeout) = timeout {
+            timeout.abort();
+        }
+        drop(signal_link);
+        if let Some(subscription) = subscription {
+            subscription.dispose()?;
+        }
+
+        let persist = {
+            let persistence = Arc::clone(&self.inner.persistence);
+            let mut state = self.state();
+            let entry = state.tasks.get_mut(task_id).ok_or_else(|| {
+                std::io::Error::other(format!("settling task disappeared: {task_id}"))
+            })?;
+            if output_persist_started {
+                Some(entry.persist_live(persistence))
+            } else {
+                entry.state.output.discard_pending_output();
+                None
+            }
+        };
+        if let Some(persist) = persist {
+            persist.await;
+        }
+
+        let terminal_info = {
+            let mut state = self.state();
+            let entry = state.tasks.get_mut(task_id).ok_or_else(|| {
+                std::io::Error::other(format!("settling task disappeared: {task_id}"))
+            })?;
+            if !entry.state.terminal_fired && entry.state.is_detached() {
+                entry.state.terminal_fired = true;
+                Some(entry.state.to_info())
+            } else {
+                None
+            }
+        };
+        if let Some(info) = terminal_info {
+            let context = self.inner.effects.context_snapshot();
+            let scheduled = self.schedule_task_notification(&info, &context);
+            if let Some(scheduled) = scheduled {
+                let service = self.clone();
+                let notification_info = info.clone();
+                tokio::spawn(async move {
+                    let _ = service
+                        .finish_and_enqueue_task_notification(scheduled, notification_info)
+                        .await;
+                });
+            }
+            self.inner.effects.record_task_terminated(&info)?;
+        }
+
+        let mut state = self.state();
+        let entry = state.tasks.get_mut(task_id).ok_or_else(|| {
+            std::io::Error::other(format!("settling task disappeared: {task_id}"))
+        })?;
+        if let Some(release) = &entry.state.foreground_release {
+            release.resolve(ForegroundTaskReleaseReason::Terminal);
+        }
+        entry.settled.send_replace(true);
+        Ok(true)
+    }
+
     // Original: AgentTaskService.waitForForegroundRelease().
     pub async fn wait_for_foreground_release(
         &self,
@@ -398,11 +496,27 @@ impl AgentTaskService {
         info: &AgentTaskInfo,
         context: &[ContextMessage],
     ) -> AgentTaskServiceResult<Option<AgentTaskNotificationBuildContext>> {
-        let scheduled = { self.state().notifications.try_schedule(info, context) };
+        let scheduled = self.schedule_task_notification(info, context);
         let Some(scheduled) = scheduled else {
             return Ok(None);
         };
 
+        self.finish_task_notification_context(scheduled, info).await
+    }
+
+    fn schedule_task_notification(
+        &self,
+        info: &AgentTaskInfo,
+        context: &[ContextMessage],
+    ) -> Option<ScheduledTaskNotification> {
+        self.state().notifications.try_schedule(info, context)
+    }
+
+    async fn finish_task_notification_context(
+        &self,
+        scheduled: ScheduledTaskNotification,
+        info: &AgentTaskInfo,
+    ) -> AgentTaskServiceResult<Option<AgentTaskNotificationBuildContext>> {
         let mut output = self.get_output_snapshot(&info.base.task_id, 0.0).await?;
         if needs_notification_fallback_preview(&output) {
             output = self
@@ -416,6 +530,20 @@ impl AgentTaskService {
             &output,
             currently_suppressed,
         ))
+    }
+
+    async fn finish_and_enqueue_task_notification(
+        &self,
+        scheduled: ScheduledTaskNotification,
+        info: AgentTaskInfo,
+    ) -> AgentTaskServiceResult<()> {
+        if let Some(built) = self
+            .finish_task_notification_context(scheduled, &info)
+            .await?
+        {
+            self.inner.effects.enqueue_notification(&built)?;
+        }
+        Ok(())
     }
 
     // Original: AgentTaskService.notifyAgentTask().
@@ -492,8 +620,8 @@ mod tests {
     use super::*;
     use crate::{
         agent::task::{
-            AgentTask, AgentTaskError, AgentTaskInfoBase, AgentTaskSink, AgentTaskStatus,
-            RegisterAgentTaskOptions, TaskOutputAction,
+            AgentTask, AgentTaskError, AgentTaskInfoBase, AgentTaskSettlementStatus, AgentTaskSink,
+            AgentTaskStatus, RegisterAgentTaskOptions, TaskOutputAction,
         },
         persistence::{
             backends::{
@@ -836,6 +964,100 @@ mod tests {
                 .terminal_notification_suppressed,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn settlement_persists_detached_tasks_releases_foreground_and_is_idempotent() {
+        let (persistence, service, effects) = service_with_effects();
+        insert_live(&service, "bash-settle01", true);
+        assert!(
+            service
+                .settle_task(
+                    "bash-settle01",
+                    AgentTaskSettlement {
+                        status: AgentTaskSettlementStatus::Completed,
+                        stop_reason: None,
+                    },
+                    20,
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            persistence
+                .read_task("bash-settle01")
+                .await
+                .unwrap()
+                .unwrap()
+                .base
+                .status,
+            AgentTaskStatus::Completed
+        );
+        assert_eq!(
+            *effects.terminated.lock().unwrap(),
+            ["bash-settle01".to_owned()]
+        );
+        assert!(
+            !service
+                .settle_task(
+                    "bash-settle01",
+                    AgentTaskSettlement {
+                        status: AgentTaskSettlementStatus::Failed,
+                        stop_reason: Some("late".into()),
+                    },
+                    30,
+                )
+                .await
+                .unwrap()
+        );
+
+        insert_live(&service, "bash-settle02", false);
+        let release = service
+            .state()
+            .tasks
+            .get("bash-settle02")
+            .unwrap()
+            .state
+            .foreground_release_future();
+        service
+            .state()
+            .tasks
+            .get_mut("bash-settle02")
+            .unwrap()
+            .state
+            .output
+            .append("foreground only".into(), false);
+        assert!(
+            service
+                .settle_task(
+                    "bash-settle02",
+                    AgentTaskSettlement {
+                        status: AgentTaskSettlementStatus::Killed,
+                        stop_reason: Some("stopped".into()),
+                    },
+                    21,
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(release.await, ForegroundTaskReleaseReason::Terminal);
+        assert!(
+            persistence
+                .read_task("bash-settle02")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            service
+                .get_task("bash-settle02")
+                .unwrap()
+                .base
+                .stop_reason
+                .as_deref(),
+            Some("stopped")
+        );
+        assert_eq!(effects.terminated.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

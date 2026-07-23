@@ -11,9 +11,9 @@ use crate::_base::utils::abort::AbortController;
 
 use super::{
     AgentTask, AgentTaskForceStop, AgentTaskInfo, AgentTaskInfoBase, AgentTaskOnDetach,
-    AgentTaskStatus, AgentTaskToInfo, AgentTaskTrackOptions, ForegroundRelease,
-    ForegroundTaskReleaseFuture, ForegroundTaskReleaseReason, RegisterAgentTaskOptions,
-    TaskOutputBuffer,
+    AgentTaskSettlement, AgentTaskStatus, AgentTaskToInfo, AgentTaskTrackOptions,
+    ForegroundRelease, ForegroundTaskReleaseFuture, ForegroundTaskReleaseReason,
+    RegisterAgentTaskOptions, TaskOutputBuffer, apply_task_settlement,
 };
 
 pub enum ManagedTaskInfoProjection {
@@ -223,6 +223,28 @@ impl ManagedTaskState {
     // Original: taskService.ts, canAutoBackgroundOnTimeout().
     pub fn can_auto_background_on_timeout(&self) -> bool {
         self.options.auto_background_on_timeout == Some(true) && !self.is_detached()
+    }
+
+    // Original: taskService.ts, settleTask() state mutation.
+    pub fn apply_settlement(&mut self, settlement: AgentTaskSettlement, now_ms: i64) -> bool {
+        let mut base = AgentTaskInfoBase {
+            task_id: self.task_id.clone(),
+            description: String::new(),
+            status: self.status,
+            detached: None,
+            started_at: self.started_at,
+            ended_at: self.ended_at,
+            stop_reason: self.stop_reason.clone(),
+            terminal_notification_suppressed: self.terminal_notification_suppressed,
+            timeout_ms: self.options.timeout_ms,
+        };
+        if !apply_task_settlement(&mut base, settlement, now_ms) {
+            return false;
+        }
+        self.status = base.status;
+        self.ended_at = base.ended_at;
+        self.stop_reason = base.stop_reason;
+        true
     }
 
     // Original: taskService.ts, toInfo().
