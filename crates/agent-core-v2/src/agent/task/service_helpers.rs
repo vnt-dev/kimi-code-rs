@@ -14,6 +14,8 @@ use super::{
 pub const MAX_RETAINED_OUTPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_TASK_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const TASK_ID_ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+pub const ACTIVE_BACKGROUND_TASK_INJECTION_VARIANT: &str = "background_task_status";
+const ACTIVE_BACKGROUND_TASK_GUIDANCE: &str = "The conversation was compacted, so the earlier messages that started these background tasks are gone — but the tasks are still running from before. Do not start duplicates. Use TaskOutput to fetch a task’s result, TaskList to list them, and TaskStop to cancel one.";
 
 // Original: taskService.ts, generateTaskId(). The OS random source is the
 // Rust counterpart of node:crypto randomBytes(); byte-wise modulo mapping and
@@ -22,6 +24,25 @@ pub fn generate_task_id(kind: &str) -> Result<String, getrandom::Error> {
     let mut bytes = [0_u8; 8];
     getrandom::fill(&mut bytes)?;
     Ok(task_id_from_bytes(kind, bytes))
+}
+
+// Original: taskService.ts, activeBackgroundTaskReminder(). The pending bit is
+// consumed before checking the active list, including when the list is empty.
+pub fn active_background_task_reminder(
+    pending: &mut bool,
+    active_tasks: &[AgentTaskInfo],
+) -> Option<String> {
+    if !*pending {
+        return None;
+    }
+    *pending = false;
+    if active_tasks.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{ACTIVE_BACKGROUND_TASK_GUIDANCE}\n\n{}",
+        super::tools::format_task_list(active_tasks, true)
+    ))
 }
 
 fn task_id_from_bytes(kind: &str, bytes: [u8; 8]) -> String {
@@ -561,5 +582,33 @@ mod tests {
                 .bytes()
                 .all(|byte| TASK_ID_ALPHABET.contains(&byte))
         );
+    }
+
+    #[test]
+    fn active_task_reminder_consumes_pending_state_once() {
+        assert_eq!(
+            ACTIVE_BACKGROUND_TASK_INJECTION_VARIANT,
+            "background_task_status"
+        );
+        let active = task(AgentTaskStatus::Running, Some(true), None, "Build index");
+        let mut pending = false;
+        assert_eq!(
+            active_background_task_reminder(&mut pending, std::slice::from_ref(&active)),
+            None
+        );
+
+        pending = true;
+        let reminder =
+            active_background_task_reminder(&mut pending, std::slice::from_ref(&active)).unwrap();
+        assert!(!pending);
+        assert_eq!(
+            reminder,
+            "The conversation was compacted, so the earlier messages that started these background tasks are gone — but the tasks are still running from before. Do not start duplicates. Use TaskOutput to fetch a task’s result, TaskList to list them, and TaskStop to cancel one.\n\nactive_background_tasks: 1\ntask_id: bash-12345678\ndescription: Build index\nstatus: running\ndetached: true\nstarted_at: 1\nkind: process"
+        );
+        assert_eq!(active_background_task_reminder(&mut pending, &[]), None);
+
+        pending = true;
+        assert_eq!(active_background_task_reminder(&mut pending, &[]), None);
+        assert!(!pending);
     }
 }
