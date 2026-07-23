@@ -18,8 +18,8 @@ use crate::kosong::contract::message::{
     ToolCallPartType, ToolCallType, extract_text, is_tool_declaration_only_message,
 };
 use crate::kosong::contract::provider::{
-    ChatProvider, FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage,
-    ThinkingEffort, ToolCallIdPolicy, TraceId,
+    ChatProvider, FinishReason, GenerateOptions, ProviderError, ProviderRequestAuth,
+    ResponseFormat, StreamedMessage, ThinkingEffort, ToolCallIdPolicy, TraceId,
 };
 use crate::kosong::contract::tool::Tool;
 use crate::kosong::contract::usage::TokenUsage;
@@ -29,7 +29,7 @@ use crate::kosong::provider::bases::openai::openai_common::{
     ToolMessageConversion, has_model_prefix, is_media_part, is_openai_reasoning_model,
 };
 use crate::kosong::provider::bases::openai::openai_responses_transport::{
-    OpenAiResponsesHttpResponse, send_openai_responses_request,
+    OpenAiResponsesClient, OpenAiResponsesHttpResponse, ReqwestOpenAiResponsesClient,
 };
 use crate::kosong::provider::bases::request_auth::{
     merge_request_headers, require_provider_api_key,
@@ -1133,6 +1133,7 @@ pub struct OpenAiResponsesOptions {
     pub default_headers: Option<IndexMap<String, String>>,
     pub tool_message_conversion: Option<ToolMessageConversion>,
     pub http_client: Option<reqwest::Client>,
+    pub client_factory: Option<OpenAiResponsesClientFactory>,
 }
 
 impl OpenAiResponsesOptions {
@@ -1146,21 +1147,21 @@ impl OpenAiResponsesOptions {
             default_headers: None,
             tool_message_conversion: None,
             http_client: None,
+            client_factory: None,
         }
     }
 }
 
+pub type OpenAiResponsesClientFactory = Arc<
+    dyn Fn(ProviderRequestAuth) -> Result<Arc<dyn OpenAiResponsesClient>, ProviderError>
+        + Send
+        + Sync,
+>;
+
 // Original: openai-responses.ts, OpenAIResponsesChatProvider
 //
-// Rust adaptation: the OpenAI SDK client becomes a reusable reqwest client.
-// Request shaping and response decoding remain separate method-level units.
-//
-// MIGRATION-TODO:
-// Original: OpenAIResponsesOptions.clientFactory
-// Missing abstraction: an arbitrary per-auth OpenAI SDK client factory has no
-// Rust transport trait yet. Temporary behavior: callers may inject one reusable
-// reqwest::Client through http_client. Completion condition: introduce a
-// per-request Responses transport factory without changing generate ordering.
+// Rust adaptation: the SDK client boundary is represented by
+// OpenAiResponsesClient; the default implementation remains reqwest-backed.
 pub struct OpenAiResponsesChatProvider {
     model: String,
     stream: bool,
@@ -1171,6 +1172,8 @@ pub struct OpenAiResponsesChatProvider {
     generation_kwargs: OpenAiResponsesGenerationKwargs,
     tool_message_conversion: ToolMessageConversion,
     http_client: reqwest::Client,
+    cached_client: Option<Arc<dyn OpenAiResponsesClient>>,
+    client_factory: Option<OpenAiResponsesClientFactory>,
 }
 
 impl OpenAiResponsesChatProvider {
@@ -1183,21 +1186,60 @@ impl OpenAiResponsesChatProvider {
         let generation_kwargs = options.max_output_tokens.map_or_else(Map::new, |tokens| {
             Map::from_iter([("max_output_tokens".to_owned(), Value::from(tokens))])
         });
+        let base_url = options
+            .base_url
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_owned());
+        let http_client = options.http_client.unwrap_or_default();
+        let cached_client = api_key.as_ref().map(|api_key| {
+            Arc::new(ReqwestOpenAiResponsesClient::new(
+                http_client.clone(),
+                base_url.clone(),
+                api_key.clone(),
+                options.default_headers.clone(),
+            )) as Arc<dyn OpenAiResponsesClient>
+        });
         Self {
             model: options.model,
             stream: true,
             api_key,
-            base_url: options
-                .base_url
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_owned()),
+            base_url,
             default_headers: options.default_headers,
             thinking_effort: options.thinking_effort,
             generation_kwargs,
             tool_message_conversion: options
                 .tool_message_conversion
                 .unwrap_or(ToolMessageConversion::Parts),
-            http_client: options.http_client.unwrap_or_default(),
+            http_client,
+            cached_client,
+            client_factory: options.client_factory,
         }
+    }
+
+    // Original: OpenAIResponsesChatProvider._createClient().
+    fn create_client(
+        &self,
+        auth: Option<&ProviderRequestAuth>,
+    ) -> Result<Arc<dyn OpenAiResponsesClient>, ProviderError> {
+        if let Some(factory) = self.client_factory.as_ref() {
+            return factory(auth.cloned().unwrap_or_default());
+        }
+        if auth.is_none()
+            && let Some(client) = self.cached_client.as_ref()
+        {
+            return Ok(Arc::clone(client));
+        }
+        let api_key =
+            require_provider_api_key("OpenAIResponsesChatProvider", auth, self.api_key.as_deref())?;
+        let headers = merge_request_headers(
+            self.default_headers.as_ref(),
+            auth.and_then(|auth| auth.headers.as_ref()),
+        );
+        Ok(Arc::new(ReqwestOpenAiResponsesClient::new(
+            self.http_client.clone(),
+            self.base_url.clone(),
+            api_key,
+            headers,
+        )))
     }
 }
 
@@ -1228,17 +1270,7 @@ impl ChatProvider for OpenAiResponsesChatProvider {
         history: &[Message],
         options: Option<&GenerateOptions>,
     ) -> Result<Box<dyn StreamedMessage>, ProviderError> {
-        let api_key = require_provider_api_key(
-            "OpenAIResponsesChatProvider",
-            options.and_then(|options| options.auth.as_ref()),
-            self.api_key.as_deref(),
-        )?;
-        let headers = merge_request_headers(
-            self.default_headers.as_ref(),
-            options
-                .and_then(|options| options.auth.as_ref())
-                .and_then(|auth| auth.headers.as_ref()),
-        );
+        let client = self.create_client(options.and_then(|options| options.auth.as_ref()))?;
         let params = build_openai_responses_request(
             &self.model,
             self.stream,
@@ -1253,16 +1285,13 @@ impl ChatProvider for OpenAiResponsesChatProvider {
         if let Some(callback) = options.and_then(|options| options.on_request_sent.as_ref()) {
             callback();
         }
-        let response = send_openai_responses_request(
-            &self.http_client,
-            &self.base_url,
-            &api_key,
-            headers.as_ref(),
-            params,
-            self.stream,
-            options.and_then(|options| options.signal.as_ref()),
-        )
-        .await?;
+        let response = client
+            .create(
+                params,
+                self.stream,
+                options.and_then(|options| options.signal.as_ref()),
+            )
+            .await?;
         let signal = options.and_then(|options| options.signal.clone());
         Ok(match response {
             OpenAiResponsesHttpResponse::Response(response) => Box::new(
@@ -1289,8 +1318,26 @@ pub fn get_openai_responses_model_capability(model_name: &str) -> Option<&'stati
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::kosong::contract::message::MediaUrl;
+
+    struct StubResponsesClient;
+
+    #[async_trait]
+    impl OpenAiResponsesClient for StubResponsesClient {
+        async fn create(
+            &self,
+            _: Map<String, Value>,
+            _: bool,
+            _: Option<&CancellationToken>,
+        ) -> Result<OpenAiResponsesHttpResponse, ProviderError> {
+            Ok(OpenAiResponsesHttpResponse::Response(
+                serde_json::json!({"status": "completed", "output": []}),
+            ))
+        }
+    }
 
     #[test]
     fn converts_reasoning_developer_role_and_tool_media() {
@@ -1397,6 +1444,46 @@ mod tests {
             &OPENAI_REASONING_CAPABILITY
         ));
         assert!(get_openai_responses_model_capability("unknown").is_none());
+    }
+
+    #[test]
+    fn client_factory_wins_without_api_key_and_receives_request_auth() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let factory_received = Arc::clone(&received);
+        let mut options = OpenAiResponsesOptions::new("gpt-5");
+        options.client_factory = Some(Arc::new(move |auth| {
+            factory_received.lock().unwrap().push(auth);
+            Ok(Arc::new(StubResponsesClient))
+        }));
+        let provider = OpenAiResponsesChatProvider::new(options);
+
+        provider.create_client(None).unwrap();
+        let auth = ProviderRequestAuth {
+            api_key: Some("request-key".into()),
+            headers: Some(IndexMap::from([("x-request".into(), "yes".into())])),
+        };
+        provider.create_client(Some(&auth)).unwrap();
+        assert_eq!(
+            *received.lock().unwrap(),
+            vec![ProviderRequestAuth::default(), auth]
+        );
+    }
+
+    #[test]
+    fn default_client_cache_is_used_only_without_request_auth() {
+        let mut options = OpenAiResponsesOptions::new("gpt-5");
+        options.api_key = Some("default-key".into());
+        let provider = OpenAiResponsesChatProvider::new(options);
+        let first = provider.create_client(None).unwrap();
+        let second = provider.create_client(None).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let request_auth = ProviderRequestAuth {
+            api_key: Some("request-key".into()),
+            headers: None,
+        };
+        let rebuilt = provider.create_client(Some(&request_auth)).unwrap();
+        assert!(!Arc::ptr_eq(&first, &rebuilt));
     }
 
     #[tokio::test]

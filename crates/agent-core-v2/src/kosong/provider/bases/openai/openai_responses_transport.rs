@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use indexmap::IndexMap;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
@@ -18,6 +19,60 @@ pub type OpenAiResponsesValueStream =
 pub enum OpenAiResponsesHttpResponse {
     Response(Value),
     Stream(OpenAiResponsesValueStream),
+}
+
+#[async_trait]
+pub trait OpenAiResponsesClient: Send + Sync {
+    async fn create(
+        &self,
+        params: Map<String, Value>,
+        stream: bool,
+        signal: Option<&CancellationToken>,
+    ) -> Result<OpenAiResponsesHttpResponse, ProviderError>;
+}
+
+pub struct ReqwestOpenAiResponsesClient {
+    client: reqwest::Client,
+    base_url: String,
+    api_key: String,
+    headers: Option<IndexMap<String, String>>,
+}
+
+impl ReqwestOpenAiResponsesClient {
+    pub fn new(
+        client: reqwest::Client,
+        base_url: String,
+        api_key: String,
+        headers: Option<IndexMap<String, String>>,
+    ) -> Self {
+        Self {
+            client,
+            base_url,
+            api_key,
+            headers,
+        }
+    }
+}
+
+#[async_trait]
+impl OpenAiResponsesClient for ReqwestOpenAiResponsesClient {
+    async fn create(
+        &self,
+        params: Map<String, Value>,
+        stream: bool,
+        signal: Option<&CancellationToken>,
+    ) -> Result<OpenAiResponsesHttpResponse, ProviderError> {
+        send_openai_responses_request(
+            &self.client,
+            &self.base_url,
+            &self.api_key,
+            self.headers.as_ref(),
+            params,
+            stream,
+            signal,
+        )
+        .await
+    }
 }
 
 fn boxed(error: ChatProviderError) -> ProviderError {
