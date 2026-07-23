@@ -20,25 +20,36 @@ use indexmap::IndexMap;
 
 use crate::{
     _base::{
-        di::lifecycle::{Disposable, DisposableHandle, DisposeResult, combined_disposable},
+        di::lifecycle::{
+            Disposable, DisposableHandle, DisposableStore, DisposeResult, combined_disposable,
+        },
         errors::error_message::to_error_message,
         errors::unexpected_error::on_unexpected_error,
         utils::abort::{AbortError, AbortSignal, abort_error, abortable, user_cancellation_reason},
     },
-    agent::context_memory::{ContextMessage, PromptOrigin},
-    app::task::contract::TaskState,
+    agent::{
+        context_injector::{
+            AgentContextInjectorServiceContract, ContextInjectionContent, ContextInjectionProvider,
+        },
+        context_memory::{ContextMessage, PromptOrigin},
+    },
+    app::{
+        event::event_bus::{DomainEvent, EventBusHandle},
+        task::contract::TaskState,
+    },
 };
 
 use super::{
-    AgentTask, AgentTaskEntry, AgentTaskError, AgentTaskInfo, AgentTaskLifecycleRecorder,
-    AgentTaskLoadOptions, AgentTaskNotificationBuildContext, AgentTaskNotificationEffects,
-    AgentTaskOutputSnapshot, AgentTaskPersistence, AgentTaskServiceContract,
-    AgentTaskServiceResult, AgentTaskSettlement, AgentTaskSettlementStatus, AgentTaskSink,
-    AgentTaskTrackOptions, AgentTrackedTaskHandle, ForegroundTaskReleaseReason, ManagedTaskState,
-    NOTIFICATION_FALLBACK_PREVIEW_BYTES, RegisterAgentTaskOptions, RestoredTaskRegistry,
-    ScheduledTaskNotification, TaskModelState, TaskNotificationDelivery, TaskOutputAction,
-    active_background_task_reminder, check_task_registration, coerce_timeout_settlement,
-    empty_output_snapshot, finish_task_notification, generate_task_id, is_compaction_splice,
+    ACTIVE_BACKGROUND_TASK_INJECTION_VARIANT, AgentTask, AgentTaskEntry, AgentTaskError,
+    AgentTaskInfo, AgentTaskLifecycleRecorder, AgentTaskLoadOptions,
+    AgentTaskNotificationBuildContext, AgentTaskNotificationEffects, AgentTaskOutputSnapshot,
+    AgentTaskPersistence, AgentTaskServiceContract, AgentTaskServiceResult, AgentTaskSettlement,
+    AgentTaskSettlementStatus, AgentTaskSink, AgentTaskTrackOptions, AgentTrackedTaskHandle,
+    ForegroundTaskReleaseReason, ManagedTaskState, NOTIFICATION_FALLBACK_PREVIEW_BYTES,
+    RegisterAgentTaskOptions, RestoredTaskRegistry, ScheduledTaskNotification, TaskModelState,
+    TaskNotificationDelivery, TaskOutputAction, active_background_task_reminder,
+    check_task_registration, coerce_timeout_settlement, empty_output_snapshot,
+    finish_task_notification, generate_task_id, is_compaction_splice,
     needs_notification_fallback_preview, normalize_reason, resolve_agent_task_config,
     should_list_task,
 };
@@ -200,6 +211,7 @@ struct AgentTaskServiceInner {
     persistence: Arc<AgentTaskPersistence>,
     effects: Arc<dyn AgentTaskRuntimeEffects>,
     state: Mutex<AgentTaskServiceState>,
+    disposables: DisposableStore,
 }
 
 impl AgentTaskService {
@@ -212,6 +224,7 @@ impl AgentTaskService {
                 persistence,
                 effects,
                 state: Mutex::new(AgentTaskServiceState::default()),
+                disposables: DisposableStore::new(),
             }),
         }
     }
@@ -476,6 +489,38 @@ impl AgentTaskService {
                 state.notifications.mark_delivered(origin);
             }
         }
+    }
+
+    // Original: AgentTaskService constructor's EventBus subscription and
+    // AgentContextInjector registration.
+    pub fn install_context_hooks(
+        &self,
+        event_bus: &EventBusHandle,
+        injector: &dyn AgentContextInjectorServiceContract,
+    ) {
+        let service = self.clone();
+        self.inner.disposables.add(event_bus.subscribe_type(
+            "context.spliced",
+            Arc::new(move |event| {
+                if let Some((delete_count, messages)) = context_splice_event(event) {
+                    service.handle_context_splice(delete_count, &messages);
+                }
+            }),
+        ));
+
+        let service = self.clone();
+        let provider: ContextInjectionProvider = Arc::new(move |_| {
+            let service = service.clone();
+            async move {
+                Ok(service
+                    .active_background_task_reminder()
+                    .map(ContextInjectionContent::Text))
+            }
+            .boxed()
+        });
+        self.inner
+            .disposables
+            .add(injector.register(ACTIVE_BACKGROUND_TASK_INJECTION_VARIANT.into(), provider));
     }
 
     // Original: AgentTaskService.activeBackgroundTaskReminder(). The pending
@@ -1478,7 +1523,7 @@ impl AgentTaskSink for ManagedAgentTaskSink {
 impl Disposable for AgentTaskService {
     fn dispose(&self) -> DisposeResult {
         self.dispose_tasks();
-        Ok(())
+        self.inner.disposables.dispose()
     }
 }
 
@@ -1587,6 +1632,12 @@ fn utf16_tail(value: &str, tail: f64) -> String {
     String::from_utf16_lossy(&units[units.len() - requested..])
 }
 
+fn context_splice_event(event: &DomainEvent) -> Option<(usize, Vec<ContextMessage>)> {
+    let delete_count = usize::try_from(event.fields.get("deleteCount")?.as_u64()?).ok()?;
+    let messages = serde_json::from_value(event.fields.get("messages")?.clone()).ok()?;
+    Some((delete_count, messages))
+}
+
 async fn wait_until_settled(receiver: &mut tokio::sync::watch::Receiver<bool>) {
     while !*receiver.borrow() {
         if receiver.changed().await.is_err() {
@@ -1626,11 +1677,14 @@ mod tests {
 
     use super::*;
     use crate::{
+        _base::di::lifecycle::{DisposableHandle, to_disposable},
+        agent::context_injector::{ContextInjectionContext, ContextInjectionError},
         agent::task::{
             AgentTask, AgentTaskConfig, AgentTaskError, AgentTaskInfoBase,
             AgentTaskSettlementStatus, AgentTaskSink, AgentTaskStatus, AgentTaskTrackOptions,
             RegisterAgentTaskOptions, TaskOutputAction,
         },
+        app::event::{event_bus::EventBusContract, event_bus_service::EventBusService},
         kosong::contract::message::{Message, Role},
         persistence::{
             backends::{
@@ -1645,6 +1699,28 @@ mod tests {
     };
 
     struct StubTask;
+
+    #[derive(Default)]
+    struct TestContextInjector {
+        name: Mutex<Option<String>>,
+        provider: Arc<Mutex<Option<ContextInjectionProvider>>>,
+    }
+
+    #[async_trait]
+    impl AgentContextInjectorServiceContract for TestContextInjector {
+        fn register(&self, name: String, provider: ContextInjectionProvider) -> DisposableHandle {
+            *self.name.lock().unwrap() = Some(name);
+            *self.provider.lock().unwrap() = Some(provider);
+            let providers = Arc::clone(&self.provider);
+            to_disposable(move || {
+                *providers.lock().unwrap() = None;
+            })
+        }
+
+        async fn inject_after_compaction(&self) -> Result<(), ContextInjectionError> {
+            Ok(())
+        }
+    }
 
     struct CompletingTask;
 
@@ -2513,6 +2589,47 @@ mod tests {
         assert_eq!(service.active_background_task_reminder(), None);
         insert_live(&service, "bash-later001", true);
         assert_eq!(service.active_background_task_reminder(), None);
+    }
+
+    #[tokio::test]
+    async fn context_hooks_route_splices_to_the_injector_and_dispose_together() {
+        let (_persistence, service) = service();
+        insert_live(&service, "bash-hook0001", true);
+        let bus = Arc::new(EventBusService::new());
+        let bus_handle = EventBusHandle(bus.clone());
+        let injector = TestContextInjector::default();
+        service.install_context_hooks(&bus_handle, &injector);
+        assert_eq!(
+            injector.name.lock().unwrap().as_deref(),
+            Some(ACTIVE_BACKGROUND_TASK_INJECTION_VARIANT)
+        );
+
+        bus.publish(DomainEvent::new(
+            "context.spliced",
+            Map::from_iter([
+                ("deleteCount".into(), Value::from(1)),
+                (
+                    "messages".into(),
+                    serde_json::to_value([context_message(PromptOrigin::CompactionSummary)])
+                        .unwrap(),
+                ),
+            ]),
+        ));
+        let provider = injector.provider.lock().unwrap().clone().unwrap();
+        let injected = provider(ContextInjectionContext {
+            injected_positions: vec![],
+            last_injected_at: None,
+            is_new_turn: true,
+        })
+        .await
+        .unwrap();
+        let Some(ContextInjectionContent::Text(reminder)) = injected else {
+            panic!("expected text reminder")
+        };
+        assert!(reminder.contains("task_id: bash-hook0001"));
+
+        service.dispose().unwrap();
+        assert!(injector.provider.lock().unwrap().is_none());
     }
 
     #[tokio::test]
