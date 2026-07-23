@@ -9,7 +9,8 @@ pub mod service;
 pub use contract::{
     AGENT_PROFILE_CATALOG_SERVICE_ID, AgentProfile, AgentProfileCatalogContract,
     AgentProfileCatalogHandle, AgentProfileContext, AgentProfilePromptPrefixContext,
-    AgentProfileSummaryPolicy, DEFAULT_AGENT_PROFILE_NAME, MissingDefaultAgentProfile,
+    AgentProfileSummaryPolicy, AgentSystemPrompt, DEFAULT_AGENT_PROFILE_NAME,
+    MissingDefaultAgentProfile,
 };
 pub use contribution::{get_agent_profile_contributions, register_agent_profile};
 pub use profile_shared::{
