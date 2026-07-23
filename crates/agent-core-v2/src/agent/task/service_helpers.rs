@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use super::{
     AgentTaskInfo, AgentTaskOutputSnapshot, AgentTaskSettlement, AgentTaskSettlementStatus,
+    AgentTaskStatus,
 };
 
 pub const MAX_RETAINED_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -74,6 +75,42 @@ pub fn coerce_timeout_settlement(
         settlement.status = AgentTaskSettlementStatus::TimedOut;
     }
     settlement
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("Too many background tasks are already running.")]
+pub struct TooManyBackgroundTasksError;
+
+// Original: taskService.ts, startsDetached().
+pub fn starts_detached(detached: Option<bool>) -> bool {
+    detached != Some(false)
+}
+
+// Original: taskService.ts, activeTaskCount().
+pub fn active_task_count<'a>(
+    tasks: impl IntoIterator<Item = (&'a AgentTaskStatus, Option<bool>)>,
+) -> usize {
+    tasks
+        .into_iter()
+        .filter(|(status, detached)| !status.is_terminal() && starts_detached(*detached))
+        .count()
+}
+
+// Original: taskService.ts, assertCanRegister(). Foreground registrations do
+// not consume or enforce the configured background-task quota.
+pub fn check_task_registration(
+    detached: bool,
+    active_detached_tasks: usize,
+    max_running_tasks: Option<u64>,
+) -> Result<(), TooManyBackgroundTasksError> {
+    let Some(max_running_tasks) = max_running_tasks else {
+        return Ok(());
+    };
+    if !detached || (active_detached_tasks as u128) < u128::from(max_running_tasks) {
+        Ok(())
+    } else {
+        Err(TooManyBackgroundTasksError)
+    }
 }
 
 // Original: taskService.ts, emptyOutputSnapshot().
@@ -610,5 +647,37 @@ mod tests {
         pending = true;
         assert_eq!(active_background_task_reminder(&mut pending, &[]), None);
         assert!(!pending);
+    }
+
+    #[test]
+    fn registration_quota_counts_only_active_initially_detached_tasks() {
+        let running = AgentTaskStatus::Running;
+        let completed = AgentTaskStatus::Completed;
+        let failed = AgentTaskStatus::Failed;
+        assert!(starts_detached(None));
+        assert!(starts_detached(Some(true)));
+        assert!(!starts_detached(Some(false)));
+        assert_eq!(
+            active_task_count([
+                (&running, None),
+                (&running, Some(true)),
+                (&running, Some(false)),
+                (&completed, Some(true)),
+                (&failed, None),
+            ]),
+            2
+        );
+
+        assert_eq!(check_task_registration(true, 99, None), Ok(()));
+        assert_eq!(check_task_registration(false, 2, Some(2)), Ok(()));
+        assert_eq!(check_task_registration(true, 1, Some(2)), Ok(()));
+        assert_eq!(
+            check_task_registration(true, 2, Some(2)),
+            Err(TooManyBackgroundTasksError)
+        );
+        assert_eq!(
+            TooManyBackgroundTasksError.to_string(),
+            "Too many background tasks are already running."
+        );
     }
 }
