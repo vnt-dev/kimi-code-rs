@@ -6,6 +6,7 @@ pub mod file;
 pub mod flag;
 pub mod git;
 pub mod host_folder_browser;
+pub mod session_index;
 pub mod task;
 pub mod telemetry;
 pub mod workspace_local_config;
