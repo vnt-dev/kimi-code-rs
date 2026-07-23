@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use indexmap::IndexMap;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -17,6 +18,63 @@ pub type AnthropicEventStream = Pin<Box<dyn Stream<Item = Result<Value, Provider
 pub enum AnthropicHttpResponse {
     Message(Value),
     Stream(AnthropicEventStream),
+}
+
+#[async_trait]
+pub trait AnthropicClient: Send + Sync {
+    async fn create(
+        &self,
+        params: Map<String, Value>,
+        request_headers: Option<&IndexMap<String, String>>,
+        stream: bool,
+        signal: Option<&CancellationToken>,
+    ) -> Result<AnthropicHttpResponse, ProviderError>;
+}
+
+pub struct ReqwestAnthropicClient {
+    client: reqwest::Client,
+    base_url: String,
+    api_key: String,
+    default_headers: Option<IndexMap<String, String>>,
+}
+
+impl ReqwestAnthropicClient {
+    pub fn new(
+        client: reqwest::Client,
+        base_url: String,
+        api_key: String,
+        default_headers: Option<IndexMap<String, String>>,
+    ) -> Self {
+        Self {
+            client,
+            base_url,
+            api_key,
+            default_headers,
+        }
+    }
+}
+
+#[async_trait]
+impl AnthropicClient for ReqwestAnthropicClient {
+    async fn create(
+        &self,
+        params: Map<String, Value>,
+        request_headers: Option<&IndexMap<String, String>>,
+        stream: bool,
+        signal: Option<&CancellationToken>,
+    ) -> Result<AnthropicHttpResponse, ProviderError> {
+        send_anthropic_request(
+            &self.client,
+            &self.base_url,
+            &self.api_key,
+            self.default_headers.as_ref(),
+            request_headers,
+            params,
+            stream,
+            signal,
+        )
+        .await
+    }
 }
 
 fn boxed(error: ChatProviderError) -> ProviderError {
