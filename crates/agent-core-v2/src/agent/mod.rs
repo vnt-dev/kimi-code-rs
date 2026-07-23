@@ -1,4 +1,5 @@
 pub mod context_memory;
+pub mod context_size;
 pub mod external_hooks;
 pub mod mcp;
 pub mod scope_context;
