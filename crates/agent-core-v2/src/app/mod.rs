@@ -5,6 +5,7 @@ pub mod event;
 pub mod file;
 pub mod flag;
 pub mod git;
+pub mod host_folder_browser;
 pub mod task;
 pub mod telemetry;
 pub mod workspace_local_config;
