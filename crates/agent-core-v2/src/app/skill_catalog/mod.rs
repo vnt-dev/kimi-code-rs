@@ -1,11 +1,17 @@
 //! Skill discovery, parsing, and catalog services.
 
+pub mod config_section;
 pub mod discovery;
 pub mod errors;
 pub mod in_memory_discovery;
 pub mod parser;
 pub mod types;
 
+pub use config_section::{
+    EXTRA_SKILL_DIRS_CONFIG_SCHEMA, EXTRA_SKILL_DIRS_SECTION,
+    MERGE_ALL_AVAILABLE_SKILLS_CONFIG_SCHEMA, MERGE_ALL_AVAILABLE_SKILLS_SECTION,
+    register_skill_catalog_config_sections,
+};
 pub use discovery::{
     SKILL_DISCOVERY_SERVICE_ID, SkillDiscoveryContract, SkillDiscoveryHandle, SkillDiscoveryResult,
 };
