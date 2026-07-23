@@ -19,7 +19,7 @@ pub enum GoalActor {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GoalBudgetLimits {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<f64>,
