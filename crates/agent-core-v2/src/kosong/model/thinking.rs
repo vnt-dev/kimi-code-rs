@@ -1,5 +1,61 @@
 use super::types::{ModelThinkingCapabilities, ModelThinkingMetadata, ThinkingDefaults};
-use crate::kosong::contract::provider::ThinkingEffort;
+use crate::kosong::{
+    contract::provider::ThinkingEffort,
+    protocol::identity::{Protocol, ProtocolAdapterRegistry},
+    provider::provider_definition::{ProviderDefinitionRegistryError, get_provider_definitions},
+};
+
+// Original: thinking.ts, drivesThinkingThroughTraits().
+pub fn drives_thinking_through_traits(
+    provider_type: Option<&str>,
+) -> Result<bool, ProviderDefinitionRegistryError> {
+    let Some(provider_type) = provider_type else {
+        return Ok(false);
+    };
+    Ok(get_provider_definitions(provider_type)?
+        .iter()
+        .any(|definition| {
+            definition
+                .traits
+                .iter()
+                .any(|protocol_trait| protocol_trait.with_thinking.is_some())
+        }))
+}
+
+// Original: thinking.ts, usesTraitDrivenThinking().
+pub fn uses_trait_driven_thinking(
+    registry: &dyn ProtocolAdapterRegistry,
+    protocol: Protocol,
+    provider_type: Option<&str>,
+) -> bool {
+    registry
+        .resolve_adapter_identity(protocol, provider_type)
+        .traits
+        .iter()
+        .any(|resolved| resolved.protocol_trait.with_thinking.is_some())
+}
+
+// Original: thinking.ts, requiresStrictThinkingValidation(). The last trait
+// that declares withThinking owns the strictness verdict.
+pub fn requires_strict_thinking_validation(
+    registry: &dyn ProtocolAdapterRegistry,
+    protocol: Protocol,
+    provider_type: Option<&str>,
+) -> bool {
+    if provider_type.is_none() {
+        return false;
+    }
+    let mut strict = false;
+    for resolved in registry
+        .resolve_adapter_identity(protocol, provider_type)
+        .traits
+    {
+        if resolved.protocol_trait.with_thinking.is_some() {
+            strict = resolved.protocol_trait.strict_thinking_validation == Some(true);
+        }
+    }
+    strict
+}
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
@@ -205,18 +261,33 @@ pub fn resolve_thinking_keep(
 
 // MIGRATION-TODO:
 // Original: packages/agent-core-v2/src/kosong/model/thinking.ts
-// Missing units: thinking config-section registration,
-// drivesThinkingThroughTraits(), usesTraitDrivenThinking(), and
-// requiresStrictThinkingValidation().
-// Temporary behavior: callers must supply the already-resolved
-// strict_validation and trait_driven verdicts to these pure helpers.
-// Completion condition: migrate the config contribution and protocol/provider
-// trait registries, then port the registry-driven methods without string gates.
+// Missing unit: thinking config-section registration and env stripping.
+// Completion condition: register the section and KIMI_MODEL_THINKING_EFFORT
+// binding through the Rust config contribution registry.
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, OnceLock, RwLock};
+
     use super::*;
-    use crate::kosong::contract::capability::ModelCapability;
+    use crate::kosong::{
+        contract::capability::ModelCapability,
+        protocol::{protocol_base::ProtocolBaseRegistry, protocol_trait::ProtocolTrait},
+        provider::{
+            protocol_adapter_registry::ProtocolAdapterRegistry as ConcreteRegistry,
+            provider_definition::{
+                ProviderDefinition, ProviderDefinitionRegistry, register_provider_definition,
+            },
+        },
+    };
+
+    fn thinking_trait(strict: Option<bool>) -> Arc<ProtocolTrait> {
+        Arc::new(ProtocolTrait {
+            strict_thinking_validation: strict,
+            with_thinking: Some(Arc::new(|_, _, _, _| None)),
+            ..ProtocolTrait::default()
+        })
+    }
 
     fn thinking_model() -> ModelThinkingMetadata {
         ModelThinkingMetadata {
@@ -231,6 +302,76 @@ mod tests {
             default_effort: Some("high".to_owned()),
             ..ModelThinkingMetadata::default()
         }
+    }
+
+    #[test]
+    fn registry_verdicts_follow_declared_resolved_and_last_strict_traits() {
+        static GLOBAL_PROVIDER: OnceLock<()> = OnceLock::new();
+        GLOBAL_PROVIDER.get_or_init(|| {
+            register_provider_definition(ProviderDefinition {
+                id: "thinking-verdict-global".into(),
+                base_protocol: Protocol::OpenAi,
+                traits: vec![thinking_trait(Some(true))],
+                endpoint: None,
+                host_headers: None,
+                model_source: None,
+                capability: None,
+            })
+            .unwrap();
+        });
+        assert!(!drives_thinking_through_traits(None).unwrap());
+        assert!(!drives_thinking_through_traits(Some("unregistered")).unwrap());
+        assert!(drives_thinking_through_traits(Some("thinking-verdict-global")).unwrap());
+
+        let providers = RwLock::new(ProviderDefinitionRegistry::default());
+        providers
+            .write()
+            .unwrap()
+            .register(ProviderDefinition {
+                id: "thinking-verdict-local".into(),
+                base_protocol: Protocol::Anthropic,
+                traits: vec![thinking_trait(Some(true)), thinking_trait(Some(false))],
+                endpoint: None,
+                host_headers: None,
+                model_source: None,
+                capability: None,
+            })
+            .unwrap();
+        providers
+            .write()
+            .unwrap()
+            .register(ProviderDefinition {
+                id: "thinking-verdict-strict".into(),
+                base_protocol: Protocol::Anthropic,
+                traits: vec![thinking_trait(Some(false)), thinking_trait(Some(true))],
+                endpoint: None,
+                host_headers: None,
+                model_source: None,
+                capability: None,
+            })
+            .unwrap();
+        let bases = RwLock::new(ProtocolBaseRegistry::default());
+        let registry = ConcreteRegistry::with_registries(&providers, &bases);
+        assert!(uses_trait_driven_thinking(
+            &registry,
+            Protocol::Anthropic,
+            Some("thinking-verdict-local")
+        ));
+        assert!(!requires_strict_thinking_validation(
+            &registry,
+            Protocol::Anthropic,
+            Some("thinking-verdict-local")
+        ));
+        assert!(requires_strict_thinking_validation(
+            &registry,
+            Protocol::Anthropic,
+            Some("thinking-verdict-strict")
+        ));
+        assert!(!requires_strict_thinking_validation(
+            &registry,
+            Protocol::Anthropic,
+            None
+        ));
     }
 
     #[test]
