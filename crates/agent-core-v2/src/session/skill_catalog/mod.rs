@@ -2,6 +2,7 @@
 
 pub mod contract;
 pub mod explicit_source;
+pub mod extra_source;
 
 pub use contract::{
     SESSION_SKILL_CATALOG_ID, SessionSkillCatalogContract, SessionSkillCatalogHandle,
@@ -10,4 +11,8 @@ pub use contract::{
 pub use explicit_source::{
     EXPLICIT_FILE_SKILL_SOURCE_ID, ExplicitFileSkillSource, ExplicitFileSkillSourceHandle,
     register_explicit_file_skill_source,
+};
+pub use extra_source::{
+    EXTRA_FILE_SKILL_SOURCE_ID, ExtraFileSkillSource, ExtraFileSkillSourceHandle,
+    register_extra_file_skill_source,
 };
