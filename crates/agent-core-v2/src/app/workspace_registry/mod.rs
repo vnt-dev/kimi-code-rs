@@ -4,6 +4,7 @@ pub mod contract;
 pub mod errors;
 pub mod file_persistence;
 pub mod persistence;
+pub mod service;
 
 pub use contract::{
     WORKSPACE_REGISTRY_SERVICE_ID, Workspace, WorkspaceRegistryContract, WorkspaceRegistryError,
@@ -16,3 +17,4 @@ pub use persistence::{
     WorkspaceCatalog, WorkspacePersistenceContract, WorkspacePersistenceHandle,
     WorkspacePersistenceResult,
 };
+pub use service::{WorkspaceRegistryService, register_workspace_registry_service};
