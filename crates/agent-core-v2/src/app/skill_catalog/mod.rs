@@ -1,12 +1,17 @@
 //! Skill discovery, parsing, and catalog services.
 
 pub mod discovery;
+pub mod errors;
 pub mod in_memory_discovery;
 pub mod parser;
 pub mod types;
 
 pub use discovery::{
     SKILL_DISCOVERY_SERVICE_ID, SkillDiscoveryContract, SkillDiscoveryHandle, SkillDiscoveryResult,
+};
+pub use errors::{
+    SKILL_ERRORS, SKILL_NAME_EMPTY, SKILL_NOT_FOUND, SKILL_TYPE_UNSUPPORTED,
+    ensure_skill_errors_registered,
 };
 pub use in_memory_discovery::{InMemorySkillDiscovery, register_in_memory_skill_discovery};
 pub use parser::{
