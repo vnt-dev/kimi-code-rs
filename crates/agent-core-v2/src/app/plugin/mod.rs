@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod errors;
 pub mod source;
+pub mod store;
 pub mod types;
 
 pub use commands::{
@@ -14,5 +15,8 @@ pub use errors::{
 };
 pub use source::{
     InstallSource, ResolveInstallSourceError, ResolvedSource, resolve_install_source,
+};
+pub use store::{
+    InstalledFile, InstalledRecord, InstalledStoreError, read_installed, write_installed,
 };
 pub use types::*;
