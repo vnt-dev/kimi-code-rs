@@ -9,9 +9,9 @@ use crate::kosong::contract::message::ContentPart;
 //   char::is_whitespace additionally treats U+0085 as whitespace.
 pub fn is_vacuous_content_part(part: &ContentPart) -> bool {
     match part {
-        ContentPart::Text { text } => is_ecmascript_whitespace_only(text),
+        ContentPart::Text { text } => trim_ecmascript_whitespace(text).is_empty(),
         ContentPart::Think { think, encrypted } => {
-            encrypted.is_none() && is_ecmascript_whitespace_only(think)
+            encrypted.is_none() && trim_ecmascript_whitespace(think).is_empty()
         }
         ContentPart::ImageUrl { .. }
         | ContentPart::AudioUrl { .. }
@@ -19,28 +19,30 @@ pub fn is_vacuous_content_part(part: &ContentPart) -> bool {
     }
 }
 
-fn is_ecmascript_whitespace_only(value: &str) -> bool {
-    value.chars().all(|character| {
-        matches!(
-            character,
-            '\u{0009}'
-                | '\u{000A}'
-                | '\u{000B}'
-                | '\u{000C}'
-                | '\u{000D}'
-                | '\u{0020}'
-                | '\u{00A0}'
-                | '\u{1680}'
-                | '\u{2000}'
-                ..='\u{200A}'
-                    | '\u{2028}'
-                    | '\u{2029}'
-                    | '\u{202F}'
-                    | '\u{205F}'
-                    | '\u{3000}'
-                    | '\u{FEFF}'
-        )
-    })
+pub(crate) fn trim_ecmascript_whitespace(value: &str) -> &str {
+    value.trim_matches(is_ecmascript_whitespace)
+}
+
+fn is_ecmascript_whitespace(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0009}'
+            | '\u{000A}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{1680}'
+            | '\u{2000}'
+            ..='\u{200A}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202F}'
+                | '\u{205F}'
+                | '\u{3000}'
+                | '\u{FEFF}'
+    )
 }
 
 #[cfg(test)]
