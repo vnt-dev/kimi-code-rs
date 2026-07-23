@@ -37,9 +37,10 @@ use super::{
     AgentTaskTrackOptions, AgentTrackedTaskHandle, ForegroundTaskReleaseReason, ManagedTaskState,
     NOTIFICATION_FALLBACK_PREVIEW_BYTES, RegisterAgentTaskOptions, RestoredTaskRegistry,
     ScheduledTaskNotification, TaskModelState, TaskNotificationDelivery, TaskOutputAction,
-    check_task_registration, coerce_timeout_settlement, empty_output_snapshot,
-    finish_task_notification, generate_task_id, needs_notification_fallback_preview,
-    normalize_reason, resolve_agent_task_config, should_list_task,
+    active_background_task_reminder, check_task_registration, coerce_timeout_settlement,
+    empty_output_snapshot, finish_task_notification, generate_task_id, is_compaction_splice,
+    needs_notification_fallback_preview, normalize_reason, resolve_agent_task_config,
+    should_list_task,
 };
 
 const JAVASCRIPT_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -113,6 +114,7 @@ struct AgentTaskServiceState {
     tasks: IndexMap<String, ManagedTaskRuntime>,
     ghosts: RestoredTaskRegistry,
     notifications: TaskNotificationDelivery,
+    active_task_reminder_pending: bool,
 }
 
 #[derive(Clone)]
@@ -440,6 +442,34 @@ impl AgentTaskService {
 
     pub fn mark_delivered_notification(&self, origin: &PromptOrigin) {
         self.state().notifications.mark_delivered(origin);
+    }
+
+    // Original: AgentTaskService constructor's `context.spliced` subscription.
+    // Compaction arms the reminder before every inserted task-origin message is
+    // recorded as delivered.
+    pub fn handle_context_splice(&self, delete_count: usize, messages: &[ContextMessage]) {
+        let mut state = self.state();
+        if is_compaction_splice(delete_count, messages) {
+            state.active_task_reminder_pending = true;
+        }
+        for message in messages {
+            if let Some(origin) = &message.origin {
+                state.notifications.mark_delivered(origin);
+            }
+        }
+    }
+
+    // Original: AgentTaskService.activeBackgroundTaskReminder(). The pending
+    // flag is consumed even when no active task remains.
+    pub fn active_background_task_reminder(&self) -> Option<String> {
+        let mut state = self.state();
+        let active_tasks = state
+            .tasks
+            .values()
+            .map(|entry| entry.state.to_info())
+            .filter(|info| should_list_task(info, true))
+            .collect::<Vec<_>>();
+        active_background_task_reminder(&mut state.active_task_reminder_pending, &active_tasks)
     }
 
     // Original: AgentTaskService.getTask().
@@ -1582,6 +1612,7 @@ mod tests {
             AgentTaskSettlementStatus, AgentTaskSink, AgentTaskStatus, AgentTaskTrackOptions,
             RegisterAgentTaskOptions, TaskOutputAction,
         },
+        kosong::contract::message::{Message, Role},
         persistence::{
             backends::{
                 memory::in_memory_storage_service::InMemoryStorageService,
@@ -1838,6 +1869,17 @@ mod tests {
             },
             10,
         ));
+    }
+
+    fn context_message(origin: PromptOrigin) -> ContextMessage {
+        ContextMessage {
+            message: Message::new(Role::User, vec![], vec![]),
+            id: None,
+            provider_message_id: None,
+            origin: Some(origin),
+            is_error: None,
+            note: None,
+        }
     }
 
     #[tokio::test]
@@ -2379,6 +2421,36 @@ mod tests {
             .unwrap();
         assert_eq!(stopped.unwrap().base.status, AgentTaskStatus::Killed);
         assert_eq!(handle.list(Some(true), None).len(), 0);
+    }
+
+    #[test]
+    fn context_splice_arms_and_consumes_active_task_reminder_and_delivery() {
+        let (_persistence, service) = service();
+        insert_live(&service, "bash-remind01", true);
+        let task_origin = PromptOrigin::Task {
+            task_id: "bash-finished1".into(),
+            status: AgentTaskStatus::Completed,
+            notification_id: "task:bash-finished1:completed".into(),
+        };
+        service.handle_context_splice(
+            3,
+            &[
+                context_message(PromptOrigin::CompactionSummary),
+                context_message(task_origin),
+            ],
+        );
+
+        let key = "bash-finished1\0completed\0task:bash-finished1:completed";
+        assert!(service.state().notifications.is_delivered(key));
+        let reminder = service.active_background_task_reminder().unwrap();
+        assert!(reminder.contains("task_id: bash-remind01"));
+        assert_eq!(service.active_background_task_reminder(), None);
+
+        service.handle_context_splice(2, &[context_message(PromptOrigin::CompactionSummary)]);
+        service.state().tasks.clear();
+        assert_eq!(service.active_background_task_reminder(), None);
+        insert_live(&service, "bash-later001", true);
+        assert_eq!(service.active_background_task_reminder(), None);
     }
 
     #[tokio::test]
