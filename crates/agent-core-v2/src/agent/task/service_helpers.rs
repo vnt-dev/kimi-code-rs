@@ -7,7 +7,33 @@ use crate::_base::utils::xml_escape::{escape_xml, escape_xml_attr};
 use crate::agent::context_memory::{ContextMessage, PromptOrigin};
 use serde_json::Value;
 
-use super::{AgentTaskInfo, AgentTaskOutputSnapshot};
+use super::{
+    AgentTaskInfo, AgentTaskOutputSnapshot, AgentTaskSettlement, AgentTaskSettlementStatus,
+};
+
+pub const MAX_RETAINED_OUTPUT_BYTES: usize = 1024 * 1024;
+pub const MAX_TASK_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+// Original: taskService.ts, outputLimitReason().
+pub fn output_limit_reason() -> String {
+    let mib = MAX_TASK_OUTPUT_BYTES / (1024 * 1024);
+    format!(
+        "Output limit exceeded: the command produced more than {mib} MiB and was terminated. Redirect large output to a file (e.g. `command > out.txt`) and inspect it in slices instead."
+    )
+}
+
+// Original: taskService.ts, coerceTimeoutSettlement(). Once the manager's
+// timeout path wins, a subsequently reported killed settlement remains a
+// timeout while retaining the original stop reason.
+pub fn coerce_timeout_settlement(
+    timed_out: bool,
+    mut settlement: AgentTaskSettlement,
+) -> AgentTaskSettlement {
+    if timed_out && settlement.status == AgentTaskSettlementStatus::Killed {
+        settlement.status = AgentTaskSettlementStatus::TimedOut;
+    }
+    settlement
+}
 
 // Original: taskService.ts, emptyOutputSnapshot().
 pub fn empty_output_snapshot() -> AgentTaskOutputSnapshot {
@@ -468,5 +494,35 @@ mod tests {
         assert!(!is_compaction_splice(0, &[summary]));
         assert!(!is_compaction_splice(2, &[ordinary]));
         assert!(!is_compaction_splice(2, &[]));
+    }
+
+    #[test]
+    fn output_limit_reason_preserves_limit_and_guidance() {
+        assert_eq!(MAX_RETAINED_OUTPUT_BYTES, 1024 * 1024);
+        assert_eq!(MAX_TASK_OUTPUT_BYTES, 16 * 1024 * 1024);
+        assert_eq!(
+            output_limit_reason(),
+            "Output limit exceeded: the command produced more than 16 MiB and was terminated. Redirect large output to a file (e.g. `command > out.txt`) and inspect it in slices instead."
+        );
+    }
+
+    #[test]
+    fn timeout_only_coerces_killed_settlements() {
+        let settlement = |status| AgentTaskSettlement {
+            status,
+            stop_reason: Some("manager stopped it".into()),
+        };
+        assert_eq!(
+            coerce_timeout_settlement(true, settlement(AgentTaskSettlementStatus::Killed)),
+            settlement(AgentTaskSettlementStatus::TimedOut)
+        );
+        assert_eq!(
+            coerce_timeout_settlement(false, settlement(AgentTaskSettlementStatus::Killed)),
+            settlement(AgentTaskSettlementStatus::Killed)
+        );
+        assert_eq!(
+            coerce_timeout_settlement(true, settlement(AgentTaskSettlementStatus::Failed)),
+            settlement(AgentTaskSettlementStatus::Failed)
+        );
     }
 }
