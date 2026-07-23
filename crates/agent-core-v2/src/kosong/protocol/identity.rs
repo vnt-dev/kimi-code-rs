@@ -1,9 +1,8 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fmt;
-use std::str::FromStr;
+use std::{error::Error, fmt, ops::Deref, str::FromStr, sync::Arc};
 
+use crate::_base::di::instantiation::ServiceIdentifier;
 use crate::kosong::contract::capability::ModelCapability;
 use crate::kosong::contract::inspection::InspectionSource;
 use crate::kosong::contract::provider::{ChatProvider, ProviderError};
@@ -151,8 +150,6 @@ pub struct ExplainedCapability {
 //   TypeScript factory exceptions become ProviderError results. The trait is
 //   object-safe so the application service container can bind the eventual L2
 //   implementation without exposing vendor definitions to this L1 contract.
-pub const PROTOCOL_ADAPTER_REGISTRY_SERVICE_ID: &str = "protocolAdapterRegistry";
-
 pub trait ProtocolAdapterRegistry: Send + Sync {
     fn supported_protocols(&self) -> Vec<Protocol>;
 
@@ -188,13 +185,20 @@ pub trait ProtocolAdapterRegistry: Send + Sync {
     ) -> Result<std::sync::Arc<dyn ChatProvider>, ProviderError>;
 }
 
-// MIGRATION-TODO:
+#[derive(Clone)]
+pub struct ProtocolAdapterRegistryHandle(pub Arc<dyn ProtocolAdapterRegistry>);
+
+impl Deref for ProtocolAdapterRegistryHandle {
+    type Target = dyn ProtocolAdapterRegistry;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
 // Original: protocol.ts, IProtocolAdapterRegistry service identifier.
-// Missing dependency: the application-level Rust DI/service container.
-// Temporary behavior: none; callers can depend directly on
-// Arc<dyn ProtocolAdapterRegistry> until the container is migrated.
-// Completion condition: bind the stable "protocolAdapterRegistry" service id
-// while migrating the production L2 registry and application composition.
+pub const PROTOCOL_ADAPTER_REGISTRY_SERVICE_ID: ServiceIdentifier<ProtocolAdapterRegistryHandle> =
+    ServiceIdentifier::new("protocolAdapterRegistry");
 
 #[cfg(test)]
 mod tests {
@@ -283,7 +287,7 @@ mod tests {
     #[test]
     fn adapter_registry_keeps_the_established_service_identity() {
         assert_eq!(
-            PROTOCOL_ADAPTER_REGISTRY_SERVICE_ID,
+            PROTOCOL_ADAPTER_REGISTRY_SERVICE_ID.to_string(),
             "protocolAdapterRegistry"
         );
     }

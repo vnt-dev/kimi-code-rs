@@ -1,12 +1,16 @@
 use std::sync::{Arc, LazyLock, RwLock};
 
+use crate::_base::di::{
+    descriptors::SyncDescriptor,
+    scope::{InstantiationType, LifecycleScope, register_scoped_service},
+};
 use crate::kosong::contract::capability::{ModelCapability, UNKNOWN_CAPABILITY};
 use crate::kosong::contract::errors::ChatProviderError;
 use crate::kosong::contract::inspection::{InspectionSource, InspectionSourceKind};
 use crate::kosong::contract::provider::{ChatProvider, ProviderError};
 use crate::kosong::protocol::identity::{
-    ExplainedCapability, Protocol, ProtocolAdapterConfig,
-    ProtocolAdapterRegistry as ProtocolAdapterRegistryContract,
+    ExplainedCapability, PROTOCOL_ADAPTER_REGISTRY_SERVICE_ID, Protocol, ProtocolAdapterConfig,
+    ProtocolAdapterRegistry as ProtocolAdapterRegistryContract, ProtocolAdapterRegistryHandle,
 };
 use crate::kosong::protocol::protocol_base::{
     PROTOCOL_BASES, ProtocolBaseContext, ProtocolBaseId, ProtocolBaseRegistry,
@@ -45,6 +49,21 @@ impl Default for ProtocolAdapterRegistry<'static> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// Original: protocolAdapterRegistry.ts, eager app-scoped service registration.
+pub fn register_protocol_adapter_registry() {
+    register_scoped_service(
+        LifecycleScope::App,
+        PROTOCOL_ADAPTER_REGISTRY_SERVICE_ID,
+        SyncDescriptor::new(|_| {
+            let registry: Arc<dyn ProtocolAdapterRegistryContract> =
+                Arc::new(ProtocolAdapterRegistry::new());
+            Ok(ProtocolAdapterRegistryHandle(registry))
+        }),
+        InstantiationType::Eager,
+        "provider",
+    );
 }
 
 impl<'a> ProtocolAdapterRegistry<'a> {
