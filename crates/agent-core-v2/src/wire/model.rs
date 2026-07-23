@@ -4,9 +4,10 @@
 
 use std::{
     any::Any,
+    collections::HashMap,
     fmt,
     sync::{
-        Arc,
+        Arc, LazyLock, RwLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -182,16 +183,76 @@ where
     }
 }
 
-#[derive(Default)]
 pub struct ModelOptions<S> {
     pub blobs: Option<Arc<dyn ModelBlobCodec<S>>>,
+    pub reducers: Vec<ModelCrossReducer<S>>,
+}
+
+impl<S> Default for ModelOptions<S> {
+    fn default() -> Self {
+        Self {
+            blobs: None,
+            reducers: Vec::new(),
+        }
+    }
+}
+
+type ErasedReducer =
+    Arc<dyn Fn(ErasedState, &dyn Any) -> Result<ErasedState, String> + Send + Sync>;
+type TypedReducer<S> = Arc<dyn Fn(S, &dyn Any) -> Result<S, String> + Send + Sync>;
+
+pub struct ModelCrossReducer<S> {
+    op_type: String,
+    reducer: TypedReducer<S>,
+}
+
+impl<S> ModelCrossReducer<S> {
+    pub fn typed<P>(
+        op_type: impl Into<String>,
+        reducer: impl Fn(S, &P) -> S + Send + Sync + 'static,
+    ) -> Self
+    where
+        P: Send + Sync + 'static,
+    {
+        let op_type = op_type.into();
+        let op_type_for_error = op_type.clone();
+        Self {
+            op_type,
+            reducer: Arc::new(move |state, payload| {
+                let payload = payload.downcast_ref::<P>().ok_or_else(|| {
+                    format!("Cross reducer for '{op_type_for_error}' received incompatible payload")
+                })?;
+                Ok(reducer(state, payload))
+            }),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ErasedCrossReducerEntry {
+    pub model: Arc<dyn ErasedModelDef>,
+    reducer: ErasedReducer,
+}
+
+impl ErasedCrossReducerEntry {
+    pub fn apply(&self, state: ErasedState, payload: &dyn Any) -> Result<ErasedState, String> {
+        (self.reducer)(state, payload)
+    }
+}
+
+static MODEL_CROSS_REDUCERS: LazyLock<RwLock<HashMap<String, Vec<ErasedCrossReducerEntry>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+pub fn model_cross_reducers(op_type: &str) -> Vec<ErasedCrossReducerEntry> {
+    MODEL_CROSS_REDUCERS
+        .read()
+        .unwrap()
+        .get(op_type)
+        .cloned()
+        .unwrap_or_default()
 }
 
 // Original: defineModel().
-// MIGRATION-TODO:
-// Original feature: opts.reducers registers cross-model reducers by foreign Op type.
-// Temporary behavior: ModelOptions currently accepts the blob codec only.
-// Completion condition: add the erased cross-reducer registry with its first domain consumer.
 pub fn define_model<S>(
     name: impl Into<String>,
     initial: impl Fn() -> S + Send + Sync + 'static,
@@ -200,14 +261,36 @@ pub fn define_model<S>(
 where
     S: Send + Sync + 'static,
 {
-    ModelDef {
+    let model = ModelDef {
         inner: Arc::new(ModelDefInner {
             id: NEXT_MODEL_ID.fetch_add(1, Ordering::Relaxed),
             name: name.into(),
             initial: Arc::new(initial),
             blobs: options.blobs,
         }),
+    };
+    if !options.reducers.is_empty() {
+        let erased_model = model.erased();
+        let mut registry = MODEL_CROSS_REDUCERS.write().unwrap();
+        for cross in options.reducers {
+            let reducer = cross.reducer;
+            let model_name = model.name().to_owned();
+            let erased: ErasedReducer = Arc::new(move |state, payload| {
+                let state = state.downcast::<S>().map_err(|_| {
+                    format!("Cross reducer received incompatible state for '{model_name}'")
+                })?;
+                reducer(*state, payload).map(|state| Box::new(state) as ErasedState)
+            });
+            registry
+                .entry(cross.op_type)
+                .or_default()
+                .push(ErasedCrossReducerEntry {
+                    model: Arc::clone(&erased_model),
+                    reducer: erased,
+                });
+        }
     }
+    model
 }
 
 #[cfg(test)]
@@ -257,6 +340,35 @@ mod tests {
         assert_eq!(*erased.initial_state().downcast::<u64>().unwrap(), 1);
     }
 
+    #[test]
+    fn registers_and_applies_typed_cross_model_reducers_in_order() {
+        #[derive(Debug)]
+        struct Payload(u64);
+
+        let op_type = format!(
+            "test.cross.{}",
+            NEXT_MODEL_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let model = define_model(
+            "derived-counter",
+            || 1_u64,
+            ModelOptions {
+                blobs: None,
+                reducers: vec![ModelCrossReducer::typed(
+                    &op_type,
+                    |state, payload: &Payload| state + payload.0,
+                )],
+            },
+        );
+        let reducers = model_cross_reducers(&op_type);
+        assert_eq!(reducers.len(), 1);
+        assert_eq!(reducers[0].model.id(), model.id());
+        let state = reducers[0]
+            .apply(Box::new(model.initial()), &Payload(4))
+            .unwrap();
+        assert_eq!(*state.downcast::<u64>().unwrap(), 5);
+    }
+
     #[tokio::test]
     async fn erased_blob_codec_preserves_both_transformation_directions() {
         let model = define_model(
@@ -264,6 +376,7 @@ mod tests {
             || 1_u64,
             ModelOptions {
                 blobs: Some(Arc::new(CounterCodec)),
+                ..ModelOptions::default()
             },
         );
         let erased = model.erased();
