@@ -9,6 +9,8 @@ use serde_json::Value;
 
 use crate::_base::utils::render_prompt::render_prompt;
 
+pub use super::contract::AgentProfileContext;
+
 const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("system.md");
 
 pub const TASK_AGENT_ROLE_PREFIX: &str = "You are now running as a subagent. All the `user` messages are sent by the main agent. \
@@ -24,20 +26,6 @@ const SKILLS_SECTION_PROSE: &str = "Skills are reusable, composable capabilities
 Identify the skills relevant to your current task and read the skill file for its instructions; only read further skill details when needed, to conserve the context window.\n\n\
 ## Available skills\n\n\
 Skills are grouped by scope (`Project`, `User`, `Extra`, `Built-in`) so you can tell where each came from. When the user refers to \"the skill in this project\" or \"the user-scope skill\", use the scope heading to disambiguate. When multiple scopes define a skill with the same name, the more specific scope takes precedence: **Project overrides User overrides Extra overrides Built-in**.";
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct AgentProfileContext {
-    pub cwd: Option<String>,
-    pub cwd_listing: Option<String>,
-    pub agents_md: Option<String>,
-    pub additional_dirs_info: Option<String>,
-    pub os_kind: Option<String>,
-    pub shell_name: Option<String>,
-    pub shell_path: Option<String>,
-    pub now: Option<String>,
-    pub skills: Option<String>,
-    pub skill_active: Option<bool>,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SkillActiveOptions {
