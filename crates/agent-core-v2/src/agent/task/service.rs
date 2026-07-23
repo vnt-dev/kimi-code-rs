@@ -76,6 +76,10 @@ struct AgentTaskServiceState {
 }
 
 pub struct AgentTaskService {
+    inner: Arc<AgentTaskServiceInner>,
+}
+
+struct AgentTaskServiceInner {
     persistence: Arc<AgentTaskPersistence>,
     state: Mutex<AgentTaskServiceState>,
 }
@@ -83,13 +87,18 @@ pub struct AgentTaskService {
 impl AgentTaskService {
     pub fn new(persistence: Arc<AgentTaskPersistence>) -> Self {
         Self {
-            persistence,
-            state: Mutex::new(AgentTaskServiceState::default()),
+            inner: Arc::new(AgentTaskServiceInner {
+                persistence,
+                state: Mutex::new(AgentTaskServiceState::default()),
+            }),
         }
     }
 
     fn state(&self) -> MutexGuard<'_, AgentTaskServiceState> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner())
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 
     // Wired into the public registerTask/track paths by the next service unit.
@@ -152,7 +161,7 @@ impl AgentTaskService {
 
     // Original: AgentTaskService.persistOutput() and startOutputPersist().
     pub fn persist_output(&self, task_id: &str) {
-        let persistence = Arc::clone(&self.persistence);
+        let persistence = Arc::clone(&self.inner.persistence);
         let mut state = self.state();
         let Some(entry) = state.tasks.get_mut(task_id) else {
             return;
@@ -171,7 +180,7 @@ impl AgentTaskService {
         if options.replace != Some(false) {
             self.state().ghosts.clear();
         }
-        let tasks = self.persistence.list_tasks().await?;
+        let tasks = self.inner.persistence.list_tasks().await?;
         let mut state = self.state();
         let live_task_ids = state.tasks.keys().cloned().collect::<HashSet<_>>();
         state
@@ -193,7 +202,7 @@ impl AgentTaskService {
             let Some(updated) = updated else {
                 continue;
             };
-            self.persistence.write_task(&updated).await?;
+            self.inner.persistence.write_task(&updated).await?;
             lost.push(updated);
         }
         Ok(lost)
@@ -220,6 +229,7 @@ impl AgentTaskService {
         }
 
         if let Some(persisted) = self
+            .inner
             .persistence
             .read_task_output_snapshot(task_id, max_preview_bytes)
             .await?
@@ -264,7 +274,7 @@ impl AgentTaskService {
         task_id: &str,
     ) -> AgentTaskServiceResult<()> {
         let write = {
-            let persistence = Arc::clone(&self.persistence);
+            let persistence = Arc::clone(&self.inner.persistence);
             let mut state = self.state();
             let Some(entry) = state.tasks.get_mut(task_id) else {
                 return Ok(());
