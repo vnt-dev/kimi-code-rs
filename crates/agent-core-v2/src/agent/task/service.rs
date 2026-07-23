@@ -14,8 +14,8 @@ use indexmap::IndexMap;
 
 use super::{
     AgentTaskInfo, AgentTaskLoadOptions, AgentTaskOutputSnapshot, AgentTaskPersistence,
-    AgentTaskServiceResult, ManagedTaskState, RestoredTaskRegistry, empty_output_snapshot,
-    should_list_task,
+    AgentTaskServiceResult, ManagedTaskState, RestoredTaskRegistry, TaskModelState,
+    empty_output_snapshot, should_list_task,
 };
 
 const JAVASCRIPT_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -101,6 +101,13 @@ impl AgentTaskService {
             .tasks
             .insert(task_id.clone(), ManagedTaskRuntime::new(task));
         state.ghosts.remove(&task_id);
+    }
+
+    // Original: AgentTaskService.restoreGhostsFromWire().
+    pub fn restore_ghosts_from_wire(&self, wire_tasks: &TaskModelState) {
+        let mut state = self.state();
+        let live_task_ids = state.tasks.keys().cloned().collect::<HashSet<_>>();
+        state.ghosts.restore_from_wire(wire_tasks, &live_task_ids);
     }
 
     // Original: AgentTaskService.getTask().
@@ -423,6 +430,31 @@ mod tests {
             ["bash-live0001", "bash-ghost001"]
         );
         assert_eq!(service.list(Some(false), Some(1)).len(), 1);
+    }
+
+    #[test]
+    fn wire_restore_skips_live_entries_and_projects_other_records() {
+        let (_persistence, service) = service();
+        insert_live(&service, "bash-live0003", true);
+        service.restore_ghosts_from_wire(&TaskModelState::from([
+            (
+                "bash-live0003".into(),
+                task("bash-live0003", AgentTaskStatus::Failed, true),
+            ),
+            (
+                "bash-wire0001".into(),
+                task("bash-wire0001", AgentTaskStatus::Completed, true),
+            ),
+        ]));
+
+        assert_eq!(
+            service.get_task("bash-live0003").unwrap().base.status,
+            AgentTaskStatus::Running
+        );
+        assert_eq!(
+            service.get_task("bash-wire0001").unwrap().base.status,
+            AgentTaskStatus::Completed
+        );
     }
 
     #[tokio::test]
