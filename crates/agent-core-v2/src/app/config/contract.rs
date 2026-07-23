@@ -236,7 +236,7 @@ pub type ResolvedConfig = Map<String, Value>;
 
 #[async_trait]
 pub trait ConfigServiceContract: Disposable + Send + Sync {
-    async fn ready(&self);
+    async fn ready(&self) -> Result<(), ConfigServiceError>;
     fn on_did_change_configuration(&self) -> Event<ConfigChangedEvent>;
     fn on_did_section_change(&self) -> Event<ConfigSectionChangedEvent>;
     fn get(&self, domain: &str) -> Option<Value>;

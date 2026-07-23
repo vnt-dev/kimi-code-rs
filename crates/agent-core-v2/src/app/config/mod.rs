@@ -8,6 +8,7 @@ pub mod pure;
 pub mod registry_service;
 pub mod section_contributions;
 pub mod section_diff;
+pub mod service;
 pub mod toml;
 
 pub use contract::*;
@@ -24,6 +25,7 @@ pub use section_contributions::{
     get_config_section_contributions, register_config_section,
 };
 pub use section_diff::{RecordDiff, diff_records};
+pub use service::{ConfigService, register_config_service};
 pub use toml::{
     apply_section_to_toml, camel_to_snake, clone_record, plain_object_to_toml, set_defined,
     snake_to_camel, transform_plain_object, transform_toml_data,

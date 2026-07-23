@@ -283,7 +283,9 @@ mod tests {
 
     #[async_trait]
     impl ConfigServiceContract for StubConfig {
-        async fn ready(&self) {}
+        async fn ready(&self) -> Result<(), ConfigServiceError> {
+            Ok(())
+        }
 
         fn on_did_change_configuration(&self) -> Event<ConfigChangedEvent> {
             self.changed.event()
