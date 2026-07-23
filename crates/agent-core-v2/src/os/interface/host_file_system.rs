@@ -2,7 +2,7 @@
 //!
 //! Original: `packages/agent-core-v2/src/os/interface/hostFileSystem.ts`.
 
-use std::{path::Path, pin::Pin};
+use std::{ops::Deref, path::Path, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use futures_util::Stream;
@@ -70,7 +70,18 @@ pub trait HostFileSystemService: Send + Sync {
     async fn real_path(&self, path: &Path) -> Result<String, HostFsError>;
 }
 
-pub const HOST_FILE_SYSTEM_SERVICE_ID: ServiceIdentifier<dyn HostFileSystemService> =
+#[derive(Clone)]
+pub struct HostFileSystemServiceHandle(pub Arc<dyn HostFileSystemService>);
+
+impl Deref for HostFileSystemServiceHandle {
+    type Target = dyn HostFileSystemService;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const HOST_FILE_SYSTEM_SERVICE_ID: ServiceIdentifier<HostFileSystemServiceHandle> =
     ServiceIdentifier::new("hostFileSystem");
 
 #[cfg(test)]

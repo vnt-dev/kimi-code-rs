@@ -6,6 +6,7 @@ use std::{
     collections::HashMap,
     error::Error,
     fmt,
+    ops::Deref,
     sync::{Arc, LazyLock},
 };
 
@@ -153,7 +154,18 @@ pub trait HostProcessService: Send + Sync {
     ) -> Result<Arc<dyn HostProcess>, HostProcessError>;
 }
 
-pub const HOST_PROCESS_SERVICE_ID: ServiceIdentifier<dyn HostProcessService> =
+#[derive(Clone)]
+pub struct HostProcessServiceHandle(pub Arc<dyn HostProcessService>);
+
+impl Deref for HostProcessServiceHandle {
+    type Target = dyn HostProcessService;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const HOST_PROCESS_SERVICE_ID: ServiceIdentifier<HostProcessServiceHandle> =
     ServiceIdentifier::new("hostProcessService");
 
 #[cfg(test)]
