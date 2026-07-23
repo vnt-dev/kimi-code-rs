@@ -4,6 +4,7 @@ pub mod env;
 pub mod fs;
 pub mod iso_date_time;
 pub mod promise;
+pub mod proxy;
 pub mod render_prompt;
 pub mod retry;
 pub mod timer;

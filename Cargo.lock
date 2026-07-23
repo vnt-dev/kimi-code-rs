@@ -1058,6 +1058,7 @@ dependencies = [
  "indexmap",
  "jsonschema",
  "kimi-code-protocol",
+ "percent-encoding",
  "regex",
  "reqwest",
  "serde",
