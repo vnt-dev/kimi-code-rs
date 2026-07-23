@@ -24,6 +24,7 @@ type TaskWriteBarrier = futures_util::future::Shared<BoxFuture<'static, ()>>;
 
 struct ManagedTaskRuntime {
     state: ManagedTaskState,
+    persist_write_queue: TaskWriteBarrier,
     output_write_queue: TaskWriteBarrier,
 }
 
@@ -31,8 +32,25 @@ impl ManagedTaskRuntime {
     fn new(state: ManagedTaskState) -> Self {
         Self {
             state,
+            persist_write_queue: futures_util::future::ready(()).boxed().shared(),
             output_write_queue: futures_util::future::ready(()).boxed().shared(),
         }
+    }
+
+    // Original: taskService.ts, persistLive(). State snapshots are captured
+    // when queued and writes remain ordered even after an earlier write fails.
+    fn persist_live(&mut self, persistence: Arc<AgentTaskPersistence>) -> TaskWriteBarrier {
+        let previous = self.persist_write_queue.clone();
+        let info = self.state.to_info();
+        let next = async move {
+            previous.await;
+            let _ = persistence.write_task(&info).await;
+        }
+        .boxed()
+        .shared();
+        self.persist_write_queue = next.clone();
+        tokio::spawn(next.clone());
+        next
     }
 
     // Original: taskService.ts, appendTaskOutput(). Each future captures the
@@ -230,6 +248,28 @@ impl AgentTaskService {
             .await?
             .preview;
         Ok(tail.map_or(output.clone(), |tail| utf16_tail(&output, tail)))
+    }
+
+    // Original: AgentTaskService.suppressTerminalNotification(). Unknown and
+    // restored-only tasks are no-ops; live writes await the ordered queue.
+    pub async fn suppress_terminal_notification(
+        &self,
+        task_id: &str,
+    ) -> AgentTaskServiceResult<()> {
+        let write = {
+            let persistence = Arc::clone(&self.persistence);
+            let mut state = self.state();
+            let Some(entry) = state.tasks.get_mut(task_id) else {
+                return Ok(());
+            };
+            if entry.state.terminal_notification_suppressed == Some(true) {
+                return Ok(());
+            }
+            entry.state.terminal_notification_suppressed = Some(true);
+            entry.persist_live(persistence)
+        };
+        write.await;
+        Ok(())
     }
 }
 
@@ -451,6 +491,62 @@ mod tests {
                 .base
                 .status,
             AgentTaskStatus::Lost
+        );
+    }
+
+    #[tokio::test]
+    async fn suppress_terminal_notification_updates_and_persists_only_live_tasks() {
+        let (persistence, service) = service();
+        let ghost = task("bash-ghost002", AgentTaskStatus::Completed, true);
+        persistence.write_task(&ghost).await.unwrap();
+        service
+            .load_from_disk(AgentTaskLoadOptions::default())
+            .await
+            .unwrap();
+        insert_live(&service, "bash-live0002", true);
+
+        service
+            .suppress_terminal_notification("bash-live0002")
+            .await
+            .unwrap();
+        service
+            .suppress_terminal_notification("bash-live0002")
+            .await
+            .unwrap();
+        service
+            .suppress_terminal_notification("bash-ghost002")
+            .await
+            .unwrap();
+        service
+            .suppress_terminal_notification("bash-missing2")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service
+                .get_task("bash-live0002")
+                .unwrap()
+                .base
+                .terminal_notification_suppressed,
+            Some(true)
+        );
+        assert_eq!(
+            persistence
+                .read_task("bash-live0002")
+                .await
+                .unwrap()
+                .unwrap()
+                .base
+                .terminal_notification_suppressed,
+            Some(true)
+        );
+        assert_eq!(
+            service
+                .get_task("bash-ghost002")
+                .unwrap()
+                .base
+                .terminal_notification_suppressed,
+            None
         );
     }
 
