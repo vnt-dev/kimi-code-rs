@@ -3,4 +3,5 @@ pub mod context_size;
 pub mod external_hooks;
 pub mod mcp;
 pub mod scope_context;
+pub mod swarm;
 pub mod task;
