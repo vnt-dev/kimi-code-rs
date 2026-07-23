@@ -5,6 +5,7 @@ pub mod discovery;
 pub mod errors;
 pub mod in_memory_discovery;
 pub mod parser;
+pub mod roots;
 pub mod runtime_options;
 pub mod source;
 pub mod types;
@@ -27,6 +28,7 @@ pub use parser::{
     UnsupportedSkillTypeError, parse_d2_flowchart, parse_frontmatter, parse_mermaid_flowchart,
     parse_skill_text, skill_argument_names,
 };
+pub use roots::{SkillRootsOptions, configured_roots, project_roots, user_roots};
 pub use runtime_options::{
     SKILL_CATALOG_RUNTIME_OPTIONS_ID, SkillCatalogRuntimeOptions,
     register_skill_catalog_runtime_options, skill_catalog_runtime_options_seed,
