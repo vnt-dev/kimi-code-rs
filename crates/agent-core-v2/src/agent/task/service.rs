@@ -14,8 +14,8 @@ use indexmap::IndexMap;
 
 use super::{
     AgentTaskInfo, AgentTaskLoadOptions, AgentTaskOutputSnapshot, AgentTaskPersistence,
-    AgentTaskServiceResult, ManagedTaskState, RestoredTaskRegistry, TaskModelState,
-    empty_output_snapshot, should_list_task,
+    AgentTaskServiceResult, ForegroundTaskReleaseReason, ManagedTaskState, RestoredTaskRegistry,
+    TaskModelState, empty_output_snapshot, should_list_task,
 };
 
 const JAVASCRIPT_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -287,6 +287,22 @@ impl AgentTaskService {
         };
         write.await;
         Ok(())
+    }
+
+    // Original: AgentTaskService.waitForForegroundRelease().
+    pub async fn wait_for_foreground_release(
+        &self,
+        task_id: &str,
+    ) -> AgentTaskServiceResult<Option<ForegroundTaskReleaseReason>> {
+        let release = self
+            .state()
+            .tasks
+            .get(task_id)
+            .map(|entry| entry.state.foreground_release_future());
+        match release {
+            Some(release) => Ok(Some(release.await)),
+            None => Ok(None),
+        }
     }
 }
 
@@ -589,6 +605,53 @@ mod tests {
                 .base
                 .terminal_notification_suppressed,
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_release_wait_distinguishes_missing_detached_and_pending_tasks() {
+        let (_persistence, service) = service();
+        insert_live(&service, "bash-detached", true);
+        insert_live(&service, "bash-fore0001", false);
+
+        assert_eq!(
+            service
+                .wait_for_foreground_release("bash-missing3")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            service
+                .wait_for_foreground_release("bash-detached")
+                .await
+                .unwrap(),
+            Some(ForegroundTaskReleaseReason::Terminal)
+        );
+
+        let waiting = service
+            .state()
+            .tasks
+            .get("bash-fore0001")
+            .unwrap()
+            .state
+            .foreground_release_future();
+        let release = service
+            .state()
+            .tasks
+            .get_mut("bash-fore0001")
+            .unwrap()
+            .state
+            .take_foreground_release()
+            .unwrap();
+        release.resolve(ForegroundTaskReleaseReason::Detached);
+        assert_eq!(waiting.await, ForegroundTaskReleaseReason::Detached);
+        assert_eq!(
+            service
+                .wait_for_foreground_release("bash-fore0001")
+                .await
+                .unwrap(),
+            Some(ForegroundTaskReleaseReason::Terminal)
         );
     }
 
