@@ -5,6 +5,7 @@ pub mod message_projection;
 pub mod protocol_message;
 pub mod tool_result_render;
 pub mod types;
+pub mod undo;
 pub mod vacuous_content;
 
 pub use compaction_handoff::*;
@@ -16,4 +17,5 @@ pub use tool_result_render::{
     RenderableToolOutput, RenderableToolResult, render_tool_result_for_model,
 };
 pub use types::*;
+pub use undo::*;
 pub use vacuous_content::is_vacuous_content_part;
