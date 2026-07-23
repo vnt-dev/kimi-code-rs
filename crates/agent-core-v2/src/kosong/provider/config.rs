@@ -165,8 +165,6 @@ pub struct ProviderConfig {
 pub const PROVIDERS_SECTION: &str = "providers";
 pub const DEFAULT_PROVIDER_SECTION: &str = "defaultProvider";
 pub const ENV_MODEL_PROVIDER_KEY: &str = "__kimi_env__";
-pub const PROVIDER_SERVICE_ID: &str = "providerService";
-
 pub type ProvidersSection = IndexMap<String, ProviderConfig>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -175,15 +173,6 @@ pub struct ProvidersChangedEvent {
     pub removed: Vec<String>,
     pub changed: Vec<String>,
 }
-
-// MIGRATION-TODO:
-// Original: provider.ts, IProviderService and its providerService DI binding.
-// Missing dependency: the _base Event primitive and the application-scoped
-// Rust DI/service container have not been migrated.
-// Temporary behavior: none; no fake event stream or in-memory service is
-// exposed by this contract module.
-// Completion condition: migrate Event, then define the async provider service
-// trait and bind it under PROVIDER_SERVICE_ID at application scope.
 
 #[cfg(test)]
 mod tests {
@@ -254,6 +243,5 @@ mod tests {
         assert_eq!(PROVIDERS_SECTION, "providers");
         assert_eq!(DEFAULT_PROVIDER_SECTION, "defaultProvider");
         assert_eq!(ENV_MODEL_PROVIDER_KEY, "__kimi_env__");
-        assert_eq!(PROVIDER_SERVICE_ID, "providerService");
     }
 }
