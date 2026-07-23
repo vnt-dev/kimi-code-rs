@@ -2,6 +2,7 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/task/taskService.ts`.
 
+use crate::_base::utils::abort::user_cancellation_reason;
 use crate::_base::utils::xml_escape::{escape_xml, escape_xml_attr};
 
 use super::{AgentTaskInfo, AgentTaskOutputSnapshot};
@@ -92,6 +93,73 @@ pub fn newer_restored_task(existing: AgentTaskInfo, loaded: AgentTaskInfo) -> Ag
         }
         (Some(_), None) => existing,
         (None, Some(_)) | (None, None) => loaded,
+    }
+}
+
+// Original: taskService.ts, buildAgentTaskNotificationBody(). Agent tasks that
+// did not complete include the exact recovery instructions used by the
+// TypeScript service when their agent id differs from the task id.
+pub fn build_agent_task_notification_body(info: &AgentTaskInfo) -> String {
+    let base_line = if info.base.status == super::AgentTaskStatus::TimedOut {
+        format!("{} timed out.", info.base.description)
+    } else if info.base.status == super::AgentTaskStatus::Killed
+        && is_serialized_user_cancellation(info.base.stop_reason.as_deref())
+    {
+        format!("{} was stopped by user.", info.base.description)
+    } else if let Some(reason) = &info.base.stop_reason {
+        let status = if info.base.status == super::AgentTaskStatus::Killed {
+            "was stopped"
+        } else {
+            agent_task_status_text(info.base.status)
+        };
+        format!("{} {status}. Reason: {reason}", info.base.description)
+    } else {
+        format!(
+            "{} {}.",
+            info.base.description,
+            agent_task_status_text(info.base.status)
+        )
+    };
+
+    if info.kind != "agent" || info.base.status == super::AgentTaskStatus::Completed {
+        return base_line;
+    }
+    let Some(agent_id) = info
+        .details
+        .get("agentId")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return base_line;
+    };
+    if agent_id == info.base.task_id {
+        return base_line;
+    }
+
+    format!(
+        "{base_line}\n\nTo recover or continue this subagent, call Agent(resume=\"{agent_id}\", prompt=\"Pick up where you left off; redo the last tool call if its result was never observed.\").\nUse agent_id (\"{agent_id}\"), NOT source_id / task_id (\"{}\") — the two look alike but only agent_id is accepted by the resume parameter.\nAdd run_in_background=true to keep it backgrounded, or omit it to take the result inline in the current turn.\nThe subagent retains its full prior context across the restart, but any in-flight tool call lost its result and may need to be redone.",
+        info.base.task_id
+    )
+}
+
+// Original: taskService.ts, normalizeReason().
+pub fn normalize_reason(reason: Option<&str>) -> Option<&str> {
+    reason.map(str::trim).filter(|reason| !reason.is_empty())
+}
+
+// Original: taskService.ts, isSerializedUserCancellation(). This compares the
+// persisted text because the original Error object is not serialized.
+pub fn is_serialized_user_cancellation(reason: Option<&str>) -> bool {
+    reason.is_some_and(|reason| reason == user_cancellation_reason().to_string())
+}
+
+fn agent_task_status_text(status: super::AgentTaskStatus) -> &'static str {
+    match status {
+        super::AgentTaskStatus::Running => "running",
+        super::AgentTaskStatus::Completed => "completed",
+        super::AgentTaskStatus::Failed => "failed",
+        super::AgentTaskStatus::TimedOut => "timed_out",
+        super::AgentTaskStatus::Killed => "killed",
+        super::AgentTaskStatus::Lost => "lost",
     }
 }
 
@@ -198,5 +266,72 @@ mod tests {
             newer_restored_task(existing, loaded).base.description,
             "loaded"
         );
+    }
+
+    #[test]
+    fn notification_body_preserves_terminal_reason_wording() {
+        let mut info = task(AgentTaskStatus::TimedOut, Some(true), Some(2), "Build");
+        info.base.stop_reason = Some("ignored timeout detail".into());
+        assert_eq!(
+            build_agent_task_notification_body(&info),
+            "Build timed out."
+        );
+
+        info.base.status = AgentTaskStatus::Killed;
+        info.base.stop_reason = Some(user_cancellation_reason().to_string());
+        assert_eq!(
+            build_agent_task_notification_body(&info),
+            "Build was stopped by user."
+        );
+
+        info.base.stop_reason = Some("Session closed".into());
+        assert_eq!(
+            build_agent_task_notification_body(&info),
+            "Build was stopped. Reason: Session closed"
+        );
+
+        info.base.status = AgentTaskStatus::Failed;
+        info.base.stop_reason = Some("exit 2".into());
+        assert_eq!(
+            build_agent_task_notification_body(&info),
+            "Build failed. Reason: exit 2"
+        );
+    }
+
+    #[test]
+    fn failed_agent_notification_includes_recovery_only_for_distinct_agent_id() {
+        let mut info = task(AgentTaskStatus::Lost, Some(true), Some(2), "Explore agent");
+        info.kind = "agent".into();
+        assert_eq!(
+            build_agent_task_notification_body(&info),
+            "Explore agent lost."
+        );
+
+        info.details.insert(
+            "agentId".into(),
+            serde_json::Value::String("agent-42".into()),
+        );
+        assert_eq!(
+            build_agent_task_notification_body(&info),
+            "Explore agent lost.\n\nTo recover or continue this subagent, call Agent(resume=\"agent-42\", prompt=\"Pick up where you left off; redo the last tool call if its result was never observed.\").\nUse agent_id (\"agent-42\"), NOT source_id / task_id (\"bash-12345678\") — the two look alike but only agent_id is accepted by the resume parameter.\nAdd run_in_background=true to keep it backgrounded, or omit it to take the result inline in the current turn.\nThe subagent retains its full prior context across the restart, but any in-flight tool call lost its result and may need to be redone."
+        );
+
+        info.base.status = AgentTaskStatus::Completed;
+        assert_eq!(
+            build_agent_task_notification_body(&info),
+            "Explore agent completed."
+        );
+    }
+
+    #[test]
+    fn reason_helpers_match_serialized_typescript_behavior() {
+        assert_eq!(normalize_reason(None), None);
+        assert_eq!(normalize_reason(Some(" \n\t")), None);
+        assert_eq!(normalize_reason(Some("  stopped  ")), Some("stopped"));
+        assert!(is_serialized_user_cancellation(Some("Aborted by the user")));
+        assert!(!is_serialized_user_cancellation(Some(
+            " Aborted by the user "
+        )));
+        assert!(!is_serialized_user_cancellation(None));
     }
 }
