@@ -687,6 +687,104 @@ mod tests {
     }
 
     #[test]
+    fn preserves_complete_response_field_names_and_open_json() {
+        let expected = json!({
+            "agent_id": "main",
+            "items": [
+                {
+                    "kind": "turn",
+                    "turnId": "t1",
+                    "ordinal": 1,
+                    "state": "completed",
+                    "origin": {"kind": "cron", "taskId": "cron-1", "payload": null},
+                    "prompt": "run",
+                    "attachmentIds": ["att-1"],
+                    "steps": [{
+                        "kind": "step",
+                        "stepId": "t1.1",
+                        "turnId": "t1",
+                        "ordinal": 1,
+                        "state": "completed",
+                        "frames": [{
+                            "kind": "tool",
+                            "frameId": "f1",
+                            "toolCallId": "call-1",
+                            "name": "Read",
+                            "state": "done",
+                            "input": null,
+                            "output": {"text": "ok"},
+                            "agentRefs": [{"agentId": "sub-1", "role": "child"}]
+                        }]
+                    }],
+                    "usage": {"inputTokens": 1.0, "outputTokens": 2.0}
+                },
+                {
+                    "kind": "marker",
+                    "markerId": "m1",
+                    "marker": "notice",
+                    "payload": {"level": "info"}
+                },
+                {"kind": "taskref", "refId": "r1", "taskId": "task-1"}
+            ],
+            "has_more": false,
+            "tasks": [{
+                "taskId": "task-1",
+                "kind": "shell",
+                "state": "timed_out",
+                "detached": true,
+                "agentId": "sub-1",
+                "outputTail": "tail"
+            }],
+            "interactions": [{
+                "interactionId": "approval-1",
+                "interactionKind": "approval",
+                "toolCallId": "call-1",
+                "state": "approved",
+                "request": {"command": "read"},
+                "response": null
+            }],
+            "attachments": [{
+                "attachmentId": "att-1",
+                "mediaType": "text/plain",
+                "name": "a.txt",
+                "size": 4.0,
+                "source": {"kind": "file", "fileId": "file-1"},
+                "placeholder": "[File #1]"
+            }],
+            "todos": [{
+                "todoId": "todo-1",
+                "items": [{"title": "ship", "status": "in_progress"}],
+                "updatedAt": "now"
+            }],
+            "meta": {
+                "goal": {
+                    "objective": "ship",
+                    "status": "active",
+                    "completionCriterion": "green",
+                    "budgetUsed": 1.0,
+                    "budgetLimit": 2.0
+                },
+                "modes": {
+                    "plan": {"reviewPath": "/plan"},
+                    "swarm": {"trigger": "manual"}
+                },
+                "activity": "turn"
+            },
+            "agents": [{
+                "agentId": "main",
+                "type": "main",
+                "parentAgentId": "root",
+                "label": "Main",
+                "createdAt": "then",
+                "disposedAt": "later"
+            }],
+            "pending_interactions": ["approval-2"]
+        });
+        let response: TranscriptResponse = parse_wire_value(expected.clone()).unwrap();
+        assert_eq!(serde_json::to_value(response).unwrap(), expected);
+    }
+
+    #[test]
     fn rejects_bad_grades_cursors_page_sizes_and_empty_nested_ids() {
         assert!(parse_wire_value::<WireTranscriptGradeSpec>(json!({"*": "stream"})).is_err());
         assert!(

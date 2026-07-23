@@ -10,6 +10,8 @@ use crate::model::AgentId;
 
 use super::{AgentTranscript, Disposable, ListenerRegistry};
 
+pub type RosterListener = dyn FnMut(&[AgentDescriptor]);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentType {

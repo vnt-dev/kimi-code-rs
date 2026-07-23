@@ -17,6 +17,8 @@ use crate::ops::{
 
 use super::{Disposable, ListenerRegistry};
 
+pub type TranscriptListener = dyn FnMut(&TranscriptChangeEvent);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SnapshotWindow {
     pub tail_turns: usize,

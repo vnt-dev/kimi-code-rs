@@ -30,48 +30,62 @@ impl TranscriptEventType {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptResetEvent {
+    pub agent_id: AgentId,
+    pub snapshot: Box<AgentTranscriptSnapshot>,
+    pub has_more_older: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptOpsEvent {
+    pub agent_id: AgentId,
+    pub ops: Vec<TranscriptOperation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum TranscriptEvent {
     #[serde(rename = "transcript.reset")]
-    Reset {
-        agent_id: AgentId,
-        snapshot: Box<AgentTranscriptSnapshot>,
-        has_more_older: bool,
-    },
+    Reset(TranscriptResetEvent),
     #[serde(rename = "transcript.ops")]
-    Ops {
-        agent_id: AgentId,
-        ops: Vec<TranscriptOperation>,
-    },
+    Ops(TranscriptOpsEvent),
 }
 
 impl TranscriptEvent {
     pub const fn event_type(&self) -> TranscriptEventType {
         match self {
-            Self::Reset { .. } => TranscriptEventType::Reset,
-            Self::Ops { .. } => TranscriptEventType::Ops,
+            Self::Reset(_) => TranscriptEventType::Reset,
+            Self::Ops(_) => TranscriptEventType::Ops,
         }
+    }
+}
+
+impl WireValidate for TranscriptResetEvent {
+    fn validate_wire(&self) -> Result<(), WireError> {
+        TranscriptResetPayload {
+            agent_id: self.agent_id.clone(),
+            snapshot: self.snapshot.as_ref().clone(),
+            has_more_older: self.has_more_older,
+        }
+        .validate_wire()
+    }
+}
+
+impl WireValidate for TranscriptOpsEvent {
+    fn validate_wire(&self) -> Result<(), WireError> {
+        TranscriptOpsPayload {
+            agent_id: self.agent_id.clone(),
+            ops: self.ops.clone(),
+        }
+        .validate_wire()
     }
 }
 
 impl WireValidate for TranscriptEvent {
     fn validate_wire(&self) -> Result<(), WireError> {
         match self {
-            Self::Reset {
-                agent_id,
-                snapshot,
-                has_more_older,
-            } => TranscriptResetPayload {
-                agent_id: agent_id.clone(),
-                snapshot: snapshot.as_ref().clone(),
-                has_more_older: *has_more_older,
-            }
-            .validate_wire(),
-            Self::Ops { agent_id, ops } => TranscriptOpsPayload {
-                agent_id: agent_id.clone(),
-                ops: ops.clone(),
-            }
-            .validate_wire(),
+            Self::Reset(event) => event.validate_wire(),
+            Self::Ops(event) => event.validate_wire(),
         }
     }
 }
