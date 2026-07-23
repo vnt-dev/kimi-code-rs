@@ -1,9 +1,76 @@
+use std::sync::{Arc, LazyLock};
+
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
 use super::types::{ModelThinkingCapabilities, ModelThinkingMetadata, ThinkingDefaults};
+use crate::app::config::{
+    AnyEnvBindings, ConfigSchema, ConfigStripEnv, ConfigValidationError, EnvBinding,
+    RegisterSectionOptions, register_config_section,
+};
 use crate::kosong::{
     contract::provider::ThinkingEffort,
     protocol::identity::{Protocol, ProtocolAdapterRegistry},
     provider::provider_definition::{ProviderDefinitionRegistryError, get_provider_definitions},
 };
+
+pub const THINKING_SECTION: &str = "thinking";
+pub const MODEL_THINKING_EFFORT_ENV: &str = "KIMI_MODEL_THINKING_EFFORT";
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThinkingConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forced_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<String>,
+}
+
+pub static THINKING_CONFIG_SCHEMA: LazyLock<ConfigSchema> = LazyLock::new(|| {
+    ConfigSchema::new(|value| {
+        if !value.is_object() {
+            return Err(ConfigValidationError::new(
+                "thinking config must be an object",
+            ));
+        }
+        let config: ThinkingConfig = serde_json::from_value(value.clone())
+            .map_err(|error| ConfigValidationError::new(error.to_string()))?;
+        serde_json::to_value(config).map_err(|error| ConfigValidationError::new(error.to_string()))
+    })
+});
+
+pub static THINKING_ENV_BINDINGS: LazyLock<Arc<AnyEnvBindings>> = LazyLock::new(|| {
+    Arc::new(AnyEnvBindings::Fields(IndexMap::from([(
+        "forcedEffort".into(),
+        AnyEnvBindings::Binding(EnvBinding::Name(MODEL_THINKING_EFFORT_ENV.into())),
+    )])))
+});
+
+pub static STRIP_THINKING_ENV: LazyLock<ConfigStripEnv> = LazyLock::new(|| {
+    Arc::new(|value, _| {
+        let mut result = value.as_object()?.clone();
+        result.remove("forcedEffort");
+        Some(Value::Object(result))
+    })
+});
+
+// Original: thinking.ts, registerConfigSection() side effect.
+pub fn register_thinking_config_section() {
+    register_config_section(
+        THINKING_SECTION,
+        THINKING_CONFIG_SCHEMA.clone(),
+        RegisterSectionOptions {
+            env: Some(Arc::clone(&THINKING_ENV_BINDINGS)),
+            strip_env: Some(Arc::clone(&STRIP_THINKING_ENV)),
+            ..RegisterSectionOptions::default()
+        },
+    );
+}
 
 // Original: thinking.ts, drivesThinkingThroughTraits().
 pub fn drives_thinking_through_traits(
@@ -259,17 +326,15 @@ pub fn resolve_thinking_keep(
     }
 }
 
-// MIGRATION-TODO:
-// Original: packages/agent-core-v2/src/kosong/model/thinking.ts
-// Missing unit: thinking config-section registration and env stripping.
-// Completion condition: register the section and KIMI_MODEL_THINKING_EFFORT
-// binding through the Rust config contribution registry.
-
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, OnceLock, RwLock};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, OnceLock, RwLock},
+    };
 
     use super::*;
+    use crate::app::config::apply_section_env;
     use crate::kosong::{
         contract::capability::ModelCapability,
         protocol::{protocol_base::ProtocolBaseRegistry, protocol_trait::ProtocolTrait},
@@ -302,6 +367,61 @@ mod tests {
             default_effort: Some("high".to_owned()),
             ..ModelThinkingMetadata::default()
         }
+    }
+
+    #[test]
+    fn thinking_schema_env_binding_and_strip_preserve_source_behavior() {
+        let parsed = THINKING_CONFIG_SCHEMA
+            .parse(&serde_json::json!({
+                "enabled": true,
+                "effort": "high",
+                "forcedEffort": "max",
+                "keep": "all",
+                "unknown": "discarded"
+            }))
+            .unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!({
+                "enabled": true,
+                "effort": "high",
+                "forcedEffort": "max",
+                "keep": "all"
+            })
+        );
+        for invalid in [
+            serde_json::json!(null),
+            serde_json::json!({"enabled": "true"}),
+            serde_json::json!({"effort": 3}),
+        ] {
+            assert!(THINKING_CONFIG_SCHEMA.parse(&invalid).is_err());
+        }
+
+        let get_env = |name: &str| {
+            HashMap::from([(MODEL_THINKING_EFFORT_ENV, "xhigh")])
+                .get(name)
+                .map(ToString::to_string)
+        };
+        let effective = apply_section_env(Some(&parsed), &THINKING_ENV_BINDINGS, &get_env)
+            .unwrap()
+            .unwrap();
+        assert_eq!(effective["forcedEffort"], "xhigh");
+        assert_eq!(
+            STRIP_THINKING_ENV(&effective, None).unwrap(),
+            serde_json::json!({"enabled": true, "effort": "high", "keep": "all"})
+        );
+    }
+
+    #[test]
+    fn thinking_section_registers_schema_env_and_strip_hooks() {
+        crate::app::config::clear_config_section_contributions_for_tests();
+        register_thinking_config_section();
+        let contributions = crate::app::config::get_config_section_contributions();
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].domain, THINKING_SECTION);
+        assert!(contributions[0].options.env.is_some());
+        assert!(contributions[0].options.strip_env.is_some());
+        crate::app::config::clear_config_section_contributions_for_tests();
     }
 
     #[test]
