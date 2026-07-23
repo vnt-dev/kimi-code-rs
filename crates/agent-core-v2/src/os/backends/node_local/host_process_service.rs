@@ -234,9 +234,8 @@ fn build_command(
 }
 
 fn shell_command(command: &str, args: &[String]) -> String {
-    std::iter::once(command)
-        .chain(args.iter().map(String::as_str))
-        .map(shell_quote)
+    std::iter::once(command.to_owned())
+        .chain(args.iter().map(|argument| shell_quote(argument)))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -433,6 +432,35 @@ mod tests {
             .unwrap();
         assert_eq!(output, "base:new");
         assert_eq!(process.wait().await.unwrap(), 0);
+    }
+
+    // Original:
+    //   packages/agent-core-v2/src/os/backends/node-local/hostProcessService.ts
+    //   HostProcessService.spawn(command, args, { shell: true })
+    #[tokio::test]
+    async fn shell_option_executes_command_as_script_and_quotes_arguments() {
+        let service = LocalHostProcessService::default();
+        let process = service
+            .spawn(
+                "printf '%s:%s' shell-script",
+                &["argument with spaces".into()],
+                HostProcessOptions {
+                    shell: Some(ProcessShell::Default),
+                    ..HostProcessOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        let mut output = String::new();
+        process
+            .stdout()
+            .lock()
+            .await
+            .read_to_string(&mut output)
+            .await
+            .unwrap();
+        assert_eq!(process.wait().await.unwrap(), 0);
+        assert_eq!(output, "shell-script:argument with spaces");
     }
 
     #[tokio::test]
