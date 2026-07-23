@@ -8,8 +8,8 @@ use crate::agent::context_memory::{ContextMessage, PromptOrigin};
 use serde_json::Value;
 
 use super::{
-    AgentTaskInfo, AgentTaskOutputSnapshot, AgentTaskSettlement, AgentTaskSettlementStatus,
-    AgentTaskStatus,
+    AgentTaskInfo, AgentTaskInfoBase, AgentTaskOutputSnapshot, AgentTaskSettlement,
+    AgentTaskSettlementStatus, AgentTaskStatus,
 };
 
 pub const MAX_RETAINED_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -125,6 +125,33 @@ pub fn mark_loaded_task_lost(mut info: AgentTaskInfo, now_ms: i64) -> Option<Age
         info.base.ended_at = Some(now_ms);
     }
     Some(info)
+}
+
+// Original: taskService.ts, settleTask() state mutation. Cleanup, persistence,
+// notifications, foreground release, and waiter resolution remain ordered
+// side effects for the service layer after this atomic state commit succeeds.
+pub fn apply_task_settlement(
+    base: &mut AgentTaskInfoBase,
+    settlement: AgentTaskSettlement,
+    now_ms: i64,
+) -> bool {
+    if base.status.is_terminal() {
+        return false;
+    }
+    let status = match settlement.status {
+        AgentTaskSettlementStatus::Completed => AgentTaskStatus::Completed,
+        AgentTaskSettlementStatus::Failed => AgentTaskStatus::Failed,
+        AgentTaskSettlementStatus::TimedOut => AgentTaskStatus::TimedOut,
+        AgentTaskSettlementStatus::Killed => AgentTaskStatus::Killed,
+    };
+    base.status = status;
+    base.ended_at = Some(now_ms);
+    base.stop_reason = match settlement.stop_reason {
+        Some(reason) => Some(reason),
+        None if status == AgentTaskStatus::Killed => base.stop_reason.take(),
+        None => None,
+    };
+    true
 }
 
 // Original: taskService.ts, emptyOutputSnapshot().
@@ -718,5 +745,61 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn settlement_is_single_commit_and_preserves_reason_only_for_killed() {
+        let mut info = task(AgentTaskStatus::Running, Some(true), None, "running");
+        info.base.stop_reason = Some("requested stop".into());
+        assert!(apply_task_settlement(
+            &mut info.base,
+            AgentTaskSettlement {
+                status: AgentTaskSettlementStatus::Killed,
+                stop_reason: None,
+            },
+            80,
+        ));
+        assert_eq!(info.base.status, AgentTaskStatus::Killed);
+        assert_eq!(info.base.ended_at, Some(80));
+        assert_eq!(info.base.stop_reason.as_deref(), Some("requested stop"));
+        assert!(!apply_task_settlement(
+            &mut info.base,
+            AgentTaskSettlement {
+                status: AgentTaskSettlementStatus::Failed,
+                stop_reason: Some("late".into()),
+            },
+            90,
+        ));
+        assert_eq!(info.base.status, AgentTaskStatus::Killed);
+        assert_eq!(info.base.ended_at, Some(80));
+
+        for status in [
+            AgentTaskSettlementStatus::Completed,
+            AgentTaskSettlementStatus::Failed,
+            AgentTaskSettlementStatus::TimedOut,
+        ] {
+            let mut info = task(AgentTaskStatus::Running, Some(true), None, "running");
+            info.base.stop_reason = Some("stale".into());
+            assert!(apply_task_settlement(
+                &mut info.base,
+                AgentTaskSettlement {
+                    status,
+                    stop_reason: None,
+                },
+                100,
+            ));
+            assert_eq!(info.base.stop_reason, None);
+        }
+
+        let mut info = task(AgentTaskStatus::Running, Some(true), None, "running");
+        assert!(apply_task_settlement(
+            &mut info.base,
+            AgentTaskSettlement {
+                status: AgentTaskSettlementStatus::Failed,
+                stop_reason: Some("exit 2".into()),
+            },
+            110,
+        ));
+        assert_eq!(info.base.stop_reason.as_deref(), Some("exit 2"));
     }
 }

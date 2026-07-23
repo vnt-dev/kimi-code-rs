@@ -46,6 +46,12 @@ impl TaskOutputBuffer {
         self.pending_output_bytes
     }
 
+    // Original: taskService.ts, settleTask() non-persisted output branch.
+    pub fn discard_pending_output(&mut self) {
+        self.pending_output.clear();
+        self.pending_output_bytes = 0;
+    }
+
     // Original: taskService.ts, appendOutput().
     pub fn append(&mut self, chunk: String, is_process: bool) -> TaskOutputAction {
         let chunk_bytes = chunk.len();
@@ -192,5 +198,15 @@ mod tests {
         output.append("two".into(), false);
         assert_eq!(output.start_output_persist(), Some("onetwo".into()));
         assert_eq!(output.pending_output_bytes(), 0);
+    }
+
+    #[test]
+    fn settlement_can_discard_unpersisted_output_without_changing_retained_tail() {
+        let mut output = TaskOutputBuffer::new(false);
+        output.append("visible tail".into(), false);
+        output.discard_pending_output();
+        assert_eq!(output.pending_output_bytes(), 0);
+        assert_eq!(output.retained_output(), "visible tail");
+        assert!(!output.output_persist_started);
     }
 }
