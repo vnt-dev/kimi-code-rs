@@ -20,8 +20,13 @@ use indexmap::IndexMap;
 
 use crate::{
     _base::{
-        di::lifecycle::{
-            Disposable, DisposableHandle, DisposableStore, DisposeResult, combined_disposable,
+        di::{
+            descriptors::SyncDescriptor,
+            instantiation::ServicesAccessorExt,
+            lifecycle::{
+                Disposable, DisposableHandle, DisposableStore, DisposeResult, combined_disposable,
+            },
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
         },
         errors::error_message::to_error_message,
         errors::unexpected_error::on_unexpected_error,
@@ -29,29 +34,43 @@ use crate::{
     },
     agent::{
         context_injector::{
-            AgentContextInjectorServiceContract, ContextInjectionContent, ContextInjectionProvider,
+            AGENT_CONTEXT_INJECTOR_SERVICE_ID, AgentContextInjectorServiceContract,
+            ContextInjectionContent, ContextInjectionProvider,
         },
-        context_memory::{ContextMessage, PromptOrigin},
+        context_memory::{
+            AGENT_CONTEXT_MEMORY_SERVICE_ID, AgentContextMemoryServiceContract, ContextMessage,
+            PromptOrigin,
+        },
+        loop_::{AGENT_LOOP_SERVICE_ID, AgentLoopServiceContract},
+        scope_context::{AGENT_SCOPE_CONTEXT_ID, AgentScopeContext},
     },
     app::{
-        event::event_bus::{DomainEvent, EventBusHandle},
+        config::{CONFIG_SERVICE_ID, ConfigServiceHandle},
+        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusHandle},
         task::contract::TaskState,
+        telemetry::{TELEMETRY_SERVICE_ID, TelemetryServiceHandle},
     },
     hooks::HookRegisterOptions,
-    wire::contract::WireServiceHandle,
+    persistence::interface::{
+        atomic_document_store::{ATOMIC_DOCUMENT_STORE_SERVICE_ID, AtomicDocumentStoreHandle},
+        storage::{FILE_SYSTEM_STORAGE_SERVICE_ID, FileSystemStorageServiceHandle},
+    },
+    session::session_context::{SESSION_CONTEXT_ID, SessionContext},
+    wire::contract::{WIRE_SERVICE_ID, WireServiceHandle},
 };
 
 use super::{
-    ACTIVE_BACKGROUND_TASK_INJECTION_VARIANT, AgentTask, AgentTaskEntry, AgentTaskError,
-    AgentTaskInfo, AgentTaskLifecycleRecorder, AgentTaskLoadOptions,
+    ACTIVE_BACKGROUND_TASK_INJECTION_VARIANT, AGENT_TASK_SERVICE_ID, AgentTask, AgentTaskEntry,
+    AgentTaskError, AgentTaskInfo, AgentTaskLifecycleRecorder, AgentTaskLoadOptions,
     AgentTaskNotificationBuildContext, AgentTaskNotificationEffects, AgentTaskOutputSnapshot,
-    AgentTaskPersistence, AgentTaskServiceContract, AgentTaskServiceResult, AgentTaskSettlement,
-    AgentTaskSettlementStatus, AgentTaskSink, AgentTaskTrackOptions, AgentTrackedTaskHandle,
-    ForegroundTaskReleaseReason, ManagedTaskState, NOTIFICATION_FALLBACK_PREVIEW_BYTES,
-    RegisterAgentTaskOptions, RestoredTaskRegistry, ScheduledTaskNotification, TASK_MODEL,
-    TASK_NOTIFICATION_DELIVERY_MODEL, TaskModelState, TaskNotificationDelivery, TaskOutputAction,
-    active_background_task_reminder, check_task_registration, coerce_timeout_settlement,
-    empty_output_snapshot, finish_task_notification, generate_task_id, is_compaction_splice,
+    AgentTaskPersistence, AgentTaskPersistenceRoot, AgentTaskServiceContract,
+    AgentTaskServiceHandle, AgentTaskServiceResult, AgentTaskSettlement, AgentTaskSettlementStatus,
+    AgentTaskSink, AgentTaskTrackOptions, AgentTrackedTaskHandle, ForegroundTaskReleaseReason,
+    ManagedTaskState, NOTIFICATION_FALLBACK_PREVIEW_BYTES, RegisterAgentTaskOptions,
+    RestoredTaskRegistry, ScheduledTaskNotification, TASK_MODEL, TASK_NOTIFICATION_DELIVERY_MODEL,
+    TaskModelState, TaskNotificationDelivery, TaskOutputAction, active_background_task_reminder,
+    check_task_registration, coerce_timeout_settlement, empty_output_snapshot,
+    finish_task_notification, generate_task_id, is_compaction_splice,
     needs_notification_fallback_preview, normalize_reason, resolve_agent_task_config,
     should_list_task,
 };
@@ -229,6 +248,45 @@ impl AgentTaskService {
                 disposables: DisposableStore::new(),
             }),
         }
+    }
+
+    // Original: AgentTaskService.constructor(). Rust passes explicit handles in
+    // place of parameter decorators and retains the source dependency order.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_dependencies(
+        telemetry: TelemetryServiceHandle,
+        context: Arc<dyn AgentContextMemoryServiceContract>,
+        config: ConfigServiceHandle,
+        documents: AtomicDocumentStoreHandle,
+        storage: FileSystemStorageServiceHandle,
+        session: &SessionContext,
+        scope: &AgentScopeContext,
+        wire: WireServiceHandle,
+        event_bus: EventBusHandle,
+        injector: &dyn AgentContextInjectorServiceContract,
+        loop_service: Arc<dyn AgentLoopServiceContract>,
+    ) -> AgentTaskServiceResult<Self> {
+        let (agent_dir, agent_scope, fallback_root) = task_persistence_coordinates(session, scope);
+        let persistence = Arc::new(AgentTaskPersistence::new(
+            agent_dir,
+            agent_scope,
+            documents,
+            storage,
+            fallback_root,
+        ));
+        let lifecycle = AgentTaskLifecycleRecorder::new(wire.clone(), telemetry);
+        let notifications = AgentTaskNotificationEffects::new(
+            Arc::clone(&context),
+            event_bus.clone(),
+            loop_service,
+        );
+        let effects: Arc<dyn AgentTaskRuntimeEffects> = Arc::new(
+            DefaultAgentTaskRuntimeEffects::new(config, context, lifecycle, notifications),
+        );
+        let service = Self::new(persistence, effects);
+        service.install_restore_hook(&wire)?;
+        service.install_context_hooks(&event_bus, injector);
+        Ok(service)
     }
 
     fn state(&self) -> MutexGuard<'_, AgentTaskServiceState> {
@@ -1652,6 +1710,47 @@ impl AgentTaskServiceContract for AgentTaskService {
     }
 }
 
+// Original: registerScopedService(LifecycleScope.Agent, IAgentTaskService,
+// AgentTaskService, InstantiationType.Eager, "task").
+pub fn register_agent_task_service() {
+    register_scoped_service(
+        LifecycleScope::Agent,
+        AGENT_TASK_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let telemetry = accessor.get(TELEMETRY_SERVICE_ID)?;
+            let context = accessor.get(AGENT_CONTEXT_MEMORY_SERVICE_ID)?;
+            let config = accessor.get(CONFIG_SERVICE_ID)?;
+            let documents = accessor.get(ATOMIC_DOCUMENT_STORE_SERVICE_ID)?;
+            let storage = accessor.get(FILE_SYSTEM_STORAGE_SERVICE_ID)?;
+            let session = accessor.get(SESSION_CONTEXT_ID)?;
+            let scope = accessor.get(AGENT_SCOPE_CONTEXT_ID)?;
+            let wire = accessor.get(WIRE_SERVICE_ID)?;
+            let event_bus = accessor.get(EVENT_BUS_SERVICE_ID)?;
+            let injector = accessor.get(AGENT_CONTEXT_INJECTOR_SERVICE_ID)?;
+            let loop_service = accessor.get(AGENT_LOOP_SERVICE_ID)?;
+            let service = AgentTaskService::from_dependencies(
+                (*telemetry).clone(),
+                Arc::clone(&context.0),
+                (*config).clone(),
+                (*documents).clone(),
+                (*storage).clone(),
+                &session,
+                &scope,
+                (*wire).clone(),
+                (*event_bus).clone(),
+                injector.0.as_ref(),
+                Arc::clone(&loop_service.0),
+            )
+            .map_err(|error| crate::_base::di::errors::DiError::Factory(error.to_string()))?;
+            let service: Arc<dyn AgentTaskServiceContract> = Arc::new(service);
+            Ok(AgentTaskServiceHandle(service))
+        })
+        .disposable(),
+        InstantiationType::Eager,
+        "task",
+    );
+}
+
 fn utf16_tail(value: &str, tail: f64) -> String {
     let units = value.encode_utf16().collect::<Vec<_>>();
     let truncated = tail.trunc();
@@ -1667,6 +1766,22 @@ fn context_splice_event(event: &DomainEvent) -> Option<(usize, Vec<ContextMessag
     let delete_count = usize::try_from(event.fields.get("deleteCount")?.as_u64()?).ok()?;
     let messages = serde_json::from_value(event.fields.get("messages")?.clone()).ok()?;
     Some((delete_count, messages))
+}
+
+fn task_persistence_coordinates(
+    session: &SessionContext,
+    scope: &AgentScopeContext,
+) -> (std::path::PathBuf, String, Option<AgentTaskPersistenceRoot>) {
+    let session_dir = std::path::PathBuf::from(&session.session_dir);
+    let fallback_root = (scope.agent_id == "main").then(|| AgentTaskPersistenceRoot {
+        dir: session_dir.clone(),
+        scope: session.scope(None),
+    });
+    (
+        session_dir.join("agents").join(&scope.agent_id),
+        scope.scope(None),
+        fallback_root,
+    )
 }
 
 async fn wait_until_settled(receiver: &mut tokio::sync::watch::Receiver<bool>) {
@@ -2605,6 +2720,47 @@ mod tests {
             .unwrap();
         assert_eq!(stopped.unwrap().base.status, AgentTaskStatus::Killed);
         assert_eq!(handle.list(Some(true), None).len(), 0);
+    }
+
+    #[test]
+    fn persistence_coordinates_preserve_main_fallback_and_agent_scope() {
+        let session = crate::session::session_context::make_session_context(
+            crate::session::session_context::SessionContextInput {
+                session_id: "session".into(),
+                workspace_id: "workspace".into(),
+                session_dir: "/sessions/workspace/session".into(),
+                session_scope: "sessions/workspace/session".into(),
+                cwd: "/workspace".into(),
+                meta_scope: None,
+            },
+        );
+        let main = crate::agent::scope_context::make_agent_scope_context(
+            crate::agent::scope_context::AgentScopeContextInput {
+                agent_id: "main".into(),
+                agent_scope: "sessions/workspace/session/agents/main".into(),
+            },
+        );
+        let (dir, scope, fallback) = task_persistence_coordinates(&session, &main);
+        assert_eq!(
+            dir,
+            std::path::Path::new("/sessions/workspace/session/agents/main")
+        );
+        assert_eq!(scope, "sessions/workspace/session/agents/main");
+        assert_eq!(
+            fallback,
+            Some(AgentTaskPersistenceRoot {
+                dir: "/sessions/workspace/session".into(),
+                scope: "sessions/workspace/session".into(),
+            })
+        );
+
+        let child = crate::agent::scope_context::make_agent_scope_context(
+            crate::agent::scope_context::AgentScopeContextInput {
+                agent_id: "worker".into(),
+                agent_scope: "sessions/workspace/session/agents/worker".into(),
+            },
+        );
+        assert!(task_persistence_coordinates(&session, &child).2.is_none());
     }
 
     #[tokio::test]

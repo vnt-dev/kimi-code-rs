@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc};
+use std::{error::Error, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -49,9 +49,19 @@ pub trait AgentContextInjectorServiceContract: Send + Sync {
     async fn inject_after_compaction(&self) -> Result<(), ContextInjectionError>;
 }
 
-pub const AGENT_CONTEXT_INJECTOR_SERVICE_ID: ServiceIdentifier<
-    dyn AgentContextInjectorServiceContract,
-> = ServiceIdentifier::new("agentContextInjectorService");
+#[derive(Clone)]
+pub struct AgentContextInjectorServiceHandle(pub Arc<dyn AgentContextInjectorServiceContract>);
+
+impl Deref for AgentContextInjectorServiceHandle {
+    type Target = dyn AgentContextInjectorServiceContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const AGENT_CONTEXT_INJECTOR_SERVICE_ID: ServiceIdentifier<AgentContextInjectorServiceHandle> =
+    ServiceIdentifier::new("agentContextInjectorService");
 
 #[cfg(test)]
 mod tests {

@@ -1,4 +1,7 @@
-use std::sync::{Arc, LazyLock};
+use std::{
+    ops::Deref,
+    sync::{Arc, LazyLock},
+};
 
 use serde_json::{Map, Value};
 
@@ -67,9 +70,19 @@ pub trait AgentContextMemoryServiceContract: Send + Sync {
     ) -> Result<ContextCompactionResult, ContextMemoryServiceError>;
 }
 
-pub const AGENT_CONTEXT_MEMORY_SERVICE_ID: ServiceIdentifier<
-    dyn AgentContextMemoryServiceContract,
-> = ServiceIdentifier::new("agentContextMemoryService");
+#[derive(Clone)]
+pub struct AgentContextMemoryServiceHandle(pub Arc<dyn AgentContextMemoryServiceContract>);
+
+impl Deref for AgentContextMemoryServiceHandle {
+    type Target = dyn AgentContextMemoryServiceContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const AGENT_CONTEXT_MEMORY_SERVICE_ID: ServiceIdentifier<AgentContextMemoryServiceHandle> =
+    ServiceIdentifier::new("agentContextMemoryService");
 
 #[derive(Debug, thiserror::Error)]
 pub enum ContextMemoryServiceError {

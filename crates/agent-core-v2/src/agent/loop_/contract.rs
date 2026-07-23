@@ -2,7 +2,7 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/loop/loop.ts`.
 
-use std::{error::Error, fmt, sync::Arc};
+use std::{error::Error, fmt, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 use futures_util::future::{BoxFuture, Shared};
@@ -262,7 +262,18 @@ pub trait AgentLoopServiceContract: Send + Sync {
     fn hooks(&self) -> &AgentLoopHooks;
 }
 
-pub const AGENT_LOOP_SERVICE_ID: ServiceIdentifier<dyn AgentLoopServiceContract> =
+#[derive(Clone)]
+pub struct AgentLoopServiceHandle(pub Arc<dyn AgentLoopServiceContract>);
+
+impl Deref for AgentLoopServiceHandle {
+    type Target = dyn AgentLoopServiceContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const AGENT_LOOP_SERVICE_ID: ServiceIdentifier<AgentLoopServiceHandle> =
     ServiceIdentifier::new("agentLoopService");
 
 #[cfg(test)]

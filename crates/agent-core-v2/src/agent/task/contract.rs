@@ -18,7 +18,14 @@ use futures_util::{
 };
 
 use crate::{
-    _base::{di::instantiation::ServiceIdentifier, event::Event, utils::abort::AbortSignal},
+    _base::{
+        di::{
+            instantiation::ServiceIdentifier,
+            lifecycle::{Disposable, DisposeResult},
+        },
+        event::Event,
+        utils::abort::AbortSignal,
+    },
     app::task::contract::{TaskHandle, TaskState},
 };
 
@@ -216,7 +223,7 @@ where
 }
 
 #[async_trait]
-pub trait AgentTaskServiceContract: Send + Sync {
+pub trait AgentTaskServiceContract: Disposable + Send + Sync {
     fn track(
         &self,
         handle: Arc<dyn AgentTrackedTaskHandle>,
@@ -278,6 +285,12 @@ impl Deref for AgentTaskServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for AgentTaskServiceHandle {
+    fn dispose(&self) -> DisposeResult {
+        self.0.dispose()
     }
 }
 
