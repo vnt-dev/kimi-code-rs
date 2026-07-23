@@ -2,6 +2,7 @@
 
 pub mod commands;
 pub mod errors;
+pub mod manifest;
 pub mod source;
 pub mod store;
 pub mod types;
@@ -13,6 +14,7 @@ pub use commands::{
 pub use errors::{
     PLUGIN_ERRORS, PLUGIN_LOAD_FAILED, PLUGIN_NOT_FOUND, ensure_plugin_errors_registered,
 };
+pub use manifest::{ParsedManifestResult, parse_manifest};
 pub use source::{
     InstallSource, ResolveInstallSourceError, ResolvedSource, resolve_install_source,
 };
