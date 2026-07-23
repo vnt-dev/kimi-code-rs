@@ -13,6 +13,26 @@ use super::{
 
 pub const MAX_RETAINED_OUTPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_TASK_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const TASK_ID_ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+
+// Original: taskService.ts, generateTaskId(). The OS random source is the
+// Rust counterpart of node:crypto randomBytes(); byte-wise modulo mapping and
+// the eight-character suffix are unchanged.
+pub fn generate_task_id(kind: &str) -> Result<String, getrandom::Error> {
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes)?;
+    Ok(task_id_from_bytes(kind, bytes))
+}
+
+fn task_id_from_bytes(kind: &str, bytes: [u8; 8]) -> String {
+    let mut task_id = String::with_capacity(kind.len() + 9);
+    task_id.push_str(kind);
+    task_id.push('-');
+    for byte in bytes {
+        task_id.push(TASK_ID_ALPHABET[usize::from(byte) % TASK_ID_ALPHABET.len()] as char);
+    }
+    task_id
+}
 
 // Original: taskService.ts, outputLimitReason().
 pub fn output_limit_reason() -> String {
@@ -523,6 +543,23 @@ mod tests {
         assert_eq!(
             coerce_timeout_settlement(true, settlement(AgentTaskSettlementStatus::Failed)),
             settlement(AgentTaskSettlementStatus::Failed)
+        );
+    }
+
+    #[test]
+    fn task_id_generation_preserves_byte_modulo_mapping() {
+        assert_eq!(
+            task_id_from_bytes("agent", [0, 9, 10, 35, 36, 37, 254, 255]),
+            "agent-09az0123"
+        );
+
+        let generated = generate_task_id("bash").unwrap();
+        assert_eq!(generated.len(), 13);
+        assert!(generated.starts_with("bash-"));
+        assert!(
+            generated[5..]
+                .bytes()
+                .all(|byte| TASK_ID_ALPHABET.contains(&byte))
         );
     }
 }
