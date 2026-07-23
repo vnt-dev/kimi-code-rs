@@ -7,6 +7,7 @@ pub mod fault_injection;
 pub mod full_compaction;
 pub mod goal;
 pub mod llm_requester;
+pub mod loop_;
 pub mod mcp;
 pub mod permission_mode;
 pub mod permission_policy;
