@@ -54,6 +54,17 @@ pub trait DomainEventPublisher: Send + Sync {
     fn publish(&self, event: Value);
 }
 
+impl DomainEventPublisher for crate::app::event::event_bus_service::EventBusService {
+    fn publish(&self, event: Value) {
+        use crate::app::event::event_bus::{DomainEvent, EventBusContract};
+
+        match DomainEvent::try_from(event) {
+            Ok(event) => EventBusContract::publish(self, event),
+            Err(error) => on_unexpected_error(&error),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RestorePhase {
     New,
