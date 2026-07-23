@@ -2,6 +2,7 @@ pub mod context_memory;
 pub mod context_size;
 pub mod external_hooks;
 pub mod mcp;
+pub mod permission_rules;
 pub mod scope_context;
 pub mod swarm;
 pub mod system_reminder;
