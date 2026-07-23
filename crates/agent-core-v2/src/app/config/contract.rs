@@ -58,7 +58,8 @@ pub type ConfigMerge = Arc<dyn Fn(Option<&Value>, Option<&Value>) -> Option<Valu
 pub type ConfigStripEnv = Arc<dyn Fn(&Value, Option<&Value>) -> Option<Value> + Send + Sync>;
 pub type ConfigFromToml = Arc<dyn Fn(&Value) -> Value + Send + Sync>;
 pub type ConfigToToml = Arc<dyn Fn(&Value, &Value) -> Option<Value> + Send + Sync>;
-pub type EnvParser = Arc<dyn Fn(&str) -> Result<Value, ConfigValidationError> + Send + Sync>;
+pub type EnvParser =
+    Arc<dyn Fn(&str) -> Result<Option<Value>, ConfigValidationError> + Send + Sync>;
 
 #[derive(Clone)]
 pub enum EnvBinding {

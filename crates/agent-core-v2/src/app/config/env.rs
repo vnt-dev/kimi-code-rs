@@ -24,8 +24,7 @@ fn resolve_binding(
         } => match get_env(env) {
             Some(raw) => parse
                 .as_ref()
-                .map_or_else(|| Ok(Value::String(raw.clone())), |parse| parse(&raw))
-                .map(Some),
+                .map_or_else(|| Ok(Some(Value::String(raw.clone()))), |parse| parse(&raw)),
             None if existing.is_none() => Ok(default.clone()),
             None => Ok(existing.cloned()),
         },
@@ -117,6 +116,7 @@ mod tests {
             parse: Some(Arc::new(|raw| {
                 raw.parse::<u64>()
                     .map(Value::from)
+                    .map(Some)
                     .map_err(|_| ConfigValidationError::new("invalid count"))
             })),
             default: Some(json!(3)),
@@ -136,6 +136,38 @@ mod tests {
                 &getter(HashMap::from([("COUNT".into(), "bad".into())]))
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn parser_may_return_undefined_like_the_source_binding_contract() {
+        let parsed = EnvBinding::Parsed {
+            env: "OPTIONAL".into(),
+            parse: Some(Arc::new(|_raw| Ok(None))),
+            default: None,
+        };
+        assert_eq!(
+            apply_section_env(
+                Some(&json!(true)),
+                &AnyEnvBindings::Binding(parsed.clone()),
+                &getter(HashMap::from([("OPTIONAL".into(), "invalid".into())]))
+            )
+            .unwrap(),
+            None
+        );
+
+        let fields = AnyEnvBindings::Fields(IndexMap::from([(
+            "keep".into(),
+            AnyEnvBindings::Binding(parsed),
+        )]));
+        assert_eq!(
+            apply_section_env(
+                Some(&json!({"keep": true})),
+                &fields,
+                &getter(HashMap::from([("OPTIONAL".into(), "invalid".into())]))
+            )
+            .unwrap(),
+            Some(json!({"keep": true}))
         );
     }
 
