@@ -2,6 +2,7 @@
 
 pub mod contract;
 pub mod env;
+pub mod errors;
 pub mod migrations;
 pub mod overlay_contributions;
 pub mod pure;
@@ -13,6 +14,7 @@ pub mod toml;
 
 pub use contract::*;
 pub use env::apply_section_env;
+pub use errors::{CONFIG_ERRORS, CONFIG_INVALID, ensure_config_errors_registered};
 pub use migrations::migrate_thinking_effort_max_to_high;
 pub use overlay_contributions::{
     clear_config_overlay_contributions_for_tests, get_config_overlay_contributions,
