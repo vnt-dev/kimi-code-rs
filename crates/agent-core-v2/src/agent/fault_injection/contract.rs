@@ -1,3 +1,5 @@
+use std::{ops::Deref, sync::Arc};
+
 use crate::_base::{di::instantiation::ServiceIdentifier, errors::errors::Error2};
 
 /// A deterministic provider failure that can be consumed once.
@@ -21,10 +23,21 @@ pub trait FaultInjectionServiceContract: Send + Sync {
     fn take(&self) -> Option<FaultKind>;
 }
 
+#[derive(Clone)]
+pub struct FaultInjectionServiceHandle(pub Arc<dyn FaultInjectionServiceContract>);
+
+impl Deref for FaultInjectionServiceHandle {
+    type Target = dyn FaultInjectionServiceContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
 // Original:
 //   packages/agent-core-v2/src/agent/faultInjection/faultInjection.ts
 //   IFaultInjectionService
-pub const FAULT_INJECTION_SERVICE_ID: ServiceIdentifier<dyn FaultInjectionServiceContract> =
+pub const FAULT_INJECTION_SERVICE_ID: ServiceIdentifier<FaultInjectionServiceHandle> =
     ServiceIdentifier::new("faultInjectionService");
 
 #[cfg(test)]

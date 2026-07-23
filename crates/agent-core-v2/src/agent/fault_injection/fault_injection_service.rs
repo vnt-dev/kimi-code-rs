@@ -1,10 +1,24 @@
 use std::sync::{Arc, Mutex};
 
-use crate::{_base::errors::errors::Error2, app::flag::FlagServiceHandle};
+use crate::{
+    _base::{
+        di::{
+            descriptors::SyncDescriptor,
+            instantiation::ServicesAccessorExt,
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
+        errors::errors::Error2,
+    },
+    app::flag::{FLAG_SERVICE_ID, FlagServiceHandle},
+};
 
 use super::{
     FAULT_INJECTION_FLAG_ID,
-    contract::{FaultInjectionServiceContract, FaultInjectionStatus, FaultKind},
+    contract::{
+        FAULT_INJECTION_SERVICE_ID, FaultInjectionServiceContract, FaultInjectionServiceHandle,
+        FaultInjectionStatus, FaultKind,
+    },
+    register_fault_injection_flag,
 };
 
 const REQUEST_INVALID: &str = "request.invalid";
@@ -84,6 +98,25 @@ impl FaultInjectionServiceContract for FaultInjectionService {
         state.fired.push(kind);
         Some(kind)
     }
+}
+
+// Original:
+//   packages/agent-core-v2/src/agent/faultInjection/faultInjectionService.ts
+//   registerScopedService(..., LifecycleScope.Agent, ..., InstantiationType.Eager)
+pub fn register_fault_injection_service() {
+    register_fault_injection_flag();
+    register_scoped_service(
+        LifecycleScope::Agent,
+        FAULT_INJECTION_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let flags = accessor.get(FLAG_SERVICE_ID)?;
+            let service: Arc<dyn FaultInjectionServiceContract> =
+                Arc::new(FaultInjectionService::from_flag_service((*flags).clone()));
+            Ok(FaultInjectionServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "faultInjection",
+    );
 }
 
 #[cfg(test)]
