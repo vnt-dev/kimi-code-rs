@@ -7,7 +7,15 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
-use crate::{agent::context_memory::PromptOrigin, kosong::contract::message::ContentPart};
+use crate::{
+    agent::{
+        context_memory::{ContextMessage, PromptOrigin},
+        loop_::{
+            MessageStepRequest, MessageStepRequestOptions, StepRequestAdmission, StepRequestOptions,
+        },
+    },
+    kosong::contract::message::ContentPart,
+};
 
 use super::{
     AgentTaskInfo, AgentTaskOutputSnapshot, AgentTaskStatus, TaskNotificationOrigin,
@@ -16,6 +24,21 @@ use super::{
 };
 
 pub const NOTIFICATION_FALLBACK_PREVIEW_BYTES: f64 = 3_000.0;
+
+// Original: taskService.ts, TaskNotificationStepRequest.constructor().
+pub fn task_notification_step_request(message: ContextMessage) -> MessageStepRequest {
+    MessageStepRequest::new(
+        message,
+        MessageStepRequestOptions {
+            request: StepRequestOptions {
+                mergeable: Some(true),
+                turn_scoped: Some(false),
+                admission: Some(StepRequestAdmission::ActiveOrNewTurn),
+            },
+            kind: Some("task_notification".into()),
+        },
+    )
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScheduledTaskNotification {
@@ -141,7 +164,9 @@ pub fn finish_task_notification(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::loop_::StepRequest;
     use crate::agent::task::AgentTaskInfoBase;
+    use crate::kosong::contract::message::{Message, Role};
 
     fn task(status: AgentTaskStatus) -> AgentTaskInfo {
         AgentTaskInfo {
@@ -232,5 +257,27 @@ mod tests {
         };
         assert!(!needs_notification_fallback_preview(&persisted));
         assert!(finish_task_notification(scheduled, &info, &persisted, true).is_none());
+    }
+
+    #[test]
+    fn task_notification_request_uses_active_or_new_turn_admission() {
+        let message = ContextMessage {
+            message: Message::new(Role::User, vec![], vec![]),
+            id: None,
+            provider_message_id: None,
+            origin: Some(PromptOrigin::Task {
+                task_id: "bash-1".into(),
+                status: AgentTaskStatus::Completed,
+                notification_id: "task:bash-1:completed".into(),
+            }),
+            is_error: None,
+            note: None,
+        };
+        let request = task_notification_step_request(message.clone());
+        assert_eq!(request.kind(), "task_notification");
+        assert!(request.mergeable());
+        assert!(!request.turn_scoped());
+        assert_eq!(request.admission(), StepRequestAdmission::ActiveOrNewTurn);
+        assert_eq!(request.resolve_context_messages(), [message]);
     }
 }
