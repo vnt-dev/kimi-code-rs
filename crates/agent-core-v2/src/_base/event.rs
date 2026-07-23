@@ -34,6 +34,14 @@ impl<T> Clone for Event<T> {
 }
 
 impl<T> Event<T> {
+    pub(crate) fn from_subscribe(
+        subscribe: impl Fn(Listener<T>) -> DisposableHandle + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            subscribe: Arc::new(subscribe),
+        }
+    }
+
     pub fn subscribe(&self, listener: impl Fn(&T) + Send + Sync + 'static) -> DisposableHandle {
         (self.subscribe)(Arc::new(listener))
     }
