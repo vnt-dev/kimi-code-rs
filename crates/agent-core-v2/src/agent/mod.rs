@@ -1,3 +1,4 @@
+pub mod blob;
 pub mod context_injector;
 pub mod context_memory;
 pub mod context_size;
