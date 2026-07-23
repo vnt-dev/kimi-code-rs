@@ -18,7 +18,7 @@ pub mod user_source;
 pub use builtin::{
     BUILTIN_SKILLS, CHECK_KIMI_CODE_DOCS_SKILL, CUSTOM_THEME_SKILL, IMPORT_FROM_CC_CODEX_SKILL,
     MCP_CONFIG_SKILL, SUB_SKILL_CONSOLIDATE, SUB_SKILL_PARENT, SUB_SKILL_REVIEW,
-    UPDATE_CONFIG_SKILL, WRITE_GOAL_SKILL,
+    UPDATE_CONFIG_SKILL, WRITE_GOAL_SKILL, register_builtin_skills,
 };
 pub use builtin_source::{
     BUILTIN_SKILL_SOURCE_ID, BuiltinSkillSource, BuiltinSkillSourceHandle,

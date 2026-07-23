@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::{
     parser::{ParseSkillTextOptions, parse_skill_text},
+    registry::InMemorySkillCatalog,
     types::{SkillDefinition, SkillSource},
 };
 
@@ -110,6 +111,13 @@ pub static BUILTIN_SKILLS: LazyLock<Vec<SkillDefinition>> = LazyLock::new(|| {
         SUB_SKILL_CONSOLIDATE.clone(),
     ]
 });
+
+// Original: registerBuiltinSkills().
+pub fn register_builtin_skills(registry: &mut InMemorySkillCatalog) {
+    for skill in BUILTIN_SKILLS.iter() {
+        registry.register_builtin_skill(skill.clone());
+    }
+}
 
 fn make_flat_builtin(
     body: &str,
@@ -217,5 +225,14 @@ mod tests {
             digest,
             "b231b7a53025b5690cd5f5f9a77e253650c13f2197f138e36d19526e0ec685c0"
         );
+    }
+
+    #[test]
+    fn registers_every_builtin_in_the_in_memory_catalog() {
+        let mut catalog = InMemorySkillCatalog::default();
+        register_builtin_skills(&mut catalog);
+        assert_eq!(catalog.list_skills().len(), BUILTIN_SKILLS.len());
+        assert!(catalog.get_skill("MCP-CONFIG").is_some());
+        assert!(catalog.get_skill("sub-skill.consolidate").is_some());
     }
 }
