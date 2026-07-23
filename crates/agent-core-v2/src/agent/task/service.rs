@@ -15,11 +15,12 @@ use indexmap::IndexMap;
 use crate::agent::context_memory::{ContextMessage, PromptOrigin};
 
 use super::{
-    AgentTaskInfo, AgentTaskLoadOptions, AgentTaskNotificationBuildContext,
-    AgentTaskOutputSnapshot, AgentTaskPersistence, AgentTaskServiceResult,
-    ForegroundTaskReleaseReason, ManagedTaskState, NOTIFICATION_FALLBACK_PREVIEW_BYTES,
-    RestoredTaskRegistry, TaskModelState, TaskNotificationDelivery, empty_output_snapshot,
-    finish_task_notification, needs_notification_fallback_preview, should_list_task,
+    AgentTaskInfo, AgentTaskLifecycleRecorder, AgentTaskLoadOptions,
+    AgentTaskNotificationBuildContext, AgentTaskNotificationEffects, AgentTaskOutputSnapshot,
+    AgentTaskPersistence, AgentTaskServiceResult, ForegroundTaskReleaseReason, ManagedTaskState,
+    NOTIFICATION_FALLBACK_PREVIEW_BYTES, RestoredTaskRegistry, TaskModelState,
+    TaskNotificationDelivery, empty_output_snapshot, finish_task_notification,
+    needs_notification_fallback_preview, should_list_task,
 };
 
 const JAVASCRIPT_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -84,16 +85,87 @@ pub struct AgentTaskService {
     inner: Arc<AgentTaskServiceInner>,
 }
 
+pub trait AgentTaskRuntimeEffects: Send + Sync {
+    fn context_snapshot(&self) -> Vec<ContextMessage>;
+    fn record_task_started(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()>;
+    fn record_task_terminated(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()>;
+    fn enqueue_notification(
+        &self,
+        built: &AgentTaskNotificationBuildContext,
+    ) -> AgentTaskServiceResult<()>;
+    fn restore_notification(
+        &self,
+        built: &AgentTaskNotificationBuildContext,
+    ) -> AgentTaskServiceResult<()>;
+}
+
+pub struct DefaultAgentTaskRuntimeEffects {
+    context: Arc<dyn crate::agent::context_memory::AgentContextMemoryServiceContract>,
+    lifecycle: AgentTaskLifecycleRecorder,
+    notifications: AgentTaskNotificationEffects,
+}
+
+impl DefaultAgentTaskRuntimeEffects {
+    pub fn new(
+        context: Arc<dyn crate::agent::context_memory::AgentContextMemoryServiceContract>,
+        lifecycle: AgentTaskLifecycleRecorder,
+        notifications: AgentTaskNotificationEffects,
+    ) -> Self {
+        Self {
+            context,
+            lifecycle,
+            notifications,
+        }
+    }
+}
+
+impl AgentTaskRuntimeEffects for DefaultAgentTaskRuntimeEffects {
+    fn context_snapshot(&self) -> Vec<ContextMessage> {
+        self.context.get()
+    }
+
+    fn record_task_started(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()> {
+        self.lifecycle.record_task_started(info)?;
+        Ok(())
+    }
+
+    fn record_task_terminated(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()> {
+        self.lifecycle.record_task_terminated(info)?;
+        Ok(())
+    }
+
+    fn enqueue_notification(
+        &self,
+        built: &AgentTaskNotificationBuildContext,
+    ) -> AgentTaskServiceResult<()> {
+        self.notifications.enqueue(built)?;
+        Ok(())
+    }
+
+    fn restore_notification(
+        &self,
+        built: &AgentTaskNotificationBuildContext,
+    ) -> AgentTaskServiceResult<()> {
+        self.notifications.restore(built)?;
+        Ok(())
+    }
+}
+
 struct AgentTaskServiceInner {
     persistence: Arc<AgentTaskPersistence>,
+    effects: Arc<dyn AgentTaskRuntimeEffects>,
     state: Mutex<AgentTaskServiceState>,
 }
 
 impl AgentTaskService {
-    pub fn new(persistence: Arc<AgentTaskPersistence>) -> Self {
+    pub fn new(
+        persistence: Arc<AgentTaskPersistence>,
+        effects: Arc<dyn AgentTaskRuntimeEffects>,
+    ) -> Self {
         Self {
             inner: Arc::new(AgentTaskServiceInner {
                 persistence,
+                effects,
                 state: Mutex::new(AgentTaskServiceState::default()),
             }),
         }
@@ -346,6 +418,48 @@ impl AgentTaskService {
         ))
     }
 
+    // Original: AgentTaskService.notifyAgentTask().
+    pub async fn notify_agent_task(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()> {
+        let context = self.inner.effects.context_snapshot();
+        let Some(built) = self
+            .build_agent_task_notification_context(info, &context)
+            .await?
+        else {
+            return Ok(());
+        };
+        self.inner.effects.enqueue_notification(&built)
+    }
+
+    // Original: AgentTaskService.restoreAgentTaskNotifications(). Terminal
+    // notifications are restored sequentially in list(false) order.
+    pub async fn restore_agent_task_notifications(&self) -> AgentTaskServiceResult<()> {
+        for info in self.list(Some(false), None) {
+            if !info.base.status.is_terminal() {
+                continue;
+            }
+            let context = self.inner.effects.context_snapshot();
+            let Some(built) = self
+                .build_agent_task_notification_context(&info, &context)
+                .await?
+            else {
+                continue;
+            };
+            self.inner.effects.restore_notification(&built)?;
+        }
+        Ok(())
+    }
+
+    // Original: AgentTaskService.reconcile(). Lost task lifecycle events are
+    // emitted before restored terminal notifications.
+    pub async fn reconcile(&self, now_ms: i64) -> AgentTaskServiceResult<Vec<AgentTaskInfo>> {
+        let lost = self.mark_loaded_tasks_lost(now_ms).await?;
+        for info in &lost {
+            self.inner.effects.record_task_terminated(info)?;
+        }
+        self.restore_agent_task_notifications().await?;
+        Ok(lost)
+    }
+
     fn is_terminal_notification_suppressed(&self, task_id: &str) -> bool {
         let state = self.state();
         state
@@ -395,6 +509,56 @@ mod tests {
 
     struct StubTask;
 
+    #[derive(Default)]
+    struct RecordingEffects {
+        context: Mutex<Vec<ContextMessage>>,
+        started: Mutex<Vec<String>>,
+        terminated: Mutex<Vec<String>>,
+        enqueued: Mutex<Vec<String>>,
+        restored: Mutex<Vec<String>>,
+    }
+
+    impl AgentTaskRuntimeEffects for RecordingEffects {
+        fn context_snapshot(&self) -> Vec<ContextMessage> {
+            self.context.lock().unwrap().clone()
+        }
+
+        fn record_task_started(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()> {
+            self.started.lock().unwrap().push(info.base.task_id.clone());
+            Ok(())
+        }
+
+        fn record_task_terminated(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()> {
+            self.terminated
+                .lock()
+                .unwrap()
+                .push(info.base.task_id.clone());
+            Ok(())
+        }
+
+        fn enqueue_notification(
+            &self,
+            built: &AgentTaskNotificationBuildContext,
+        ) -> AgentTaskServiceResult<()> {
+            self.enqueued
+                .lock()
+                .unwrap()
+                .push(built.hook_context.source_id.clone());
+            Ok(())
+        }
+
+        fn restore_notification(
+            &self,
+            built: &AgentTaskNotificationBuildContext,
+        ) -> AgentTaskServiceResult<()> {
+            self.restored
+                .lock()
+                .unwrap()
+                .push(built.hook_context.source_id.clone());
+            Ok(())
+        }
+    }
+
     #[async_trait]
     impl AgentTask for StubTask {
         fn id_prefix(&self) -> &str {
@@ -440,7 +604,11 @@ mod tests {
         }
     }
 
-    fn service() -> (Arc<AgentTaskPersistence>, AgentTaskService) {
+    fn service_with_effects() -> (
+        Arc<AgentTaskPersistence>,
+        AgentTaskService,
+        Arc<RecordingEffects>,
+    ) {
         let storage = Arc::new(InMemoryStorageService::default());
         let bytes: Arc<dyn FileSystemStorageService> = storage;
         let docs: Arc<dyn AtomicDocumentStoreService> =
@@ -452,7 +620,16 @@ mod tests {
             FileSystemStorageServiceHandle(bytes),
             None,
         ));
-        let service = AgentTaskService::new(Arc::clone(&persistence));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = AgentTaskService::new(
+            Arc::clone(&persistence),
+            effects.clone() as Arc<dyn AgentTaskRuntimeEffects>,
+        );
+        (persistence, service, effects)
+    }
+
+    fn service() -> (Arc<AgentTaskPersistence>, AgentTaskService) {
+        let (persistence, service, _) = service_with_effects();
         (persistence, service)
     }
 
@@ -760,6 +937,45 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn reconcile_records_lost_tasks_then_restores_terminal_notifications_in_order() {
+        let (persistence, service, effects) = service_with_effects();
+        for info in [
+            task("bash-running2", AgentTaskStatus::Running, true),
+            task("bash-done0002", AgentTaskStatus::Completed, true),
+        ] {
+            persistence.write_task(&info).await.unwrap();
+        }
+        service
+            .load_from_disk(AgentTaskLoadOptions::default())
+            .await
+            .unwrap();
+
+        let lost = service.reconcile(100).await.unwrap();
+        assert_eq!(lost.len(), 1);
+        assert_eq!(
+            *effects.terminated.lock().unwrap(),
+            ["bash-running2".to_owned()]
+        );
+        assert_eq!(
+            *effects.restored.lock().unwrap(),
+            ["bash-done0002".to_owned(), "bash-running2".to_owned()]
+        );
+        assert!(effects.enqueued.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn live_notification_is_enqueued_instead_of_restored() {
+        let (_persistence, service, effects) = service_with_effects();
+        let completed = task("bash-notify04", AgentTaskStatus::Completed, true);
+        service.notify_agent_task(&completed).await.unwrap();
+        assert_eq!(
+            *effects.enqueued.lock().unwrap(),
+            ["bash-notify04".to_owned()]
+        );
+        assert!(effects.restored.lock().unwrap().is_empty());
     }
 
     #[test]
