@@ -5,6 +5,7 @@ pub mod commands;
 pub mod contract;
 pub mod errors;
 pub mod github_resolver;
+pub mod manager;
 pub mod manifest;
 pub mod source;
 pub mod store;
@@ -27,6 +28,7 @@ pub use github_resolver::{
     GithubResolverError, GithubSourceInput, GithubSourceResolution, resolve_github_commit_sha,
     resolve_github_source,
 };
+pub use manager::{PluginManager, PluginManagerError, PluginManagerOptions, PluginManagerResult};
 pub use manifest::{ParsedManifestResult, parse_manifest};
 pub use source::{
     InstallSource, ResolveInstallSourceError, ResolvedSource, resolve_install_source,
