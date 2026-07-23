@@ -4,6 +4,7 @@ pub mod context_memory;
 pub mod context_size;
 pub mod external_hooks;
 pub mod fault_injection;
+pub mod full_compaction;
 pub mod llm_requester;
 pub mod mcp;
 pub mod permission_mode;
