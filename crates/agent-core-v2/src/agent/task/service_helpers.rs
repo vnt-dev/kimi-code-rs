@@ -4,6 +4,7 @@
 
 use crate::_base::utils::abort::user_cancellation_reason;
 use crate::_base::utils::xml_escape::{escape_xml, escape_xml_attr};
+use crate::agent::context_memory::{ContextMessage, PromptOrigin};
 use serde_json::Value;
 
 use super::{AgentTaskInfo, AgentTaskOutputSnapshot};
@@ -206,12 +207,26 @@ pub fn task_origin_from_message(message: &Value) -> Option<TaskNotificationOrigi
     task_notification_origin(message.as_object()?.get("origin")?)
 }
 
+// Original: taskService.ts, isCompactionSplice(). A compaction reminder is
+// armed only when history was actually deleted and the replacement includes a
+// compaction summary message.
+pub fn is_compaction_splice(delete_count: usize, messages: &[ContextMessage]) -> bool {
+    delete_count > 0
+        && messages.iter().any(|message| {
+            matches!(
+                message.origin.as_ref(),
+                Some(PromptOrigin::CompactionSummary)
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::Map;
 
     use super::*;
     use crate::agent::task::{AgentTaskInfoBase, AgentTaskStatus};
+    use crate::kosong::contract::message::{Message, Role};
 
     fn task(
         status: AgentTaskStatus,
@@ -431,5 +446,27 @@ mod tests {
         }
         assert_eq!(task_origin_from_message(&serde_json::json!({})), None);
         assert_eq!(task_origin_from_message(&serde_json::json!([])), None);
+    }
+
+    #[test]
+    fn compaction_splice_requires_deletion_and_a_summary_replacement() {
+        let message = |origin| ContextMessage {
+            message: Message::new(Role::User, vec![], vec![]),
+            id: None,
+            provider_message_id: None,
+            origin,
+            is_error: None,
+            note: None,
+        };
+        let summary = message(Some(PromptOrigin::CompactionSummary));
+        let ordinary = message(Some(PromptOrigin::User));
+
+        assert!(is_compaction_splice(
+            1,
+            &[ordinary.clone(), summary.clone()]
+        ));
+        assert!(!is_compaction_splice(0, &[summary]));
+        assert!(!is_compaction_splice(2, &[ordinary]));
+        assert!(!is_compaction_splice(2, &[]));
     }
 }
