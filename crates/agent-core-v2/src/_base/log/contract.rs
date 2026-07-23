@@ -30,6 +30,13 @@ impl fmt::Display for LogLevel {
 
 pub type LogContext = Map<String, Value>;
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum LogPayload {
+    Context(LogContext),
+    Error(LogEntryError),
+    Value(Value),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LogEntryError {
     pub message: String,
@@ -62,15 +69,27 @@ pub trait LogWriter: Send + Sync {
 }
 
 pub trait Logger: Send + Sync {
-    fn error(&self, message: &str, payload: Option<Value>);
-    fn warn(&self, message: &str, payload: Option<Value>);
-    fn info(&self, message: &str, payload: Option<Value>);
-    fn debug(&self, message: &str, payload: Option<Value>);
+    fn error(&self, message: &str, payload: Option<LogPayload>);
+    fn warn(&self, message: &str, payload: Option<LogPayload>);
+    fn info(&self, message: &str, payload: Option<LogPayload>);
+    fn debug(&self, message: &str, payload: Option<LogPayload>);
     fn child(&self, context: LogContext) -> Arc<dyn Logger>;
 }
 
 #[derive(Clone)]
-pub struct LogServiceHandle(pub Arc<dyn Logger>);
+pub struct LogServiceHandle(pub Arc<dyn LogService>);
+
+pub trait LogService: Logger + crate::_base::di::lifecycle::Disposable {
+    fn level(&self) -> LogLevel;
+    fn set_level(&self, level: LogLevel);
+    fn flush(&self) -> BoxFuture<'_, std::io::Result<()>>;
+}
+
+impl crate::_base::di::lifecycle::Disposable for LogServiceHandle {
+    fn dispose(&self) -> crate::_base::di::lifecycle::DisposeResult {
+        self.0.dispose()
+    }
+}
 
 pub const LOG_SERVICE_ID: ServiceIdentifier<LogServiceHandle> =
     ServiceIdentifier::new("logService");
