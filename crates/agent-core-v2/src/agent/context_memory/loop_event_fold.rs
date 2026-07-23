@@ -138,6 +138,14 @@ impl LoopEventFold {
         self.messages
     }
 
+    pub(crate) fn messages_mut(&mut self) -> &mut [ContextMessage] {
+        &mut self.messages
+    }
+
+    pub(crate) fn pop_message(&mut self) -> Option<ContextMessage> {
+        self.messages.pop()
+    }
+
     // Original: loopEventFold.ts, foldAppendMessage().
     pub fn fold_append_message(&mut self, message: ContextMessage) {
         if self.pending.is_empty() {

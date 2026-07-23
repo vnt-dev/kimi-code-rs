@@ -1,4 +1,5 @@
 pub mod compaction_handoff;
+pub mod context_ops;
 pub mod loop_event_fold;
 pub mod message_id;
 pub mod message_projection;
@@ -9,6 +10,7 @@ pub mod undo;
 pub mod vacuous_content;
 
 pub use compaction_handoff::*;
+pub use context_ops::*;
 pub use loop_event_fold::*;
 pub use message_id::new_message_id;
 pub use message_projection::{MessageProjectionError, to_protocol_message};
