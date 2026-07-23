@@ -2,7 +2,7 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/telemetry/telemetry.ts`.
 
-use std::{ops::Deref, sync::Arc};
+use std::{error::Error, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -17,6 +17,8 @@ use crate::_base::di::{
 // explicit null. Callers must provide primitive JSON values.
 pub type TelemetryProperties = IndexMap<String, Option<Value>>;
 pub type TelemetryContextPatch = TelemetryProperties;
+pub type TelemetryAppenderError = Box<dyn Error + Send + Sync>;
+pub type TelemetryAppenderResult = Result<(), TelemetryAppenderError>;
 
 #[async_trait]
 pub trait TelemetryAppender: Send + Sync {
@@ -28,9 +30,13 @@ pub trait TelemetryAppender: Send + Sync {
 
     fn set_context(&self, _patch: &TelemetryContextPatch) {}
 
-    async fn flush(&self) {}
+    async fn flush(&self) -> TelemetryAppenderResult {
+        Ok(())
+    }
 
-    async fn shutdown(&self) {}
+    async fn shutdown(&self) -> TelemetryAppenderResult {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Default)]
@@ -128,8 +134,8 @@ mod tests {
         let properties = TelemetryProperties::from([("missing".into(), None)]);
         appender.track("event", Some(&properties));
         assert!(appender.with_context(&properties).is_some());
-        appender.flush().await;
-        appender.shutdown().await;
+        appender.flush().await.unwrap();
+        appender.shutdown().await.unwrap();
 
         let service = noop_telemetry_service();
         service.track("event", Some(&properties));

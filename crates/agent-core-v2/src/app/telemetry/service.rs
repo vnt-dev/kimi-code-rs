@@ -127,8 +127,12 @@ impl TelemetryServiceContract for TelemetryService {
     async fn flush(&self) {
         let appenders = self.state.lock().unwrap().appenders.clone();
         join_all(appenders.into_iter().map(|appender| async move {
-            if let Err(payload) = AssertUnwindSafe(appender.flush()).catch_unwind().await {
-                report_appender_panic("telemetry appender flush panicked", payload);
+            match AssertUnwindSafe(appender.flush()).catch_unwind().await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => on_unexpected_error(error.as_ref()),
+                Err(payload) => {
+                    report_appender_panic("telemetry appender flush panicked", payload);
+                }
             }
         }))
         .await;
@@ -138,8 +142,12 @@ impl TelemetryServiceContract for TelemetryService {
     async fn shutdown(&self) {
         let appenders = self.state.lock().unwrap().appenders.clone();
         join_all(appenders.into_iter().map(|appender| async move {
-            if let Err(payload) = AssertUnwindSafe(appender.shutdown()).catch_unwind().await {
-                report_appender_panic("telemetry appender shutdown panicked", payload);
+            match AssertUnwindSafe(appender.shutdown()).catch_unwind().await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => on_unexpected_error(error.as_ref()),
+                Err(payload) => {
+                    report_appender_panic("telemetry appender shutdown panicked", payload);
+                }
             }
         }))
         .await;
@@ -264,12 +272,14 @@ mod tests {
                 .push((event.into(), properties.cloned().unwrap_or_default()));
         }
 
-        async fn flush(&self) {
+        async fn flush(&self) -> super::super::TelemetryAppenderResult {
             self.flushes.fetch_add(1, Ordering::Relaxed);
+            Ok(())
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self) -> super::super::TelemetryAppenderResult {
             self.shutdowns.fetch_add(1, Ordering::Relaxed);
+            Ok(())
         }
     }
 
@@ -327,27 +337,27 @@ mod tests {
         assert_eq!(appender.shutdowns.load(Ordering::Relaxed), 1);
     }
 
-    struct PanickingAppender;
+    struct FailingAppender;
 
     #[async_trait]
-    impl TelemetryAppender for PanickingAppender {
+    impl TelemetryAppender for FailingAppender {
         fn track(&self, _event: &str, _properties: Option<&TelemetryProperties>) {
             panic!("track boom");
         }
 
-        async fn flush(&self) {
-            panic!("flush boom");
+        async fn flush(&self) -> super::super::TelemetryAppenderResult {
+            Err(Box::new(std::io::Error::other("flush boom")))
         }
 
-        async fn shutdown(&self) {
-            panic!("shutdown boom");
+        async fn shutdown(&self) -> super::super::TelemetryAppenderResult {
+            Err(Box::new(std::io::Error::other("shutdown boom")))
         }
     }
 
     #[tokio::test]
-    async fn panicking_appender_does_not_block_other_appenders() {
+    async fn failing_appender_does_not_block_other_appenders() {
         let root = TelemetryService::new();
-        root.set_appender(Arc::new(PanickingAppender));
+        root.set_appender(Arc::new(FailingAppender));
         let good = Arc::new(CapturingAppender::default());
         let good_erased: Arc<dyn TelemetryAppender> = good.clone();
         root.add_appender(good_erased);
