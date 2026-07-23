@@ -6,6 +6,7 @@
 
 use std::{
     collections::HashSet,
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
@@ -16,7 +17,9 @@ use indexmap::IndexMap;
 use crate::{
     _base::{
         di::lifecycle::DisposableHandle,
-        utils::abort::{AbortLink, AbortSignal, abortable},
+        utils::abort::{
+            AbortError, AbortLink, AbortSignal, abort_error, abortable, user_cancellation_reason,
+        },
     },
     agent::context_memory::{ContextMessage, PromptOrigin},
 };
@@ -24,10 +27,12 @@ use crate::{
 use super::{
     AgentTaskInfo, AgentTaskLifecycleRecorder, AgentTaskLoadOptions,
     AgentTaskNotificationBuildContext, AgentTaskNotificationEffects, AgentTaskOutputSnapshot,
-    AgentTaskPersistence, AgentTaskServiceResult, AgentTaskSettlement, ForegroundTaskReleaseReason,
-    ManagedTaskState, NOTIFICATION_FALLBACK_PREVIEW_BYTES, RestoredTaskRegistry,
-    ScheduledTaskNotification, TaskModelState, TaskNotificationDelivery, empty_output_snapshot,
-    finish_task_notification, needs_notification_fallback_preview, should_list_task,
+    AgentTaskPersistence, AgentTaskServiceResult, AgentTaskSettlement, AgentTaskSettlementStatus,
+    AgentTrackedTaskHandle, ForegroundTaskReleaseReason, ManagedTaskState,
+    NOTIFICATION_FALLBACK_PREVIEW_BYTES, RestoredTaskRegistry, ScheduledTaskNotification,
+    TaskModelState, TaskNotificationDelivery, empty_output_snapshot, finish_task_notification,
+    needs_notification_fallback_preview, normalize_reason, resolve_agent_task_config,
+    should_list_task,
 };
 
 const JAVASCRIPT_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -42,11 +47,14 @@ struct ManagedTaskRuntime {
     foreground_signal_link: Option<AbortLink>,
     handle_subscription: Option<DisposableHandle>,
     settled: tokio::sync::watch::Sender<bool>,
+    lifecycle_done: tokio::sync::watch::Sender<bool>,
+    tracked_handle: Option<Arc<dyn AgentTrackedTaskHandle>>,
 }
 
 impl ManagedTaskRuntime {
     fn new(state: ManagedTaskState) -> Self {
         let (settled, _) = tokio::sync::watch::channel(false);
+        let (lifecycle_done, _) = tokio::sync::watch::channel(false);
         Self {
             state,
             persist_write_queue: futures_util::future::ready(()).boxed().shared(),
@@ -55,6 +63,8 @@ impl ManagedTaskRuntime {
             foreground_signal_link: None,
             handle_subscription: None,
             settled,
+            lifecycle_done,
+            tracked_handle: None,
         }
     }
 
@@ -103,6 +113,7 @@ pub struct AgentTaskService {
 }
 
 pub trait AgentTaskRuntimeEffects: Send + Sync {
+    fn task_config(&self) -> Option<super::AgentTaskConfig>;
     fn context_snapshot(&self) -> Vec<ContextMessage>;
     fn record_task_started(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()>;
     fn record_task_terminated(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()>;
@@ -117,6 +128,7 @@ pub trait AgentTaskRuntimeEffects: Send + Sync {
 }
 
 pub struct DefaultAgentTaskRuntimeEffects {
+    config: crate::app::config::ConfigServiceHandle,
     context: Arc<dyn crate::agent::context_memory::AgentContextMemoryServiceContract>,
     lifecycle: AgentTaskLifecycleRecorder,
     notifications: AgentTaskNotificationEffects,
@@ -124,11 +136,13 @@ pub struct DefaultAgentTaskRuntimeEffects {
 
 impl DefaultAgentTaskRuntimeEffects {
     pub fn new(
+        config: crate::app::config::ConfigServiceHandle,
         context: Arc<dyn crate::agent::context_memory::AgentContextMemoryServiceContract>,
         lifecycle: AgentTaskLifecycleRecorder,
         notifications: AgentTaskNotificationEffects,
     ) -> Self {
         Self {
+            config,
             context,
             lifecycle,
             notifications,
@@ -137,6 +151,10 @@ impl DefaultAgentTaskRuntimeEffects {
 }
 
 impl AgentTaskRuntimeEffects for DefaultAgentTaskRuntimeEffects {
+    fn task_config(&self) -> Option<super::AgentTaskConfig> {
+        resolve_agent_task_config(&self.config)
+    }
+
     fn context_snapshot(&self) -> Vec<ContextMessage> {
         self.context.get()
     }
@@ -476,6 +494,148 @@ impl AgentTaskService {
         Ok(true)
     }
 
+    // Original: AgentTaskService.stop().
+    pub async fn stop(
+        &self,
+        task_id: &str,
+        reason: Option<&str>,
+    ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
+        if !self.state().tasks.contains_key(task_id) {
+            return Ok(None);
+        }
+        let reason = normalize_reason(reason).map(str::to_owned);
+        self.terminate_with_grace(
+            task_id,
+            reason.clone(),
+            abort_error(reason.as_deref()),
+            AgentTaskSettlementStatus::Killed,
+        )
+        .await
+    }
+
+    // Original: AgentTaskService.stopByUser().
+    pub async fn stop_by_user(
+        &self,
+        task_id: &str,
+    ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
+        if !self.state().tasks.contains_key(task_id) {
+            return Ok(None);
+        }
+        let reason = user_cancellation_reason();
+        self.terminate_with_grace(
+            task_id,
+            Some(reason.to_string()),
+            reason,
+            AgentTaskSettlementStatus::Killed,
+        )
+        .await
+    }
+
+    async fn terminate_with_grace(
+        &self,
+        task_id: &str,
+        stop_reason: Option<String>,
+        abort_reason: AbortError,
+        final_status: AgentTaskSettlementStatus,
+    ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
+        if let Some(info) = self.terminal_info(task_id).await {
+            return Ok(Some(info));
+        }
+
+        let (timeout, tracked_handle, abort_controller, mut lifecycle_done) = {
+            let mut state = self.state();
+            let Some(entry) = state.tasks.get_mut(task_id) else {
+                return Ok(None);
+            };
+            if final_status == AgentTaskSettlementStatus::TimedOut {
+                entry.state.timed_out = true;
+            }
+            entry.state.stop_reason = stop_reason.clone();
+            (
+                entry.timeout_handle.take(),
+                entry.tracked_handle.clone(),
+                entry.state.abort_controller.clone(),
+                entry.lifecycle_done.subscribe(),
+            )
+        };
+        if let Some(timeout) = timeout {
+            timeout.abort();
+        }
+        if let Some(handle) = tracked_handle {
+            handle.cancel();
+        } else {
+            abort_controller.abort(Some(abort_reason));
+        }
+
+        let grace_ms = self
+            .inner
+            .effects
+            .task_config()
+            .and_then(|config| config.kill_grace_period_ms)
+            .unwrap_or(5_000);
+        let graceful = if *lifecycle_done.borrow() {
+            true
+        } else {
+            tokio::select! {
+                biased;
+                () = wait_until_settled(&mut lifecycle_done) => true,
+                () = tokio::time::sleep(Duration::from_millis(grace_ms)) => false,
+            }
+        };
+
+        if let Some(info) = self.terminal_info(task_id).await {
+            return Ok(Some(info));
+        }
+        if !graceful {
+            let (callback, task) = {
+                let state = self.state();
+                let Some(entry) = state.tasks.get(task_id) else {
+                    return Ok(None);
+                };
+                (
+                    entry.state.force_stop.clone(),
+                    entry.state.projection.registered_task(),
+                )
+            };
+            if let Some(callback) = callback {
+                if let Ok(force_stop) = catch_unwind(AssertUnwindSafe(|| callback())) {
+                    let _ = AssertUnwindSafe(force_stop).catch_unwind().await;
+                }
+            } else if let Some(task) = task
+                && let Ok(force_stop) = catch_unwind(AssertUnwindSafe(|| task.force_stop()))
+            {
+                let _ = AssertUnwindSafe(force_stop).catch_unwind().await;
+            }
+        }
+
+        if let Some(info) = self.terminal_info(task_id).await {
+            return Ok(Some(info));
+        }
+        self.settle_task(
+            task_id,
+            AgentTaskSettlement {
+                status: final_status,
+                stop_reason,
+            },
+            current_time_millis(),
+        )
+        .await?;
+        Ok(self.terminal_info(task_id).await)
+    }
+
+    async fn terminal_info(&self, task_id: &str) -> Option<AgentTaskInfo> {
+        let barrier = {
+            let state = self.state();
+            let entry = state.tasks.get(task_id)?;
+            if !entry.state.status.is_terminal() {
+                return None;
+            }
+            entry.persist_write_queue.clone()
+        };
+        barrier.await;
+        self.get_task(task_id)
+    }
+
     // Original: AgentTaskService.waitForForegroundRelease().
     pub async fn wait_for_foreground_release(
         &self,
@@ -735,6 +895,10 @@ fn javascript_timeout_duration(timeout_ms: f64) -> Duration {
     Duration::from_millis(milliseconds)
 }
 
+fn current_time_millis() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
@@ -743,8 +907,9 @@ mod tests {
     use super::*;
     use crate::{
         agent::task::{
-            AgentTask, AgentTaskError, AgentTaskInfoBase, AgentTaskSettlementStatus, AgentTaskSink,
-            AgentTaskStatus, RegisterAgentTaskOptions, TaskOutputAction,
+            AgentTask, AgentTaskConfig, AgentTaskError, AgentTaskInfoBase,
+            AgentTaskSettlementStatus, AgentTaskSink, AgentTaskStatus, RegisterAgentTaskOptions,
+            TaskOutputAction,
         },
         persistence::{
             backends::{
@@ -770,6 +935,13 @@ mod tests {
     }
 
     impl AgentTaskRuntimeEffects for RecordingEffects {
+        fn task_config(&self) -> Option<AgentTaskConfig> {
+            Some(AgentTaskConfig {
+                kill_grace_period_ms: Some(0),
+                ..AgentTaskConfig::default()
+            })
+        }
+
         fn context_snapshot(&self) -> Vec<ContextMessage> {
             self.context.lock().unwrap().clone()
         }
@@ -1181,6 +1353,55 @@ mod tests {
             Some("stopped")
         );
         assert_eq!(effects.terminated.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stop_normalizes_reason_aborts_and_settles_after_grace() {
+        let (_persistence, service, effects) = service_with_effects();
+        insert_live(&service, "bash-stop0001", true);
+        let signal = service
+            .state()
+            .tasks
+            .get("bash-stop0001")
+            .unwrap()
+            .state
+            .abort_controller
+            .signal();
+        let stopped = service
+            .stop("bash-stop0001", Some("  requested  "))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stopped.base.status, AgentTaskStatus::Killed);
+        assert_eq!(stopped.base.stop_reason.as_deref(), Some("requested"));
+        assert!(signal.aborted());
+        assert_eq!(
+            *effects.terminated.lock().unwrap(),
+            ["bash-stop0001".to_owned()]
+        );
+        assert_eq!(
+            service
+                .stop("bash-stop0001", Some("ignored"))
+                .await
+                .unwrap()
+                .unwrap()
+                .base
+                .stop_reason
+                .as_deref(),
+            Some("requested")
+        );
+        assert!(service.stop("missing", None).await.unwrap().is_none());
+
+        insert_live(&service, "bash-stop0002", true);
+        let by_user = service
+            .stop_by_user("bash-stop0002")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            by_user.base.stop_reason,
+            Some(user_cancellation_reason().to_string())
+        );
     }
 
     #[tokio::test]
