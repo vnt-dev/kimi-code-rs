@@ -5,8 +5,16 @@ use crate::{
     app::config::{CONFIG_INVALID, ensure_config_errors_registered},
     kosong::{
         contract::inspection::{InspectionSource, InspectionSourceKind, ResolutionTrace},
-        model::{contract::ModelRecord, types::ResolvedModelAuthMaterial},
+        model::{
+            contract::{ModelRecord, ModelRecordOverride},
+            thinking::drives_thinking_through_traits,
+            types::ResolvedModelAuthMaterial,
+        },
         provider::{
+            bases::anthropic::anthropic_profile::{
+                BUDGET_THINKING_EFFORTS, infer_anthropic_model_profile,
+                match_known_anthropic_model_profile,
+            },
             config::ProviderConfig,
             provider_definition::{
                 ExplainedProviderEndpoint, ProviderDefinitionRegistryError,
@@ -141,6 +149,107 @@ pub fn resolve_model_auth_material(
     Ok(ResolvedModelAuthMaterial::default())
 }
 
+// Original: modelAuth.ts, effectiveModelConfig().
+pub fn effective_model_config(
+    model: &ModelRecord,
+    provider_type: Option<&str>,
+) -> Result<ModelRecord, ProviderDefinitionRegistryError> {
+    let mut effective = model.clone();
+    if let Some(overrides) = &model.overrides {
+        effective.overrides = None;
+        apply_model_overrides(&mut effective, overrides);
+        if overrides.support_efforts.is_some()
+            && overrides.default_effort.is_none()
+            && effective.default_effort.as_ref().is_some_and(|default| {
+                !overrides
+                    .support_efforts
+                    .as_ref()
+                    .is_some_and(|efforts| efforts.contains(default))
+            })
+        {
+            effective.default_effort = None;
+        }
+    }
+    with_anthropic_profile(effective, provider_type)
+}
+
+fn apply_model_overrides(model: &mut ModelRecord, overrides: &ModelRecordOverride) {
+    if let Some(value) = overrides.max_context_size {
+        model.max_context_size = Some(value);
+    }
+    if let Some(value) = overrides.max_output_size {
+        model.max_output_size = Some(value);
+    }
+    if let Some(value) = &overrides.capabilities {
+        model.capabilities = Some(value.clone());
+    }
+    if let Some(value) = &overrides.display_name {
+        model.display_name = Some(value.clone());
+    }
+    if let Some(value) = &overrides.reasoning_key {
+        model.reasoning_key = Some(value.clone());
+    }
+    if let Some(value) = overrides.adaptive_thinking {
+        model.adaptive_thinking = Some(value);
+    }
+    if let Some(value) = &overrides.support_efforts {
+        model.support_efforts = Some(value.clone());
+    }
+    if let Some(value) = &overrides.default_effort {
+        model.default_effort = Some(value.clone());
+    }
+}
+
+// Original: modelAuth.ts, withAnthropicProfile().
+fn with_anthropic_profile(
+    mut model: ModelRecord,
+    provider_type: Option<&str>,
+) -> Result<ModelRecord, ProviderDefinitionRegistryError> {
+    let Some(wire_name) = model.name.as_deref().or(model.model.as_deref()) else {
+        return Ok(model);
+    };
+    let protocol_is_anthropic = model.protocol
+        == Some(crate::kosong::protocol::identity::Protocol::Anthropic)
+        || (model.protocol.is_none() && provider_type == Some("anthropic"));
+    let profile = if provider_type.is_some()
+        && !drives_thinking_through_traits(provider_type)?
+        && protocol_is_anthropic
+    {
+        Some(infer_anthropic_model_profile(wire_name))
+    } else {
+        match_known_anthropic_model_profile(wire_name)
+    };
+    let Some(profile) = profile else {
+        return Ok(model);
+    };
+
+    let capability = if profile.can_disable_thinking {
+        "thinking"
+    } else {
+        "always_thinking"
+    };
+    let capabilities = model.capabilities.get_or_insert_with(Vec::new);
+    if !capabilities
+        .iter()
+        .any(|candidate| candidate.trim().eq_ignore_ascii_case(capability))
+    {
+        capabilities.push(capability.into());
+    }
+    let adaptive_thinking = model.adaptive_thinking;
+    let support_efforts = model.support_efforts.get_or_insert_with(|| {
+        let efforts = if adaptive_thinking == Some(false) {
+            BUDGET_THINKING_EFFORTS
+        } else {
+            profile.efforts
+        };
+        efforts.iter().map(|effort| (*effort).to_owned()).collect()
+    });
+    if model.default_effort.is_none() && support_efforts.iter().any(|effort| effort == "high") {
+        model.default_effort = Some("high".into());
+    }
+    Ok(model)
+}
+
 fn model_provider_key(model: &ModelRecord) -> Option<String> {
     model.provider_id.clone().or_else(|| model.provider.clone())
 }
@@ -193,14 +302,10 @@ pub fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-// MIGRATION-TODO:
-// Original: packages/agent-core-v2/src/kosong/model/modelAuth.ts
-// Missing unit: effectiveModelConfig() and its Anthropic profile fold.
-// Completion condition: migrate the registry-driven thinking verdict and port
-// override/profile composition without vendor string gates.
-
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
     use indexmap::IndexMap;
 
     use super::*;
@@ -417,5 +522,107 @@ mod tests {
             ResolvedModelAuthMaterial::default()
         );
         assert_eq!(trace.0[0].1.kind, InspectionSourceKind::None);
+    }
+
+    #[test]
+    fn effective_config_applies_only_override_fields_and_clears_stale_default() {
+        let model = ModelRecord {
+            provider_id: Some("provider-id".into()),
+            name: Some("not-an-anthropic-model".into()),
+            max_context_size: NonZeroU64::new(100),
+            display_name: Some("base".into()),
+            support_efforts: Some(vec!["low".into(), "high".into()]),
+            default_effort: Some("high".into()),
+            overrides: Some(ModelRecordOverride {
+                max_context_size: NonZeroU64::new(200),
+                display_name: Some("override".into()),
+                support_efforts: Some(vec!["low".into()]),
+                ..ModelRecordOverride::default()
+            }),
+            ..ModelRecord::default()
+        };
+
+        let effective = effective_model_config(&model, None).unwrap();
+        assert_eq!(effective.provider_id.as_deref(), Some("provider-id"));
+        assert_eq!(effective.max_context_size, NonZeroU64::new(200));
+        assert_eq!(effective.display_name.as_deref(), Some("override"));
+        assert_eq!(effective.support_efforts, Some(vec!["low".into()]));
+        assert_eq!(effective.default_effort, None);
+        assert_eq!(effective.overrides, None);
+        assert!(model.overrides.is_some());
+    }
+
+    #[test]
+    fn anthropic_profile_preserves_declared_values_and_adds_missing_defaults() {
+        let model = ModelRecord {
+            protocol: Some(Protocol::Anthropic),
+            name: Some("claude-opus-4-6".into()),
+            capabilities: Some(vec![" THINKING ".into(), "image_in".into()]),
+            adaptive_thinking: Some(false),
+            ..ModelRecord::default()
+        };
+        let effective = effective_model_config(&model, None).unwrap();
+        assert_eq!(
+            effective.capabilities,
+            Some(vec![" THINKING ".into(), "image_in".into()])
+        );
+        assert_eq!(
+            effective.support_efforts,
+            Some(vec!["low".into(), "medium".into(), "high".into()])
+        );
+        assert_eq!(effective.default_effort.as_deref(), Some("high"));
+
+        let declared = ModelRecord {
+            protocol: Some(Protocol::Anthropic),
+            name: Some("claude-opus-4-6".into()),
+            support_efforts: Some(vec!["custom".into()]),
+            default_effort: Some("custom".into()),
+            ..ModelRecord::default()
+        };
+        let effective = effective_model_config(&declared, None).unwrap();
+        assert_eq!(effective.support_efforts, Some(vec!["custom".into()]));
+        assert_eq!(effective.default_effort.as_deref(), Some("custom"));
+    }
+
+    #[test]
+    fn unknown_anthropic_models_are_inferred_only_for_non_trait_driven_providers() {
+        static REGISTERED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        REGISTERED.get_or_init(|| {
+            register_provider_definition(ProviderDefinition {
+                id: "model-auth-trait-thinking".into(),
+                base_protocol: Protocol::Anthropic,
+                traits: vec![std::sync::Arc::new(
+                    crate::kosong::protocol::protocol_trait::ProtocolTrait {
+                        with_thinking: Some(std::sync::Arc::new(|_, _, _, _| None)),
+                        ..Default::default()
+                    },
+                )],
+                endpoint: None,
+                host_headers: None,
+                model_source: None,
+                capability: None,
+            })
+            .unwrap();
+        });
+        let model = ModelRecord {
+            protocol: Some(Protocol::Anthropic),
+            name: Some("future-model-without-known-profile".into()),
+            ..ModelRecord::default()
+        };
+
+        let inferred = effective_model_config(&model, Some("plain-provider")).unwrap();
+        assert_eq!(inferred.capabilities, Some(vec!["thinking".to_owned()]));
+        assert!(
+            inferred
+                .support_efforts
+                .as_ref()
+                .is_some_and(|efforts| efforts.iter().any(|effort| effort == "xhigh"))
+        );
+
+        let trait_driven =
+            effective_model_config(&model, Some("model-auth-trait-thinking")).unwrap();
+        assert_eq!(trait_driven.capabilities, None);
+        assert_eq!(trait_driven.support_efforts, None);
+        assert_eq!(trait_driven.default_effort, None);
     }
 }
