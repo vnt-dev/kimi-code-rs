@@ -13,7 +13,7 @@ use tokio::io::AsyncReadExt;
 use crate::{
     _base::utils::abort::{AbortError, AbortSignal},
     agent::task::types::{
-        AgentTask, AgentTaskInfo, AgentTaskInfoBase, AgentTaskSettlement,
+        AgentTask, AgentTaskError, AgentTaskInfo, AgentTaskInfoBase, AgentTaskSettlement,
         AgentTaskSettlementStatus, AgentTaskSink,
     },
     os::interface::host_process::{
@@ -76,7 +76,7 @@ impl AgentTask for ProcessTask {
         &self.description
     }
 
-    async fn start(&self, sink: &dyn AgentTaskSink) {
+    async fn start(&self, sink: &dyn AgentTaskSink) -> Result<(), AgentTaskError> {
         let signal = sink.signal();
         let process_for_abort = Arc::clone(&self.process);
         let abort_signal = signal.clone();
@@ -119,14 +119,21 @@ impl AgentTask for ProcessTask {
             }
         };
         self.dispose_process();
-        sink.settle(settlement).await;
+        sink.settle(settlement).await?;
+        Ok(())
     }
 
-    async fn force_stop(&self) {
-        if self.process.exit_code().is_none() {
-            let _ = self.process.kill(Some(ProcessSignal::Kill)).await;
-        }
+    async fn force_stop(&self) -> Result<(), AgentTaskError> {
+        let result = if self.process.exit_code().is_none() {
+            self.process
+                .kill(Some(ProcessSignal::Kill))
+                .await
+                .map_err(|error| Box::new(error) as AgentTaskError)
+        } else {
+            Ok(())
+        };
         self.dispose_process();
+        result
     }
 
     fn to_info(&self, base: AgentTaskInfoBase) -> AgentTaskInfo {
@@ -348,8 +355,8 @@ impl AgentTaskSink for RawOutputSink<'_> {
     fn append_output(&self, chunk: &str) {
         (self.output)(chunk);
     }
-    async fn settle(&self, _: AgentTaskSettlement) -> bool {
-        false
+    async fn settle(&self, _: AgentTaskSettlement) -> Result<bool, AgentTaskError> {
+        Ok(false)
     }
 }
 
@@ -379,9 +386,9 @@ mod tests {
         fn append_output(&self, chunk: &str) {
             self.output.lock().unwrap().push_str(chunk);
         }
-        async fn settle(&self, settlement: AgentTaskSettlement) -> bool {
+        async fn settle(&self, settlement: AgentTaskSettlement) -> Result<bool, AgentTaskError> {
             *self.settlement.lock().unwrap() = Some(settlement);
-            true
+            Ok(true)
         }
     }
 
@@ -410,7 +417,7 @@ mod tests {
             output: Mutex::new(String::new()),
             settlement: Mutex::new(None),
         };
-        task.start(&sink).await;
+        task.start(&sink).await.unwrap();
         let output = sink.output.lock().unwrap().clone();
         assert!(output.contains("out"));
         assert!(output.contains("err"));
@@ -463,6 +470,7 @@ mod tests {
         };
         tokio::time::timeout(Duration::from_secs(3), task.start(&sink))
             .await
+            .unwrap()
             .unwrap();
         assert_eq!(
             sink.settlement.lock().unwrap().as_ref().unwrap().status,

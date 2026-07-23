@@ -6,11 +6,15 @@
 //! base plus flattened JSON details, so independent task modules can add kinds
 //! without introducing a dependency cycle back into this contract module.
 
+use std::error::Error;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::_base::utils::abort::AbortSignal;
+
+pub type AgentTaskError = Box<dyn Error + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -80,7 +84,7 @@ pub struct AgentTaskInfo {
 pub trait AgentTaskSink: Send + Sync {
     fn signal(&self) -> AbortSignal;
     fn append_output(&self, chunk: &str);
-    async fn settle(&self, settlement: AgentTaskSettlement) -> bool;
+    async fn settle(&self, settlement: AgentTaskSettlement) -> Result<bool, AgentTaskError>;
 }
 
 #[async_trait]
@@ -91,9 +95,11 @@ pub trait AgentTask: Send + Sync {
     fn timeout_ms(&self) -> Option<u64> {
         None
     }
-    async fn start(&self, sink: &dyn AgentTaskSink);
+    async fn start(&self, sink: &dyn AgentTaskSink) -> Result<(), AgentTaskError>;
     fn on_detach(&self) {}
-    async fn force_stop(&self) {}
+    async fn force_stop(&self) -> Result<(), AgentTaskError> {
+        Ok(())
+    }
     fn to_info(&self, base: AgentTaskInfoBase) -> AgentTaskInfo;
 }
 

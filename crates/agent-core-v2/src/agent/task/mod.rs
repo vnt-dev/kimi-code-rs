@@ -1,4 +1,5 @@
 pub mod config_section;
+pub mod contract;
 pub mod errors;
 pub mod notification_xml;
 pub mod persist;
@@ -7,6 +8,7 @@ pub mod tools;
 pub mod types;
 
 pub use config_section::*;
+pub use contract::*;
 pub use errors::*;
 pub use notification_xml::*;
 pub use persist::*;
