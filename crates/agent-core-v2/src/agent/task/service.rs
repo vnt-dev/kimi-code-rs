@@ -444,6 +444,25 @@ impl AgentTaskService {
         self.state().notifications.mark_delivered(origin);
     }
 
+    // Original: AgentTaskService.restoreAfterReplay(). Restore-derived state is
+    // installed before disk merge, reconciliation, and terminal notification
+    // restoration; `replace: false` retains Wire-only entries while matching
+    // disk entries still use the original `newerRestoredTask()` arbitration.
+    pub async fn restore_after_replay(
+        &self,
+        wire_tasks: &TaskModelState,
+        delivered_keys: &[String],
+        now_ms: i64,
+    ) -> AgentTaskServiceResult<Vec<AgentTaskInfo>> {
+        self.restore_delivered_notifications(delivered_keys.iter().cloned());
+        self.restore_ghosts_from_wire(wire_tasks);
+        self.load_from_disk(AgentTaskLoadOptions {
+            replace: Some(false),
+        })
+        .await?;
+        self.reconcile(now_ms).await
+    }
+
     // Original: AgentTaskService constructor's `context.spliced` subscription.
     // Compaction arms the reminder before every inserted task-origin message is
     // recorded as delivered.
@@ -2421,6 +2440,49 @@ mod tests {
             .unwrap();
         assert_eq!(stopped.unwrap().base.status, AgentTaskStatus::Killed);
         assert_eq!(handle.list(Some(true), None).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn restore_after_replay_merges_wire_and_disk_then_reconciles_in_order() {
+        let (persistence, service, effects) = service_with_effects();
+        let mut disk_conflict = task("bash-restore1", AgentTaskStatus::Completed, true);
+        disk_conflict.base.description = "disk".into();
+        persistence.write_task(&disk_conflict).await.unwrap();
+        persistence
+            .write_task(&task("bash-restore2", AgentTaskStatus::Running, true))
+            .await
+            .unwrap();
+        let mut wire_task = task("bash-restore1", AgentTaskStatus::Running, true);
+        wire_task.base.description = "wire".into();
+        let delivered = vec!["task\0completed\0notice".into()];
+
+        let lost = service
+            .restore_after_replay(
+                &TaskModelState::from([(wire_task.base.task_id.clone(), wire_task)]),
+                &delivered,
+                50,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            lost.iter()
+                .map(|info| info.base.task_id.as_str())
+                .collect::<Vec<_>>(),
+            ["bash-restore2"]
+        );
+        assert_eq!(
+            service.get_task("bash-restore1").unwrap().base.description,
+            "disk"
+        );
+        assert!(lost.iter().all(|info| {
+            info.base.status == AgentTaskStatus::Lost && info.base.ended_at == Some(50)
+        }));
+        assert!(service.state().notifications.is_delivered(&delivered[0]));
+        assert_eq!(
+            effects.terminated.lock().unwrap().as_slice(),
+            ["bash-restore2"]
+        );
     }
 
     #[test]
