@@ -1,0 +1,12 @@
+[package]
+name = "kimi-code-transcript"
+version = "0.0.1"
+edition = "2024"
+description = "Agent-granular transcript rendering data layer"
+license = "MIT"
+publish = false
+
+[dependencies]
+indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["preserve_order"] }

@@ -11,6 +11,7 @@ members = [
     "crates/minidb",
     "crates/oauth",
     "crates/protocol",
+    "crates/transcript",
 ]
 resolver = "3"
 
