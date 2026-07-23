@@ -111,7 +111,7 @@ impl QueryStoreError {
 }
 
 #[async_trait]
-pub trait QueryBuilderService: Send {
+pub trait QueryBuilderService: Send + Sync {
     fn where_filter(&mut self, filter: QueryFilter);
     fn order_by(&mut self, field: String, direction: SortDir);
     fn limit(&mut self, limit: u64);
