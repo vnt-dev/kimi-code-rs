@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::migration::WIRE_PROTOCOL_VERSION;
+use super::{migration::WIRE_PROTOCOL_VERSION, op::Op};
 
 pub const AGENT_WIRE_RECORD_KEY: &str = "wire.jsonl";
 
@@ -65,17 +65,21 @@ pub fn is_wire_metadata_record(record: &WireRecord) -> bool {
         && record.get("created_at").is_some_and(Value::is_number)
 }
 
-pub fn op_to_wire_record(op_type: &str, payload: &Value) -> WireRecord {
+pub fn op_to_wire_record(op: &Op) -> WireRecord {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    op_to_wire_record_at(op_type, payload, i64::try_from(now).unwrap_or(i64::MAX))
+    op_to_wire_record_at(op, i64::try_from(now).unwrap_or(i64::MAX))
 }
 
 // Original: opToWireRecord(). Object payload fields are spread after `type`,
 // so payload-owned `type` and `time` intentionally retain source precedence.
-pub fn op_to_wire_record_at(op_type: &str, payload: &Value, now_millis: i64) -> WireRecord {
+pub fn op_to_wire_record_at(op: &Op, now_millis: i64) -> WireRecord {
+    encode_op_parts_at(&op.op_type, &op.payload_value, now_millis)
+}
+
+fn encode_op_parts_at(op_type: &str, payload: &Value, now_millis: i64) -> WireRecord {
     let mut record = [("type".into(), Value::String(op_type.into()))]
         .into_iter()
         .collect::<WireRecord>();
@@ -121,7 +125,7 @@ mod tests {
 
     #[test]
     fn object_payloads_flatten_and_preserve_payload_field_precedence() {
-        let record = op_to_wire_record_at(
+        let record = encode_op_parts_at(
             "goal.create",
             &serde_json::json!({"goal_id": "g1", "type": "payload.type", "time": 7}),
             99,
@@ -144,11 +148,11 @@ mod tests {
             serde_json::json!([1, 2]),
             Value::Null,
         ] {
-            let record = op_to_wire_record_at("test", &payload, 1);
+            let record = encode_op_parts_at("test", &payload, 1);
             assert_eq!(wire_record_to_payload(&record), payload);
         }
         let payload = serde_json::json!({"payload": 42});
-        let record = op_to_wire_record_at("test", &payload, 1);
+        let record = encode_op_parts_at("test", &payload, 1);
         assert_eq!(wire_record_to_payload(&record), Value::from(42));
     }
 }
