@@ -12,10 +12,14 @@ use std::{
 use futures_util::{FutureExt, future::BoxFuture};
 use indexmap::IndexMap;
 
+use crate::agent::context_memory::{ContextMessage, PromptOrigin};
+
 use super::{
-    AgentTaskInfo, AgentTaskLoadOptions, AgentTaskOutputSnapshot, AgentTaskPersistence,
-    AgentTaskServiceResult, ForegroundTaskReleaseReason, ManagedTaskState, RestoredTaskRegistry,
-    TaskModelState, empty_output_snapshot, should_list_task,
+    AgentTaskInfo, AgentTaskLoadOptions, AgentTaskNotificationBuildContext,
+    AgentTaskOutputSnapshot, AgentTaskPersistence, AgentTaskServiceResult,
+    ForegroundTaskReleaseReason, ManagedTaskState, NOTIFICATION_FALLBACK_PREVIEW_BYTES,
+    RestoredTaskRegistry, TaskModelState, TaskNotificationDelivery, empty_output_snapshot,
+    finish_task_notification, needs_notification_fallback_preview, should_list_task,
 };
 
 const JAVASCRIPT_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -73,6 +77,7 @@ impl ManagedTaskRuntime {
 struct AgentTaskServiceState {
     tasks: IndexMap<String, ManagedTaskRuntime>,
     ghosts: RestoredTaskRegistry,
+    notifications: TaskNotificationDelivery,
 }
 
 pub struct AgentTaskService {
@@ -117,6 +122,14 @@ impl AgentTaskService {
         let mut state = self.state();
         let live_task_ids = state.tasks.keys().cloned().collect::<HashSet<_>>();
         state.ghosts.restore_from_wire(wire_tasks, &live_task_ids);
+    }
+
+    pub fn restore_delivered_notifications(&self, keys: impl IntoIterator<Item = String>) {
+        self.state().notifications.restore_delivered(keys);
+    }
+
+    pub fn mark_delivered_notification(&self, origin: &PromptOrigin) {
+        self.state().notifications.mark_delivered(origin);
     }
 
     // Original: AgentTaskService.getTask().
@@ -303,6 +316,46 @@ impl AgentTaskService {
             Some(release) => Ok(Some(release.await)),
             None => Ok(None),
         }
+    }
+
+    // Original: AgentTaskService.buildAgentTaskNotificationContext(). The
+    // context snapshot is supplied explicitly so no state lock crosses either
+    // persistence read.
+    pub async fn build_agent_task_notification_context(
+        &self,
+        info: &AgentTaskInfo,
+        context: &[ContextMessage],
+    ) -> AgentTaskServiceResult<Option<AgentTaskNotificationBuildContext>> {
+        let scheduled = { self.state().notifications.try_schedule(info, context) };
+        let Some(scheduled) = scheduled else {
+            return Ok(None);
+        };
+
+        let mut output = self.get_output_snapshot(&info.base.task_id, 0.0).await?;
+        if needs_notification_fallback_preview(&output) {
+            output = self
+                .get_output_snapshot(&info.base.task_id, NOTIFICATION_FALLBACK_PREVIEW_BYTES)
+                .await?;
+        }
+        let currently_suppressed = self.is_terminal_notification_suppressed(&info.base.task_id);
+        Ok(finish_task_notification(
+            scheduled,
+            info,
+            &output,
+            currently_suppressed,
+        ))
+    }
+
+    fn is_terminal_notification_suppressed(&self, task_id: &str) -> bool {
+        let state = self.state();
+        state
+            .tasks
+            .get(task_id)
+            .is_some_and(|entry| entry.state.terminal_notification_suppressed == Some(true))
+            || state
+                .ghosts
+                .get(task_id)
+                .is_some_and(|info| info.base.terminal_notification_suppressed == Some(true))
     }
 }
 
@@ -652,6 +705,60 @@ mod tests {
                 .await
                 .unwrap(),
             Some(ForegroundTaskReleaseReason::Terminal)
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_context_reserves_once_reads_fallback_and_honors_delivery_state() {
+        let (persistence, service) = service();
+        let completed = task("bash-notify01", AgentTaskStatus::Completed, true);
+        persistence.write_task(&completed).await.unwrap();
+        service
+            .load_from_disk(AgentTaskLoadOptions::default())
+            .await
+            .unwrap();
+
+        let built = service
+            .build_agent_task_notification_context(&completed, &[])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(built.notification["type"], "task.completed");
+        assert_eq!(built.notification["source_id"], "bash-notify01");
+        assert!(
+            service
+                .build_agent_task_notification_context(&completed, &[])
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let delivered = task("bash-notify02", AgentTaskStatus::Failed, true);
+        let delivered_origin = PromptOrigin::Task {
+            task_id: delivered.base.task_id.clone(),
+            status: delivered.base.status,
+            notification_id: "task:bash-notify02:failed".into(),
+        };
+        service.mark_delivered_notification(&delivered_origin);
+        assert!(
+            service
+                .build_agent_task_notification_context(&delivered, &[])
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let restored = task("bash-notify03", AgentTaskStatus::Lost, true);
+        service.restore_delivered_notifications([format!(
+            "{}\0lost\0task:{}:lost",
+            restored.base.task_id, restored.base.task_id
+        )]);
+        assert!(
+            service
+                .build_agent_task_notification_context(&restored, &[])
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 
