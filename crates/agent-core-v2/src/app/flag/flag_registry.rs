@@ -2,7 +2,10 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/flag/flagRegistry.ts`.
 
-use std::sync::{LazyLock, RwLock};
+use std::{
+    ops::Deref,
+    sync::{Arc, LazyLock, RwLock},
+};
 
 use crate::_base::di::{instantiation::ServiceIdentifier, lifecycle::DisposableHandle};
 
@@ -55,5 +58,16 @@ pub trait FlagRegistry: Send + Sync {
     fn list(&self) -> Vec<FlagDefinitionInput>;
 }
 
-pub const FLAG_REGISTRY_SERVICE_ID: ServiceIdentifier<dyn FlagRegistry> =
+#[derive(Clone)]
+pub struct FlagRegistryHandle(pub Arc<dyn FlagRegistry>);
+
+impl Deref for FlagRegistryHandle {
+    type Target = dyn FlagRegistry;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const FLAG_REGISTRY_SERVICE_ID: ServiceIdentifier<FlagRegistryHandle> =
     ServiceIdentifier::new("flagRegistry");

@@ -9,9 +9,15 @@ use indexmap::IndexMap;
 use crate::_base::di::lifecycle::{
     Disposable, DisposableHandle, DisposableStore, DisposeResult, to_disposable,
 };
+use crate::_base::di::{
+    descriptors::SyncDescriptor,
+    errors::DiError,
+    scope::{InstantiationType, LifecycleScope, register_scoped_service},
+};
 
 use super::flag_registry::{
-    FlagDefinitionInput, FlagRegistry, FlagRegistryError, get_contributed_flags,
+    FLAG_REGISTRY_SERVICE_ID, FlagDefinitionInput, FlagRegistry, FlagRegistryError,
+    FlagRegistryHandle, get_contributed_flags,
 };
 
 pub struct FlagRegistryService {
@@ -72,6 +78,22 @@ impl Disposable for FlagRegistryService {
     fn dispose(&self) -> DisposeResult {
         self.registrations.dispose()
     }
+}
+
+// Original: registerScopedService(... FlagRegistryService ...).
+pub fn register_flag_registry_service() {
+    register_scoped_service(
+        LifecycleScope::App,
+        FLAG_REGISTRY_SERVICE_ID,
+        SyncDescriptor::new(|_| {
+            let registry =
+                FlagRegistryService::new().map_err(|error| DiError::Factory(error.to_string()))?;
+            let registry: Arc<dyn FlagRegistry> = Arc::new(registry);
+            Ok(FlagRegistryHandle(registry))
+        }),
+        InstantiationType::Eager,
+        "flag",
+    );
 }
 
 #[cfg(test)]
