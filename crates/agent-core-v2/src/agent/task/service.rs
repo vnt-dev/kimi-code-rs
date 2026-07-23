@@ -7,13 +7,17 @@
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex, MutexGuard},
+    time::Duration,
 };
 
 use futures_util::{FutureExt, future::BoxFuture};
 use indexmap::IndexMap;
 
 use crate::{
-    _base::{di::lifecycle::DisposableHandle, utils::abort::AbortLink},
+    _base::{
+        di::lifecycle::DisposableHandle,
+        utils::abort::{AbortLink, AbortSignal, abortable},
+    },
     agent::context_memory::{ContextMessage, PromptOrigin},
 };
 
@@ -477,15 +481,116 @@ impl AgentTaskService {
         &self,
         task_id: &str,
     ) -> AgentTaskServiceResult<Option<ForegroundTaskReleaseReason>> {
-        let release = self
-            .state()
-            .tasks
-            .get(task_id)
-            .map(|entry| entry.state.foreground_release_future());
-        match release {
-            Some(release) => Ok(Some(release.await)),
-            None => Ok(None),
+        enum ForegroundWait {
+            Missing,
+            Terminal(TaskWriteBarrier),
+            Detached,
+            Pending(
+                super::ForegroundTaskReleaseFuture,
+                tokio::sync::watch::Receiver<bool>,
+            ),
         }
+        let wait = {
+            let state = self.state();
+            match state.tasks.get(task_id) {
+                None => ForegroundWait::Missing,
+                Some(entry) if entry.state.status.is_terminal() => {
+                    ForegroundWait::Terminal(entry.persist_write_queue.clone())
+                }
+                Some(entry) if entry.state.is_detached() => ForegroundWait::Detached,
+                Some(entry) => ForegroundWait::Pending(
+                    entry.state.foreground_release_future(),
+                    entry.settled.subscribe(),
+                ),
+            }
+        };
+        let (release, mut settled) = match wait {
+            ForegroundWait::Missing => return Ok(None),
+            ForegroundWait::Terminal(barrier) => {
+                barrier.await;
+                return Ok(Some(ForegroundTaskReleaseReason::Terminal));
+            }
+            ForegroundWait::Detached => {
+                return Ok(Some(ForegroundTaskReleaseReason::Detached));
+            }
+            ForegroundWait::Pending(release, settled) => (release, settled),
+        };
+        let reason = tokio::select! {
+            biased;
+            reason = release => reason,
+            () = wait_until_settled(&mut settled) => ForegroundTaskReleaseReason::Terminal,
+        };
+        if reason == ForegroundTaskReleaseReason::Terminal {
+            let barrier = self
+                .state()
+                .tasks
+                .get(task_id)
+                .map(|entry| entry.persist_write_queue.clone());
+            if let Some(barrier) = barrier {
+                barrier.await;
+            }
+        }
+        Ok(Some(reason))
+    }
+
+    // Original: AgentTaskService.wait().
+    pub async fn wait(
+        &self,
+        task_id: &str,
+        timeout_ms: Option<f64>,
+        signal: Option<AbortSignal>,
+    ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
+        let timeout_ms = timeout_ms.unwrap_or(30_000.0);
+        let (mut settled, terminal_barrier) = {
+            let state = self.state();
+            let Some(entry) = state.tasks.get(task_id) else {
+                return Ok(state.ghosts.get(task_id).cloned());
+            };
+            if entry.state.status.is_terminal() {
+                (None, Some(entry.persist_write_queue.clone()))
+            } else if timeout_ms <= 0.0 {
+                return Ok(Some(entry.state.to_info()));
+            } else {
+                (Some(entry.settled.subscribe()), None)
+            }
+        };
+        if let Some(barrier) = terminal_barrier {
+            barrier.await;
+            return Ok(self.get_task(task_id));
+        }
+
+        let mut settled = settled
+            .take()
+            .ok_or_else(|| std::io::Error::other("task waiter missing settlement receiver"))?;
+        let pending = async {
+            tokio::select! {
+                biased;
+                () = wait_until_settled(&mut settled) => {},
+                () = tokio::time::sleep(javascript_timeout_duration(timeout_ms)) => {},
+            }
+        };
+        if let Some(signal) = signal {
+            abortable(pending, &signal).await.map_err(|error| {
+                Box::new((*error).clone()) as crate::agent::task::AgentTaskServiceError
+            })?;
+        } else {
+            pending.await;
+        }
+
+        let barrier = {
+            let state = self.state();
+            state.tasks.get(task_id).and_then(|entry| {
+                entry
+                    .state
+                    .status
+                    .is_terminal()
+                    .then(|| entry.persist_write_queue.clone())
+            })
+        };
+        if let Some(barrier) = barrier {
+            barrier.await;
+        }
+        Ok(self.get_task(task_id))
     }
 
     // Original: AgentTaskService.buildAgentTaskNotificationContext(). The
@@ -610,6 +715,24 @@ fn utf16_tail(value: &str, tail: f64) -> String {
         (truncated as usize).min(units.len())
     };
     String::from_utf16_lossy(&units[units.len() - requested..])
+}
+
+async fn wait_until_settled(receiver: &mut tokio::sync::watch::Receiver<bool>) {
+    while !*receiver.borrow() {
+        if receiver.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
+fn javascript_timeout_duration(timeout_ms: f64) -> Duration {
+    const MAX_NODE_TIMEOUT_MS: f64 = 2_147_483_647.0;
+    let milliseconds = if !timeout_ms.is_finite() || timeout_ms > MAX_NODE_TIMEOUT_MS {
+        1
+    } else {
+        (timeout_ms.trunc() as u64).max(1)
+    };
+    Duration::from_millis(milliseconds)
 }
 
 #[cfg(test)]
@@ -1078,7 +1201,7 @@ mod tests {
                 .wait_for_foreground_release("bash-detached")
                 .await
                 .unwrap(),
-            Some(ForegroundTaskReleaseReason::Terminal)
+            Some(ForegroundTaskReleaseReason::Detached)
         );
 
         let waiting = service
@@ -1103,8 +1226,74 @@ mod tests {
                 .wait_for_foreground_release("bash-fore0001")
                 .await
                 .unwrap(),
+            Some(ForegroundTaskReleaseReason::Detached)
+        );
+
+        service
+            .state()
+            .tasks
+            .get_mut("bash-detached")
+            .unwrap()
+            .state
+            .status = AgentTaskStatus::Completed;
+        assert_eq!(
+            service
+                .wait_for_foreground_release("bash-detached")
+                .await
+                .unwrap(),
             Some(ForegroundTaskReleaseReason::Terminal)
         );
+    }
+
+    #[tokio::test]
+    async fn wait_handles_immediate_timeout_abort_and_settlement_broadcast() {
+        use crate::_base::utils::abort::AbortController;
+
+        let (_persistence, service) = service();
+        insert_live(&service, "bash-wait0001", true);
+        assert_eq!(
+            service
+                .wait("bash-wait0001", Some(0.0), None)
+                .await
+                .unwrap()
+                .unwrap()
+                .base
+                .status,
+            AgentTaskStatus::Running
+        );
+
+        let controller = AbortController::new();
+        controller.abort(None);
+        assert!(
+            service
+                .wait("bash-wait0001", Some(30_000.0), Some(controller.signal()))
+                .await
+                .is_err()
+        );
+
+        let waiting_service = service.clone();
+        let waiter = tokio::spawn(async move {
+            waiting_service
+                .wait("bash-wait0001", Some(30_000.0), None)
+                .await
+        });
+        tokio::task::yield_now().await;
+        service
+            .settle_task(
+                "bash-wait0001",
+                AgentTaskSettlement {
+                    status: AgentTaskSettlementStatus::Completed,
+                    stop_reason: None,
+                },
+                40,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            waiter.await.unwrap().unwrap().unwrap().base.status,
+            AgentTaskStatus::Completed
+        );
+        assert_eq!(service.wait("missing", None, None).await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -1208,5 +1397,14 @@ mod tests {
         assert_eq!(utf16_tail("abc", 0.9), "abc");
         assert_eq!(utf16_tail("abc", f64::NAN), "abc");
         assert_eq!(utf16_tail("abc", f64::INFINITY), "abc");
+        assert_eq!(
+            javascript_timeout_duration(f64::NAN),
+            Duration::from_millis(1)
+        );
+        assert_eq!(javascript_timeout_duration(1.9), Duration::from_millis(1));
+        assert_eq!(
+            javascript_timeout_duration(30_000.0),
+            Duration::from_millis(30_000)
+        );
     }
 }
