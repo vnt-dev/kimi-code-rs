@@ -47,7 +47,8 @@ pub use runtime_options::{
     register_skill_catalog_runtime_options, skill_catalog_runtime_options_seed,
 };
 pub use source::{
-    SKILL_SOURCE_PRIORITY, SkillContribution, SkillSourceContract, SkillSourcePriorities,
+    SKILL_SOURCE_PRIORITY, SkillContribution, SkillSourceContract, SkillSourceError,
+    SkillSourcePriorities, SkillSourceResult,
 };
 pub use types::{
     SkillDefinition, SkillMetadata, SkillPluginContext, SkillRoot, SkillSource, SkillSummary,

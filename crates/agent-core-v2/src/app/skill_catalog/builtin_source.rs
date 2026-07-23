@@ -14,7 +14,7 @@ use crate::_base::di::{
 
 use super::{
     builtin::BUILTIN_SKILLS,
-    source::{SKILL_SOURCE_PRIORITY, SkillContribution, SkillSourceContract},
+    source::{SKILL_SOURCE_PRIORITY, SkillContribution, SkillSourceContract, SkillSourceResult},
 };
 
 #[derive(Default)]
@@ -31,12 +31,12 @@ impl SkillSourceContract for BuiltinSkillSource {
     }
 
     // Original: BuiltinSkillSource.load().
-    async fn load(&self) -> SkillContribution {
-        SkillContribution {
+    async fn load(&self) -> SkillSourceResult<SkillContribution> {
+        Ok(SkillContribution {
             skills: BUILTIN_SKILLS.clone(),
             skipped: None,
             scanned_roots: None,
-        }
+        })
     }
 }
 
@@ -76,7 +76,7 @@ mod tests {
         let source = BuiltinSkillSource;
         assert_eq!(source.id(), "builtin");
         assert_eq!(source.priority(), 0);
-        let contribution = source.load().await;
+        let contribution = source.load().await.unwrap();
         assert_eq!(contribution.skills.as_slice(), BUILTIN_SKILLS.as_slice());
         assert!(contribution.skipped.is_none());
         assert!(contribution.scanned_roots.is_none());

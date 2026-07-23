@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 
 use crate::_base::event::Event;
+use crate::app::config::ConfigServiceError;
 
 use super::types::{SkillDefinition, SkippedSkill};
 
@@ -32,6 +33,17 @@ pub const SKILL_SOURCE_PRIORITY: SkillSourcePriorities = SkillSourcePriorities {
     workspace: 30,
 };
 
+#[derive(Debug, thiserror::Error)]
+pub enum SkillSourceError {
+    #[error(transparent)]
+    Config(#[from] ConfigServiceError),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+pub type SkillSourceResult<T> = Result<T, SkillSourceError>;
+
 #[async_trait]
 pub trait SkillSourceContract: Send + Sync {
     fn id(&self) -> &str;
@@ -41,7 +53,7 @@ pub trait SkillSourceContract: Send + Sync {
         None
     }
 
-    async fn load(&self) -> SkillContribution;
+    async fn load(&self) -> SkillSourceResult<SkillContribution>;
 }
 
 #[cfg(test)]
