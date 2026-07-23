@@ -1,9 +1,11 @@
 //! Layered application configuration.
 
+pub mod contract;
 pub mod pure;
 pub mod section_diff;
 pub mod toml;
 
+pub use contract::*;
 pub use pure::{deep_equal, deep_merge, is_plain_object, omit_undefined};
 pub use section_diff::{RecordDiff, diff_records};
 pub use toml::{
