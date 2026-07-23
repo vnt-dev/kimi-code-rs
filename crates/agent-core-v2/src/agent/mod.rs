@@ -1,3 +1,4 @@
+pub mod context_injector;
 pub mod context_memory;
 pub mod context_size;
 pub mod external_hooks;
