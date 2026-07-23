@@ -17,6 +17,7 @@ kimi-code-minidb = { path = "../minidb" }
 libc = "0.2"
 notify = "8.2.0"
 percent-encoding = "2"
+portable-pty = "0.9.0"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
