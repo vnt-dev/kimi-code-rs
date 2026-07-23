@@ -4,6 +4,7 @@
 
 use crate::_base::utils::abort::user_cancellation_reason;
 use crate::_base::utils::xml_escape::{escape_xml, escape_xml_attr};
+use serde_json::Value;
 
 use super::{AgentTaskInfo, AgentTaskOutputSnapshot};
 
@@ -161,6 +162,48 @@ fn agent_task_status_text(status: super::AgentTaskStatus) -> &'static str {
         super::AgentTaskStatus::Killed => "killed",
         super::AgentTaskStatus::Lost => "lost",
     }
+}
+
+// Original: taskService.ts, TaskNotificationOrigin. The status intentionally
+// remains a string: isTaskOrigin() accepted any string rather than validating
+// it against AgentTaskStatus, including while replaying historical records.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskNotificationOrigin {
+    pub task_id: String,
+    pub status: String,
+    pub notification_id: String,
+}
+
+// Original: taskService.ts, isTaskOrigin(). Both the retired
+// `background_task` discriminator and the current `task` discriminator are
+// accepted for replay compatibility.
+pub fn task_notification_origin(value: &Value) -> Option<TaskNotificationOrigin> {
+    let value = value.as_object()?;
+    if !matches!(
+        value.get("kind").and_then(Value::as_str),
+        Some("background_task" | "task")
+    ) {
+        return None;
+    }
+    Some(TaskNotificationOrigin {
+        task_id: value.get("taskId")?.as_str()?.into(),
+        status: value.get("status")?.as_str()?.into(),
+        notification_id: value.get("notificationId")?.as_str()?.into(),
+    })
+}
+
+// Original: taskService.ts, notificationKey(). NUL separators preserve the
+// original collision-resistant key format used by delivery de-duplication.
+pub fn notification_key(origin: &TaskNotificationOrigin) -> String {
+    format!(
+        "{}\0{}\0{}",
+        origin.task_id, origin.status, origin.notification_id
+    )
+}
+
+// Original: taskService.ts, taskOriginFromMessage().
+pub fn task_origin_from_message(message: &Value) -> Option<TaskNotificationOrigin> {
+    task_notification_origin(message.as_object()?.get("origin")?)
 }
 
 #[cfg(test)]
@@ -333,5 +376,60 @@ mod tests {
             " Aborted by the user "
         )));
         assert!(!is_serialized_user_cancellation(None));
+    }
+
+    #[test]
+    fn task_origins_accept_current_and_legacy_discriminators() {
+        for kind in ["task", "background_task"] {
+            let origin = serde_json::json!({
+                "kind": kind,
+                "taskId": "agent-1",
+                "status": "future_status",
+                "notificationId": "notice-1",
+                "ignored": true
+            });
+            let parsed = task_notification_origin(&origin).unwrap();
+            assert_eq!(parsed.task_id, "agent-1");
+            assert_eq!(parsed.status, "future_status");
+            assert_eq!(
+                notification_key(&parsed),
+                "agent-1\0future_status\0notice-1"
+            );
+            assert_eq!(
+                task_origin_from_message(&serde_json::json!({ "origin": origin })),
+                Some(parsed)
+            );
+        }
+    }
+
+    #[test]
+    fn task_origin_guards_reject_partial_or_wrongly_typed_values() {
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!({}),
+            serde_json::json!({
+                "kind": "cron_job",
+                "taskId": "t",
+                "status": "completed",
+                "notificationId": "n"
+            }),
+            serde_json::json!({
+                "kind": "task",
+                "taskId": 1,
+                "status": "completed",
+                "notificationId": "n"
+            }),
+            serde_json::json!({
+                "kind": "task",
+                "taskId": "t",
+                "status": null,
+                "notificationId": "n"
+            }),
+        ] {
+            assert_eq!(task_notification_origin(&value), None);
+        }
+        assert_eq!(task_origin_from_message(&serde_json::json!({})), None);
+        assert_eq!(task_origin_from_message(&serde_json::json!([])), None);
     }
 }
