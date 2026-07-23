@@ -24,6 +24,24 @@ impl RestoredTaskRegistry {
         self.ghosts.values()
     }
 
+    pub fn remove(&mut self, task_id: &str) -> Option<AgentTaskInfo> {
+        self.ghosts.shift_remove(task_id)
+    }
+
+    pub fn clear(&mut self) {
+        self.ghosts.clear();
+    }
+
+    pub fn task_ids(&self) -> Vec<String> {
+        self.ghosts.keys().cloned().collect()
+    }
+
+    pub fn mark_active_lost_task(&mut self, task_id: &str, now_ms: i64) -> Option<AgentTaskInfo> {
+        let updated = mark_loaded_task_lost(self.ghosts.get(task_id)?.clone(), now_ms)?;
+        self.ghosts.insert(task_id.into(), updated.clone());
+        Some(updated)
+    }
+
     // Original: taskService.ts, restoreGhostsFromWire(). Existing live task
     // ids are authoritative; other wire entries replace matching ghosts while
     // retaining JavaScript Map insertion order.
@@ -197,5 +215,26 @@ mod tests {
             registry.get("done").unwrap().base.status,
             AgentTaskStatus::Completed
         );
+    }
+
+    #[test]
+    fn one_at_a_time_lost_transition_leaves_later_records_untouched() {
+        let mut registry = RestoredTaskRegistry::default();
+        registry.merge_loaded(
+            [
+                task("running-a", AgentTaskStatus::Running, None),
+                task("running-b", AgentTaskStatus::Running, None),
+            ],
+            None,
+            &HashSet::new(),
+        );
+        assert_eq!(registry.task_ids(), ["running-a", "running-b"]);
+        assert!(registry.mark_active_lost_task("running-a", 20).is_some());
+        assert_eq!(
+            registry.get("running-b").unwrap().base.status,
+            AgentTaskStatus::Running
+        );
+        registry.clear();
+        assert!(registry.values().next().is_none());
     }
 }
