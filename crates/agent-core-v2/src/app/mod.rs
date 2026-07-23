@@ -1,3 +1,4 @@
+pub mod agent_profile_catalog;
 pub mod auth;
 pub mod bootstrap;
 pub mod config;
