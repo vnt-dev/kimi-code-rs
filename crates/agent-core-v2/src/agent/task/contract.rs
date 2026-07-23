@@ -2,10 +2,20 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/task/task.ts`.
 
-use std::{error::Error, ops::Deref, sync::Arc};
+use std::{
+    error::Error,
+    ops::Deref,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use async_trait::async_trait;
-use futures_util::future::{BoxFuture, Shared};
+use futures_util::{
+    FutureExt,
+    future::{BoxFuture, Shared},
+};
 
 use crate::{
     _base::{di::instantiation::ServiceIdentifier, event::Event, utils::abort::AbortSignal},
@@ -46,6 +56,56 @@ pub enum ForegroundTaskReleaseReason {
 }
 
 pub type ForegroundTaskReleaseFuture = Shared<BoxFuture<'static, ForegroundTaskReleaseReason>>;
+
+// Original: taskService.ts, ForegroundRelease and createForegroundRelease().
+pub struct ForegroundRelease {
+    sender: tokio::sync::watch::Sender<Option<ForegroundTaskReleaseReason>>,
+    resolved: AtomicBool,
+    future: ForegroundTaskReleaseFuture,
+}
+
+impl ForegroundRelease {
+    pub fn new() -> Self {
+        let (sender, mut receiver) = tokio::sync::watch::channel(None);
+        let keep_alive = sender.clone();
+        let future = async move {
+            let _keep_alive = keep_alive;
+            loop {
+                if let Some(reason) = *receiver.borrow() {
+                    return reason;
+                }
+                let _ = receiver.changed().await;
+            }
+        }
+        .boxed()
+        .shared();
+        Self {
+            sender,
+            resolved: AtomicBool::new(false),
+            future,
+        }
+    }
+
+    pub fn future(&self) -> ForegroundTaskReleaseFuture {
+        self.future.clone()
+    }
+
+    pub fn resolve(&self, reason: ForegroundTaskReleaseReason) {
+        if self
+            .resolved
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.sender.send_replace(Some(reason));
+        }
+    }
+}
+
+impl Default for ForegroundRelease {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 pub type AgentTaskCallbackFuture = BoxFuture<'static, Result<(), AgentTaskServiceError>>;
 pub type AgentTaskForceStop = Arc<dyn Fn() -> AgentTaskCallbackFuture + Send + Sync>;
 pub type AgentTaskOnDetach = Arc<dyn Fn() + Send + Sync>;
@@ -207,6 +267,30 @@ mod tests {
             ForegroundTaskReleaseReason::TimeoutDetached
         );
         assert_eq!(release.await, ForegroundTaskReleaseReason::TimeoutDetached);
+    }
+
+    #[tokio::test]
+    async fn foreground_release_is_first_wins_and_shared() {
+        let release = ForegroundRelease::new();
+        let first = release.future();
+        let second = release.future();
+        release.resolve(ForegroundTaskReleaseReason::Detached);
+        release.resolve(ForegroundTaskReleaseReason::Terminal);
+        assert_eq!(first.await, ForegroundTaskReleaseReason::Detached);
+        assert_eq!(second.await, ForegroundTaskReleaseReason::Detached);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropped_release_keeps_the_promise_pending() {
+        let future = {
+            let release = ForegroundRelease::new();
+            release.future()
+        };
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(1), future)
+                .await
+                .is_err()
+        );
     }
 
     #[test]
