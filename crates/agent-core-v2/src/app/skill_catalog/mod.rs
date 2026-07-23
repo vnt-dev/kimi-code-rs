@@ -8,6 +8,7 @@ pub mod errors;
 pub mod file_discovery;
 pub mod in_memory_discovery;
 pub mod parser;
+pub mod registry;
 pub mod roots;
 pub mod runtime_options;
 pub mod source;
@@ -42,6 +43,7 @@ pub use parser::{
     UnsupportedSkillTypeError, parse_d2_flowchart, parse_frontmatter, parse_mermaid_flowchart,
     parse_skill_text, skill_argument_names,
 };
+pub use registry::{InMemorySkillCatalog, RegisterSkillOptions, SkillNotFoundError};
 pub use roots::{SkillRootsOptions, configured_roots, project_roots, user_roots};
 pub use runtime_options::{
     SKILL_CATALOG_RUNTIME_OPTIONS_ID, SkillCatalogRuntimeOptions,
@@ -52,9 +54,9 @@ pub use source::{
     SkillSourcePriorities, SkillSourceResult,
 };
 pub use types::{
-    SkillDefinition, SkillMetadata, SkillPluginContext, SkillRoot, SkillSource, SkillSummary,
-    SkippedSkill, is_inline_skill_type, is_supported_skill_type, is_user_activatable_skill_type,
-    normalize_skill_name, summarize_skill,
+    SkillCatalogContract, SkillDefinition, SkillMetadata, SkillPluginContext, SkillRoot,
+    SkillSource, SkillSummary, SkippedSkill, is_inline_skill_type, is_supported_skill_type,
+    is_user_activatable_skill_type, normalize_skill_name, summarize_skill,
 };
 pub use user_source::{
     USER_FILE_SKILL_SOURCE_ID, UserFileSkillSource, UserFileSkillSourceHandle,

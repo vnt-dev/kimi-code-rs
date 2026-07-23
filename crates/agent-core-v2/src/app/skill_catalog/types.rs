@@ -70,6 +70,22 @@ pub struct SkippedSkill {
     pub reason: String,
 }
 
+pub trait SkillCatalogContract: Send + Sync {
+    fn get_skill(&self, name: &str) -> Option<SkillDefinition>;
+    fn get_plugin_skill(&self, plugin_id: &str, name: &str) -> Option<SkillDefinition>;
+    fn render_skill_prompt(
+        &self,
+        skill: &SkillDefinition,
+        raw_args: &str,
+        session_id: Option<&str>,
+    ) -> String;
+    fn list_skills(&self) -> Vec<SkillDefinition>;
+    fn list_invocable_skills(&self) -> Vec<SkillDefinition>;
+    fn get_skill_roots(&self) -> Vec<String>;
+    fn get_skipped_by_policy(&self) -> Vec<SkippedSkill>;
+    fn get_model_skill_listing(&self) -> String;
+}
+
 // Original: normalizeSkillName().
 pub fn normalize_skill_name(name: &str) -> String {
     name.to_lowercase()

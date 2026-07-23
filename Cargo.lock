@@ -1150,6 +1150,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml",
+ "unicode-segmentation",
  "url",
  "uuid",
  "uzers",
