@@ -23,6 +23,10 @@ pub(crate) fn trim_ecmascript_whitespace(value: &str) -> &str {
     value.trim_matches(is_ecmascript_whitespace)
 }
 
+pub(crate) fn trim_end_ecmascript_whitespace(value: &str) -> &str {
+    value.trim_end_matches(is_ecmascript_whitespace)
+}
+
 fn is_ecmascript_whitespace(character: char) -> bool {
     matches!(
         character,
