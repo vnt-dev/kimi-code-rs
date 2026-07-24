@@ -2,6 +2,7 @@
 
 pub mod client_remote;
 pub mod client_shared;
+pub mod client_stdio;
 pub mod config_loader;
 pub mod config_schema;
 pub mod errors;
@@ -14,6 +15,7 @@ pub mod types;
 
 pub use client_remote::*;
 pub use client_shared::*;
+pub use client_stdio::*;
 pub use config_loader::*;
 pub use config_schema::{
     McpConfigValidationError, McpExecutor, McpServerCommonFields, McpServerConfig,
