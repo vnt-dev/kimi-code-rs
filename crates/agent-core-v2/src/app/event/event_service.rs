@@ -5,11 +5,18 @@
 use std::sync::Arc;
 
 use crate::_base::{
-    di::lifecycle::{Disposable, DisposableHandle, DisposeResult},
+    di::{
+        descriptors::SyncDescriptor,
+        instantiation::ServicesAccessor,
+        lifecycle::{Disposable, DisposableHandle, DisposeResult},
+        scope::{InstantiationType, LifecycleScope, register_scoped_service},
+    },
     event::{Emitter, Event, Listener},
 };
 
-use super::global_event::{EventServiceContract, GlobalDomainEvent};
+use super::global_event::{
+    EVENT_SERVICE_ID, EventServiceContract, EventServiceHandle, GlobalDomainEvent,
+};
 
 pub struct EventService {
     emitter: Arc<Emitter<GlobalDomainEvent>>,
@@ -53,6 +60,21 @@ impl Drop for EventService {
     fn drop(&mut self) {
         let _ = self.emitter.dispose();
     }
+}
+
+// Original: eventService.ts eager app-scope registration.
+pub fn register_event_service() {
+    register_scoped_service(
+        LifecycleScope::App,
+        EVENT_SERVICE_ID,
+        SyncDescriptor::new(|_: &dyn ServicesAccessor| {
+            let service: Arc<dyn EventServiceContract> = Arc::new(EventService::new());
+            Ok(EventServiceHandle(service))
+        })
+        .disposable(),
+        InstantiationType::Eager,
+        "event",
+    );
 }
 
 #[cfg(test)]
