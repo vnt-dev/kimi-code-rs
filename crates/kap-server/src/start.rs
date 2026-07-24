@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
+use kimi_code_agent_core_v2::app::auth::OAuthServiceHandle;
 use kimi_code_agent_core_v2::app::auth_legacy::AuthLegacyServiceHandle;
 use kimi_code_agent_core_v2::app::bootstrap::{
     BootstrapInput, BootstrapResolveError, resolve_bootstrap_options,
@@ -60,6 +61,7 @@ pub struct ServerStartOptions {
     pub web_assets_dir: Option<PathBuf>,
     pub version: Option<String>,
     pub auth_legacy_service: Option<AuthLegacyServiceHandle>,
+    pub oauth_service: Option<OAuthServiceHandle>,
     pub config_service: Option<ConfigServiceHandle>,
     pub event_service: Option<EventServiceHandle>,
     pub core_bridge: Option<Arc<dyn AgentCoreBridge>>,
@@ -95,6 +97,10 @@ impl std::fmt::Debug for ServerStartOptions {
             .field(
                 "auth_legacy_service",
                 &self.auth_legacy_service.as_ref().map(|_| "[configured]"),
+            )
+            .field(
+                "oauth_service",
+                &self.oauth_service.as_ref().map(|_| "[configured]"),
             )
             .field(
                 "config_service",
@@ -288,6 +294,7 @@ pub async fn start_server(options: ServerStartOptions) -> Result<RunningServer, 
         started_at: AppState::started_at_now(),
         shutdown: shutdown.clone(),
         auth_legacy_service: options.auth_legacy_service,
+        oauth_service: options.oauth_service,
         config_service: options.config_service,
         event_service: options.event_service,
         core_bridge,
@@ -401,6 +408,17 @@ mod tests {
         Disposable, DisposableHandle, DisposeResult,
     };
     use kimi_code_agent_core_v2::_base::event::{Event, Listener};
+    use kimi_code_agent_core_v2::app::auth::oauth_protocol::{
+        AlwaysTrue, NonEmptyString, OAuthFlowSnapshot as CoreOAuthFlowSnapshot,
+        OAuthFlowStart as CoreOAuthFlowStart,
+        OAuthFlowStartAuthenticated as CoreOAuthFlowStartAuthenticated,
+        OAuthFlowStatus as CoreOAuthFlowStatus,
+        OAuthLoginCancelResponse as CoreOAuthLoginCancelResponse,
+        OAuthLogoutResponse as CoreOAuthLogoutResponse, RefreshOAuthProviderModelsResponse,
+    };
+    use kimi_code_agent_core_v2::app::auth::{
+        AuthOperationError, AuthStatus, OAuthServiceContract,
+    };
     use kimi_code_agent_core_v2::app::auth_legacy::{
         AuthLegacyResult, AuthLegacyServiceContract, AuthSummary as CoreAuthSummary,
         ManagedProviderStatus as CoreManagedProviderStatus,
@@ -411,6 +429,8 @@ mod tests {
         ConfigServiceContract, ConfigServiceError, ConfigTarget, ResolvedConfig,
     };
     use kimi_code_agent_core_v2::app::event::{EventServiceContract, GlobalDomainEvent};
+    use kimi_code_agent_core_v2::kosong::provider::config::OAuthRef;
+    use kimi_code_oauth::BearerTokenProvider;
     use serde_json::{Map, Value};
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message as ClientWsMessage;
@@ -429,6 +449,96 @@ mod tests {
     struct StubAuthLegacyService {
         result: Result<CoreAuthSummary, String>,
         calls: AtomicUsize,
+    }
+
+    #[derive(Default)]
+    struct StubOAuthService {
+        calls: Mutex<Vec<(String, Option<String>)>>,
+    }
+
+    impl StubOAuthService {
+        fn record(&self, method: &str, provider: Option<&str>) {
+            self.calls
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push((method.into(), provider.map(str::to_owned)));
+        }
+    }
+
+    #[async_trait]
+    impl OAuthServiceContract for StubOAuthService {
+        async fn start_login(
+            &self,
+            provider: Option<&str>,
+        ) -> Result<CoreOAuthFlowStart, AuthOperationError> {
+            self.record("start_login", provider);
+            Ok(CoreOAuthFlowStart::Authenticated(
+                CoreOAuthFlowStartAuthenticated {
+                    flow_id: NonEmptyString::new("flow-1").unwrap(),
+                    provider: NonEmptyString::new(provider.unwrap_or("kimi-code")).unwrap(),
+                },
+            ))
+        }
+
+        fn get_flow(&self, provider: Option<&str>) -> Option<CoreOAuthFlowSnapshot> {
+            self.record("get_flow", provider);
+            None
+        }
+
+        async fn cancel_login(
+            &self,
+            provider: Option<&str>,
+        ) -> Result<CoreOAuthLoginCancelResponse, AuthOperationError> {
+            self.record("cancel_login", provider);
+            Ok(CoreOAuthLoginCancelResponse {
+                cancelled: true,
+                status: CoreOAuthFlowStatus::Cancelled,
+            })
+        }
+
+        async fn logout(
+            &self,
+            provider: Option<&str>,
+        ) -> Result<CoreOAuthLogoutResponse, AuthOperationError> {
+            self.record("logout", provider);
+            Ok(CoreOAuthLogoutResponse {
+                logged_out: AlwaysTrue,
+                provider: NonEmptyString::new(provider.unwrap_or("kimi-code")).unwrap(),
+            })
+        }
+
+        async fn status(&self, provider: Option<&str>) -> Result<AuthStatus, AuthOperationError> {
+            Ok(AuthStatus {
+                logged_in: false,
+                provider: provider.map(str::to_owned),
+            })
+        }
+
+        async fn refresh_oauth_provider_models(
+            &self,
+        ) -> Result<RefreshOAuthProviderModelsResponse, AuthOperationError> {
+            Ok(RefreshOAuthProviderModelsResponse {
+                changed: Vec::new(),
+                unchanged: Vec::new(),
+                failed: Vec::new(),
+            })
+        }
+
+        fn resolve_token_provider(
+            &self,
+            _provider: &str,
+            _oauth_ref: Option<&OAuthRef>,
+        ) -> Option<BearerTokenProvider> {
+            None
+        }
+
+        async fn get_cached_access_token(
+            &self,
+            _provider: &str,
+            _oauth_ref: Option<&OAuthRef>,
+        ) -> Result<Option<String>, AuthOperationError> {
+            Ok(None)
+        }
     }
 
     #[derive(Default)]
@@ -718,12 +828,16 @@ mod tests {
         }));
         let config = Arc::new(StubConfigService::default());
         let events = Arc::new(RecordingEventService::default());
+        let oauth = Arc::new(StubOAuthService::default());
         let server = start_server(ServerStartOptions {
             port: Some(0),
             home_dir: Some(home.path().to_owned()),
             debug_endpoints: true,
             auth_legacy_service: Some(AuthLegacyServiceHandle(
                 Arc::clone(&auth) as Arc<dyn AuthLegacyServiceContract>
+            )),
+            oauth_service: Some(OAuthServiceHandle(
+                Arc::clone(&oauth) as Arc<dyn OAuthServiceContract>
             )),
             config_service: Some(ConfigServiceHandle(
                 Arc::clone(&config) as Arc<dyn ConfigServiceContract>
@@ -771,6 +885,10 @@ mod tests {
                         CoreOperation::GetAuth
                             | CoreOperation::GetConfig
                             | CoreOperation::UpdateConfig
+                            | CoreOperation::GetOauthLogin
+                            | CoreOperation::StartOauthLogin
+                            | CoreOperation::DeleteOauthLogin
+                            | CoreOperation::OauthLogout
                     )
                 })
                 .collect::<Vec<_>>();
@@ -786,6 +904,86 @@ mod tests {
             }
         }
         assert_eq!(auth.calls.load(Ordering::SeqCst), 1);
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn oauth_routes_call_oauth_service_methods() {
+        let home = tempfile::tempdir().unwrap();
+        let oauth = Arc::new(StubOAuthService::default());
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            oauth_service: Some(OAuthServiceHandle(
+                Arc::clone(&oauth) as Arc<dyn OAuthServiceContract>
+            )),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let token = server.auth_token_service.get_token();
+        for (method, uri, body, expected) in [
+            (
+                "POST",
+                "/api/v1/oauth/login",
+                Some(r#"{"provider":"managed"}"#),
+                serde_json::json!({
+                    "flow_id": "flow-1",
+                    "provider": "managed",
+                    "status": "authenticated"
+                }),
+            ),
+            (
+                "GET",
+                "/api/v1/oauth/login?provider=managed",
+                None,
+                Value::Null,
+            ),
+            (
+                "DELETE",
+                "/api/v1/oauth/login?provider=managed",
+                None,
+                serde_json::json!({"cancelled": true, "status": "cancelled"}),
+            ),
+            (
+                "POST",
+                "/api/v1/oauth/logout",
+                Some(r#"{"provider":"managed"}"#),
+                serde_json::json!({"logged_out": true, "provider": "managed"}),
+            ),
+        ] {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("host", "localhost")
+                .header("authorization", format!("Bearer {token}"));
+            if body.is_some() {
+                request = request.header("content-type", "application/json");
+            }
+            let response = server
+                .app
+                .clone()
+                .oneshot(request.body(Body::from(body.unwrap_or_default())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(envelope["code"], 0);
+            assert_eq!(envelope["data"], expected);
+        }
+        assert_eq!(
+            oauth
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|call| call.0.as_str())
+                .collect::<Vec<_>>(),
+            vec!["start_login", "get_flow", "cancel_login", "logout"]
+        );
         server.close().await.unwrap();
     }
 
