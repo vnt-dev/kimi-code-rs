@@ -2,6 +2,9 @@
 //!
 //! Original: `session/swarm/sessionSwarm.ts`.
 
+pub mod agent_run_batch;
+pub use agent_run_batch::*;
+
 use std::{future::Future, ops::Deref, pin::Pin, sync::Arc, time::Duration};
 
 use serde_json::Value;
