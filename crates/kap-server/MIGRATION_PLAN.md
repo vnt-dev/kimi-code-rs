@@ -90,3 +90,54 @@ resource lifecycle, with source-mapping comments on significant methods.
    implementations and compare responses, errors, events, files, logs where
    observable, retry/timeout behavior, and shutdown. Finish with workspace
    format, check, test, and Clippy validation.
+
+## Implemented Units
+
+The following source units now have tested Rust counterparts:
+
+| TypeScript source | Rust counterpart | Notes |
+| --- | --- | --- |
+| `security/bindClassify.ts` | `src/security/bind_classify.rs` | Complete |
+| `middleware/hostnames.ts`, `origin.ts` | `src/middleware/hostnames.rs`, `origin.rs` | Predicates complete; HTTP hook wiring awaits the server adapter |
+| `middleware/auth.ts`, `rateLimit.ts`, `securityHeaders.ts` | matching `src/middleware/*.rs` | Policy complete; HTTP hook wiring awaits the server adapter |
+| `services/auth/*` | `src/services/auth/*` | Complete, including live token rotation |
+| `instanceRegistry.ts` | `src/instance_registry.rs` | Complete for explicit home/instances directories |
+| `services/guiStore/guiStoreService.ts` | `src/services/gui_store/service.rs` | Complete; core-v2 DI decorator registration deferred |
+| `services/snapshot/snapshotConfig.ts` | `src/services/snapshot/config.rs` | Complete |
+| `snapshotReader.readWireRecords`, blob resolution | `src/services/snapshot/reader.rs` | Complete |
+| `transport/ws/bearerProtocol.ts` | `src/transport/ws/bearer_protocol.rs` | Complete |
+| `transport/ws/connectionRegistry.ts` | `src/transport/ws/connection_registry.rs` | Complete |
+| `transport/ws/v1/inFlightTurnTracker.ts` | `src/transport/ws/v1/in_flight_turn_tracker.rs` | Complete, including JS UTF-16 offsets |
+| `transport/ws/v1/sessionEventJournal.ts` | `src/transport/ws/v1/session_event_journal.rs` | Complete |
+| `transport/ws/v1/subagentRosterTracker.ts` | `src/transport/ws/v1/subagent_roster_tracker.rs` | Complete |
+| `transport/ws/v1/protocol.ts` | `src/transport/ws/v1/protocol.rs` | Complete |
+| `routes/action-suffix.ts` | `src/routes/action_suffix.rs` | Complete |
+| `lib/fileLaunch.ts` | `src/launch.rs` | Complete |
+| `request-id.ts`, `requestLogging.ts`, `version.ts` | matching top-level Rust modules | Pure behavior complete |
+| `services/pinoLoggerService.ts` | `src/services/server_logger.rs` | JSON logger counterpart complete |
+| protocol DTO modules | sibling `kimi-code-protocol` crate | Reused rather than duplicated |
+
+## Explicit agent-core-v2 Boundaries
+
+These production paths intentionally use `todo!` with `MIGRATION-TODO`
+comments, as requested, because their original implementation calls unfinished
+`agent-core-v2` services:
+
+- `startServer` and ordered `RunningServer.close`;
+- default Kimi home resolution in the instance registry;
+- full `SnapshotReader.read` assembly;
+- RPC channel discovery/reflection.
+
+The REST route handlers, transcript/core event binding, model refresh
+scheduler, filesystem watch bridge, session event broadcaster, and complete
+WebSocket connection are not exposed as fake implementations. They remain part
+of the same core-v2 integration boundary and must be migrated when the required
+core contracts stabilize.
+
+## Remaining Server-Adapter Work
+
+The Rust crate deliberately does not start a partial HTTP daemon. After
+core-v2 bootstrap is available, the next unit is a Tokio HTTP/WebSocket adapter
+(Axum/Tower or equivalent) that wires the already-migrated policies and local
+services, followed by route modules one at a time and the end-to-end parity
+suite.
