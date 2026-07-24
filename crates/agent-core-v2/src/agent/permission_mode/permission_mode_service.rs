@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use crate::{
     _base::{
@@ -34,9 +34,19 @@ pub trait AgentPermissionModeServiceContract: Send + Sync {
     fn on_did_change_mode(&self) -> Event<PermissionModeChangedContext>;
 }
 
-pub const AGENT_PERMISSION_MODE_SERVICE_ID: ServiceIdentifier<
-    dyn AgentPermissionModeServiceContract,
-> = ServiceIdentifier::new("agentPermissionModeService");
+#[derive(Clone)]
+pub struct AgentPermissionModeServiceHandle(pub Arc<dyn AgentPermissionModeServiceContract>);
+
+impl Deref for AgentPermissionModeServiceHandle {
+    type Target = dyn AgentPermissionModeServiceContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const AGENT_PERMISSION_MODE_SERVICE_ID: ServiceIdentifier<AgentPermissionModeServiceHandle> =
+    ServiceIdentifier::new("agentPermissionModeService");
 
 #[derive(Debug, thiserror::Error)]
 pub enum PermissionModeServiceError {
