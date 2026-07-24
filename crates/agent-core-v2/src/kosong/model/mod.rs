@@ -1,6 +1,7 @@
 pub mod completion_budget;
 pub mod config_section;
 pub mod contract;
+pub mod discovery_config_section;
 pub mod errors;
 pub mod host_request_headers;
 pub mod model_auth;
@@ -9,6 +10,10 @@ pub mod types;
 
 pub use config_section::{
     MODELS_SCHEMA, models_from_toml, models_to_toml, register_models_config_section,
+};
+pub use discovery_config_section::{
+    MODEL_CATALOG_CONFIG_SCHEMA, MODEL_CATALOG_SECTION, ModelCatalogConfig,
+    register_model_catalog_config_section,
 };
 pub use host_request_headers::{
     HOST_REQUEST_HEADERS_ID, HostRequestHeaders, host_request_headers_seed,
