@@ -29,3 +29,4 @@ pub mod tool_registry;
 pub mod tool_result_truncation;
 pub mod tool_select;
 pub mod usage;
+pub mod user_tool;
