@@ -64,9 +64,22 @@ impl SessionInteractionService {
 
     // Original: request().
     pub async fn request(&self, request: InteractionRequest) -> serde_json::Value {
+        let receiver = self.begin_request(request).await;
+        receiver.await.unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Parks a request and returns its single-use response receiver.
+    ///
+    /// This ownership split is required by Rust so typed facades can install
+    /// cancellation behavior after the request has been atomically queued.
+    /// `request()` remains the direct counterpart of the source method.
+    pub(crate) async fn begin_request(
+        &self,
+        request: InteractionRequest,
+    ) -> oneshot::Receiver<serde_json::Value> {
         let (sender, receiver) = oneshot::channel();
         self.park(request, Some(sender)).await;
-        receiver.await.unwrap_or(serde_json::Value::Null)
+        receiver
     }
 
     // Original: enqueue().

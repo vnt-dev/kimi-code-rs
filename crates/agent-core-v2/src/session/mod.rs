@@ -5,6 +5,7 @@ pub mod approval;
 pub mod interaction;
 pub mod mcp;
 pub mod process;
+pub mod question;
 pub mod session_context;
 pub mod session_fs;
 pub mod skill_catalog;
