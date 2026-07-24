@@ -40,6 +40,9 @@ pub enum SkillSourceError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error("plugin skill source failed: {0}")]
+    Plugin(Box<dyn std::error::Error + Send + Sync>),
 }
 
 pub type SkillSourceResult<T> = Result<T, SkillSourceError>;
