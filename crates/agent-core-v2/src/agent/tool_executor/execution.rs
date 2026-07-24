@@ -12,16 +12,32 @@ use crate::{
 
 use super::{aborted_tool_output, normalize_tool_result, race_with_abort_grace};
 
-pub async fn run_single_execution(
-    tool_name: &str,
-    tool_call_id: String,
-    execution: &RunnableToolExecution,
-    turn_id: i64,
-    trace: Option<LlmRequestTrace>,
-    metadata: Option<Value>,
-    signal: AbortSignal,
-    on_update: Option<ToolUpdateCallback>,
-) -> ToolResult {
+/// Inputs for [`run_single_execution`].
+///
+/// This keeps the method-level counterpart of the original
+/// `runSingleExecution()` readable without an eight-argument Rust signature.
+pub struct RunSingleExecutionInput<'a> {
+    pub tool_name: &'a str,
+    pub tool_call_id: String,
+    pub execution: &'a RunnableToolExecution,
+    pub turn_id: i64,
+    pub trace: Option<LlmRequestTrace>,
+    pub metadata: Option<Value>,
+    pub signal: AbortSignal,
+    pub on_update: Option<ToolUpdateCallback>,
+}
+
+pub async fn run_single_execution(input: RunSingleExecutionInput<'_>) -> ToolResult {
+    let RunSingleExecutionInput {
+        tool_name,
+        tool_call_id,
+        execution,
+        turn_id,
+        trace,
+        metadata,
+        signal,
+        on_update,
+    } = input;
     if signal.aborted() {
         return ToolResult::from(crate::tool::ExecutableToolResult::error(
             aborted_tool_output(tool_name, &signal),
@@ -84,16 +100,16 @@ mod tests {
         let mut execution = RunnableToolExecution::new("always", execute);
         execution.description = Some("read a file".into());
         execution.stop_batch_after_this = Some(true);
-        let result = run_single_execution(
-            "Read",
-            "call-1".into(),
-            &execution,
-            2,
-            None,
-            None,
-            AbortController::new().signal(),
-            None,
-        )
+        let result = run_single_execution(RunSingleExecutionInput {
+            tool_name: "Read",
+            tool_call_id: "call-1".into(),
+            execution: &execution,
+            turn_id: 2,
+            trace: None,
+            metadata: None,
+            signal: AbortController::new().signal(),
+            on_update: None,
+        })
         .await;
         assert_eq!(
             result.output,
