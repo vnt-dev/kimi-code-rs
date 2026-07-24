@@ -5,11 +5,17 @@
 //! `kimi-code-protocol` crate and are re-exported here where the TypeScript
 //! package exposed them directly.
 
+pub mod instance_registry;
 pub mod middleware;
 pub mod security;
 pub mod services;
 pub mod transport;
 
+pub use instance_registry::{
+    HEARTBEAT_INTERVAL, InstanceRegistration, InstanceRegistry, InstanceRegistryOptions,
+    ServerInstanceInfo, get_live_server_instance, list_live_server_instances,
+    resolve_server_instances_dir,
+};
 pub use kimi_code_protocol::{Envelope, err_envelope, ok_envelope};
 pub use security::bind_classify::{BindClass, ClassifyOptions, classify};
 pub use services::auth::persistent_token::{rotate_server_token, server_token_path};

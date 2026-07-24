@@ -11,11 +11,23 @@ base64 = "0.22"
 bcrypt = "0.17"
 getrandom = "0.3"
 kimi-code-protocol = { path = "../protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 subtle = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["fs", "io-util", "rt"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+ulid = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile = "3"
