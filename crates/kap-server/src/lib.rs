@@ -9,6 +9,7 @@ pub mod instance_registry;
 pub mod middleware;
 pub mod request_id;
 pub mod request_logging;
+pub mod routes;
 pub mod security;
 pub mod services;
 pub mod start;
