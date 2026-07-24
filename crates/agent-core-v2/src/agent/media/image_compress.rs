@@ -222,6 +222,192 @@ pub fn compress_base64_for_model(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageCropRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+#[derive(Clone, Debug, Default)]
+pub struct CropImageOptions {
+    pub compress: CompressImageOptions,
+    pub skip_resize: bool,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct CropImageSuccess {
+    pub data: Vec<u8>,
+    pub mime_type: String,
+    pub width: i64,
+    pub height: i64,
+    pub original_width: i64,
+    pub original_height: i64,
+    pub region: ImageCropRegion,
+    pub resized: bool,
+    pub original_byte_length: usize,
+    pub final_byte_length: usize,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CropImageFailure {
+    pub error: String,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum CropImageOutcome {
+    Success(CropImageSuccess),
+    Failure(CropImageFailure),
+}
+
+// Original: cropImageForModel(). The returned region is in original-pixel
+// coordinates even when the encoded crop is downscaled.
+pub fn crop_image_for_model(
+    bytes: &[u8],
+    mime_type: &str,
+    region: ImageCropRegion,
+    options: &CropImageOptions,
+) -> CropImageOutcome {
+    let fail = |error| CropImageOutcome::Failure(CropImageFailure { error });
+    let normalized = normalize_image_mime(mime_type);
+    if bytes.is_empty() {
+        return fail("The image is empty.".into());
+    }
+    if !matches!(
+        normalized.as_str(),
+        "image/png" | "image/jpeg" | "image/webp"
+    ) {
+        return fail(format!(
+            "Cropping is only supported for PNG, JPEG, and WebP images; got {mime_type}."
+        ));
+    }
+    if normalized == "image/webp" && is_animated_webp(bytes) {
+        return fail("Cropping is not supported for animated WebP images.".into());
+    }
+    if ![region.x, region.y, region.width, region.height]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return fail(format!(
+            "Region coordinates must be finite numbers; got x={}, y={}, width={}, height={}.",
+            js_number(region.x),
+            js_number(region.y),
+            js_number(region.width),
+            js_number(region.height)
+        ));
+    }
+    let max_decode = options
+        .compress
+        .max_decode_bytes
+        .unwrap_or(MAX_IMAGE_DECODE_BYTES);
+    if bytes.len() > max_decode {
+        return fail("The image is too large to decode for cropping.".into());
+    }
+    if let Some(dimensions) = super::sniff_image_dimensions(bytes)
+        && (dimensions.width <= 0
+            || dimensions.height <= 0
+            || (dimensions.width as u64).saturating_mul(dimensions.height as u64)
+                > MAX_DECODE_PIXELS)
+    {
+        return fail(format!(
+            "The image ({}x{} pixels) is too large to decode for cropping.",
+            dimensions.width, dimensions.height
+        ));
+    }
+    let Ok(image) =
+        ImageReader::with_format(Cursor::new(bytes), format_for_mime(&normalized)).decode()
+    else {
+        return fail(
+            "Failed to decode the image for cropping: unsupported or corrupt image data.".into(),
+        );
+    };
+    let (original_width, original_height) = (image.width(), image.height());
+    let (x, y) = (region.x.floor(), region.y.floor());
+    if x < 0.0
+        || y < 0.0
+        || x >= original_width as f64
+        || y >= original_height as f64
+        || region.width < 1.0
+        || region.height < 1.0
+    {
+        return fail(format!(
+            "Region (x={}, y={}, width={}, height={}) lies outside the {}x{} image.",
+            js_number(region.x),
+            js_number(region.y),
+            js_number(region.width),
+            js_number(region.height),
+            original_width,
+            original_height
+        ));
+    }
+    let (x, y) = (x as u32, y as u32);
+    let (w, h) = (
+        (region.width.floor() as u32).min(original_width - x),
+        (region.height.floor() as u32).min(original_height - y),
+    );
+    let applied = ImageCropRegion {
+        x: x as f64,
+        y: y as f64,
+        width: w as f64,
+        height: h as f64,
+    };
+    let cropped = image.crop_imm(x, y, w, h);
+    let jpeg_only = normalized == "image/jpeg";
+    let budget = options.compress.byte_budget.unwrap_or(IMAGE_BYTE_BUDGET);
+    let encoded = if options.skip_resize {
+        encode_skip_resize(&cropped, jpeg_only)
+    } else {
+        let resized = fit_within_edge(
+            cropped,
+            options
+                .compress
+                .max_edge
+                .unwrap_or_else(resolve_max_image_edge_px),
+        );
+        encode_candidates(&resized, jpeg_only)
+            .into_iter()
+            .min_by_key(|(data, _)| data.len())
+            .map(|(data, mime)| (data, mime, resized.width(), resized.height()))
+    };
+    let Some((data, output_mime, width, height)) = encoded else {
+        return fail("Failed to decode the image for cropping: image encoding failed.".into());
+    };
+    if data.len() > budget {
+        return fail(format!("The cropped region encodes to {} bytes ({}) , over the {}-byte ({}) per-image limit. Choose a smaller region, or allow downscaling.",data.len(),format_byte_size(data.len() as f64),budget,format_byte_size(budget as f64)).replace(") ,", "),"));
+    }
+    CropImageOutcome::Success(CropImageSuccess {
+        final_byte_length: data.len(),
+        data,
+        mime_type: output_mime.into(),
+        width: width as i64,
+        height: height as i64,
+        original_width: original_width as i64,
+        original_height: original_height as i64,
+        region: applied,
+        resized: width != w || height != h,
+        original_byte_length: bytes.len(),
+    })
+}
+
+fn encode_skip_resize(
+    image: &DynamicImage,
+    jpeg_only: bool,
+) -> Option<(Vec<u8>, &'static str, u32, u32)> {
+    if jpeg_only {
+        let mut data = Vec::new();
+        JpegEncoder::new_with_quality(&mut data, 90)
+            .encode_image(image)
+            .ok()?;
+        Some((data, "image/jpeg", image.width(), image.height()))
+    } else {
+        let mut data = Cursor::new(Vec::new());
+        image.write_to(&mut data, ImageFormat::Png).ok()?;
+        Some((
+            data.into_inner(),
+            "image/png",
+            image.width(),
+            image.height(),
+        ))
+    }
+}
+
 fn format_for_mime(mime: &str) -> ImageFormat {
     match mime {
         "image/png" => ImageFormat::Png,
@@ -601,6 +787,50 @@ mod tests {
         assert_eq!(result.captions.len(), 1);
         assert!(
             matches!(&result.parts[..], [ContentPart::ImageUrl { image_url }] if image_url.url.starts_with("data:image/"))
+        );
+    }
+    #[test]
+    fn crops_regions_and_reports_invalid_coordinates() {
+        let bitmap = DynamicImage::new_rgb8(4, 3);
+        let mut encoded = Cursor::new(Vec::new());
+        bitmap.write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let bytes = encoded.into_inner();
+        let outcome = crop_image_for_model(
+            &bytes,
+            "image/png",
+            ImageCropRegion {
+                x: 1.2,
+                y: 1.9,
+                width: 8.0,
+                height: 8.0,
+            },
+            &CropImageOptions {
+                skip_resize: true,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            outcome,
+            CropImageOutcome::Success(CropImageSuccess {
+                width: 3,
+                height: 2,
+                resized: false,
+                ..
+            })
+        ));
+        let invalid = crop_image_for_model(
+            &bytes,
+            "image/png",
+            ImageCropRegion {
+                x: f64::NAN,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            &CropImageOptions::default(),
+        );
+        assert!(
+            matches!(invalid, CropImageOutcome::Failure(CropImageFailure { error }) if error.contains("finite numbers"))
         );
     }
 }
