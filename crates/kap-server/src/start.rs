@@ -10,6 +10,8 @@ use kimi_code_agent_core_v2::app::auth_legacy::AuthLegacyServiceHandle;
 use kimi_code_agent_core_v2::app::bootstrap::{
     BootstrapInput, BootstrapResolveError, resolve_bootstrap_options,
 };
+use kimi_code_agent_core_v2::app::config::ConfigServiceHandle;
+use kimi_code_agent_core_v2::app::event::EventServiceHandle;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -58,6 +60,8 @@ pub struct ServerStartOptions {
     pub web_assets_dir: Option<PathBuf>,
     pub version: Option<String>,
     pub auth_legacy_service: Option<AuthLegacyServiceHandle>,
+    pub config_service: Option<ConfigServiceHandle>,
+    pub event_service: Option<EventServiceHandle>,
     pub core_bridge: Option<Arc<dyn AgentCoreBridge>>,
 }
 
@@ -91,6 +95,14 @@ impl std::fmt::Debug for ServerStartOptions {
             .field(
                 "auth_legacy_service",
                 &self.auth_legacy_service.as_ref().map(|_| "[configured]"),
+            )
+            .field(
+                "config_service",
+                &self.config_service.as_ref().map(|_| "[configured]"),
+            )
+            .field(
+                "event_service",
+                &self.event_service.as_ref().map(|_| "[configured]"),
             )
             .field(
                 "core_bridge",
@@ -276,6 +288,8 @@ pub async fn start_server(options: ServerStartOptions) -> Result<RunningServer, 
         started_at: AppState::started_at_now(),
         shutdown: shutdown.clone(),
         auth_legacy_service: options.auth_legacy_service,
+        config_service: options.config_service,
+        event_service: options.event_service,
         core_bridge,
         web_assets_dir,
     });
@@ -383,12 +397,21 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use futures_util::{SinkExt, StreamExt};
+    use kimi_code_agent_core_v2::_base::di::lifecycle::{
+        Disposable, DisposableHandle, DisposeResult,
+    };
+    use kimi_code_agent_core_v2::_base::event::{Event, Listener};
     use kimi_code_agent_core_v2::app::auth_legacy::{
         AuthLegacyResult, AuthLegacyServiceContract, AuthSummary as CoreAuthSummary,
         ManagedProviderStatus as CoreManagedProviderStatus,
         ManagedProviderSummary as CoreManagedProviderSummary,
     };
-    use serde_json::Value;
+    use kimi_code_agent_core_v2::app::config::{
+        ConfigChangedEvent, ConfigDiagnostic, ConfigInspectValue, ConfigSectionChangedEvent,
+        ConfigServiceContract, ConfigServiceError, ConfigTarget, ResolvedConfig,
+    };
+    use kimi_code_agent_core_v2::app::event::{EventServiceContract, GlobalDomainEvent};
+    use serde_json::{Map, Value};
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message as ClientWsMessage;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -406,6 +429,134 @@ mod tests {
     struct StubAuthLegacyService {
         result: Result<CoreAuthSummary, String>,
         calls: AtomicUsize,
+    }
+
+    #[derive(Default)]
+    struct StubConfigService {
+        values: Mutex<ResolvedConfig>,
+        sets: Mutex<Vec<(String, Option<Value>, ConfigTarget)>>,
+    }
+
+    impl StubConfigService {
+        fn with_values(values: Map<String, Value>) -> Self {
+            Self {
+                values: Mutex::new(values),
+                sets: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Disposable for StubConfigService {
+        fn dispose(&self) -> DisposeResult {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl ConfigServiceContract for StubConfigService {
+        async fn ready(&self) -> Result<(), ConfigServiceError> {
+            Ok(())
+        }
+
+        fn on_did_change_configuration(&self) -> Event<ConfigChangedEvent> {
+            Event::none()
+        }
+
+        fn on_did_section_change(&self) -> Event<ConfigSectionChangedEvent> {
+            Event::none()
+        }
+
+        fn get(&self, domain: &str) -> Option<Value> {
+            self.values
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(domain)
+                .cloned()
+        }
+
+        fn inspect(&self, domain: &str) -> ConfigInspectValue {
+            ConfigInspectValue {
+                value: self.get(domain),
+                ..ConfigInspectValue::default()
+            }
+        }
+
+        fn get_all(&self) -> ResolvedConfig {
+            self.values
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone()
+        }
+
+        async fn set(
+            &self,
+            domain: &str,
+            patch: Option<Value>,
+            target: ConfigTarget,
+        ) -> Result<(), ConfigServiceError> {
+            self.sets
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push((domain.into(), patch.clone(), target));
+            let mut values = self
+                .values
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            match patch {
+                Some(value) => {
+                    values.insert(domain.into(), value);
+                }
+                None => {
+                    values.shift_remove(domain);
+                }
+            }
+            Ok(())
+        }
+
+        async fn replace(
+            &self,
+            domain: &str,
+            value: Option<Value>,
+            target: ConfigTarget,
+        ) -> Result<(), ConfigServiceError> {
+            self.set(domain, value, target).await
+        }
+
+        async fn reload(&self) -> Result<(), ConfigServiceError> {
+            Ok(())
+        }
+
+        fn diagnostics(&self) -> Vec<ConfigDiagnostic> {
+            Vec::new()
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingEventService {
+        events: Mutex<Vec<GlobalDomainEvent>>,
+    }
+
+    impl Disposable for RecordingEventService {
+        fn dispose(&self) -> DisposeResult {
+            Ok(())
+        }
+    }
+
+    impl EventServiceContract for RecordingEventService {
+        fn on_did_publish(&self) -> Event<GlobalDomainEvent> {
+            Event::none()
+        }
+
+        fn publish(&self, event: GlobalDomainEvent) {
+            self.events
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(event);
+        }
+
+        fn subscribe(&self, handler: Listener<GlobalDomainEvent>) -> DisposableHandle {
+            Event::<GlobalDomainEvent>::none().subscribe(move |event| handler(event))
+        }
     }
 
     impl StubAuthLegacyService {
@@ -565,12 +716,20 @@ mod tests {
             default_model: Some("kimi-for-coding".into()),
             managed_provider: None,
         }));
+        let config = Arc::new(StubConfigService::default());
+        let events = Arc::new(RecordingEventService::default());
         let server = start_server(ServerStartOptions {
             port: Some(0),
             home_dir: Some(home.path().to_owned()),
             debug_endpoints: true,
             auth_legacy_service: Some(AuthLegacyServiceHandle(
                 Arc::clone(&auth) as Arc<dyn AuthLegacyServiceContract>
+            )),
+            config_service: Some(ConfigServiceHandle(
+                Arc::clone(&config) as Arc<dyn ConfigServiceContract>
+            )),
+            event_service: Some(EventServiceHandle(
+                Arc::clone(&events) as Arc<dyn EventServiceContract>
             )),
             core_bridge: Some(Arc::clone(&bridge) as Arc<dyn AgentCoreBridge>),
             ..ServerStartOptions::default()
@@ -606,7 +765,14 @@ mod tests {
         {
             let bridge_specs = specs
                 .iter()
-                .filter(|spec| spec.operation != CoreOperation::GetAuth)
+                .filter(|spec| {
+                    !matches!(
+                        spec.operation,
+                        CoreOperation::GetAuth
+                            | CoreOperation::GetConfig
+                            | CoreOperation::UpdateConfig
+                    )
+                })
                 .collect::<Vec<_>>();
             let calls = bridge
                 .calls
@@ -620,6 +786,89 @@ mod tests {
             }
         }
         assert_eq!(auth.calls.load(Ordering::SeqCst), 1);
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn config_routes_call_config_and_event_services() {
+        let home = tempfile::tempdir().unwrap();
+        let config = Arc::new(StubConfigService::with_values(
+            serde_json::json!({
+                "providers": {
+                    "kimi": {"type": "openai", "apiKey": "initial-secret"}
+                },
+                "defaultPermissionMode": "ask"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        ));
+        let events = Arc::new(RecordingEventService::default());
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            config_service: Some(ConfigServiceHandle(
+                Arc::clone(&config) as Arc<dyn ConfigServiceContract>
+            )),
+            event_service: Some(EventServiceHandle(
+                Arc::clone(&events) as Arc<dyn EventServiceContract>
+            )),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let token = server.auth_token_service.get_token();
+        let response = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/config")
+                    .header("host", "localhost")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .header("x-request-id", "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+                    .body(Body::from(
+                        r#"{
+                            "providers":{"kimi":{"type":"openai","api_key":"new-secret"}},
+                            "default_model":"kimi-k2",
+                            "yolo":true
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["code"], 0);
+        assert_eq!(body["request_id"], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(body["data"]["default_model"], "kimi-k2");
+        assert_eq!(body["data"]["default_permission_mode"], "yolo");
+        assert_eq!(body["data"]["yolo"], true);
+        assert_eq!(body["data"]["providers"]["kimi"]["has_api_key"], true);
+        assert!(body["data"]["providers"]["kimi"].get("api_key").is_none());
+
+        {
+            let sets = config.sets.lock().unwrap();
+            assert_eq!(
+                sets.iter().map(|call| call.0.as_str()).collect::<Vec<_>>(),
+                vec!["providers", "defaultModel", "defaultPermissionMode"]
+            );
+        }
+        {
+            let events = events.events.lock().unwrap();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].event_type, "event.config.changed");
+            assert_eq!(
+                events[0].payload["changedFields"],
+                serde_json::json!(["providers", "default_model", "yolo"])
+            );
+        }
         server.close().await.unwrap();
     }
 

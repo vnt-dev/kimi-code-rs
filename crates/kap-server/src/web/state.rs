@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use kimi_code_agent_core_v2::_base::utils::iso_date_time::{IsoDateTime, now_iso_date_time};
 use kimi_code_agent_core_v2::app::auth_legacy::AuthLegacyServiceHandle;
+use kimi_code_agent_core_v2::app::config::ConfigServiceHandle;
+use kimi_code_agent_core_v2::app::event::EventServiceHandle;
 use tokio::sync::watch;
 
 use crate::middleware::hostnames::HostCheckOptions;
@@ -33,6 +35,8 @@ pub struct AppState {
     pub started_at: IsoDateTime,
     pub shutdown: watch::Sender<bool>,
     pub auth_legacy_service: Option<AuthLegacyServiceHandle>,
+    pub config_service: Option<ConfigServiceHandle>,
+    pub event_service: Option<EventServiceHandle>,
     pub core_bridge: Arc<dyn AgentCoreBridge>,
     pub web_assets_dir: Option<PathBuf>,
 }
