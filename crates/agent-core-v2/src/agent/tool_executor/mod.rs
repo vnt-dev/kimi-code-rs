@@ -4,6 +4,8 @@
 
 mod contract;
 mod tool_hooks;
+mod tool_scheduler;
 
 pub use contract::*;
 pub use tool_hooks::*;
+pub use tool_scheduler::*;
