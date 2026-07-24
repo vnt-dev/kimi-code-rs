@@ -1,5 +1,6 @@
 //! Session-scoped agent services.
 
+pub mod agent_lifecycle;
 pub mod agent_profile_catalog;
 pub mod approval;
 pub mod interaction;
