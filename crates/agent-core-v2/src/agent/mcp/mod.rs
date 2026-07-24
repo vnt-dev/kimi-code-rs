@@ -1,5 +1,6 @@
 //! Model Context Protocol configuration and services.
 
+pub mod client_http;
 pub mod client_remote;
 pub mod client_shared;
 pub mod client_stdio;
@@ -14,6 +15,7 @@ pub mod tool_naming;
 pub mod tools;
 pub mod types;
 
+pub use client_http::*;
 pub use client_remote::*;
 pub use client_shared::*;
 pub use client_stdio::*;
