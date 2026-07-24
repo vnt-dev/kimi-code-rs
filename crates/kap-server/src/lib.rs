@@ -6,6 +6,7 @@
 //! package exposed them directly.
 
 pub mod instance_registry;
+pub mod launch;
 pub mod middleware;
 pub mod request_id;
 pub mod request_logging;
