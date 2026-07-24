@@ -4,6 +4,16 @@
 //! `gateImageFormatParts()`. Compression and crop codecs are migrated in a
 //! later unit; this pure gate intentionally precedes every codec path.
 
+use std::{
+    io::Cursor,
+    sync::{Mutex, OnceLock},
+};
+
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use image::{
+    DynamicImage, ImageFormat, ImageReader, codecs::jpeg::JpegEncoder, imageops::FilterType,
+};
+
 use crate::kosong::contract::message::{ContentPart, MediaUrl};
 
 use super::{
@@ -11,6 +21,249 @@ use super::{
     is_data_url, is_model_accepted_image_mime, normalize_image_mime, parse_image_data_url,
     resolve_effective_image_mime, unsupported_image_mime_from_url,
 };
+
+pub const MAX_IMAGE_EDGE_PX: u32 = 2000;
+pub const IMAGE_BYTE_BUDGET: usize = 3_932_160;
+pub const READ_IMAGE_BYTE_BUDGET: usize = 262_144;
+pub const MAX_IMAGE_DECODE_BYTES: usize = 67_108_864;
+const MAX_DECODE_PIXELS: u64 = 100_000_000;
+
+static CONFIGURED_MAX_EDGE: OnceLock<Mutex<Option<u32>>> = OnceLock::new();
+static CONFIGURED_READ_BUDGET: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
+
+pub fn set_configured_max_image_edge_px(value: Option<f64>) {
+    *CONFIGURED_MAX_EDGE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap() = value
+        .filter(|v| v.is_finite() && *v > 0.0 && v.fract() == 0.0)
+        .map(|v| v as u32);
+}
+pub fn resolve_max_image_edge_px() -> u32 {
+    CONFIGURED_MAX_EDGE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .unwrap_or(MAX_IMAGE_EDGE_PX)
+}
+pub fn set_configured_read_image_byte_budget(value: Option<f64>) {
+    *CONFIGURED_READ_BUDGET
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap() = value
+        .filter(|v| v.is_finite() && *v > 0.0 && v.fract() == 0.0)
+        .map(|v| v as usize);
+}
+pub fn resolve_read_image_byte_budget() -> usize {
+    CONFIGURED_READ_BUDGET
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .unwrap_or(READ_IMAGE_BYTE_BUDGET)
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CompressImageOptions {
+    pub max_edge: Option<u32>,
+    pub byte_budget: Option<usize>,
+    pub max_decode_bytes: Option<usize>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompressImageResult {
+    pub data: Vec<u8>,
+    pub mime_type: String,
+    pub width: i64,
+    pub height: i64,
+    pub original_width: i64,
+    pub original_height: i64,
+    pub changed: bool,
+    pub original_byte_length: usize,
+    pub final_byte_length: usize,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompressBase64Result {
+    pub base64: String,
+    pub mime_type: String,
+    pub width: i64,
+    pub height: i64,
+    pub original_width: i64,
+    pub original_height: i64,
+    pub changed: bool,
+    pub original_byte_length: usize,
+    pub final_byte_length: usize,
+}
+
+// Original: compressImageForModel(). Decode and encoding failures are deliberately best-effort passthroughs.
+pub fn compress_image_for_model(
+    bytes: &[u8],
+    mime_type: &str,
+    options: &CompressImageOptions,
+) -> CompressImageResult {
+    let normalized = normalize_image_mime(mime_type);
+    let dims = super::sniff_image_dimensions(bytes);
+    let passthrough = || CompressImageResult {
+        data: bytes.into(),
+        mime_type: mime_type.into(),
+        width: dims.as_ref().map_or(0, |d| d.width),
+        height: dims.as_ref().map_or(0, |d| d.height),
+        original_width: dims.as_ref().map_or(0, |d| d.width),
+        original_height: dims.as_ref().map_or(0, |d| d.height),
+        changed: false,
+        original_byte_length: bytes.len(),
+        final_byte_length: bytes.len(),
+    };
+    if bytes.is_empty()
+        || !matches!(
+            normalized.as_str(),
+            "image/png" | "image/jpeg" | "image/webp"
+        )
+        || is_animated_webp(bytes)
+    {
+        return passthrough();
+    }
+    let max_edge = options.max_edge.unwrap_or_else(resolve_max_image_edge_px);
+    let budget = options.byte_budget.unwrap_or(IMAGE_BYTE_BUDGET);
+    let max_decode = options.max_decode_bytes.unwrap_or(MAX_IMAGE_DECODE_BYTES);
+    let longest = dims.as_ref().map_or(0, |d| d.width.max(d.height));
+    if bytes.len() <= budget && (longest == 0 || longest <= max_edge as i64) {
+        return passthrough();
+    }
+    if bytes.len() > max_decode
+        || dims.as_ref().is_some_and(|d| {
+            d.width <= 0
+                || d.height <= 0
+                || (d.width as u64).saturating_mul(d.height as u64) > MAX_DECODE_PIXELS
+        })
+    {
+        return passthrough();
+    }
+    let Ok(image) =
+        ImageReader::with_format(Cursor::new(bytes), format_for_mime(&normalized)).decode()
+    else {
+        return passthrough();
+    };
+    let (ow, oh) = (image.width(), image.height());
+    let resized = fit_within_edge(image, max_edge);
+    let candidates = encode_candidates(&resized, normalized == "image/jpeg");
+    let Some((data, output_mime)) = candidates.into_iter().min_by_key(|(data, _)| data.len())
+    else {
+        return passthrough();
+    };
+    if data.len() >= bytes.len() && resized.width() == ow && resized.height() == oh {
+        return passthrough();
+    }
+    CompressImageResult {
+        final_byte_length: data.len(),
+        data,
+        mime_type: output_mime.into(),
+        width: resized.width() as i64,
+        height: resized.height() as i64,
+        original_width: ow as i64,
+        original_height: oh as i64,
+        changed: true,
+        original_byte_length: bytes.len(),
+    }
+}
+
+// Original: compressBase64ForModel().
+pub fn compress_base64_for_model(
+    base64: &str,
+    mime_type: &str,
+    options: &CompressImageOptions,
+) -> CompressBase64Result {
+    let approx = base64.len().saturating_mul(3) / 4;
+    let max = options.max_decode_bytes.unwrap_or(MAX_IMAGE_DECODE_BYTES);
+    if approx > max {
+        return CompressBase64Result {
+            base64: base64.into(),
+            mime_type: mime_type.into(),
+            width: 0,
+            height: 0,
+            original_width: 0,
+            original_height: 0,
+            changed: false,
+            original_byte_length: approx,
+            final_byte_length: approx,
+        };
+    }
+    let Ok(bytes) = STANDARD.decode(base64) else {
+        return CompressBase64Result {
+            base64: base64.into(),
+            mime_type: mime_type.into(),
+            width: 0,
+            height: 0,
+            original_width: 0,
+            original_height: 0,
+            changed: false,
+            original_byte_length: 0,
+            final_byte_length: 0,
+        };
+    };
+    let result = compress_image_for_model(&bytes, mime_type, options);
+    CompressBase64Result {
+        base64: if result.changed {
+            STANDARD.encode(&result.data)
+        } else {
+            base64.into()
+        },
+        mime_type: if result.changed {
+            result.mime_type.clone()
+        } else {
+            mime_type.into()
+        },
+        width: result.width,
+        height: result.height,
+        original_width: result.original_width,
+        original_height: result.original_height,
+        changed: result.changed,
+        original_byte_length: result.original_byte_length,
+        final_byte_length: result.final_byte_length,
+    }
+}
+
+fn format_for_mime(mime: &str) -> ImageFormat {
+    match mime {
+        "image/png" => ImageFormat::Png,
+        "image/jpeg" => ImageFormat::Jpeg,
+        _ => ImageFormat::WebP,
+    }
+}
+fn fit_within_edge(image: DynamicImage, edge: u32) -> DynamicImage {
+    let longest = image.width().max(image.height());
+    if longest <= edge {
+        image
+    } else {
+        image.resize(
+            (image.width() as u64 * edge as u64 / longest as u64).max(1) as u32,
+            (image.height() as u64 * edge as u64 / longest as u64).max(1) as u32,
+            FilterType::Lanczos3,
+        )
+    }
+}
+fn encode_candidates(image: &DynamicImage, jpeg_only: bool) -> Vec<(Vec<u8>, &'static str)> {
+    let mut out = Vec::new();
+    if !jpeg_only {
+        let mut png = Cursor::new(Vec::new());
+        if image.write_to(&mut png, ImageFormat::Png).is_ok() {
+            out.push((png.into_inner(), "image/png"));
+        }
+    }
+    for quality in [80, 60, 40, 20] {
+        let mut jpeg = Vec::new();
+        if JpegEncoder::new_with_quality(&mut jpeg, quality)
+            .encode_image(image)
+            .is_ok()
+        {
+            out.push((jpeg, "image/jpeg"));
+        }
+    }
+    out
+}
+fn is_animated_webp(bytes: &[u8]) -> bool {
+    bytes
+        .windows(4)
+        .any(|chunk| chunk == b"ANIM" || chunk == b"ANMF")
+}
 
 // Original: gateImageFormatParts().
 pub fn gate_image_format_parts(parts: &[ContentPart]) -> Vec<ContentPart> {
@@ -224,5 +477,26 @@ mod tests {
         assert!(extracted.captions[0].contains("4000x3000 image/png (3.8 MB)"));
         assert_eq!(format_byte_size(1023.0), "1023 B");
         assert_eq!(format_byte_size(1536.0), "2 KB");
+    }
+    #[test]
+    fn compresses_oversized_dimensions_and_leaves_small_images_unchanged() {
+        let image = DynamicImage::new_rgb8(4, 2);
+        let mut encoded = Cursor::new(Vec::new());
+        image.write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let bytes = encoded.into_inner();
+        let unchanged =
+            compress_image_for_model(&bytes, "image/png", &CompressImageOptions::default());
+        assert!(!unchanged.changed);
+        let compressed = compress_image_for_model(
+            &bytes,
+            "image/png",
+            &CompressImageOptions {
+                max_edge: Some(2),
+                ..Default::default()
+            },
+        );
+        assert!(compressed.changed);
+        assert_eq!((compressed.width, compressed.height), (2, 1));
+        assert_eq!(compressed.original_byte_length, bytes.len());
     }
 }
