@@ -7,6 +7,7 @@ mod contract;
 mod execution;
 mod preflight;
 mod result_normalization;
+mod telemetry;
 mod tool_hooks;
 mod tool_scheduler;
 
@@ -15,5 +16,6 @@ pub use contract::*;
 pub use execution::*;
 pub use preflight::*;
 pub use result_normalization::*;
+pub use telemetry::*;
 pub use tool_hooks::*;
 pub use tool_scheduler::*;
