@@ -4,6 +4,7 @@
 use std::{error::Error, fmt, sync::Arc};
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UrlFetchKind {
@@ -20,6 +21,7 @@ pub struct UrlFetchResult {
 #[derive(Clone, Debug, Default)]
 pub struct UrlFetchOptions {
     pub tool_call_id: Option<String>,
+    pub cancellation: Option<CancellationToken>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
