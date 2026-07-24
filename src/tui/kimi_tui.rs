@@ -7,6 +7,10 @@ use crate::tui::{
         render::truncate_to_width,
     },
     controllers::{
+        dialog_focus::{
+            DialogOutcome, MountedDialog, help_dialog, migration_notice_dialog, permission_dialog,
+            settings_dialog, theme_dialog,
+        },
         slash_autocomplete::{SlashAutocompleteSurface, build_builtin_slash_autocomplete},
         slash_command_surface::{SlashCommandSurfaceAction, resolve_slash_command_surface},
     },
@@ -43,6 +47,7 @@ pub struct KimiTui {
     terminal_rows: usize,
     startup_warning: Option<String>,
     slash_autocomplete: SlashAutocompleteSurface,
+    active_dialog: Option<MountedDialog>,
 }
 
 impl KimiTui {
@@ -72,6 +77,7 @@ impl KimiTui {
             terminal_rows: 24,
             startup_warning,
             slash_autocomplete,
+            active_dialog: None,
         }
     }
 
@@ -155,6 +161,46 @@ impl KimiTui {
         TuiControl::Continue
     }
 
+    fn mount_dialog(&mut self, dialog: MountedDialog) {
+        // Original: KimiTUI.mountEditorReplacement().
+        self.editor.cancel_autocomplete();
+        self.editor.set_focused(false);
+        self.active_dialog = Some(dialog);
+        self.status = Some("Dialog open · Esc to cancel".to_owned());
+    }
+
+    fn restore_editor(&mut self) {
+        // Original: KimiTUI.restoreEditor().
+        self.active_dialog = None;
+        self.editor.set_focused(true);
+    }
+
+    fn handle_dialog_input(&mut self, data: &str) -> TuiControl {
+        let Some(dialog) = &mut self.active_dialog else {
+            return TuiControl::Continue;
+        };
+        dialog.handle_input(data);
+        let Some(outcome) = dialog.take_outcome() else {
+            return TuiControl::Continue;
+        };
+
+        self.restore_editor();
+        match outcome {
+            DialogOutcome::Cancelled => {
+                self.status = Some("Dialog closed.".to_owned());
+            }
+            DialogOutcome::Selected(message) => {
+                // MIGRATION-TODO:
+                // Original selector callbacks update KimiHarness session or
+                // persisted TUI configuration. Until those v2 services are
+                // composed, preserve the selected value as a visible result.
+                self.transcript.push(TranscriptLine::System(message));
+                self.status = Some("Selection acknowledged.".to_owned());
+            }
+        }
+        TuiControl::Continue
+    }
+
     fn submit(&mut self, text: String) -> TuiControl {
         let text = text.trim().to_owned();
         if text.is_empty() {
@@ -192,10 +238,8 @@ impl KimiTui {
                     Some("Local transcript cleared; v2 session creation is pending.".to_owned());
                 TuiControl::Continue
             }
-            SlashCommandSurfaceAction::ShowHelp(lines) => {
-                self.transcript
-                    .extend(lines.into_iter().map(TranscriptLine::System));
-                self.status = Some("Help".to_owned());
+            SlashCommandSurfaceAction::ShowHelp => {
+                self.mount_dialog(help_dialog());
                 TuiControl::Continue
             }
             SlashCommandSurfaceAction::ShowVersion(version) => {
@@ -213,15 +257,13 @@ impl KimiTui {
                 // slash-command registry into controllers and session
                 // services. The registered operation and its arguments have
                 // been accepted, but its v2-backed behavior is not composed.
-                let argument_notice = if args.is_empty() {
-                    String::new()
-                } else {
-                    format!(" Arguments received: {args}")
+                let dialog = match command_name {
+                    "settings" => settings_dialog(),
+                    "permission" => permission_dialog(),
+                    "theme" => theme_dialog(),
+                    _ => migration_notice_dialog(command_name, &args),
                 };
-                self.transcript.push(TranscriptLine::System(format!(
-                    "/{command_name} is available, but its backend is not connected yet.{argument_notice}"
-                )));
-                self.status = Some("Command acknowledged.".to_owned());
+                self.mount_dialog(dialog);
                 TuiControl::Continue
             }
             SlashCommandSurfaceAction::Unknown(name) => {
@@ -270,8 +312,12 @@ impl Component for KimiTui {
             self.transcript.push(TranscriptLine::System(warning));
         }
 
-        let editor_lines = self.editor.render_editor(width);
-        let reserved = editor_lines.len().saturating_add(5);
+        let input_lines = if let Some(dialog) = &mut self.active_dialog {
+            dialog.render(width)
+        } else {
+            self.editor.render_editor(width)
+        };
+        let reserved = input_lines.len().saturating_add(5);
         let transcript_capacity = self.terminal_rows.saturating_sub(reserved).max(1);
         let transcript_start = self.transcript.len().saturating_sub(transcript_capacity);
         lines.extend(
@@ -285,7 +331,7 @@ impl Component for KimiTui {
             let status = current_theme().fg(ColorToken::TextMuted, status);
             lines.push(truncate_to_width(&status, width, "…", false));
         }
-        lines.extend(editor_lines);
+        lines.extend(input_lines);
         lines
     }
 
@@ -310,6 +356,9 @@ impl TuiApp for KimiTui {
     async fn handle_terminal_input(&mut self, data: &str) -> TuiControl {
         if data == "\u{1b}[I" || data == "\u{1b}[O" {
             return TuiControl::Continue;
+        }
+        if self.active_dialog.is_some() {
+            return self.handle_dialog_input(data);
         }
         let outcome = self.editor.handle_input_event(data);
         for action in outcome.actions {
@@ -351,12 +400,20 @@ mod tests {
         for input in ["/", "h", "e", "l", "p", "\r"] {
             assert_eq!(tui.handle_terminal_input(input).await, TuiControl::Continue);
         }
-        assert!(tui.render(80).join("\n").contains("Slash commands"));
+        assert!(tui.render(80).join("\n").contains("Keyboard shortcuts"));
+        assert_eq!(
+            tui.handle_terminal_input("\u{1b}").await,
+            TuiControl::Continue
+        );
 
         for input in ["/", "m", "o", "d", "e", "l", "\r"] {
             assert_eq!(tui.handle_terminal_input(input).await, TuiControl::Continue);
         }
-        assert!(tui.render(80).join("\n").contains("/model is available"));
+        assert!(
+            tui.render(80)
+                .join("\n")
+                .contains("v2 backend is not connected")
+        );
     }
 
     #[test]
@@ -364,14 +421,15 @@ mod tests {
         let mut tui = KimiTui::new("1.2.3", None);
         tui.handle_terminal_resize(80, 40);
 
-        for input in ["/version", "/goal ship it", "/missing", "/help"] {
+        for input in ["/version", "/goal ship it", "/missing"] {
             tui.submit(input.to_owned());
+            if tui.active_dialog.is_some() {
+                tui.handle_dialog_input("\u{1b}");
+            }
         }
         let rendered = tui.render(100).join("\n");
         assert!(rendered.contains("Kimi Code v1.2.3"));
-        assert!(rendered.contains("Arguments received: ship it"));
         assert!(rendered.contains("Unknown command: /missing"));
-        assert!(rendered.contains("/yolo"));
 
         assert_eq!(tui.submit("/q".to_owned()), TuiControl::Exit);
     }
@@ -407,6 +465,33 @@ mod tests {
         assert!(tui.editor.is_showing_autocomplete());
 
         assert_eq!(tui.handle_terminal_input("\r").await, TuiControl::Continue);
-        assert!(tui.render(100).join("\n").contains("/model is available"));
+        assert!(
+            tui.render(100)
+                .join("\n")
+                .contains("v2 backend is not connected")
+        );
+    }
+
+    #[tokio::test]
+    async fn dialog_replaces_editor_focus_and_restores_existing_input() {
+        use crate::tui::components::core::CURSOR_MARKER;
+
+        let mut tui = KimiTui::with_work_dir("0.1.0", None, PathBuf::from("."));
+        tui.editor.set_text("draft");
+        assert!(tui.render(100).join("\n").contains(CURSOR_MARKER));
+
+        tui.submit("/settings".to_owned());
+        let dialog = tui.render(100).join("\n");
+        assert!(dialog.contains("Settings"));
+        assert!(!dialog.contains(CURSOR_MARKER));
+        assert_eq!(tui.editor_text(), "draft");
+
+        assert_eq!(
+            tui.handle_terminal_input("\u{1b}").await,
+            TuiControl::Continue
+        );
+        let restored = tui.render(100).join("\n");
+        assert!(restored.contains(CURSOR_MARKER));
+        assert_eq!(tui.editor_text(), "draft");
     }
 }

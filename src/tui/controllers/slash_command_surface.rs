@@ -1,7 +1,6 @@
-use crate::tui::commands::{
-    parse::parse_slash_input,
-    registry::{BUILTIN_SLASH_COMMANDS, find_built_in_slash_command},
-};
+#[cfg(test)]
+use crate::tui::commands::registry::BUILTIN_SLASH_COMMANDS;
+use crate::tui::commands::{parse::parse_slash_input, registry::find_built_in_slash_command};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlashCommandSurfaceAction {
@@ -9,7 +8,7 @@ pub enum SlashCommandSurfaceAction {
     Exit,
     ClearTranscript,
     ShowVersion(String),
-    ShowHelp(Vec<String>),
+    ShowHelp,
     Pending {
         command_name: &'static str,
         args: String,
@@ -40,7 +39,7 @@ pub fn resolve_slash_command_surface(input: &str, version: &str) -> SlashCommand
 
     match command.name {
         "exit" => SlashCommandSurfaceAction::Exit,
-        "help" => SlashCommandSurfaceAction::ShowHelp(help_lines()),
+        "help" => SlashCommandSurfaceAction::ShowHelp,
         "version" => SlashCommandSurfaceAction::ShowVersion(format!("Kimi Code v{version}")),
         "new" => SlashCommandSurfaceAction::ClearTranscript,
         command_name => SlashCommandSurfaceAction::Pending {
@@ -48,30 +47,6 @@ pub fn resolve_slash_command_surface(input: &str, version: &str) -> SlashCommand
             args: parsed.args,
         },
     }
-}
-
-fn help_lines() -> Vec<String> {
-    let mut commands = BUILTIN_SLASH_COMMANDS.iter().collect::<Vec<_>>();
-    commands.sort_by(|left, right| {
-        right
-            .priority
-            .unwrap_or_default()
-            .cmp(&left.priority.unwrap_or_default())
-            .then_with(|| left.name.cmp(right.name))
-    });
-
-    let mut lines = vec![
-        "Slash commands (backend-dependent commands currently return a migration notice):"
-            .to_owned(),
-    ];
-    lines.extend(commands.chunks(6).map(|chunk| {
-        chunk
-            .iter()
-            .map(|command| format!("/{}", command.name))
-            .collect::<Vec<_>>()
-            .join("  ")
-    }));
-    lines
 }
 
 #[cfg(test)]
@@ -126,18 +101,5 @@ mod tests {
             resolve_slash_command_surface("/", "1.2.3"),
             SlashCommandSurfaceAction::Empty
         );
-    }
-
-    #[test]
-    fn help_contains_all_canonical_commands() {
-        let SlashCommandSurfaceAction::ShowHelp(lines) =
-            resolve_slash_command_surface("/help", "1.2.3")
-        else {
-            panic!("help should produce visible lines");
-        };
-        let help = lines.join("\n");
-        for command in BUILTIN_SLASH_COMMANDS {
-            assert!(help.contains(&format!("/{}", command.name)));
-        }
     }
 }
