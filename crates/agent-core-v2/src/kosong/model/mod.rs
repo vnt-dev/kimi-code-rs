@@ -17,8 +17,10 @@ pub mod types;
 pub use catalog::{
     AuthProvider, AuthRequestOptions, Model, ModelCatalogItem, ModelPingResult,
     ProviderCatalogItem, ProviderCatalogStatus, ProviderCredentialState, SetDefaultModelResponse,
-    StaticAuthProvider, global_default_for_provider, model_ids_for_provider, to_protocol_model,
-    to_protocol_model_fallback, to_protocol_provider,
+    StaticAuthProvider, build_protocol_provider_options, global_default_for_provider,
+    has_configured_api_key, location_from_vertex_ai_base_url, model_ids_for_provider,
+    profile_for_attribution, resolve_model_capabilities, resolve_outbound_headers,
+    strip_trailing_v1, to_protocol_model, to_protocol_model_fallback, to_protocol_provider,
 };
 pub use config_section::{
     MODELS_SCHEMA, models_from_toml, models_to_toml, register_models_config_section,
