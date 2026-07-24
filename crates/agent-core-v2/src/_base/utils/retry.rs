@@ -1,5 +1,6 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
+use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -12,7 +13,8 @@ const MAX_DELAY_MS: f64 = 32_000.0;
 const RETRY_FACTOR: f64 = 2.0;
 const JITTER_FACTOR: f64 = 0.25;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RetryErrorFields {
     pub error_name: String,
     pub error_message: String,

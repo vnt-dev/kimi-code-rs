@@ -18,6 +18,7 @@ pub mod profile;
 pub mod prompt;
 pub mod scope_context;
 pub mod skill;
+pub mod step_retry;
 pub mod swarm;
 pub mod system_reminder;
 pub mod task;
