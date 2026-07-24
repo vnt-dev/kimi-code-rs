@@ -14,10 +14,28 @@ use crate::{
         instantiation::ServiceIdentifier,
         lifecycle::{DisposableHandle, to_disposable},
     },
-    agent::tool_executor::ResolvedToolExecutionHookContext,
+    agent::{
+        permission_mode::AgentPermissionModeServiceContract,
+        permission_rules::AgentPermissionRulesServiceContract, plan::AgentPlanServiceContract,
+        swarm::AgentSwarmServiceContract, tool_executor::ResolvedToolExecutionHookContext,
+    },
+    app::telemetry::TelemetryServiceContract,
+    os::interface::host_environment::HostEnvironment,
+    session::workspace_context::SessionWorkspaceContextContract,
 };
 
-use super::{PermissionPolicy, PermissionPolicyResult};
+use super::{
+    AgentSwarmExclusiveDenyPermissionPolicy, AutoModeApprovePermissionPolicy,
+    AutoModeAskUserQuestionDenyPermissionPolicy, DefaultToolApprovePermissionPolicy,
+    ExitPlanModeReviewAskPermissionPolicy, FallbackAskPermissionPolicy,
+    GitControlPathAccessAskPermissionPolicy, GitCwdWriteApprovePermissionPolicy,
+    GoalStartReviewAskPermissionPolicy, PermissionPolicy, PermissionPolicyResult,
+    PlanModeGuardDenyPermissionPolicy, PlanModeToolApprovePermissionPolicy,
+    SensitiveFileAccessAskPermissionPolicy, SessionApprovalHistoryPermissionPolicy,
+    SwarmModeAgentSwarmApprovePermissionPolicy, UserConfiguredAllowPermissionPolicy,
+    UserConfiguredAskPermissionPolicy, UserConfiguredDenyPermissionPolicy,
+    YoloModeApprovePermissionPolicy,
+};
 
 #[derive(Clone)]
 pub struct PermissionPolicyEvaluation {
@@ -56,6 +74,58 @@ impl AgentPermissionPolicyService {
             policies,
             dynamic_policies: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    // Original: AgentPermissionPolicyService.constructor(). Rust receives the
+    // already-resolved dependencies explicitly because the current DI core
+    // cannot retrieve bare trait service identifiers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_dependencies(
+        mode: Arc<dyn AgentPermissionModeServiceContract>,
+        rules: Arc<dyn AgentPermissionRulesServiceContract>,
+        plan: Arc<dyn AgentPlanServiceContract>,
+        swarm: Arc<dyn AgentSwarmServiceContract>,
+        telemetry: Arc<dyn TelemetryServiceContract>,
+        environment: Arc<dyn HostEnvironment>,
+        workspace: Arc<dyn SessionWorkspaceContextContract>,
+    ) -> Self {
+        let policies: Vec<Arc<dyn PermissionPolicy>> = vec![
+            Arc::new(AgentSwarmExclusiveDenyPermissionPolicy),
+            Arc::new(AutoModeAskUserQuestionDenyPermissionPolicy::new(
+                Arc::clone(&mode),
+            )),
+            Arc::new(PlanModeGuardDenyPermissionPolicy::new(Arc::clone(&plan))),
+            Arc::new(UserConfiguredDenyPermissionPolicy::new(Arc::clone(&rules))),
+            Arc::new(AutoModeApprovePermissionPolicy::new(Arc::clone(&mode))),
+            Arc::new(SessionApprovalHistoryPermissionPolicy::new(Arc::clone(
+                &rules,
+            ))),
+            Arc::new(UserConfiguredAskPermissionPolicy::new(Arc::clone(&rules))),
+            Arc::new(UserConfiguredAllowPermissionPolicy::new(Arc::clone(&rules))),
+            Arc::new(ExitPlanModeReviewAskPermissionPolicy::new(
+                Arc::clone(&plan),
+                Arc::clone(&mode),
+                Arc::clone(&telemetry),
+            )),
+            Arc::new(GoalStartReviewAskPermissionPolicy::new(Arc::clone(&mode))),
+            Arc::new(PlanModeToolApprovePermissionPolicy::new(Arc::clone(&plan))),
+            Arc::new(SensitiveFileAccessAskPermissionPolicy),
+            Arc::new(GitControlPathAccessAskPermissionPolicy::new(
+                Arc::clone(&environment),
+                Arc::clone(&workspace),
+            )),
+            Arc::new(YoloModeApprovePermissionPolicy::new(Arc::clone(&mode))),
+            Arc::new(SwarmModeAgentSwarmApprovePermissionPolicy::new(Arc::clone(
+                &swarm,
+            ))),
+            Arc::new(DefaultToolApprovePermissionPolicy),
+            Arc::new(GitCwdWriteApprovePermissionPolicy::new(
+                environment,
+                workspace,
+            )),
+            Arc::new(FallbackAskPermissionPolicy),
+        ];
+        Self::new(policies)
     }
 }
 
