@@ -3,12 +3,17 @@
 
 pub mod contract;
 pub mod explicit_file_agent_source;
+pub mod extra_file_agent_source;
 pub mod project_file_agent_source;
 
 pub use contract::*;
 pub use explicit_file_agent_source::{
     EXPLICIT_FILE_AGENT_SOURCE_ID, ExplicitFileAgentSource, ExplicitFileAgentSourceHandle,
     register_explicit_file_agent_source,
+};
+pub use extra_file_agent_source::{
+    EXTRA_FILE_AGENT_SOURCE_ID, ExtraFileAgentSource, ExtraFileAgentSourceHandle,
+    register_extra_file_agent_source,
 };
 pub use project_file_agent_source::{
     PROJECT_FILE_AGENT_SOURCE_ID, ProjectFileAgentSource, ProjectFileAgentSourceHandle,
