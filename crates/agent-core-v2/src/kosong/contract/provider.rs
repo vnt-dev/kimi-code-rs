@@ -193,6 +193,7 @@ pub struct VideoUploadInput {
     pub filename: Option<String>,
 }
 
+#[derive(Clone)]
 pub enum VideoUploadSource {
     Location(String),
     Data(VideoUploadInput),

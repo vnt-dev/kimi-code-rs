@@ -2,12 +2,13 @@
 //!
 //! Original: `packages/agent-core-v2/src/kosong/model/modelRequester.ts`.
 
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{error::Error, fmt, future::Future, pin::Pin, sync::Arc};
 
 use futures_util::stream::BoxStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::kosong::contract::{
+    errors::ChatProviderError,
     message::{ContentPart, Message, StreamedMessagePart},
     provider::{
         FinishReason, ProviderError, ResponseFormat, SamplingOptions, ThinkingEffort,
@@ -16,6 +17,8 @@ use crate::kosong::contract::{
     tool::Tool,
     usage::TokenUsage,
 };
+
+use crate::_base::errors::errors::Error2;
 
 use super::catalog::Model;
 
@@ -54,6 +57,30 @@ pub enum ModelRequestEvent {
     Timing(ModelRequestTiming),
 }
 
+#[derive(Clone, Debug)]
+pub enum ModelRequestError {
+    Abort(ChatProviderError),
+    Coded(Error2),
+}
+
+impl fmt::Display for ModelRequestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Abort(error) => error.fmt(formatter),
+            Self::Coded(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for ModelRequestError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Abort(error) => Some(error),
+            Self::Coded(error) => Some(error),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ModelRequestParams {
     pub cache_key: Option<String>,
@@ -66,7 +93,7 @@ pub struct ModelRequestParams {
     pub on_trace_id: Option<TraceIdCallback>,
 }
 
-pub type ModelRequestStream = BoxStream<'static, Result<ModelRequestEvent, ProviderError>>;
+pub type ModelRequestStream = BoxStream<'static, Result<ModelRequestEvent, ModelRequestError>>;
 pub type UploadVideoFuture =
     Pin<Box<dyn Future<Output = Result<Option<ContentPart>, ProviderError>> + Send + 'static>>;
 

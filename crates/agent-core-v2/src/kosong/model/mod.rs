@@ -36,7 +36,8 @@ pub use host_request_headers::{
     register_host_request_headers,
 };
 pub use model_requester::{
-    ModelRequestEvent, ModelRequestInput, ModelRequestParams, ModelRequestStream,
-    ModelRequestTiming, ModelRequester, UploadVideoFuture, effective_max_completion_tokens,
+    ModelRequestError, ModelRequestEvent, ModelRequestInput, ModelRequestParams,
+    ModelRequestStream, ModelRequestTiming, ModelRequester, UploadVideoFuture,
+    effective_max_completion_tokens,
 };
-pub use model_requester_impl::build_stream_timing;
+pub use model_requester_impl::{ModelRequesterImpl, build_stream_timing};
