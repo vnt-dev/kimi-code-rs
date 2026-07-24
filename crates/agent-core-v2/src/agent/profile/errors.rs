@@ -13,6 +13,29 @@ pub const PROFILE_UNKNOWN: &str = "profile.unknown";
 pub const PROFILE_ALREADY_BOUND: &str = "profile.already_bound";
 pub const PROFILE_NOT_BOUND: &str = "profile.not_bound";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProfileErrorCode {
+    ModelNotConfigured,
+    ModelConfigInvalid,
+    ThinkingAliasConflict,
+    ProfileUnknown,
+    ProfileAlreadyBound,
+    ProfileNotBound,
+}
+
+impl ProfileErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ModelNotConfigured => MODEL_NOT_CONFIGURED,
+            Self::ModelConfigInvalid => MODEL_CONFIG_INVALID,
+            Self::ThinkingAliasConflict => THINKING_ALIAS_CONFLICT,
+            Self::ProfileUnknown => PROFILE_UNKNOWN,
+            Self::ProfileAlreadyBound => PROFILE_ALREADY_BOUND,
+            Self::ProfileNotBound => PROFILE_NOT_BOUND,
+        }
+    }
+}
+
 pub static PROFILE_ERRORS: ErrorDomain = ErrorDomain {
     codes: &[
         ("MODEL_NOT_CONFIGURED", MODEL_NOT_CONFIGURED),
