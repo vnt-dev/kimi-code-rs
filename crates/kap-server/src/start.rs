@@ -725,6 +725,12 @@ mod tests {
         let assets = tempfile::tempdir().unwrap();
         std::fs::write(assets.path().join("index.html"), "<main>Kimi</main>").unwrap();
         std::fs::write(assets.path().join("app.js"), "console.log('kimi')").unwrap();
+        std::fs::create_dir(assets.path().join("settings")).unwrap();
+        std::fs::write(
+            assets.path().join("settings").join("index.html"),
+            "<main>Settings</main>",
+        )
+        .unwrap();
         let server = start_server(ServerStartOptions {
             port: Some(0),
             home_dir: Some(home.path().to_owned()),
@@ -757,6 +763,22 @@ mod tests {
                 expected_type
             );
         }
+        let directory_index = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/settings/")
+                    .header("host", "localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let directory_body = axum::body::to_bytes(directory_index.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(directory_body, "<main>Settings</main>");
         let reserved = server
             .app
             .clone()

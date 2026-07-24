@@ -63,10 +63,7 @@ async fn resolve_static_file(assets_dir: &Path, pathname: &str) -> Option<PathBu
     } else {
         root.join(&relative)
     };
-    let candidate = if requested
-        .to_string_lossy()
-        .ends_with(std::path::MAIN_SEPARATOR)
-    {
+    let candidate = if decoded.ends_with(['/', '\\']) {
         requested.join("index.html")
     } else {
         requested
