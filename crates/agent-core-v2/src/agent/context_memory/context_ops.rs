@@ -139,6 +139,7 @@ pub static CONTEXT_APPLY_COMPACTION: LazyLock<
                 LoopEventFold::new(result.messages)
             },
         ),
+        validate_apply: None,
         to_event: None,
         persist: None,
     };

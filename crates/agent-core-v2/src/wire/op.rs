@@ -21,11 +21,14 @@ use super::{
 pub type ErasedPayload = Box<dyn Any + Send + Sync>;
 pub type PayloadParser<P> = Arc<dyn Fn(&Value) -> Result<P, String> + Send + Sync>;
 pub type ApplyOp<S, P> = Arc<dyn Fn(S, &P) -> S + Send + Sync>;
+pub type ApplyValidator<S, P> =
+    Arc<dyn Fn(&S, &P) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync>;
 pub type OpEvent<S, P> = Arc<dyn Fn(&P, &S) -> Option<Value> + Send + Sync>;
 
 pub struct DefineOpOptions<S, P> {
     pub parse_payload: PayloadParser<P>,
     pub apply: ApplyOp<S, P>,
+    pub validate_apply: Option<ApplyValidator<S, P>>,
     pub to_event: Option<OpEvent<S, P>>,
     pub persist: Option<bool>,
 }
@@ -40,9 +43,18 @@ where
                 serde_json::from_value(value.clone()).map_err(|error| error.to_string())
             }),
             apply: Arc::new(apply),
+            validate_apply: None,
             to_event: None,
             persist: None,
         }
+    }
+
+    pub fn with_apply_validation(
+        mut self,
+        validate: impl Fn(&S, &P) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync + 'static,
+    ) -> Self {
+        self.validate_apply = Some(Arc::new(validate));
+        self
     }
 }
 
@@ -51,6 +63,7 @@ pub trait ErasedOpDescriptor: Send + Sync {
     fn model(&self) -> Arc<dyn ErasedModelDef>;
     fn persist(&self) -> Option<bool>;
     fn parse_payload(&self, payload: &Value) -> Result<ErasedPayload, String>;
+    fn validate(&self, state: &dyn Any, payload: &dyn Any) -> Result<(), OpTypeError>;
     fn apply(&self, state: ErasedState, payload: &dyn Any) -> Result<ErasedState, OpTypeError>;
     fn to_event(&self, payload: &dyn Any, state: &dyn Any) -> Result<Option<Value>, OpTypeError>;
 }
@@ -60,6 +73,7 @@ pub struct OpDescriptor<S, P> {
     model: ModelDef<S>,
     parse_payload: PayloadParser<P>,
     apply: ApplyOp<S, P>,
+    validate_apply: Option<ApplyValidator<S, P>>,
     to_event: Option<OpEvent<S, P>>,
     persist: Option<bool>,
 }
@@ -99,7 +113,29 @@ where
         (self.parse_payload)(payload).map(|payload| Box::new(payload) as ErasedPayload)
     }
 
+    fn validate(&self, state: &dyn Any, payload: &dyn Any) -> Result<(), OpTypeError> {
+        let state = state
+            .downcast_ref::<S>()
+            .ok_or_else(|| OpTypeError::State {
+                op_type: self.op_type.clone(),
+                model: self.model.name().into(),
+            })?;
+        let payload = payload
+            .downcast_ref::<P>()
+            .ok_or_else(|| OpTypeError::Payload {
+                op_type: self.op_type.clone(),
+            })?;
+        if let Some(validate) = &self.validate_apply {
+            validate(state, payload).map_err(|source| OpTypeError::Apply {
+                op_type: self.op_type.clone(),
+                source,
+            })?;
+        }
+        Ok(())
+    }
+
     fn apply(&self, state: ErasedState, payload: &dyn Any) -> Result<ErasedState, OpTypeError> {
+        self.validate(state.as_ref(), payload)?;
         let state = state.downcast::<S>().map_err(|_| OpTypeError::State {
             op_type: self.op_type.clone(),
             model: self.model.name().into(),
@@ -137,6 +173,12 @@ pub enum OpTypeError {
     State { op_type: String, model: String },
     #[error("Op '{op_type}' received an incompatible payload")]
     Payload { op_type: String },
+    #[error("Op '{op_type}' rejected its payload: {source}")]
+    Apply {
+        op_type: String,
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
 }
 
 pub struct DefinedOp<S, P> {
@@ -226,6 +268,7 @@ where
         model,
         parse_payload: options.parse_payload,
         apply: options.apply,
+        validate_apply: options.validate_apply,
         to_event: options.to_event,
         persist: options.persist,
     });
