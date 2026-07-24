@@ -51,6 +51,7 @@ pub fn parse_tool_call_arguments(raw: Option<&str>) -> ParsedToolCallArguments {
     }
 }
 
+#[derive(Clone)]
 pub enum PreflightedToolCall {
     Runnable {
         tool_call: ToolCall,
