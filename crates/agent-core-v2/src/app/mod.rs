@@ -10,6 +10,7 @@ pub mod event;
 pub mod external_hooks_runner;
 pub mod file;
 pub mod flag;
+pub mod gateway;
 pub mod git;
 pub mod host_folder_browser;
 pub mod message_legacy;
