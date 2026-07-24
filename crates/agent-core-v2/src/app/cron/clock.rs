@@ -113,24 +113,23 @@ fn read_file_wall(path: &std::path::Path) -> f64 {
 // JavaScript Number constructor's accepted hexadecimal, binary, and octal
 // integer spellings as well.
 fn parse_js_number(value: &str) -> Option<f64> {
-    let unsigned = value.strip_prefix('+').unwrap_or(value);
-    let parsed = if let Some(hex) = unsigned
+    let parsed = if let Some(hex) = value
         .strip_prefix("0x")
-        .or_else(|| unsigned.strip_prefix("0X"))
+        .or_else(|| value.strip_prefix("0X"))
     {
         u128::from_str_radix(hex, 16)
             .ok()
             .map(|number| number as f64)
-    } else if let Some(binary) = unsigned
+    } else if let Some(binary) = value
         .strip_prefix("0b")
-        .or_else(|| unsigned.strip_prefix("0B"))
+        .or_else(|| value.strip_prefix("0B"))
     {
         u128::from_str_radix(binary, 2)
             .ok()
             .map(|number| number as f64)
-    } else if let Some(octal) = unsigned
+    } else if let Some(octal) = value
         .strip_prefix("0o")
-        .or_else(|| unsigned.strip_prefix("0O"))
+        .or_else(|| value.strip_prefix("0O"))
     {
         u128::from_str_radix(octal, 8)
             .ok()
@@ -206,6 +205,8 @@ mod tests {
         assert_eq!(parse_js_number("1.25e3"), Some(1_250.0));
         assert_eq!(parse_js_number("0b101"), Some(5.0));
         assert_eq!(parse_js_number("0o10"), Some(8.0));
+        assert_eq!(parse_js_number("+0x10"), None);
+        assert_eq!(parse_js_number("-0x10"), None);
         assert_eq!(parse_js_number("NaN"), None);
         assert_eq!(parse_js_number("Infinity"), None);
     }
