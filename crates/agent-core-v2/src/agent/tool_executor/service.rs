@@ -230,19 +230,34 @@ impl ExecutorRunner {
             pending
                 .push(async move { receipt.await.map_err(|error| Box::new(error) as BoxError)? });
         }
-        while let Some(timed) = pending.next().await {
-            let timed = timed?;
-            let call = &prepared[timed.index].call;
-            let result = self.finalize(call, timed.result, &options).await;
-            self.dispatch_result(call, &result, &options)?;
-            self.track(call, &result, timed.duration_ms, &options);
-            sender
-                .send(Ok(ToolExecutionResult {
-                    tool_call_id: tool_call(call).id.clone(),
-                    tool_name: tool_name(call).into(),
-                    result,
-                }))
-                .map_err(|error| Box::new(error) as BoxError)?;
+        // Original: `execute()` starts each finalization as a separate promise
+        // and races scheduler completions against already-running
+        // finalizations. This is essential for same-step deduplication: a
+        // synthetic duplicate may await the original call's finalization.
+        let mut finalizations = FuturesUnordered::<BoxFuture<'static, Result<(), BoxError>>>::new();
+        while !pending.is_empty() || !finalizations.is_empty() {
+            tokio::select! {
+                Some(timed) = pending.next(), if !pending.is_empty() => {
+                    let timed = timed?;
+                    let call = prepared[timed.index].call.clone();
+                    let runner = self.clone();
+                    let options = options.clone();
+                    let sender = sender.clone();
+                    finalizations.push(Box::pin(async move {
+                        let result = runner.finalize(&call, timed.result, &options).await;
+                        runner.dispatch_result(&call, &result, &options)?;
+                        runner.track(&call, &result, timed.duration_ms, &options);
+                        sender.send(Ok(ToolExecutionResult {
+                            tool_call_id: tool_call(&call).id.clone(),
+                            tool_name: tool_name(&call).into(),
+                            result,
+                        }))
+                        .map_err(|error| Box::new(error) as BoxError)?;
+                        Ok(())
+                    }));
+                }
+                Some(result) = finalizations.next(), if !finalizations.is_empty() => result?,
+            }
         }
         Ok(())
     }
