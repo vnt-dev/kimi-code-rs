@@ -13,13 +13,16 @@ pub enum InteractionKind {
     UserTool,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InteractionOrigin {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<u64>,
+    // TypeScript `number` values are IEEE-754 doubles. Agent turn ids are
+    // normally integral, but the interaction protocol itself does not impose
+    // that narrower constraint.
+    pub turn_id: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
