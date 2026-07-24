@@ -8,6 +8,7 @@ pub mod cron_expr;
 pub mod cron_task;
 pub mod cron_task_persistence;
 pub mod cron_task_persistence_service;
+pub mod jitter;
 
 pub use clock::{ClockSources, SYSTEM_CLOCKS, resolve_clock_sources};
 pub use config_section::{CRON_SECTION, DEFAULT_CRON_CONFIG, register_cron_config_section};
@@ -23,4 +24,8 @@ pub use cron_task_persistence::{
 pub use cron_task_persistence_service::{
     CRON_ID_REGEX, CronTaskPersistenceService, is_valid_cron_task,
     register_cron_task_persistence_service,
+};
+pub use jitter::{
+    DEFAULT_CRON_JITTER_CONFIG, JitterConfig, jittered_next_cron_run_ms,
+    one_shot_jittered_next_cron_run_ms,
 };
