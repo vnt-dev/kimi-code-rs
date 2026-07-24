@@ -16,6 +16,7 @@ pub mod permission_rules;
 pub mod plan;
 pub mod profile;
 pub mod prompt;
+pub mod question_tools;
 pub mod scope_context;
 pub mod skill;
 pub mod step_retry;
