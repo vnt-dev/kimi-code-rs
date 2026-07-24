@@ -6,6 +6,7 @@ pub mod explicit_file_agent_source;
 pub mod extra_file_agent_source;
 pub mod merge;
 pub mod project_file_agent_source;
+pub mod service;
 
 pub use contract::*;
 pub use explicit_file_agent_source::{
@@ -21,3 +22,4 @@ pub use project_file_agent_source::{
     PROJECT_FILE_AGENT_SOURCE_ID, ProjectFileAgentSource, ProjectFileAgentSourceHandle,
     register_project_file_agent_source,
 };
+pub use service::{SessionAgentProfileCatalogService, register_session_agent_profile_catalog};

@@ -7,14 +7,20 @@ use std::{ops::Deref, sync::Arc};
 use async_trait::async_trait;
 
 use crate::{
-    _base::{di::instantiation::ServiceIdentifier, event::Event},
+    _base::{
+        di::{
+            instantiation::ServiceIdentifier,
+            lifecycle::{Disposable, DisposeResult},
+        },
+        event::Event,
+    },
     app::agent_profile_catalog::{AgentProfile, MissingDefaultAgentProfile},
 };
 
 pub type SessionAgentProfileCatalogError = Box<dyn std::error::Error + Send + Sync>;
 
 #[async_trait]
-pub trait SessionAgentProfileCatalogContract: Send + Sync {
+pub trait SessionAgentProfileCatalogContract: Send + Sync + Disposable {
     async fn ready(&self) -> Result<(), SessionAgentProfileCatalogError>;
     fn on_did_change(&self) -> Event<String>;
     fn get(&self, name: &str) -> Option<Arc<AgentProfile>>;
@@ -32,6 +38,12 @@ impl Deref for SessionAgentProfileCatalogHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for SessionAgentProfileCatalogHandle {
+    fn dispose(&self) -> DisposeResult {
+        self.0.dispose()
     }
 }
 
