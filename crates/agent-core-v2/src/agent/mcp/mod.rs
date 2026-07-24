@@ -1,11 +1,13 @@
 //! Model Context Protocol configuration and services.
 
+pub mod config_loader;
 pub mod config_schema;
 pub mod output;
 pub mod tool_naming;
 pub mod tools;
 pub mod types;
 
+pub use config_loader::*;
 pub use config_schema::{
     McpConfigValidationError, McpExecutor, McpServerCommonFields, McpServerConfig,
     McpServerHttpConfig, McpServerRemoteConfig, McpServerSseConfig, McpServerStdioConfig,
