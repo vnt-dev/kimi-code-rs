@@ -26,6 +26,7 @@ use super::{
         MODEL_SERVICE_ID, MODELS_SECTION, ModelRecord, ModelServiceContract, ModelServiceHandle,
         ModelServiceResult, ModelsChangedEvent, ModelsSection,
     },
+    env_overlay::register_kimi_model_env_overlay,
 };
 
 pub struct ModelService {
@@ -127,6 +128,7 @@ impl Disposable for ModelService {
 // loading a module cannot mutate global service state.
 pub fn register_model_service() {
     register_models_config_section();
+    register_kimi_model_env_overlay();
     register_scoped_service(
         LifecycleScope::App,
         MODEL_SERVICE_ID,
