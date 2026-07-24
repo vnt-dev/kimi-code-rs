@@ -69,7 +69,11 @@ pub async fn run_single_execution(input: RunSingleExecutionInput<'_>) -> ToolRes
         },
     )
     .await;
+    // Original: `normalizeAndMergeResult()` restores `coerced.delivery` after
+    // normalization, whose output-focused portion intentionally omits it.
+    let delivery = raw.delivery.clone();
     let mut normalized = normalize_tool_result(raw);
+    normalized.delivery = delivery;
     normalized.description = execution.description.clone();
     normalized.display = execution.display.clone();
     normalized.approval_rule = Some(execution.approval_rule.clone());
@@ -88,7 +92,11 @@ mod tests {
     use super::*;
     use crate::{
         _base::utils::abort::AbortController,
-        tool::{ExecutableToolOutput, ExecutableToolResult},
+        kosong::contract::message::ContentPart,
+        tool::{
+            ExecutableToolOutput, ExecutableToolResult, ToolDelivery, ToolDeliveryKind,
+            ToolDeliveryMessage,
+        },
     };
 
     #[tokio::test]
@@ -118,5 +126,42 @@ mod tests {
         assert_eq!(result.description.as_deref(), Some("read a file"));
         assert_eq!(result.approval_rule.as_deref(), Some("always"));
         assert_eq!(result.stop_batch_after_this, Some(true));
+    }
+
+    #[tokio::test]
+    async fn execution_preserves_delivery_after_normalization() {
+        let delivery = ToolDelivery {
+            kind: ToolDeliveryKind::Steer,
+            message: ToolDeliveryMessage {
+                content: vec![ContentPart::Text {
+                    text: "follow up".into(),
+                }],
+                tool_calls: None,
+                origin: None,
+            },
+        };
+        let expected_delivery = delivery.clone();
+        let execute = Arc::new(move |_context: ExecutableToolContext| {
+            let delivery = delivery.clone();
+            Box::pin(async move {
+                ExecutableToolResult {
+                    delivery: Some(delivery),
+                    ..ExecutableToolResult::success("done")
+                }
+            }) as BoxFuture<'static, ExecutableToolResult>
+        });
+        let execution = RunnableToolExecution::new("always", execute);
+        let result = run_single_execution(RunSingleExecutionInput {
+            tool_name: "Read",
+            tool_call_id: "call-1".into(),
+            execution: &execution,
+            turn_id: 2,
+            trace: None,
+            metadata: None,
+            signal: AbortController::new().signal(),
+            on_update: None,
+        })
+        .await;
+        assert_eq!(result.delivery, Some(expected_delivery));
     }
 }
