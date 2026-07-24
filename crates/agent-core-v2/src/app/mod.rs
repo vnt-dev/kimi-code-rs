@@ -1,6 +1,7 @@
 pub mod agent_file_catalog;
 pub mod agent_profile_catalog;
 pub mod auth;
+pub mod auth_legacy;
 pub mod bootstrap;
 pub mod config;
 pub mod cron;
