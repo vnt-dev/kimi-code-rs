@@ -4,7 +4,12 @@ pub mod contract;
 pub mod file_source;
 pub mod manifest;
 pub mod wire_scan;
+pub mod zip;
 pub use contract::*;
 pub use file_source::{ZipSource, ZipSourceIdentity, open_zip_source};
 pub use manifest::*;
 pub use wire_scan::{normalize_timestamp_ms, scan_session_wire};
+pub use zip::{
+    ExportZipError, ExtraZipEntry, SessionZipEntry, WriteExportZipArgs, collect_files_recursive,
+    write_export_zip,
+};
