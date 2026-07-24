@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, watch};
 use crate::{
     _base::log::contract::{LogPayload, Logger},
     agent::mcp::{
-        McpConnectionManager, McpConnectionManagerOptions, McpServerConfig,
+        McpConnectionManager, McpConnectionManagerOptions, McpOAuthService, McpServerConfig,
         ResolveSessionMcpConfigInput, SessionMcpConfig, merge_caller_mcp_servers,
         resolve_session_mcp_config,
     },
@@ -46,6 +46,10 @@ pub struct SessionMcpServiceOptions {
     pub log: Arc<dyn Logger>,
     pub telemetry: TelemetryServiceHandle,
     pub config_loader: Option<SessionMcpConfigLoader>,
+    /// Source construction owns this service through the session atomic
+    /// document store. It is injected here because this Rust service uses
+    /// narrow dependencies rather than the TypeScript DI container.
+    pub oauth_service: Option<Arc<McpOAuthService>>,
 }
 
 struct InitialLoad {
@@ -61,6 +65,7 @@ struct InitialLoad {
 /// is still lazy and cached by `ensure_mcp_ready`.
 pub struct SessionMcpService {
     manager: Arc<McpConnectionManager>,
+    oauth_service: Option<Arc<McpOAuthService>>,
     options: SessionMcpServiceOptions,
     initial_load: Mutex<InitialLoad>,
 }
@@ -72,10 +77,12 @@ impl SessionMcpService {
         let manager = McpConnectionManager::new(McpConnectionManagerOptions {
             stdio_cwd: Some(options.work_dir.clone()),
             log: Some(Arc::clone(&options.log)),
+            oauth_service: options.oauth_service.clone(),
             ..Default::default()
         });
         Arc::new(Self {
             manager,
+            oauth_service: options.oauth_service.clone(),
             options,
             initial_load: Mutex::new(InitialLoad {
                 started: false,
@@ -87,6 +94,11 @@ impl SessionMcpService {
     // Original: connectionManager().
     pub fn connection_manager(&self) -> Arc<McpConnectionManager> {
         Arc::clone(&self.manager)
+    }
+
+    // Original: AgentMcpService.oauthService delegation.
+    pub fn oauth_service(&self) -> Option<Arc<McpOAuthService>> {
+        self.oauth_service.clone()
     }
 
     // Original: ensureMcpReady(). The first caller's server override is the
@@ -257,6 +269,7 @@ mod tests {
             log: Arc::new(SilentLogger),
             telemetry: noop_telemetry_service(),
             config_loader: Some(loader),
+            oauth_service: None,
         });
 
         service
