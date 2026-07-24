@@ -21,6 +21,7 @@ pub mod skill;
 pub mod swarm;
 pub mod system_reminder;
 pub mod task;
+pub mod tool_dedupe;
 pub mod tool_executor;
 pub mod tool_policy;
 pub mod tool_registry;
