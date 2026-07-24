@@ -7,7 +7,7 @@ autobins = false
 [workspace]
 members = [
     ".",
-    "crates/agent-core-v2",
+    "crates/agent-core-v2", "crates/kap-server",
     "crates/minidb",
     "crates/oauth",
     "crates/protocol",

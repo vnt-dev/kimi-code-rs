@@ -1235,6 +1235,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kimi-code-kap-server"
+version = "0.1.0"
+
+[[package]]
 name = "kimi-code-minidb"
 version = "0.2.0"
 dependencies = [
