@@ -162,7 +162,7 @@ impl AgentStepRetryService {
             self.reset_attempts();
             return Ok(Some(false));
         }
-        let error = underlying_error(&context.error).unwrap_or_else(|| &context.error);
+        let error = underlying_error(&context.error).unwrap_or(&context.error);
         let delay_ms = read_retry_after_ms(error).unwrap_or_else(|| {
             retry_backoff_delays(max_attempts as usize)
                 .get((failed_attempt - 1) as usize)
