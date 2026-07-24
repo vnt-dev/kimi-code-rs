@@ -5,6 +5,7 @@ pub mod config_section;
 pub mod contract;
 pub mod discovery;
 pub mod discovery_config_section;
+pub mod discovery_service;
 pub mod env_overlay;
 pub mod errors;
 pub mod host_request_headers;
@@ -41,6 +42,7 @@ pub use discovery_config_section::{
     MODEL_CATALOG_CONFIG_SCHEMA, MODEL_CATALOG_SECTION, ModelCatalogConfig,
     register_model_catalog_config_section,
 };
+pub use discovery_service::{map_refresh_result, without_keys};
 pub use env_overlay::{
     ENV_MODEL_ALIAS_KEY, KIMI_MODEL_ENV_OVERLAY, KimiModelEnvOverlay,
     register_kimi_model_env_overlay,
