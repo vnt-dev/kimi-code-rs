@@ -517,38 +517,75 @@ mod tests {
         let server = start_server(ServerStartOptions {
             port: Some(0),
             home_dir: Some(home.path().to_owned()),
+            debug_endpoints: true,
             core_bridge: Some(Arc::clone(&bridge) as Arc<dyn AgentCoreBridge>),
             ..ServerStartOptions::default()
         })
         .await
         .unwrap();
         let token = server.auth_token_service.get_token();
-        let response = server
-            .app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/models?refresh=false")
-                    .header("host", "localhost")
-                    .header("authorization", format!("Bearer {token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        let specs = crate::routes::core_route_specs(true, true);
+        for spec in &specs {
+            let path = materialize_route_path(spec.runtime_path);
+            let response = server
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(spec.method)
+                        .uri(path)
+                        .header("host", "localhost")
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "{} {}",
+                spec.method,
+                spec.runtime_path
+            );
+        }
         {
             let calls = bridge
                 .calls
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            assert_eq!(calls.len(), 1);
-            assert_eq!(calls[0].0, CoreOperation::ListModels);
-            assert_eq!(calls[0].1.method, "GET");
-            assert_eq!(calls[0].1.path, "/api/v1/models");
-            assert_eq!(calls[0].1.query.as_deref(), Some("refresh=false"));
+            assert_eq!(calls.len(), specs.len());
+            for (call, spec) in calls.iter().zip(&specs) {
+                assert_eq!(call.0, spec.operation);
+                assert_eq!(call.1.method, spec.method);
+                assert_eq!(call.1.path, materialize_route_path(spec.runtime_path));
+            }
         }
         server.close().await.unwrap();
+    }
+
+    fn materialize_route_path(path: &str) -> String {
+        [
+            ("{session_ref}", "session-1"),
+            ("{session_id}", "session-1"),
+            ("{provider_id}", "provider-1"),
+            ("{message_id}", "message-1"),
+            ("{approval_id}", "approval-1"),
+            ("{workspace_id}", "workspace-1"),
+            ("{file_id}", "file-1"),
+            ("{terminal_id}", "terminal-1"),
+            ("{task_id}", "task-1"),
+            ("{agent_id}", "agent-1"),
+            ("{service}", "service"),
+            ("{method}", "method"),
+            ("{item}", "item"),
+            ("{tail}", "action"),
+            ("{*path}", "directory/file.txt"),
+        ]
+        .into_iter()
+        .fold(path.to_owned(), |path, (capture, value)| {
+            path.replace(capture, value)
+        })
     }
 
     #[tokio::test]

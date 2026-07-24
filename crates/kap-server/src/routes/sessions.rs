@@ -1,7 +1,12 @@
-use super::{RouteSpec, route};
-use crate::web::CoreOperation;
+use std::sync::Arc;
 
-// Original: packages/kap-server/src/routes/sessions.ts, registerSessionsRoutes().
+use axum::Router;
+use axum::response::Response;
+use axum::routing::{get, post};
+
+use super::{CoreRouteRequest, RouteSpec, dispatch_core, route};
+use crate::web::{AppState, CoreOperation};
+
 pub const ROUTES: &[RouteSpec] = &[
     route(
         "GET",
@@ -76,3 +81,88 @@ pub const ROUTES: &[RouteSpec] = &[
         CoreOperation::GetSessionWarnings,
     ),
 ];
+
+async fn list_sessions(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::ListSessions, request).await
+}
+
+async fn create_session(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::CreateSession, request).await
+}
+
+async fn get_session(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::GetSession, request).await
+}
+
+async fn session_action(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::SessionAction, request).await
+}
+
+async fn session_nested_action(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::SessionNestedAction, request).await
+}
+
+async fn list_session_children(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::ListSessionChildren, request).await
+}
+
+async fn create_session_child(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::CreateSessionChild, request).await
+}
+
+async fn get_session_goal(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::GetSessionGoal, request).await
+}
+
+async fn get_session_profile(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::GetSessionProfile, request).await
+}
+
+async fn update_session_profile(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::UpdateSessionProfile, request).await
+}
+
+async fn get_session_status(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::GetSessionStatus, request).await
+}
+
+async fn get_session_warnings(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::GetSessionWarnings, request).await
+}
+
+pub fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    router
+        .route("/api/v1/sessions", get(list_sessions))
+        .route("/api/v1/sessions", post(create_session))
+        .route("/api/v1/sessions/{session_ref}", get(get_session))
+        .route("/api/v1/sessions/{session_ref}", post(session_action))
+        .route(
+            "/api/v1/sessions/{session_id}/{tail}",
+            post(session_nested_action),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/children",
+            get(list_session_children),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/children",
+            post(create_session_child),
+        )
+        .route("/api/v1/sessions/{session_id}/goal", get(get_session_goal))
+        .route(
+            "/api/v1/sessions/{session_id}/profile",
+            get(get_session_profile),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/profile",
+            post(update_session_profile),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/status",
+            get(get_session_status),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/warnings",
+            get(get_session_warnings),
+        )
+}

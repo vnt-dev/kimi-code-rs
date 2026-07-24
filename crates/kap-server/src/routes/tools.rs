@@ -1,7 +1,12 @@
-use super::{RouteSpec, route};
-use crate::web::CoreOperation;
+use std::sync::Arc;
 
-// Original: packages/kap-server/src/routes/tools.ts, registerToolsRoutes().
+use axum::Router;
+use axum::response::Response;
+use axum::routing::{get, post};
+
+use super::{CoreRouteRequest, RouteSpec, dispatch_core, route};
+use crate::web::{AppState, CoreOperation};
+
 pub const ROUTES: &[RouteSpec] = &[
     route(
         "GET",
@@ -22,3 +27,22 @@ pub const ROUTES: &[RouteSpec] = &[
         CoreOperation::McpServerAction,
     ),
 ];
+
+async fn list_tools(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::ListTools, request).await
+}
+
+async fn list_mcp_servers(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::ListMcpServers, request).await
+}
+
+async fn mcp_server_action(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::McpServerAction, request).await
+}
+
+pub fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    router
+        .route("/api/v1/tools", get(list_tools))
+        .route("/api/v1/mcp/servers", get(list_mcp_servers))
+        .route("/api/v1/mcp/servers/{tail}", post(mcp_server_action))
+}

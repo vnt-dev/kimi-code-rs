@@ -1,14 +1,14 @@
 //! HTTP routes grouped to mirror `packages/kap-server/src/routes`.
 
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::body::to_bytes;
-use axum::extract::{Extension, Request, State};
+use axum::extract::{FromRequest, Request};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{MethodFilter, on};
-use axum::{Json, Router};
 use serde_json::{Map, Value, json};
 
 use crate::web::{AppState, CoreHttpRequest, CoreOperation, middleware::RequestId};
@@ -19,6 +19,7 @@ pub mod auth;
 pub mod config;
 pub mod connections;
 pub mod debug;
+pub mod documentation;
 pub mod files;
 pub mod fs;
 pub mod gui_store;
@@ -99,25 +100,41 @@ pub fn core_route_specs(debug_endpoints: bool, enable_terminals: bool) -> Vec<Ro
     specs
 }
 
-pub fn register_core_routes(
-    mut router: Router<Arc<AppState>>,
-    state: &AppState,
-) -> Router<Arc<AppState>> {
-    for route in core_route_specs(state.debug_endpoints, state.enable_terminals) {
-        router = router.route(
-            route.runtime_path,
-            on(method_filter(route.method), core_handler).layer(Extension(route.operation)),
-        );
-    }
-    router
+pub(crate) struct CoreRouteRequest {
+    state: Arc<AppState>,
+    request_id: RequestId,
+    request: Request,
 }
 
-async fn core_handler(
-    State(state): State<Arc<AppState>>,
-    Extension(operation): Extension<CoreOperation>,
-    Extension(request_id): Extension<RequestId>,
-    request: Request,
+impl FromRequest<Arc<AppState>> for CoreRouteRequest {
+    type Rejection = Infallible;
+
+    async fn from_request(
+        request: Request,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        let request_id = request
+            .extensions()
+            .get::<RequestId>()
+            .cloned()
+            .unwrap_or_else(|| RequestId(kimi_code_protocol::parse_or_generate_request_id(None)));
+        Ok(Self {
+            state: Arc::clone(state),
+            request_id,
+            request,
+        })
+    }
+}
+
+pub(crate) async fn dispatch_core(
+    operation: CoreOperation,
+    route_request: CoreRouteRequest,
 ) -> Response {
+    let CoreRouteRequest {
+        state,
+        request_id,
+        request,
+    } = route_request;
     let method = request.method().to_string();
     let path = request.uri().path().to_owned();
     let query = request.uri().query().map(str::to_owned);
@@ -170,16 +187,6 @@ async fn core_handler(
         }
     }
     result
-}
-
-fn method_filter(method: &str) -> MethodFilter {
-    match method {
-        "GET" => MethodFilter::GET,
-        "POST" => MethodFilter::POST,
-        "PATCH" => MethodFilter::PATCH,
-        "DELETE" => MethodFilter::DELETE,
-        _ => panic!("unsupported route method: {method}"),
-    }
 }
 
 pub fn create_open_api_document(state: &AppState) -> Value {

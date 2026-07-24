@@ -1,7 +1,12 @@
-use super::{RouteSpec, route};
-use crate::web::CoreOperation;
+use std::sync::Arc;
 
-// Original: packages/kap-server/src/routes/approvals.ts, registerApprovalsRoutes().
+use axum::Router;
+use axum::response::Response;
+use axum::routing::{get, post};
+
+use super::{CoreRouteRequest, RouteSpec, dispatch_core, route};
+use crate::web::{AppState, CoreOperation};
+
 pub const ROUTES: &[RouteSpec] = &[
     route(
         "GET",
@@ -16,3 +21,23 @@ pub const ROUTES: &[RouteSpec] = &[
         CoreOperation::ResolveApproval,
     ),
 ];
+
+async fn list_approvals(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::ListApprovals, request).await
+}
+
+async fn resolve_approval(request: CoreRouteRequest) -> Response {
+    dispatch_core(CoreOperation::ResolveApproval, request).await
+}
+
+pub fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    router
+        .route(
+            "/api/v1/sessions/{session_id}/approvals",
+            get(list_approvals),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/approvals/{approval_id}",
+            post(resolve_approval),
+        )
+}
