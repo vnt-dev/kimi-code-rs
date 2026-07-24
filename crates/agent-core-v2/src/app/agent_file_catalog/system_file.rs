@@ -25,7 +25,7 @@ pub async fn load_system_md_profile(
     fs: &dyn HostFileSystemService,
     brand_home: &Path,
     builtin_default: Arc<AgentProfile>,
-    warn: &dyn Fn(&str),
+    warn: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Option<Arc<AgentProfile>>, HostFsError> {
     let path = brand_home.join(SYSTEM_MD_FILENAME);
     let text = match is_file_path(fs, &path).await {
