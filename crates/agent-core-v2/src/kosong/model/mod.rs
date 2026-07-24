@@ -1,3 +1,4 @@
+pub mod catalog;
 pub mod completion_budget;
 pub mod config_section;
 pub mod contract;
@@ -9,6 +10,12 @@ pub mod model_auth;
 pub mod thinking;
 pub mod types;
 
+pub use catalog::{
+    AuthProvider, AuthRequestOptions, Model, ModelCatalogItem, ModelPingResult,
+    ProviderCatalogItem, ProviderCatalogStatus, ProviderCredentialState, SetDefaultModelResponse,
+    StaticAuthProvider, global_default_for_provider, model_ids_for_provider, to_protocol_model,
+    to_protocol_model_fallback, to_protocol_provider,
+};
 pub use config_section::{
     MODELS_SCHEMA, models_from_toml, models_to_toml, register_models_config_section,
 };
