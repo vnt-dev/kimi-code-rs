@@ -6,10 +6,11 @@
 
 use std::{
     io::Cursor,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use futures_util::future::BoxFuture;
 use image::{
     DynamicImage, ImageFormat, ImageReader, codecs::jpeg::JpegEncoder, imageops::FilterType,
 };
@@ -315,6 +316,84 @@ pub fn gate_image_format_parts(parts: &[ContentPart]) -> Vec<ContentPart> {
     output
 }
 
+pub type PersistOriginal =
+    Arc<dyn Fn(Vec<u8>, String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
+
+#[derive(Clone, Default)]
+pub struct CompressAnnotateOptions {
+    pub persist_original: Option<PersistOriginal>,
+}
+#[derive(Clone, Default)]
+pub struct CompressImageContentPartsOptions {
+    pub compress: CompressImageOptions,
+    pub annotate: Option<CompressAnnotateOptions>,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompressedContentParts {
+    pub parts: Vec<ContentPart>,
+    pub captions: Vec<String>,
+}
+
+// Original: compressImageContentParts(). Formatting is gated before any
+// base64 decode; persistence failures never prevent an already-compressed image from being sent.
+pub async fn compress_image_content_parts(
+    parts: &[ContentPart],
+    options: &CompressImageContentPartsOptions,
+) -> CompressedContentParts {
+    let mut output = Vec::with_capacity(parts.len());
+    let mut captions = Vec::new();
+    for part in gate_image_format_parts(parts) {
+        let ContentPart::ImageUrl { image_url } = &part else {
+            output.push(part);
+            continue;
+        };
+        let Some(parsed) = parse_image_data_url(&image_url.url) else {
+            output.push(part);
+            continue;
+        };
+        let result =
+            compress_base64_for_model(&parsed.base64, &parsed.mime_type, &options.compress);
+        if !result.changed {
+            output.push(part);
+            continue;
+        }
+        if let Some(annotate) = &options.annotate {
+            let original_path = match (&annotate.persist_original, STANDARD.decode(&parsed.base64))
+            {
+                (Some(persist), Ok(bytes)) => persist(bytes, parsed.mime_type.clone()).await,
+                _ => None,
+            };
+            captions.push(build_image_compression_caption(
+                &ImageCompressionCaptionInput {
+                    original: ImageVariantDescription {
+                        width: result.original_width as f64,
+                        height: result.original_height as f64,
+                        byte_length: result.original_byte_length as f64,
+                        mime_type: parsed.mime_type,
+                    },
+                    final_variant: ImageVariantDescription {
+                        width: result.width as f64,
+                        height: result.height as f64,
+                        byte_length: result.final_byte_length as f64,
+                        mime_type: result.mime_type.clone(),
+                    },
+                    original_path,
+                },
+            ));
+        }
+        output.push(ContentPart::ImageUrl {
+            image_url: MediaUrl {
+                url: format!("data:{};base64,{}", result.mime_type, result.base64),
+                id: image_url.id.clone(),
+            },
+        });
+    }
+    CompressedContentParts {
+        parts: output,
+        captions,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageVariantDescription {
     pub width: f64,
@@ -480,9 +559,9 @@ mod tests {
     }
     #[test]
     fn compresses_oversized_dimensions_and_leaves_small_images_unchanged() {
-        let image = DynamicImage::new_rgb8(4, 2);
+        let bitmap = DynamicImage::new_rgb8(4, 2);
         let mut encoded = Cursor::new(Vec::new());
-        image.write_to(&mut encoded, ImageFormat::Png).unwrap();
+        bitmap.write_to(&mut encoded, ImageFormat::Png).unwrap();
         let bytes = encoded.into_inner();
         let unchanged =
             compress_image_for_model(&bytes, "image/png", &CompressImageOptions::default());
@@ -498,5 +577,30 @@ mod tests {
         assert!(compressed.changed);
         assert_eq!((compressed.width, compressed.height), (2, 1));
         assert_eq!(compressed.original_byte_length, bytes.len());
+    }
+    #[tokio::test]
+    async fn compresses_gated_content_parts_and_emits_annotations_only_when_requested() {
+        let bitmap = DynamicImage::new_rgb8(4, 2);
+        let mut encoded = Cursor::new(Vec::new());
+        bitmap.write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let url = format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(encoded.into_inner())
+        );
+        let result = compress_image_content_parts(
+            &[image(&url)],
+            &CompressImageContentPartsOptions {
+                compress: CompressImageOptions {
+                    max_edge: Some(2),
+                    ..Default::default()
+                },
+                annotate: Some(CompressAnnotateOptions::default()),
+            },
+        )
+        .await;
+        assert_eq!(result.captions.len(), 1);
+        assert!(
+            matches!(&result.parts[..], [ContentPart::ImageUrl { image_url }] if image_url.url.starts_with("data:image/"))
+        );
     }
 }
