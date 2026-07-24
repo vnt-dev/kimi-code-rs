@@ -1,14 +1,12 @@
 use std::io::{self, Stdout, Write};
-#[cfg(windows)]
-use std::{ffi::c_void, mem::MaybeUninit};
 
 use async_trait::async_trait;
-#[cfg(not(windows))]
-use crossterm::event::{Event, EventStream};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange},
+    event::{
+        DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange, Event,
+        EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    },
     execute, queue,
     style::Print,
     terminal::{
@@ -16,7 +14,6 @@ use crossterm::{
         enable_raw_mode, size,
     },
 };
-#[cfg(not(windows))]
 use futures_util::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,10 +33,7 @@ pub trait TerminalBackend: Send {
 
 pub struct ProcessTerminal {
     stdout: Stdout,
-    #[cfg(not(windows))]
     events: EventStream,
-    #[cfg(windows)]
-    surrogate_buffer: Option<u16>,
     entered: bool,
 }
 
@@ -53,10 +47,7 @@ impl ProcessTerminal {
     pub fn new() -> Self {
         Self {
             stdout: io::stdout(),
-            #[cfg(not(windows))]
             events: EventStream::new(),
-            #[cfg(windows)]
-            surrogate_buffer: None,
             entered: false,
         }
     }
@@ -115,11 +106,6 @@ impl TerminalBackend for ProcessTerminal {
     }
 
     async fn next_event(&mut self) -> io::Result<Option<TerminalEvent>> {
-        #[cfg(windows)]
-        {
-            return self.next_windows_event().await;
-        }
-        #[cfg(not(windows))]
         loop {
             let Some(event) = self.events.next().await else {
                 return Ok(None);
@@ -149,239 +135,6 @@ impl TerminalBackend for ProcessTerminal {
             }
         }
     }
-}
-
-#[cfg(windows)]
-impl ProcessTerminal {
-    async fn next_windows_event(&mut self) -> io::Result<Option<TerminalEvent>> {
-        loop {
-            let record = tokio::task::spawn_blocking(read_windows_input_record)
-                .await
-                .map_err(io::Error::other)??;
-            if let Some(event) = decode_windows_input_record(record, &mut self.surrogate_buffer)? {
-                return Ok(Some(event));
-            }
-        }
-    }
-}
-
-#[cfg(windows)]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct WindowsCoord {
-    x: i16,
-    y: i16,
-}
-
-#[cfg(windows)]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct WindowsKeyEventRecord {
-    key_down: i32,
-    repeat_count: u16,
-    virtual_key_code: u16,
-    virtual_scan_code: u16,
-    unicode_char: u16,
-    control_key_state: u32,
-}
-
-#[cfg(windows)]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct WindowsBufferSizeRecord {
-    size: WindowsCoord,
-}
-
-#[cfg(windows)]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct WindowsFocusEventRecord {
-    set_focus: i32,
-}
-
-#[cfg(windows)]
-#[repr(C)]
-#[derive(Clone, Copy)]
-union WindowsInputEvent {
-    key: WindowsKeyEventRecord,
-    buffer_size: WindowsBufferSizeRecord,
-    focus: WindowsFocusEventRecord,
-    storage: [u8; 16],
-}
-
-#[cfg(windows)]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct WindowsInputRecord {
-    event_type: u16,
-    event: WindowsInputEvent,
-}
-
-#[cfg(windows)]
-const WINDOWS_KEY_EVENT: u16 = 0x0001;
-#[cfg(windows)]
-const WINDOWS_BUFFER_SIZE_EVENT: u16 = 0x0004;
-#[cfg(windows)]
-const WINDOWS_FOCUS_EVENT: u16 = 0x0010;
-#[cfg(windows)]
-const WINDOWS_STD_INPUT_HANDLE: i32 = -10;
-
-#[cfg(windows)]
-#[link(name = "Kernel32")]
-unsafe extern "system" {
-    fn GetStdHandle(standard_handle: i32) -> *mut c_void;
-    fn ReadConsoleInputW(
-        console_input: *mut c_void,
-        buffer: *mut WindowsInputRecord,
-        length: u32,
-        events_read: *mut u32,
-    ) -> i32;
-}
-
-#[cfg(windows)]
-fn read_windows_input_record() -> io::Result<WindowsInputRecord> {
-    // SAFETY:
-    // GetStdHandle returns a process-owned console handle. We only pass that
-    // handle to ReadConsoleInputW, with storage for exactly one INPUT_RECORD
-    // and a valid output count pointer. The repr(C) definitions above mirror
-    // the Win32 INPUT_RECORD layouts used by ReadConsoleInputW.
-    unsafe {
-        let handle = GetStdHandle(WINDOWS_STD_INPUT_HANDLE);
-        if handle.is_null() || handle == (-1_isize as *mut c_void) {
-            return Err(io::Error::last_os_error());
-        }
-        let mut record = MaybeUninit::<WindowsInputRecord>::uninit();
-        let mut events_read = 0_u32;
-        if ReadConsoleInputW(handle, record.as_mut_ptr(), 1, &mut events_read) == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if events_read != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "ReadConsoleInputW returned no terminal event",
-            ));
-        }
-        Ok(record.assume_init())
-    }
-}
-
-#[cfg(windows)]
-fn decode_windows_input_record(
-    record: WindowsInputRecord,
-    surrogate_buffer: &mut Option<u16>,
-) -> io::Result<Option<TerminalEvent>> {
-    match record.event_type {
-        WINDOWS_KEY_EVENT => {
-            // SAFETY: event_type identifies the active INPUT_RECORD union arm.
-            let key = unsafe { record.event.key };
-            decode_windows_key_event(key, surrogate_buffer)
-        }
-        WINDOWS_BUFFER_SIZE_EVENT => {
-            let (columns, rows) = size()?;
-            Ok(Some(TerminalEvent::Resize { columns, rows }))
-        }
-        WINDOWS_FOCUS_EVENT => {
-            // SAFETY: event_type identifies the active INPUT_RECORD union arm.
-            let focus = unsafe { record.event.focus };
-            let input = if focus.set_focus != 0 {
-                "\u{1b}[I"
-            } else {
-                "\u{1b}[O"
-            };
-            Ok(Some(TerminalEvent::Input(input.to_owned())))
-        }
-        _ => Ok(None),
-    }
-}
-
-#[cfg(windows)]
-fn decode_windows_key_event(
-    key: WindowsKeyEventRecord,
-    surrogate_buffer: &mut Option<u16>,
-) -> io::Result<Option<TerminalEvent>> {
-    if key.key_down == 0 {
-        return Ok(None);
-    }
-
-    let modifiers = windows_key_modifiers(key.control_key_state);
-    let key_code = match key.virtual_key_code {
-        0x08 => Some(KeyCode::Backspace),
-        0x09 if modifiers.contains(KeyModifiers::SHIFT) => Some(KeyCode::BackTab),
-        0x09 => Some(KeyCode::Tab),
-        0x0d => Some(KeyCode::Enter),
-        0x1b => Some(KeyCode::Esc),
-        0x21 => Some(KeyCode::PageUp),
-        0x22 => Some(KeyCode::PageDown),
-        0x23 => Some(KeyCode::End),
-        0x24 => Some(KeyCode::Home),
-        0x25 => Some(KeyCode::Left),
-        0x26 => Some(KeyCode::Up),
-        0x27 => Some(KeyCode::Right),
-        0x28 => Some(KeyCode::Down),
-        0x2d => Some(KeyCode::Insert),
-        0x2e => Some(KeyCode::Delete),
-        _ => decode_windows_character(key, modifiers, surrogate_buffer)?,
-    };
-    let Some(key_code) = key_code else {
-        return Ok(None);
-    };
-    Ok(encode_key_event(KeyEvent::new_with_kind(
-        key_code,
-        modifiers,
-        KeyEventKind::Press,
-    ))
-    .map(TerminalEvent::Input))
-}
-
-#[cfg(windows)]
-fn decode_windows_character(
-    key: WindowsKeyEventRecord,
-    modifiers: KeyModifiers,
-    surrogate_buffer: &mut Option<u16>,
-) -> io::Result<Option<KeyCode>> {
-    match key.unicode_char {
-        // Do not reconstruct unmodified ASCII from virtual-key codes here.
-        // Those u_char == 0 records are IME composition keystrokes; Crossterm
-        // reconstructing them is what appended strings such as "pi:c" to
-        // committed Chinese input.
-        0 if !modifiers.contains(KeyModifiers::CONTROL) => Ok(None),
-        0 if (0x41..=0x5a).contains(&key.virtual_key_code) => {
-            let character = char::from_u32(u32::from(key.virtual_key_code) + 0x20)
-                .ok_or_else(|| io::Error::other("invalid virtual key code"))?;
-            Ok(Some(KeyCode::Char(character)))
-        }
-        0 => Ok(None),
-        high @ 0xd800..=0xdbff => {
-            *surrogate_buffer = Some(high);
-            Ok(None)
-        }
-        low @ 0xdc00..=0xdfff => {
-            let Some(high) = surrogate_buffer.take() else {
-                return Ok(None);
-            };
-            let mut decoded = char::decode_utf16([high, low]);
-            Ok(decoded.next().and_then(Result::ok).map(KeyCode::Char))
-        }
-        scalar => {
-            *surrogate_buffer = None;
-            Ok(char::from_u32(u32::from(scalar)).map(KeyCode::Char))
-        }
-    }
-}
-
-#[cfg(windows)]
-fn windows_key_modifiers(control_key_state: u32) -> KeyModifiers {
-    let mut modifiers = KeyModifiers::NONE;
-    if control_key_state & 0x0003 != 0 {
-        modifiers.insert(KeyModifiers::ALT);
-    }
-    if control_key_state & 0x000c != 0 {
-        modifiers.insert(KeyModifiers::CONTROL);
-    }
-    if control_key_state & 0x0010 != 0 {
-        modifiers.insert(KeyModifiers::SHIFT);
-    }
-    modifiers
 }
 
 impl Drop for ProcessTerminal {
@@ -498,61 +251,5 @@ mod tests {
         let mut event = key(KeyCode::Char('x'), KeyModifiers::NONE);
         event.kind = KeyEventKind::Release;
         assert_eq!(encode_key_event(event), None);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_input_keeps_committed_cjk_and_drops_ime_composition_keys() {
-        let mut surrogate = None;
-        let composition = WindowsKeyEventRecord {
-            key_down: 1,
-            repeat_count: 1,
-            virtual_key_code: u16::from(b'P'),
-            virtual_scan_code: 0,
-            unicode_char: 0,
-            control_key_state: 0,
-        };
-        assert_eq!(
-            decode_windows_key_event(composition, &mut surrogate).expect("composition"),
-            None
-        );
-
-        let committed = WindowsKeyEventRecord {
-            unicode_char: '你' as u16,
-            ..composition
-        };
-        assert_eq!(
-            decode_windows_key_event(committed, &mut surrogate).expect("committed"),
-            Some(TerminalEvent::Input("你".to_owned()))
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_input_preserves_control_and_navigation_keys() {
-        let mut surrogate = None;
-        let ctrl_c = WindowsKeyEventRecord {
-            key_down: 1,
-            repeat_count: 1,
-            virtual_key_code: u16::from(b'C'),
-            virtual_scan_code: 0,
-            unicode_char: 3,
-            control_key_state: 0x0008,
-        };
-        assert_eq!(
-            decode_windows_key_event(ctrl_c, &mut surrogate).expect("ctrl-c"),
-            Some(TerminalEvent::Input("\u{3}".to_owned()))
-        );
-
-        let left = WindowsKeyEventRecord {
-            virtual_key_code: 0x25,
-            unicode_char: 0,
-            control_key_state: 0,
-            ..ctrl_c
-        };
-        assert_eq!(
-            decode_windows_key_event(left, &mut surrogate).expect("left"),
-            Some(TerminalEvent::Input("\u{1b}[D".to_owned()))
-        );
     }
 }
