@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::{any::Any, path::PathBuf, sync::Arc};
 
 use crate::tui::{
     components::{
@@ -6,12 +6,14 @@ use crate::tui::{
         editor::{CustomEditor, EditorAction, InputMode},
         render::truncate_to_width,
     },
-    controllers::slash_command_surface::{
-        SlashCommandSurfaceAction, resolve_slash_command_surface,
+    controllers::{
+        slash_autocomplete::{SlashAutocompleteSurface, build_builtin_slash_autocomplete},
+        slash_command_surface::{SlashCommandSurfaceAction, resolve_slash_command_surface},
     },
     runtime::{TuiApp, TuiControl},
     theme::{ColorToken, current_theme},
 };
+use async_trait::async_trait;
 
 const DEFAULT_PENDING_RESPONSE: &str =
     "Agent runtime is not connected yet. Your input was received.";
@@ -40,12 +42,28 @@ pub struct KimiTui {
     status: Option<String>,
     terminal_rows: usize,
     startup_warning: Option<String>,
+    slash_autocomplete: SlashAutocompleteSurface,
 }
 
 impl KimiTui {
     pub fn new(version: impl Into<String>, startup_warning: Option<String>) -> Self {
+        Self::with_work_dir(
+            version,
+            startup_warning,
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        )
+    }
+
+    fn with_work_dir(
+        version: impl Into<String>,
+        startup_warning: Option<String>,
+        work_dir: PathBuf,
+    ) -> Self {
         let mut editor = CustomEditor::new();
         editor.set_focused(true);
+        let slash_autocomplete = build_builtin_slash_autocomplete(work_dir);
+        editor.set_autocomplete_provider(Arc::clone(&slash_autocomplete.provider));
+        editor.set_argument_hints(slash_autocomplete.argument_hints.clone());
         Self {
             version: version.into(),
             editor,
@@ -53,6 +71,7 @@ impl KimiTui {
             status: Some("Ready".to_owned()),
             terminal_rows: 24,
             startup_warning,
+            slash_autocomplete,
         }
     }
 
@@ -60,7 +79,7 @@ impl KimiTui {
         self.editor.text()
     }
 
-    fn handle_editor_action(&mut self, action: EditorAction) -> TuiControl {
+    async fn handle_editor_action(&mut self, action: EditorAction) -> TuiControl {
         match action {
             EditorAction::Submit(text) => self.submit(text),
             EditorAction::CtrlC => {
@@ -100,10 +119,12 @@ impl KimiTui {
             }
             EditorAction::PasteImage => self.pending_action("Clipboard image paste"),
             EditorAction::InputModeChanged(InputMode::Prompt) => {
+                self.slash_autocomplete.set_input_mode(InputMode::Prompt);
                 self.status = Some("Prompt mode".to_owned());
                 TuiControl::Continue
             }
             EditorAction::InputModeChanged(InputMode::Bash) => {
+                self.slash_autocomplete.set_input_mode(InputMode::Bash);
                 self.status = Some("Shell mode (execution not connected)".to_owned());
                 TuiControl::Continue
             }
@@ -111,11 +132,13 @@ impl KimiTui {
                 self.status = Some("Autocomplete cancelled.".to_owned());
                 TuiControl::Continue
             }
-            EditorAction::RequestAutocomplete { .. } => {
-                // MIGRATION-TODO:
-                // Original: CustomEditor requests file and slash-command
-                // completions from KimiTUI. The editor remains usable while
-                // the v2-backed catalog is not yet composed.
+            EditorAction::RequestAutocomplete { force } => {
+                if self.editor.text().trim_start().starts_with('/')
+                    && let Some(request) = self.editor.begin_autocomplete_request(force, false)
+                {
+                    let response = request.run().await;
+                    self.editor.finish_autocomplete_request(response);
+                }
                 TuiControl::Continue
             }
             EditorAction::NonEscapeInput => TuiControl::Continue,
@@ -266,8 +289,9 @@ impl Component for KimiTui {
         lines
     }
 
-    fn handle_input(&mut self, data: &str) {
-        let _ = self.handle_terminal_input(data);
+    fn handle_input(&mut self, _data: &str) {
+        // KimiTui input is routed through the async TuiApp boundary so
+        // autocomplete requests can complete without blocking the runtime.
     }
 
     fn invalidate(&mut self) {}
@@ -281,14 +305,15 @@ impl Component for KimiTui {
     }
 }
 
+#[async_trait]
 impl TuiApp for KimiTui {
-    fn handle_terminal_input(&mut self, data: &str) -> TuiControl {
+    async fn handle_terminal_input(&mut self, data: &str) -> TuiControl {
         if data == "\u{1b}[I" || data == "\u{1b}[O" {
             return TuiControl::Continue;
         }
         let outcome = self.editor.handle_input_event(data);
         for action in outcome.actions {
-            if self.handle_editor_action(action) == TuiControl::Exit {
+            if self.handle_editor_action(action).await == TuiControl::Exit {
                 return TuiControl::Exit;
             }
         }
@@ -306,11 +331,11 @@ mod tests {
     use super::*;
     use crate::tui::components::render::visible_width;
 
-    #[test]
-    fn accepts_text_and_returns_a_visible_default_response() {
+    #[tokio::test]
+    async fn accepts_text_and_returns_a_visible_default_response() {
         let mut tui = KimiTui::new("0.1.0", None);
         for input in ["h", "i", "\r"] {
-            assert_eq!(tui.handle_terminal_input(input), TuiControl::Continue);
+            assert_eq!(tui.handle_terminal_input(input).await, TuiControl::Continue);
         }
 
         let rendered = tui.render(80).join("\n");
@@ -320,16 +345,16 @@ mod tests {
         assert_eq!(tui.editor_text(), "");
     }
 
-    #[test]
-    fn routes_builtin_and_pending_slash_commands_without_panicking() {
+    #[tokio::test]
+    async fn routes_builtin_and_pending_slash_commands_without_panicking() {
         let mut tui = KimiTui::new("0.1.0", None);
         for input in ["/", "h", "e", "l", "p", "\r"] {
-            assert_eq!(tui.handle_terminal_input(input), TuiControl::Continue);
+            assert_eq!(tui.handle_terminal_input(input).await, TuiControl::Continue);
         }
         assert!(tui.render(80).join("\n").contains("Slash commands"));
 
         for input in ["/", "m", "o", "d", "e", "l", "\r"] {
-            assert_eq!(tui.handle_terminal_input(input), TuiControl::Continue);
+            assert_eq!(tui.handle_terminal_input(input).await, TuiControl::Continue);
         }
         assert!(tui.render(80).join("\n").contains("/model is available"));
     }
@@ -351,19 +376,37 @@ mod tests {
         assert_eq!(tui.submit("/q".to_owned()), TuiControl::Exit);
     }
 
-    #[test]
-    fn ctrl_c_clears_input_then_exits_and_render_respects_width() {
+    #[tokio::test]
+    async fn ctrl_c_clears_input_then_exits_and_render_respects_width() {
         let mut tui = KimiTui::new("0.1.0", Some("config warning".to_owned()));
         tui.handle_terminal_resize(24, 10);
-        assert_eq!(tui.handle_terminal_input("x"), TuiControl::Continue);
-        assert_eq!(tui.handle_terminal_input("\u{3}"), TuiControl::Continue);
+        assert_eq!(tui.handle_terminal_input("x").await, TuiControl::Continue);
+        assert_eq!(
+            tui.handle_terminal_input("\u{3}").await,
+            TuiControl::Continue
+        );
         assert_eq!(tui.editor_text(), "");
-        assert_eq!(tui.handle_terminal_input("\u{3}"), TuiControl::Exit);
+        assert_eq!(tui.handle_terminal_input("\u{3}").await, TuiControl::Exit);
         for line in tui.render(24) {
             assert!(
                 visible_width(&line) <= 24,
                 "line exceeds terminal width: {line:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn renders_and_accepts_builtin_slash_autocomplete() {
+        let mut tui = KimiTui::with_work_dir("0.1.0", None, PathBuf::from("."));
+        for input in ["/", "m", "o"] {
+            assert_eq!(tui.handle_terminal_input(input).await, TuiControl::Continue);
+        }
+
+        let rendered = tui.render(100).join("\n");
+        assert!(rendered.contains("model"));
+        assert!(tui.editor.is_showing_autocomplete());
+
+        assert_eq!(tui.handle_terminal_input("\r").await, TuiControl::Continue);
+        assert!(tui.render(100).join("\n").contains("/model is available"));
     }
 }

@@ -1,5 +1,7 @@
 use std::io;
 
+use async_trait::async_trait;
+
 use crate::tui::components::Component;
 
 use super::{TerminalBackend, TerminalEvent};
@@ -10,8 +12,9 @@ pub enum TuiControl {
     Exit,
 }
 
+#[async_trait]
 pub trait TuiApp: Component {
-    fn handle_terminal_input(&mut self, data: &str) -> TuiControl;
+    async fn handle_terminal_input(&mut self, data: &str) -> TuiControl;
 
     fn handle_terminal_resize(&mut self, _columns: u16, _rows: u16) {}
 }
@@ -58,7 +61,7 @@ where
         while let Some(event) = self.terminal.next_event().await? {
             match event {
                 TerminalEvent::Input(data) => {
-                    if app.handle_terminal_input(&data) == TuiControl::Exit {
+                    if app.handle_terminal_input(&data).await == TuiControl::Exit {
                         break;
                     }
                 }
@@ -142,8 +145,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl TuiApp for TestApp {
-        fn handle_terminal_input(&mut self, data: &str) -> TuiControl {
+        async fn handle_terminal_input(&mut self, data: &str) -> TuiControl {
             if data == "quit" {
                 TuiControl::Exit
             } else {
