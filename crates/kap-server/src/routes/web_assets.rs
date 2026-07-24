@@ -7,7 +7,7 @@ use axum::http::{HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use tokio::fs;
 
-use super::state::AppState;
+use crate::web::AppState;
 
 pub async fn validate_web_assets(assets_dir: &Path) -> io::Result<()> {
     let metadata = fs::metadata(assets_dir.join("index.html")).await?;
@@ -21,7 +21,7 @@ pub async fn validate_web_assets(assets_dir: &Path) -> io::Result<()> {
     }
 }
 
-// Original: routes/webAssets.ts, serveWebAsset().
+// Original: packages/kap-server/src/routes/webAssets.ts, serveWebAsset().
 pub async fn serve_web_asset(
     State(state): State<std::sync::Arc<AppState>>,
     method: Method,

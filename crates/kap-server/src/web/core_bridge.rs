@@ -120,10 +120,11 @@ impl AgentCoreBridge for TodoAgentCoreBridge {
         _request: CoreHttpRequest,
     ) -> CoreHttpResponse {
         // MIGRATION-TODO:
-        // Original: packages/kap-server/src/routes/* handlers resolve services
-        // from the agent-core-v2 Scope. Route registration, HTTP parsing and
-        // dispatch are migrated; business calls wait for the unfinished Rust
-        // kimi-code-agent-core-v2 crate.
+        // Original: packages/kap-server/src/routes/* handlers resolve concrete
+        // services from an assembled agent-core-v2 Scope. Bootstrap path
+        // resolution, protocol DTOs and time utilities are already used
+        // directly; this TODO is limited to service composition/lookup that
+        // the Rust bootstrap has not exposed as a complete application Scope.
         todo!("call kimi-code-agent-core-v2 for {operation:?}")
     }
 }

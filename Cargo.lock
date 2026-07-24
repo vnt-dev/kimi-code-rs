@@ -1419,6 +1419,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "subtle",
  "tempfile",
  "thiserror 2.0.19",

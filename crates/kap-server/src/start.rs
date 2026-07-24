@@ -17,6 +17,7 @@ use tokio::task::{JoinError, JoinHandle};
 use crate::instance_registry::{InstanceRegistry, InstanceRegistryOptions, RegistrationInfo};
 use crate::middleware::hostnames::HostCheckOptions;
 use crate::middleware::rate_limit::{AuthFailureLimiter, AuthFailureLimiterOptions};
+use crate::routes::web_assets::validate_web_assets;
 use crate::security::bind_classify::{BindClass, ClassifyOptions, classify};
 use crate::services::auth::{
     AuthTokenService, CredentialValidator, PasswordError, PrivateFileError, TokenStore,
@@ -26,7 +27,6 @@ use crate::services::gui_store::GuiStoreService;
 use crate::services::server_logger::{ServerLogLevel, ServerLogger, create_server_logger};
 use crate::transport::ws::connection_registry::ConnectionRegistry;
 use crate::version::get_server_version;
-use crate::web::web_assets::validate_web_assets;
 use crate::web::{AgentCoreBridge, AppState, TodoAgentCoreBridge, create_router};
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
@@ -548,6 +548,46 @@ mod tests {
             assert_eq!(calls[0].1.path, "/api/v1/models");
             assert_eq!(calls[0].1.query.as_deref(), Some("refresh=false"));
         }
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn meta_uses_protocol_dto_and_agent_core_iso_time() {
+        let home = tempfile::tempdir().unwrap();
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            version: Some("9.8.7".into()),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let token = server.auth_token_service.get_token();
+        let response = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/meta")
+                    .header("host", "localhost")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let envelope: kimi_code_protocol::Envelope<kimi_code_protocol::MetaResponse> =
+            serde_json::from_slice(&body).unwrap();
+        let meta = envelope.data.unwrap();
+        assert_eq!(meta.server_version, "9.8.7");
+        assert_eq!(
+            meta.backend,
+            Some(kimi_code_protocol::BackendGeneration::V2)
+        );
+        assert!(meta.started_at.as_ref().ends_with('Z'));
         server.close().await.unwrap();
     }
 
