@@ -264,6 +264,12 @@ mod tests {
         }
     }
 
+    impl Disposable for Injector {
+        fn dispose(&self) -> DisposeResult {
+            Ok(())
+        }
+    }
+
     fn setup() -> (
         Arc<WireService>,
         Arc<CountingLog>,

@@ -359,6 +359,12 @@ mod tests {
         }
     }
 
+    impl Disposable for Injector {
+        fn dispose(&self) -> DisposeResult {
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn injection_only_emits_on_new_turn_and_disposes_its_registration() {
         let injector = Injector::default();

@@ -155,6 +155,12 @@ mod tests {
         }
     }
 
+    impl Disposable for Injector {
+        fn dispose(&self) -> DisposeResult {
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn injection_registers_provider_and_disposes_registration() {
         let mode = Arc::new(Mode(Mutex::new(PermissionMode::Auto)));

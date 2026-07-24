@@ -1926,6 +1926,12 @@ mod tests {
         }
     }
 
+    impl Disposable for TestContextInjector {
+        fn dispose(&self) -> DisposeResult {
+            Ok(())
+        }
+    }
+
     struct CompletingTask;
 
     struct TestTrackedHandle {

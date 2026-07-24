@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 
 use crate::{
-    _base::di::{instantiation::ServiceIdentifier, lifecycle::DisposableHandle},
+    _base::di::{
+        instantiation::ServiceIdentifier,
+        lifecycle::{Disposable, DisposableHandle, DisposeResult},
+    },
     kosong::contract::message::ContentPart,
 };
 
@@ -43,7 +46,7 @@ pub type ContextInjectionProvider = Arc<
 >;
 
 #[async_trait]
-pub trait AgentContextInjectorServiceContract: Send + Sync {
+pub trait AgentContextInjectorServiceContract: Disposable + Send + Sync {
     fn register(&self, name: String, provider: ContextInjectionProvider) -> DisposableHandle;
 
     async fn inject_after_compaction(&self) -> Result<(), ContextInjectionError>;
@@ -57,6 +60,12 @@ impl Deref for AgentContextInjectorServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for AgentContextInjectorServiceHandle {
+    fn dispose(&self) -> DisposeResult {
+        self.0.dispose()
     }
 }
 
