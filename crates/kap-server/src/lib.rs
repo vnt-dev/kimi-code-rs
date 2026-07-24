@@ -7,7 +7,9 @@
 
 pub mod middleware;
 pub mod security;
+pub mod services;
 pub mod transport;
 
 pub use kimi_code_protocol::{Envelope, err_envelope, ok_envelope};
 pub use security::bind_classify::{BindClass, ClassifyOptions, classify};
+pub use services::auth::persistent_token::{rotate_server_token, server_token_path};

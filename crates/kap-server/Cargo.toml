@@ -7,5 +7,16 @@ license = "MIT"
 publish = false
 
 [dependencies]
+base64 = "0.22"
+bcrypt = "0.17"
+getrandom = "0.3"
 kimi-code-protocol = { path = "../protocol" }
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "rt"] }
 url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
