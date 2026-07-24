@@ -2,6 +2,7 @@
 
 pub mod agent_profile_catalog;
 pub mod approval;
+pub mod interaction;
 pub mod mcp;
 pub mod process;
 pub mod session_context;
