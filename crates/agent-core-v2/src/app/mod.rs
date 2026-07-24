@@ -4,6 +4,7 @@ pub mod auth;
 pub mod bootstrap;
 pub mod config;
 pub mod cron;
+pub mod edit;
 pub mod event;
 pub mod external_hooks_runner;
 pub mod file;
