@@ -1308,6 +1308,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bcrypt",
+ "chrono",
  "getrandom 0.3.4",
  "indexmap",
  "kimi-code-protocol",

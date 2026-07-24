@@ -11,7 +11,9 @@ pub mod request_id;
 pub mod request_logging;
 pub mod security;
 pub mod services;
+pub mod start;
 pub mod transport;
+pub mod version;
 
 pub use instance_registry::{
     HEARTBEAT_INTERVAL, InstanceRegistration, InstanceRegistry, InstanceRegistryOptions,
@@ -21,3 +23,4 @@ pub use instance_registry::{
 pub use kimi_code_protocol::{Envelope, err_envelope, ok_envelope};
 pub use security::bind_classify::{BindClass, ClassifyOptions, classify};
 pub use services::auth::persistent_token::{rotate_server_token, server_token_path};
+pub use start::{RunningServer, ServerStartOptions, start_server};
