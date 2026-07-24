@@ -7,6 +7,7 @@ pub mod client_sse;
 pub mod client_stdio;
 pub mod config_loader;
 pub mod config_schema;
+pub mod connection_manager;
 pub mod errors;
 pub mod mcp_discovery_ops;
 pub mod oauth;
@@ -27,6 +28,7 @@ pub use config_schema::{
     McpServerHttpConfig, McpServerRemoteConfig, McpServerSseConfig, McpServerStdioConfig,
     parse_mcp_server_config,
 };
+pub use connection_manager::*;
 pub use errors::*;
 pub use mcp_discovery_ops::*;
 pub use oauth::*;
