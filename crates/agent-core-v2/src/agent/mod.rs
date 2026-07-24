@@ -14,6 +14,7 @@ pub mod permission_policy;
 pub mod permission_rules;
 pub mod plan;
 pub mod profile;
+pub mod prompt;
 pub mod scope_context;
 pub mod skill;
 pub mod swarm;
