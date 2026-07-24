@@ -11,11 +11,13 @@ base64 = "0.22"
 bcrypt = "0.17"
 getrandom = "0.3"
 kimi-code-protocol = { path = "../protocol" }
+indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
+toml = { version = "1.1.0", features = ["preserve_order"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 ulid = "1"
