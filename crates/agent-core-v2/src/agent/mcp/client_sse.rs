@@ -10,6 +10,27 @@ pub struct McpSseEvent {
     pub id: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum McpSseEndpointError {
+    #[error("invalid MCP SSE server URL: {0}")]
+    ServerUrl(#[from] url::ParseError),
+    #[error("MCP SSE endpoint event has an empty message URL")]
+    EmptyEndpoint,
+}
+
+/// Resolves the legacy `event: endpoint` data field using the source event
+/// stream as the base URL, as done by the MCP SDK's SSE client transport.
+pub fn resolve_sse_message_endpoint(
+    server_url: &str,
+    endpoint: &str,
+) -> Result<url::Url, McpSseEndpointError> {
+    if endpoint.is_empty() {
+        return Err(McpSseEndpointError::EmptyEndpoint);
+    }
+    let server_url = url::Url::parse(server_url)?;
+    Ok(server_url.join(endpoint)?)
+}
+
 /// Incremental SSE decoder used by the legacy MCP client. It accepts arbitrary
 /// UTF-8 chunk boundaries and follows the SSE field/blank-line dispatch rules.
 #[derive(Default)]
@@ -128,5 +149,21 @@ mod tests {
                 id: Some("good".into()),
             })
         );
+    }
+
+    #[test]
+    fn resolves_endpoint_events_against_the_sse_url() {
+        assert_eq!(
+            resolve_sse_message_endpoint("https://mcp.example/events", "/messages").unwrap(),
+            url::Url::parse("https://mcp.example/messages").unwrap()
+        );
+        assert_eq!(
+            resolve_sse_message_endpoint("https://mcp.example/base/events", "messages").unwrap(),
+            url::Url::parse("https://mcp.example/base/messages").unwrap()
+        );
+        assert!(matches!(
+            resolve_sse_message_endpoint("https://mcp.example/events", ""),
+            Err(McpSseEndpointError::EmptyEndpoint)
+        ));
     }
 }
