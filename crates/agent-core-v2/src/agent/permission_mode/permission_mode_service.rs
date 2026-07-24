@@ -3,15 +3,25 @@ use std::{ops::Deref, sync::Arc};
 use crate::{
     _base::{
         di::{
+            descriptors::SyncDescriptor,
             instantiation::ServiceIdentifier,
-            lifecycle::{DisposableHandle, DisposableStore},
+            instantiation::ServicesAccessorExt,
+            lifecycle::{Disposable, DisposableHandle, DisposableStore, DisposeResult},
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
         },
         event::{Emitter, Event},
     },
     agent::{
-        context_injector::AgentContextInjectorServiceContract, permission_policy::PermissionMode,
+        context_injector::{
+            AGENT_CONTEXT_INJECTOR_SERVICE_ID, AgentContextInjectorServiceContract,
+            AgentContextInjectorServiceHandle,
+        },
+        permission_policy::PermissionMode,
     },
-    wire::wire_service::{WireService, WireServiceError},
+    wire::{
+        contract::{WIRE_SERVICE_ID, WireServiceHandle},
+        wire_service::{WireService, WireServiceError},
+    },
 };
 
 use super::{
@@ -28,7 +38,7 @@ pub struct PermissionModeChangedContext {
     pub previous_mode: PermissionMode,
 }
 
-pub trait AgentPermissionModeServiceContract: Send + Sync {
+pub trait AgentPermissionModeServiceContract: Disposable + Send + Sync {
     fn mode(&self) -> PermissionMode;
     fn set_mode(&self, mode: PermissionMode) -> Result<(), PermissionModeServiceError>;
     fn on_did_change_mode(&self) -> Event<PermissionModeChangedContext>;
@@ -42,6 +52,12 @@ impl Deref for AgentPermissionModeServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for AgentPermissionModeServiceHandle {
+    fn dispose(&self) -> DisposeResult {
+        self.0.dispose()
     }
 }
 
@@ -95,6 +111,14 @@ impl AgentPermissionModeService {
             _disposables: disposables,
         }
     }
+
+    // Original: permissionModeService.ts, dependency-injected constructor.
+    pub fn from_handles(
+        wire: WireServiceHandle,
+        injector: AgentContextInjectorServiceHandle,
+    ) -> Self {
+        Self::new(wire.0, injector.0.as_ref())
+    }
 }
 
 impl AgentPermissionModeServiceContract for AgentPermissionModeService {
@@ -123,6 +147,33 @@ impl AgentPermissionModeServiceContract for AgentPermissionModeService {
     fn on_did_change_mode(&self) -> Event<PermissionModeChangedContext> {
         self.changed.event()
     }
+}
+
+impl Disposable for AgentPermissionModeService {
+    fn dispose(&self) -> DisposeResult {
+        self._disposables.dispose()
+    }
+}
+
+// Original: permissionModeService.ts, registerScopedService(..., Eager,
+// "permissionMode"). The registration is disposable because the source
+// service owns its injection and mode-change emitter subscriptions.
+pub fn register_agent_permission_mode_service() {
+    register_scoped_service(
+        LifecycleScope::Agent,
+        AGENT_PERMISSION_MODE_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let wire = accessor.get(WIRE_SERVICE_ID)?;
+            let injector = accessor.get(AGENT_CONTEXT_INJECTOR_SERVICE_ID)?;
+            let service: Arc<dyn AgentPermissionModeServiceContract> = Arc::new(
+                AgentPermissionModeService::from_handles((*wire).clone(), (*injector).clone()),
+            );
+            Ok(AgentPermissionModeServiceHandle(service))
+        })
+        .disposable(),
+        InstantiationType::Eager,
+        "permissionMode",
+    );
 }
 
 #[cfg(test)]
