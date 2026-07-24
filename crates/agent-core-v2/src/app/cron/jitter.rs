@@ -2,6 +2,8 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/cron/jitter.ts`.
 
+use std::cmp::Ordering;
+
 use chrono::{DateTime, Local, Timelike, Utc};
 
 use super::{ParsedCronExpression, compute_next_cron_run};
@@ -36,7 +38,7 @@ pub fn jittered_next_cron_run_ms(
         .filter(|next| *next > ideal_ms)
         .map_or(MS_PER_DAY, |next| next - ideal_ms);
     let cap = (period * config.recurring_max_fraction_of_period).min(config.recurring_max_ms);
-    if !(cap > 0.0) {
+    if cap.partial_cmp(&0.0) != Some(Ordering::Greater) {
         return ideal_ms;
     }
     ideal_ms + cap * fraction_from_id(id)
@@ -57,7 +59,9 @@ pub fn one_shot_jittered_next_cron_run_ms(
     else {
         return ideal_ms;
     };
-    if !matches!(date.minute(), 0 | 30) || !(config.one_shot_max_ms > 0.0) {
+    if !matches!(date.minute(), 0 | 30)
+        || config.one_shot_max_ms.partial_cmp(&0.0) != Some(Ordering::Greater)
+    {
         return ideal_ms;
     }
     let shifted = ideal_ms - config.one_shot_max_ms * fraction_from_id(id);
@@ -69,10 +73,11 @@ pub fn one_shot_jittered_next_cron_run_ms(
 }
 
 fn fraction_from_id(id: &str) -> f64 {
-    if id.len() == 8 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        if let Ok(value) = u32::from_str_radix(id, 16) {
-            return value as f64 / 4_294_967_296.0;
-        }
+    if id.len() == 8
+        && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && let Ok(value) = u32::from_str_radix(id, 16)
+    {
+        return value as f64 / 4_294_967_296.0;
     }
     let mut hash: i32 = 5381;
     for code_unit in id.encode_utf16() {

@@ -209,10 +209,16 @@ fn matches(expr: &ParsedCronExpression, date: &DateTime<Local>) -> bool {
     let dow = expr
         .days_of_week
         .contains(&date.weekday().num_days_from_sunday());
-    (expr.days_of_month_wildcard && expr.days_of_week_wildcard)
-        || (expr.days_of_month_wildcard && dow)
-        || (expr.days_of_week_wildcard && dom)
-        || (dom || dow)
+    if expr.days_of_month_wildcard && expr.days_of_week_wildcard {
+        return true;
+    }
+    if expr.days_of_month_wildcard {
+        return dow;
+    }
+    if expr.days_of_week_wildcard {
+        return dom;
+    }
+    dom || dow
 }
 
 pub fn cron_to_human(expr: &ParsedCronExpression) -> String {
@@ -234,13 +240,12 @@ pub fn cron_to_human(expr: &ParsedCronExpression) -> String {
         && expr.days_of_month_wildcard
         && all_month
         && expr.days_of_week_wildcard
+        && let Some(step) = detect_step(&expr.hours, 0, 23).filter(|step| *step > 1)
     {
-        if let Some(step) = detect_step(&expr.hours, 0, 23).filter(|step| *step > 1) {
-            return format!(
-                "every {step} hours at minute {:02}",
-                expr.minutes.first().unwrap()
-            );
-        }
+        return format!(
+            "every {step} hours at minute {:02}",
+            expr.minutes.first().unwrap()
+        );
     }
     if expr.minutes.len() == 1 && expr.hours.len() == 1 && expr.days_of_month_wildcard && all_month
     {
