@@ -3,6 +3,7 @@
 pub mod config_schema;
 pub mod output;
 pub mod tool_naming;
+pub mod tools;
 pub mod types;
 
 pub use config_schema::{
