@@ -6,6 +6,7 @@ pub mod discovery;
 pub mod discovery_config_section;
 pub mod errors;
 pub mod host_request_headers;
+pub mod inspection;
 pub mod model_auth;
 pub mod model_requester;
 pub mod model_requester_impl;
@@ -35,6 +36,12 @@ pub use discovery_config_section::{
 pub use host_request_headers::{
     HOST_REQUEST_HEADERS_ID, HostRequestHeaders, host_request_headers_seed,
     register_host_request_headers,
+};
+pub use inspection::{
+    InspectedAuth, InspectedAuthKind, InspectedModel, InspectedProvider,
+    InspectedProviderDefinition, InspectedResolvedModel, InspectionAssemblyError, ModelInspection,
+    ResolutionTraceCollector, TRACE, assemble_model_inspection, attribute_effective_fields,
+    attribute_provider_options, mask_secret, redact_secrets,
 };
 pub use model_requester::{
     ModelRequestError, ModelRequestEvent, ModelRequestInput, ModelRequestParams,
