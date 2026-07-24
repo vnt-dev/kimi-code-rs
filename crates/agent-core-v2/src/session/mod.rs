@@ -8,6 +8,7 @@ pub mod process;
 pub mod question;
 pub mod session_context;
 pub mod session_fs;
+pub mod session_metadata;
 pub mod skill_catalog;
 pub mod tool_policy;
 pub mod workspace_context;
