@@ -137,7 +137,72 @@ pub fn preflight_tool_call(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+
     use super::*;
+    use crate::{
+        agent::tool_registry::{
+            AgentToolRegistryService, AgentToolRegistryServiceContract, ToolRegistrationOptions,
+        },
+        kosong::contract::{message::ToolCallType, tool::Tool},
+        tool::{ExecutableTool, ToolExecution},
+    };
+
+    struct TestTool {
+        definition: Tool,
+    }
+
+    #[async_trait]
+    impl ExecutableTool for TestTool {
+        type Input = Value;
+
+        fn tool(&self) -> &Tool {
+            &self.definition
+        }
+
+        async fn resolve_execution(&self, _input: Self::Input) -> ToolExecution {
+            ToolExecution::Error(crate::tool::ExecutableToolResult::success("unused"))
+        }
+    }
+
+    fn call(name: &str, arguments: &str) -> ToolCall {
+        ToolCall {
+            call_type: ToolCallType::Function,
+            id: "call-1".into(),
+            name: name.into(),
+            arguments: Some(arguments.into()),
+            extras: None,
+            stream_index: None,
+        }
+    }
+
+    fn registry() -> AgentToolRegistryService {
+        let registry = AgentToolRegistryService::new();
+        registry.register(
+            Arc::new(TestTool {
+                definition: Tool {
+                    name: "Read".into(),
+                    description: "Reads a file".into(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "required": ["path"],
+                        "additionalProperties": false,
+                        "properties": {"path": {"type": "string"}},
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                    deferred: None,
+                },
+            }),
+            ToolRegistrationOptions {
+                source: Some(ToolSource::User),
+            },
+        );
+        registry
+    }
 
     #[test]
     fn parser_preserves_empty_and_invalid_json_fallbacks() {
@@ -154,5 +219,66 @@ mod tests {
         assert!(invalid.parse_failed);
         assert_eq!(invalid.data, serde_json::json!({}));
         assert!(invalid.error.is_some());
+    }
+
+    #[test]
+    fn preflight_preserves_rejection_precedence_and_runnable_values() {
+        let registry = registry();
+        let missing: MissingToolDescriber = Arc::new(|name| Some(format!("missing: {name}")));
+        let missing =
+            preflight_tool_call(&registry, call("Missing", "{}"), None, None, Some(&missing));
+        assert!(matches!(
+            missing,
+            PreflightedToolCall::Rejected { output, args, .. }
+                if output == "missing: Missing" && args == serde_json::json!({})
+        ));
+
+        let guard: ToolCallGuard =
+            Arc::new(|input| (input.source == ToolSource::User).then_some("guard rejected".into()));
+        let guarded = preflight_tool_call(
+            &registry,
+            call("Read", r#"{"path":"a.txt"}"#),
+            Some(&guard),
+            None,
+            None,
+        );
+        assert!(matches!(
+            guarded,
+            PreflightedToolCall::Rejected { output, .. } if output == "guard rejected"
+        ));
+
+        let unavailable: UnavailableToolDescriber =
+            Arc::new(|_| Some("temporarily unavailable".into()));
+        let unavailable = preflight_tool_call(
+            &registry,
+            call("Read", r#"{"path":"a.txt"}"#),
+            None,
+            Some(&unavailable),
+            None,
+        );
+        assert!(matches!(
+            unavailable,
+            PreflightedToolCall::Rejected { output, .. } if output == "temporarily unavailable"
+        ));
+
+        let invalid = preflight_tool_call(&registry, call("Read", "{}"), None, None, None);
+        assert!(matches!(
+            invalid,
+            PreflightedToolCall::Rejected { output, .. }
+                if output.starts_with("Invalid args for tool \"Read\": must have required property 'path'")
+        ));
+
+        let runnable = preflight_tool_call(
+            &registry,
+            call("Read", r#"{"path":"a.txt"}"#),
+            None,
+            None,
+            None,
+        );
+        assert!(matches!(
+            runnable,
+            PreflightedToolCall::Runnable { tool_name, args, .. }
+                if tool_name == "Read" && args == serde_json::json!({"path": "a.txt"})
+        ));
     }
 }
