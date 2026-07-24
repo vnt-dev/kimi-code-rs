@@ -4,6 +4,7 @@
 
 mod abort_grace;
 mod contract;
+mod execution;
 mod preflight;
 mod result_normalization;
 mod tool_hooks;
@@ -11,6 +12,7 @@ mod tool_scheduler;
 
 pub use abort_grace::*;
 pub use contract::*;
+pub use execution::*;
 pub use preflight::*;
 pub use result_normalization::*;
 pub use tool_hooks::*;
