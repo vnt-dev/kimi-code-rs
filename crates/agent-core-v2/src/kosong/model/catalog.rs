@@ -347,8 +347,8 @@ pub fn build_protocol_provider_options(
     protocol: Protocol,
     provider: Option<&ProviderConfig>,
     base_url: Option<&str>,
-) -> ProtocolProviderOptions {
-    match protocol {
+) -> Option<ProtocolProviderOptions> {
+    let options = match protocol {
         Protocol::Anthropic => ProtocolProviderOptions {
             default_max_tokens: model.max_output_size.map(|size| size.get() as f64),
             support_efforts: model.support_efforts.clone(),
@@ -382,7 +382,17 @@ pub fn build_protocol_provider_options(
             }
         }
         Protocol::OpenAiResponses => ProtocolProviderOptions::default(),
-    }
+    };
+    (options.reasoning_key.is_some()
+        || options.default_max_tokens.is_some()
+        || options.support_efforts.is_some()
+        || options.adaptive_thinking.is_some()
+        || options.beta_api.is_some()
+        || options.metadata.is_some()
+        || options.vertexai.is_some()
+        || options.project.is_some()
+        || options.location.is_some())
+    .then_some(options)
 }
 
 // Original: catalogService.ts, profileForAttribution().
@@ -629,7 +639,8 @@ mod tests {
             Protocol::Anthropic,
             None,
             None,
-        );
+        )
+        .unwrap();
         assert_eq!(anthropic.default_max_tokens, Some(8192.0));
         assert_eq!(anthropic.beta_api, Some(true));
 
@@ -644,12 +655,22 @@ mod tests {
                 ..ProviderConfig::default()
             }),
             Some("https://us-central1-aiplatform.googleapis.com/v1"),
-        );
+        )
+        .unwrap();
         assert_eq!(vertex.vertexai, Some(true));
         assert_eq!(vertex.project.as_deref(), Some("project-a"));
         assert_eq!(vertex.location.as_deref(), Some("us-central1"));
         assert_eq!(
             location_from_vertex_ai_base_url(Some("https://wrong.example.test/v1")),
+            None
+        );
+        assert_eq!(
+            build_protocol_provider_options(
+                &ModelRecord::default(),
+                Protocol::OpenAiResponses,
+                None,
+                None
+            ),
             None
         );
     }
