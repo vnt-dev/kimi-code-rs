@@ -1,8 +1,15 @@
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use crate::{
-    _base::di::instantiation::ServiceIdentifier,
-    wire::wire_service::{WireService, WireServiceError},
+    _base::di::{
+        descriptors::SyncDescriptor,
+        instantiation::{ServiceIdentifier, ServicesAccessorExt},
+        scope::{InstantiationType, LifecycleScope, register_scoped_service},
+    },
+    wire::{
+        contract::{WIRE_SERVICE_ID, WireServiceHandle},
+        wire_service::{WireService, WireServiceError},
+    },
 };
 
 use super::{
@@ -23,9 +30,18 @@ pub trait AgentPermissionRulesServiceContract: Send + Sync {
     ) -> Result<(), PermissionRulesServiceError>;
 }
 
-pub const AGENT_PERMISSION_RULES_SERVICE_ID: ServiceIdentifier<
-    dyn AgentPermissionRulesServiceContract,
-> = ServiceIdentifier::new("agentPermissionRulesService");
+#[derive(Clone)]
+pub struct AgentPermissionRulesServiceHandle(pub Arc<dyn AgentPermissionRulesServiceContract>);
+
+impl Deref for AgentPermissionRulesServiceHandle {
+    type Target = dyn AgentPermissionRulesServiceContract;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const AGENT_PERMISSION_RULES_SERVICE_ID: ServiceIdentifier<AgentPermissionRulesServiceHandle> =
+    ServiceIdentifier::new("agentPermissionRulesService");
 
 #[derive(Debug, thiserror::Error)]
 pub enum PermissionRulesServiceError {
@@ -46,6 +62,23 @@ impl AgentPermissionRulesService {
         std::sync::LazyLock::force(&RECORD_APPROVAL_RESULT);
         Self { wire }
     }
+}
+
+// Original: permissionRulesService.ts, registerScopedService(..., Eager,
+// "permissionRules").
+pub fn register_agent_permission_rules_service() {
+    register_scoped_service(
+        LifecycleScope::Agent,
+        AGENT_PERMISSION_RULES_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let wire: WireServiceHandle = (*accessor.get(WIRE_SERVICE_ID)?).clone();
+            let service: Arc<dyn AgentPermissionRulesServiceContract> =
+                Arc::new(AgentPermissionRulesService::new(wire.0));
+            Ok(AgentPermissionRulesServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "permissionRules",
+    );
 }
 
 impl AgentPermissionRulesServiceContract for AgentPermissionRulesService {
