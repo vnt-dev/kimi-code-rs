@@ -119,7 +119,7 @@ pub async fn export_session_directory(
             title: args.summary.title.clone(),
             workspace_dir: args.summary.workspace_dir.clone(),
         },
-        now: args.now.clone(),
+        now: args.now,
         version: args.request.version.clone(),
         wire_protocol_version: None,
         session_scan,

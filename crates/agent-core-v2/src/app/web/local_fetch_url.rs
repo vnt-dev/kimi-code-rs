@@ -30,21 +30,11 @@ const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Appl
 const DEFAULT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_REDIRECT_HOPS: usize = 10;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct LocalFetchUrlProviderOptions {
     pub user_agent: Option<String>,
     pub max_bytes: Option<u64>,
     pub allow_private_addresses: Option<bool>,
-}
-
-impl Default for LocalFetchUrlProviderOptions {
-    fn default() -> Self {
-        Self {
-            user_agent: None,
-            max_bytes: None,
-            allow_private_addresses: None,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -268,10 +258,9 @@ async fn resolve_safe_fetch_target(
     let addresses = tokio::net::lookup_host((host.as_str(), port))
         .await
         .map_err(|error| {
-            Box::new(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Cannot resolve host \"{host}\" for the fetch safety check: {error}"),
-            )) as UrlFetchError
+            Box::new(io::Error::other(format!(
+                "Cannot resolve host \"{host}\" for the fetch safety check: {error}"
+            ))) as UrlFetchError
         })?
         .collect::<Vec<_>>();
     for address in &addresses {
@@ -368,9 +357,11 @@ fn extract_main_content_blocking(html: &str, url: &Url) -> Result<String, UrlFet
         let text = article.text.trim();
         if !text.is_empty() {
             let title = article.title.trim();
-            return Ok((!title.is_empty())
-                .then(|| format!("# {title}\n\n{text}"))
-                .unwrap_or_else(|| text.to_owned()));
+            return Ok(if title.is_empty() {
+                text.to_owned()
+            } else {
+                format!("# {title}\n\n{text}")
+            });
         }
     }
     let document = Html::parse_document(html);
@@ -384,9 +375,11 @@ fn extract_main_content_blocking(html: &str, url: &Url) -> Result<String, UrlFet
             "Failed to extract meaningful content from the page. The page may require JavaScript to render.",
         )));
     }
-    Ok((!title.is_empty())
-        .then(|| format!("# {title}\n\n{text}"))
-        .unwrap_or(text))
+    Ok(if title.is_empty() {
+        text
+    } else {
+        format!("# {title}\n\n{text}")
+    })
 }
 
 fn select_text(document: &Html, selector: &str) -> Option<String> {
