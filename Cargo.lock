@@ -1414,6 +1414,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "indexmap",
+ "kimi-code-agent-core-v2",
  "kimi-code-protocol",
  "libc",
  "serde",

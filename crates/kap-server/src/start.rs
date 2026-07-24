@@ -6,6 +6,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
+use kimi_code_agent_core_v2::app::bootstrap::{
+    BootstrapInput, BootstrapResolveError, resolve_bootstrap_options,
+};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -99,6 +102,8 @@ pub enum StartServerError {
     PrivateFile(#[from] PrivateFileError),
     #[error(transparent)]
     Password(#[from] PasswordError),
+    #[error(transparent)]
+    Bootstrap(#[from] BootstrapResolveError),
     #[error("server task failed: {0}")]
     Join(#[from] JoinError),
     #[error(
@@ -163,18 +168,19 @@ impl RunningServer {
 pub async fn start_server(options: ServerStartOptions) -> Result<RunningServer, StartServerError> {
     let host = options.host.unwrap_or_else(|| DEFAULT_HOST.to_owned());
     let requested_port = options.port.unwrap_or(DEFAULT_PORT);
-    let home_dir = options.home_dir.unwrap_or_else(|| {
-        // MIGRATION-TODO:
-        // Original: start.ts, resolveKimiHome(opts.homeDir).
-        // Missing dependency: kimi-code-agent-core-v2 home resolution.
-        todo!("resolve default Kimi home through kimi-code-agent-core-v2")
-    });
-    let instances_dir = options
-        .instances_dir
-        .unwrap_or_else(|| home_dir.join("server").join("instances"));
     let version = options
         .version
         .unwrap_or_else(|| get_server_version().to_owned());
+    let bootstrap_options = resolve_bootstrap_options(BootstrapInput {
+        home_dir: options.home_dir,
+        config_path: options.config_path,
+        client_version: Some(version.clone()),
+        ..BootstrapInput::default()
+    })?;
+    let home_dir = bootstrap_options.home_dir;
+    let instances_dir = options
+        .instances_dir
+        .unwrap_or_else(|| home_dir.join("server").join("instances"));
     let started_at_ms = now_millis();
     let registry = InstanceRegistry::create(InstanceRegistryOptions {
         instances_dir: Some(instances_dir),

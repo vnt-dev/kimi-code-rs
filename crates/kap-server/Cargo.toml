@@ -15,6 +15,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 futures-util = "0.3"
 getrandom = "0.3"
 kimi-code-protocol = { path = "../protocol" }
+kimi-code-agent-core-v2 = { path = "../agent-core-v2" }
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
