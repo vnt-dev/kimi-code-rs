@@ -19,5 +19,6 @@ pub mod session_index;
 pub mod skill_catalog;
 pub mod task;
 pub mod telemetry;
+pub mod web;
 pub mod workspace_local_config;
 pub mod workspace_registry;
