@@ -1,6 +1,10 @@
 use std::{error::Error, fmt, path::Path};
 
-use crate::tui::config::{TuiConfig, TuiConfigIoError, get_tui_config_path, load_tui_config};
+use crate::tui::{
+    config::{TuiConfig, TuiConfigIoError, get_tui_config_path, load_tui_config},
+    kimi_tui::KimiTui,
+    runtime::{ProcessTerminal, TuiRuntime},
+};
 
 use super::options::CliOptions;
 
@@ -19,6 +23,7 @@ pub struct ShellStartupConfig {
 pub enum RunShellError {
     ConfigPath(crate::utils::paths::HomeDirectoryUnavailable),
     Config(TuiConfigIoError),
+    Terminal(std::io::Error),
 }
 
 impl fmt::Display for RunShellError {
@@ -26,6 +31,7 @@ impl fmt::Display for RunShellError {
         match self {
             Self::ConfigPath(error) => error.fmt(formatter),
             Self::Config(error) => error.fmt(formatter),
+            Self::Terminal(error) => error.fmt(formatter),
         }
     }
 }
@@ -35,6 +41,7 @@ impl Error for RunShellError {
         match self {
             Self::ConfigPath(error) => Some(error),
             Self::Config(error) => Some(error),
+            Self::Terminal(error) => Some(error),
         }
     }
 }
@@ -86,21 +93,30 @@ pub async fn run_shell(
 
 async fn start_v2_shell(
     _options: &CliOptions,
-    _version: &str,
-    _run_options: RunShellOptions,
-    _startup: ShellStartupConfig,
+    version: &str,
+    run_options: RunShellOptions,
+    startup: ShellStartupConfig,
 ) -> Result<(), RunShellError> {
     // MIGRATION-TODO:
-    // Original: apps/kimi-code/src/cli/run-shell.ts, runShell() after
-    // loadTuiConfig().
-    // Missing dependency: kimi-code-agent-core-v2 does not yet expose the
-    // application-level harness composition used to create a session-backed
-    // KimiTUI.
-    // Temporary behavior: reaching the interactive shell reports an explicit
-    // incomplete migration through todo!().
-    // Completion condition: compose the v2 services and pass their session
-    // facade to the migrated KimiTUI without importing the legacy agent-core.
-    todo!("compose runShell with kimi-code-agent-core-v2 and KimiTUI")
+    // Original: runShell() composes KimiHarness and KimiTUI.
+    // Missing dependency: the v2 application/session scope is not yet exposed
+    // through the migrated shell coordinator.
+    // Temporary behavior: start a fully interactive local TUI whose operations
+    // acknowledge input with deterministic defaults.
+    // Completion condition: bootstrap kimi-code-agent-core-v2 and inject its
+    // session/agent services into KimiTui without importing legacy agent-core.
+    let mut startup_warning = startup.config_warning;
+    if run_options.migrate_only {
+        startup_warning = Some(
+            "Migration-only mode is interactive, but legacy migration execution is not connected."
+                .to_owned(),
+        );
+    }
+    let mut tui = KimiTui::new(version, startup_warning);
+    TuiRuntime::new(ProcessTerminal::new())
+        .run(&mut tui)
+        .await
+        .map_err(RunShellError::Terminal)
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ pub mod easter_eggs;
 pub mod fuzzy;
 pub mod goal_queue_store;
 pub mod keys;
+pub mod kimi_tui;
 pub mod reverse_rpc;
 pub mod runtime;
 pub mod state;
