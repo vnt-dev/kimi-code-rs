@@ -117,7 +117,7 @@ The following source units now have tested Rust counterparts:
 | `services/pinoLoggerService.ts` | `src/services/server_logger.rs` | JSON logger counterpart complete |
 | protocol DTO modules | sibling `kimi-code-protocol` crate | Reused rather than duplicated |
 | `start.ts`, `listenWithPortRetry()` | `src/start.rs` | Axum listener, exposure policy, auth, instance registration, port retry and graceful transport shutdown complete |
-| `routes/registerApiV1Routes.ts`, route modules | matching `src/routes/*.rs` files | Full documented interface surface registered by source domain; core-dependent operations use the explicit bridge below |
+| `routes/registerApiV1Routes.ts`, route modules | matching `src/routes/*.rs` files | Full documented interface surface with one named async handler per endpoint; core-dependent method bodies use the explicit bridge below |
 | `routes/webAssets.ts` | `src/routes/web_assets.rs` | Async static files, MIME mapping, SPA fallback and reserved paths complete |
 | `transport/ws/v1/registerWsV1.ts`, connection control methods | `src/web/websocket.rs` | Upgrade/auth/subprotocol, hello, control ACKs, registry and close lifecycle complete |
 
