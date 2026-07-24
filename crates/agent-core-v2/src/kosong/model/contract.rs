@@ -10,7 +10,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::{
-    _base::{di::instantiation::ServiceIdentifier, event::Event},
+    _base::{
+        di::{
+            instantiation::ServiceIdentifier,
+            lifecycle::{Disposable, DisposeResult},
+        },
+        event::Event,
+    },
     kosong::{protocol::identity::Protocol, provider::config::OAuthRef},
 };
 
@@ -99,7 +105,7 @@ pub type ModelServiceError = Box<dyn Error + Send + Sync>;
 pub type ModelServiceResult<T> = Result<T, ModelServiceError>;
 
 #[async_trait]
-pub trait ModelServiceContract: Send + Sync {
+pub trait ModelServiceContract: Disposable + Send + Sync {
     fn on_did_change_models(&self) -> Event<ModelsChangedEvent>;
     fn get(&self, id: &str) -> Option<ModelRecord>;
     fn list(&self) -> ModelsSection;
@@ -115,6 +121,12 @@ impl Deref for ModelServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for ModelServiceHandle {
+    fn dispose(&self) -> DisposeResult {
+        self.0.dispose()
     }
 }
 

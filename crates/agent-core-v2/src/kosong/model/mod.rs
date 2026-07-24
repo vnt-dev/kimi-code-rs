@@ -9,6 +9,7 @@ pub mod host_request_headers;
 pub mod model_auth;
 pub mod model_requester;
 pub mod model_requester_impl;
+pub mod model_service;
 pub mod thinking;
 pub mod types;
 
@@ -41,3 +42,4 @@ pub use model_requester::{
     effective_max_completion_tokens,
 };
 pub use model_requester_impl::{ModelRequesterImpl, build_stream_timing};
+pub use model_service::{ModelService, register_model_service};
