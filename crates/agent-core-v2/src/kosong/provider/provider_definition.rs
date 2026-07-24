@@ -167,6 +167,33 @@ impl ProviderDefinitionRegistry {
             base_url: explained.base_url,
         }
     }
+
+    pub fn resolve_endpoint_with_env(
+        &self,
+        provider_type: &str,
+        get_env: &dyn Fn(&str) -> Option<String>,
+    ) -> ResolvedProviderEndpoint {
+        let Some(definition) = self.get(provider_type, None) else {
+            return ResolvedProviderEndpoint::default();
+        };
+        let endpoint = definition
+            .endpoint
+            .as_ref()
+            .map(normalize_endpoint_declaration)
+            .or_else(|| aggregate_trait_endpoints(&definition));
+        let Some(endpoint) = endpoint else {
+            return ResolvedProviderEndpoint::default();
+        };
+        let first = |names: &[String]| {
+            names
+                .iter()
+                .find_map(|name| get_env(name).filter(|value| !value.is_empty()))
+        };
+        ResolvedProviderEndpoint {
+            api_key: first(&endpoint.api_key_env),
+            base_url: first(&endpoint.base_url_env).or(endpoint.default_base_url),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -311,6 +338,16 @@ pub fn resolve_provider_endpoint(
         .read()
         .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .resolve_endpoint(provider_type, env))
+}
+
+pub fn resolve_provider_endpoint_with_env(
+    provider_type: &str,
+    get_env: &dyn Fn(&str) -> Option<String>,
+) -> Result<ResolvedProviderEndpoint, ProviderDefinitionRegistryError> {
+    Ok(PROVIDER_DEFINITIONS
+        .read()
+        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
+        .resolve_endpoint_with_env(provider_type, get_env))
 }
 
 pub fn explain_provider_endpoint_from_process_env(
