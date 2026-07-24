@@ -16,6 +16,7 @@ pub mod host_folder_browser;
 pub mod message_legacy;
 pub mod plugin;
 pub mod session_index;
+pub mod session_legacy;
 pub mod skill_catalog;
 pub mod task;
 pub mod telemetry;
