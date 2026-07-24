@@ -9,6 +9,7 @@ pub mod goal;
 pub mod llm_requester;
 pub mod loop_;
 pub mod mcp;
+pub mod media;
 pub mod permission_mode;
 pub mod permission_policy;
 pub mod permission_rules;
