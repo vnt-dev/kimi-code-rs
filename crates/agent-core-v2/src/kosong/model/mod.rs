@@ -7,6 +7,7 @@ pub mod discovery_config_section;
 pub mod errors;
 pub mod host_request_headers;
 pub mod model_auth;
+pub mod model_requester;
 pub mod thinking;
 pub mod types;
 
@@ -32,4 +33,8 @@ pub use discovery_config_section::{
 pub use host_request_headers::{
     HOST_REQUEST_HEADERS_ID, HostRequestHeaders, host_request_headers_seed,
     register_host_request_headers,
+};
+pub use model_requester::{
+    ModelRequestEvent, ModelRequestInput, ModelRequestParams, ModelRequestStream,
+    ModelRequestTiming, ModelRequester, UploadVideoFuture, effective_max_completion_tokens,
 };
