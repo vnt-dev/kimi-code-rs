@@ -348,7 +348,12 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use futures_util::{SinkExt, StreamExt};
     use serde_json::Value;
+    use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::tungstenite::Message as ClientWsMessage;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::http::HeaderValue as WsHeaderValue;
     use tower::ServiceExt;
 
     use super::*;
@@ -566,6 +571,131 @@ mod tests {
             .unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["data"]["value"], "dark");
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_authenticates_with_bearer_protocol_and_tracks_subscriptions() {
+        let home = tempfile::tempdir().unwrap();
+        let bridge = Arc::new(RecordingCoreBridge::default());
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            core_bridge: Some(Arc::clone(&bridge) as Arc<dyn AgentCoreBridge>),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let protocol = format!("kimi-code.bearer.{}", server.auth_token_service.get_token());
+        let mut request = format!("ws://{}:{}/api/v1/ws", server.host, server.port)
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            WsHeaderValue::from_str(&protocol).unwrap(),
+        );
+        let (mut socket, response) = connect_async(request).await.unwrap();
+        assert_eq!(
+            response
+                .headers()
+                .get("sec-websocket-protocol")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            protocol
+        );
+
+        let hello = socket.next().await.unwrap().unwrap().into_text().unwrap();
+        let hello: Value = serde_json::from_str(&hello).unwrap();
+        assert_eq!(hello["type"], "server_hello");
+        assert_eq!(hello["payload"]["protocol_version"], 2);
+        assert_eq!(hello["payload"]["capabilities"]["event_batching"], false);
+
+        socket
+            .send(ClientWsMessage::Text(
+                r#"{"type":"client_hello","id":"hello-1","payload":{"client_id":"test","subscriptions":[]}}"#
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let hello_ack = socket.next().await.unwrap().unwrap().into_text().unwrap();
+        let hello_ack: Value = serde_json::from_str(&hello_ack).unwrap();
+        assert_eq!(hello_ack["type"], "ack");
+        assert_eq!(hello_ack["id"], "hello-1");
+
+        socket
+            .send(ClientWsMessage::Text(
+                r#"{"type":"subscribe","id":"sub-1","payload":{"session_ids":["session-1"]}}"#
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let subscribe_ack = socket.next().await.unwrap().unwrap().into_text().unwrap();
+        let subscribe_ack: Value = serde_json::from_str(&subscribe_ack).unwrap();
+        assert_eq!(subscribe_ack["payload"]["accepted"][0], "session-1");
+        assert_eq!(server.connection_registry.size(), 1);
+        let connection = server.connection_registry.values().pop().unwrap();
+        assert!(connection.has_client_hello());
+        assert_eq!(
+            connection.subscription_session_ids(),
+            vec!["session-1".to_owned()]
+        );
+        {
+            let calls = bridge
+                .calls
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, CoreOperation::WebSocketEventReplay);
+            assert_eq!(calls[0].1.method, "WS");
+        }
+
+        socket.close(None).await.unwrap();
+        for _ in 0..20 {
+            if server.connection_registry.is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(server.connection_registry.is_empty());
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_rejects_missing_credentials_and_disallowed_origins() {
+        let home = tempfile::tempdir().unwrap();
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let url = format!("ws://{}:{}/api/v1/ws", server.host, server.port);
+        let missing = connect_async(&url).await.unwrap_err();
+        match missing {
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                assert_eq!(response.status(), 401);
+            }
+            error => panic!("expected HTTP rejection, got {error}"),
+        }
+
+        let protocol = format!("kimi-code.bearer.{}", server.auth_token_service.get_token());
+        let mut request = url.into_client_request().unwrap();
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            WsHeaderValue::from_str(&protocol).unwrap(),
+        );
+        request
+            .headers_mut()
+            .insert("origin", WsHeaderValue::from_static("https://evil.example"));
+        let disallowed = connect_async(request).await.unwrap_err();
+        match disallowed {
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                assert_eq!(response.status(), 403);
+            }
+            error => panic!("expected HTTP rejection, got {error}"),
+        }
         server.close().await.unwrap();
     }
 }

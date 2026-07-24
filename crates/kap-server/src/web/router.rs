@@ -16,6 +16,7 @@ use crate::transport::ws::connection_registry::ConnectionLike;
 use super::api::{create_open_api_document, register_core_routes};
 use super::middleware::{RequestId, boundary};
 use super::state::AppState;
+use super::websocket::{WS_PATH, ws_upgrade};
 
 // Original: routes/registerApiV1Routes.ts, registerHealthRoute().
 async fn health(Extension(request_id): Extension<RequestId>) -> Json<Value> {
@@ -240,6 +241,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/gui/store/removeItem", post(gui_remove_item))
         .route("/api/v1/gui/store/clear", post(gui_clear))
         .route("/api/v1/gui/store/length", get(gui_length))
+        .route(WS_PATH, get(ws_upgrade))
         .route("/asyncapi.json", get(async_api))
         .route("/openapi.json", get(open_api));
     if state.enable_shutdown {
