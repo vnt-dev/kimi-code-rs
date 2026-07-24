@@ -2,6 +2,7 @@
 
 pub mod agent_file;
 pub mod agent_profile_source;
+pub mod paths;
 pub mod profile_from_file;
 pub mod runtime_options;
 pub mod types;
@@ -13,6 +14,7 @@ pub use agent_profile_source::{
     AgentProfileContribution, AgentProfileSourceContract, AgentProfileSourceError,
     AgentProfileSourceHandle, profiles_from_discovery,
 };
+pub use paths::{is_directory_path, is_file_path, path_exists, resolve_agent_path};
 pub use profile_from_file::agent_profile_from_file;
 pub use runtime_options::{
     AGENT_CATALOG_RUNTIME_OPTIONS_ID, AgentCatalogRuntimeOptions,
