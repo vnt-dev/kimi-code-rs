@@ -8,6 +8,7 @@ pub mod errors;
 pub mod host_request_headers;
 pub mod model_auth;
 pub mod model_requester;
+pub mod model_requester_impl;
 pub mod thinking;
 pub mod types;
 
@@ -38,3 +39,4 @@ pub use model_requester::{
     ModelRequestEvent, ModelRequestInput, ModelRequestParams, ModelRequestStream,
     ModelRequestTiming, ModelRequester, UploadVideoFuture, effective_max_completion_tokens,
 };
+pub use model_requester_impl::build_stream_timing;
