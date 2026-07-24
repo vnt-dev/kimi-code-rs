@@ -14,6 +14,7 @@ pub mod path_utils;
 pub mod plan_mode_guard_deny;
 pub mod plan_mode_tool_approve;
 pub mod sensitive_file_access_ask;
+pub mod session_approval_history;
 pub mod user_configured_rule;
 pub mod yolo_mode_approve;
 
@@ -29,5 +30,6 @@ pub use path_utils::*;
 pub use plan_mode_guard_deny::*;
 pub use plan_mode_tool_approve::*;
 pub use sensitive_file_access_ask::*;
+pub use session_approval_history::*;
 pub use user_configured_rule::*;
 pub use yolo_mode_approve::*;
