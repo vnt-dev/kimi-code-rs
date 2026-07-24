@@ -16,6 +16,8 @@ use crossterm::{
 };
 use futures_util::StreamExt;
 
+use crate::tui::components::{core::CURSOR_MARKER, render::visible_width};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalEvent {
     Input(String),
@@ -95,12 +97,19 @@ impl TerminalBackend for ProcessTerminal {
     }
 
     fn draw(&mut self, lines: &[String]) -> io::Result<()> {
+        let (_, terminal_rows) = size()?;
+        let (lines, cursor) = prepare_terminal_frame(lines, terminal_rows);
         queue!(self.stdout, MoveTo(0, 0), Clear(ClearType::All))?;
         for (index, line) in lines.iter().enumerate() {
             if index > 0 {
                 queue!(self.stdout, Print("\r\n"))?;
             }
             queue!(self.stdout, Print(line))?;
+        }
+        if let Some((column, row)) = cursor {
+            queue!(self.stdout, MoveTo(column, row), Show)?;
+        } else {
+            queue!(self.stdout, Hide)?;
         }
         self.stdout.flush()
     }
@@ -135,6 +144,42 @@ impl TerminalBackend for ProcessTerminal {
             }
         }
     }
+}
+
+// Original:
+//   packages/pi-tui/src/tui.ts
+//   TUI.extractCursorPosition()
+//
+// Rust adaptation:
+//   The full-redraw terminal backend strips pi-tui's zero-width APC marker
+//   before writing a frame, then uses its visual location for the hardware
+//   cursor. Terminals that do not interpret the private APC sequence would
+//   otherwise display its payload (`pi:c`) as ordinary text.
+fn prepare_terminal_frame(
+    lines: &[String],
+    terminal_rows: u16,
+) -> (Vec<String>, Option<(u16, u16)>) {
+    let mut output = lines.to_vec();
+    let viewport_top = output
+        .len()
+        .saturating_sub(usize::from(terminal_rows).max(1));
+
+    for row in (viewport_top..output.len()).rev() {
+        let Some(marker_index) = output[row].find(CURSOR_MARKER) else {
+            continue;
+        };
+        let column = visible_width(&output[row][..marker_index]);
+        output[row].replace_range(marker_index..marker_index + CURSOR_MARKER.len(), "");
+        return (
+            output,
+            Some((
+                u16::try_from(column).unwrap_or(u16::MAX),
+                u16::try_from(row - viewport_top).unwrap_or(u16::MAX),
+            )),
+        );
+    }
+
+    (output, None)
 }
 
 impl Drop for ProcessTerminal {
@@ -251,5 +296,33 @@ mod tests {
         let mut event = key(KeyCode::Char('x'), KeyModifiers::NONE);
         event.kind = KeyEventKind::Release;
         assert_eq!(encode_key_event(event), None);
+    }
+
+    #[test]
+    fn strips_pi_tui_cursor_marker_and_preserves_its_visual_position() {
+        let lines = vec![
+            "header".to_owned(),
+            format!("\u{1b}[31m> 你好{CURSOR_MARKER}\u{1b}[0m "),
+        ];
+
+        let (prepared, cursor) = prepare_terminal_frame(&lines, 24);
+
+        assert_eq!(cursor, Some((6, 1)));
+        assert!(!prepared.join("\n").contains("pi:c"));
+        assert!(!prepared.join("\n").contains(CURSOR_MARKER));
+        assert!(prepared[1].contains("> 你好"));
+    }
+
+    #[test]
+    fn cursor_row_is_relative_to_the_visible_viewport() {
+        let lines = vec![
+            "old".to_owned(),
+            "visible".to_owned(),
+            format!("> {CURSOR_MARKER}"),
+        ];
+
+        let (_, cursor) = prepare_terminal_frame(&lines, 2);
+
+        assert_eq!(cursor, Some((2, 1)));
     }
 }
