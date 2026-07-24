@@ -1,12 +1,33 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::io;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::services::auth::AuthTokenService;
-use crate::services::server_logger::{ServerLogLevel, ServerLogger};
+use axum::Router;
+use thiserror::Error;
+use tokio::net::TcpListener;
+use tokio::sync::watch;
+use tokio::task::{JoinError, JoinHandle};
+
+use crate::instance_registry::{InstanceRegistry, InstanceRegistryOptions, RegistrationInfo};
+use crate::middleware::hostnames::HostCheckOptions;
+use crate::middleware::rate_limit::{AuthFailureLimiter, AuthFailureLimiterOptions};
+use crate::security::bind_classify::{BindClass, ClassifyOptions, classify};
+use crate::services::auth::{
+    AuthTokenService, CredentialValidator, PasswordError, PrivateFileError, TokenStore,
+    create_auth_token_service, resolve_password_hash,
+};
+use crate::services::gui_store::GuiStoreService;
+use crate::services::server_logger::{ServerLogLevel, ServerLogger, create_server_logger};
 use crate::transport::ws::connection_registry::ConnectionRegistry;
+use crate::version::get_server_version;
+use crate::web::{AppState, create_router};
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 58_627;
+pub const PORT_RETRY_LIMIT: usize = 100;
 
 #[derive(Default)]
 pub struct ServerStartOptions {
@@ -64,44 +85,262 @@ impl std::fmt::Debug for ServerStartOptions {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+pub enum StartServerError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error(transparent)]
+    PrivateFile(#[from] PrivateFileError),
+    #[error(transparent)]
+    Password(#[from] PasswordError),
+    #[error("server task failed: {0}")]
+    Join(#[from] JoinError),
+    #[error(
+        "refusing to bind {host} ({exposure_class:?}) without TLS; terminate TLS at a reverse proxy or pass --insecure-no-tls"
+    )]
+    NonLoopbackWithoutTls {
+        host: String,
+        exposure_class: BindClass,
+    },
+}
+
 pub struct RunningServer {
+    pub app: Router,
     pub connection_registry: Arc<ConnectionRegistry>,
     pub auth_token_service: AuthTokenService,
     pub host: String,
     pub port: u16,
+    shutdown: watch::Sender<bool>,
+    server_task: JoinHandle<io::Result<()>>,
+    auth_failure_limiter: Option<Arc<AuthFailureLimiter>>,
+}
+
+impl std::fmt::Debug for RunningServer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RunningServer")
+            .field("connection_registry", &self.connection_registry)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RunningServer {
-    pub async fn close(self) {
+    // Original: start.ts, RunningServer.close().
+    pub async fn close(self) -> Result<(), StartServerError> {
+        self.connection_registry
+            .close_all(Some("server shutting down"));
+        let _ = self.shutdown.send(true);
+        self.server_task.await??;
+        if let Some(limiter) = &self.auth_failure_limiter {
+            limiter.dispose();
+        }
+
         // MIGRATION-TODO:
-        // Original: start.ts, RunningServer.close()
-        // Missing dependency: agent-core-v2 Scope disposal, event broadcaster,
-        // model refresh scheduler and filesystem watch bridge lifecycles.
-        todo!("finish ordered shutdown after kimi-code-agent-core-v2 is complete")
+        // Original: start.ts, close() also disposes the agent-core-v2 Scope,
+        // model refresh scheduler, event broadcaster and filesystem watches.
+        // These lifecycles will be attached here when agent-core-v2 is complete.
+        Ok(())
     }
 }
 
 // Original: packages/kap-server/src/start.ts, startServer().
-pub async fn start_server(_options: ServerStartOptions) -> RunningServer {
-    // MIGRATION-TODO:
-    // Missing dependency: agent-core-v2 bootstrap(), Scope seeds, config,
-    // workspace/session services, provider discovery and route service
-    // registrations. The server-local services used by this composition root
-    // are migrated in this crate; do not fabricate a partial HTTP daemon.
-    // Completion condition: the required agent-core-v2 contracts and bootstrap
-    // lifecycle are complete.
-    todo!("bootstrap kap-server after kimi-code-agent-core-v2 is complete")
+pub async fn start_server(options: ServerStartOptions) -> Result<RunningServer, StartServerError> {
+    let host = options.host.unwrap_or_else(|| DEFAULT_HOST.to_owned());
+    let requested_port = options.port.unwrap_or(DEFAULT_PORT);
+    let home_dir = options.home_dir.unwrap_or_else(|| {
+        // MIGRATION-TODO:
+        // Original: start.ts, resolveKimiHome(opts.homeDir).
+        // Missing dependency: kimi-code-agent-core-v2 home resolution.
+        todo!("resolve default Kimi home through kimi-code-agent-core-v2")
+    });
+    let instances_dir = options
+        .instances_dir
+        .unwrap_or_else(|| home_dir.join("server").join("instances"));
+    let version = options
+        .version
+        .unwrap_or_else(|| get_server_version().to_owned());
+    let started_at_ms = now_millis();
+    let registry = InstanceRegistry::create(InstanceRegistryOptions {
+        instances_dir: Some(instances_dir),
+        ..InstanceRegistryOptions::default()
+    });
+    let registration = Arc::new(
+        registry
+            .register(RegistrationInfo {
+                pid: std::process::id(),
+                host: host.clone(),
+                port: requested_port,
+                started_at: started_at_ms,
+                host_version: Some(version.clone()),
+            })
+            .await?,
+    );
+
+    let exposure_class = classify(
+        &host,
+        ClassifyOptions {
+            bind_class: options.bind_class,
+        },
+    );
+    if exposure_class != BindClass::Loopback && !options.insecure_no_tls {
+        registration.release().await?;
+        return Err(StartServerError::NonLoopbackWithoutTls {
+            host,
+            exposure_class,
+        });
+    }
+
+    let logger = options
+        .logger
+        .unwrap_or_else(|| create_server_logger(options.log_level.unwrap_or(ServerLogLevel::Info)));
+    let auth_token_service = match options.auth_token_service {
+        Some(service) => service,
+        None => match create_default_auth_service(&home_dir).await {
+            Ok(service) => service,
+            Err(error) => {
+                registration.release().await?;
+                return Err(error);
+            }
+        },
+    };
+    let credential_validator =
+        CredentialValidator::new(auth_token_service.clone(), options.rpc_token);
+    let connection_registry = Arc::new(ConnectionRegistry::default());
+    let auth_failure_limiter = (exposure_class != BindClass::Loopback)
+        .then(|| Arc::new(AuthFailureLimiter::new(AuthFailureLimiterOptions::default())));
+    let (shutdown, shutdown_rx) = watch::channel(false);
+    let enable_shutdown = exposure_class == BindClass::Loopback || options.allow_remote_shutdown;
+    let state = Arc::new(AppState {
+        auth_token_service: auth_token_service.clone(),
+        credential_validator,
+        connection_registry: Arc::clone(&connection_registry),
+        gui_store: Arc::new(GuiStoreService::new(&home_dir)),
+        host: host.clone(),
+        host_check: HostCheckOptions {
+            bound_host: Some(host.clone()),
+            extra: options.allowed_hosts,
+            disable: options.disable_host_check,
+        },
+        allowed_origins: options.cors_origins,
+        disable_auth: options.disable_auth,
+        auth_failure_limiter: auth_failure_limiter.clone(),
+        exposure_class,
+        enable_shutdown,
+        server_version: version,
+        server_id: registration.server_id.clone(),
+        started_at: AppState::started_at_now(),
+        shutdown: shutdown.clone(),
+    });
+    let app = create_router(state);
+    let listener = match listen_with_port_retry(&host, requested_port, PORT_RETRY_LIMIT).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            registration.release().await?;
+            return Err(error.into());
+        }
+    };
+    let port = listener.local_addr()?.port();
+    registration.update(Some(port)).await?;
+
+    let server_app = app.clone();
+    let task_registration = Arc::clone(&registration);
+    let server_task = tokio::spawn(async move {
+        let result = axum::serve(
+            listener,
+            server_app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
+        .await;
+        let release_result = task_registration.release().await;
+        result.and(release_result)
+    });
+
+    logger.log(
+        ServerLogLevel::Info,
+        serde_json::json!({"host": host, "port": port}),
+        "kap-server listening",
+    );
+    Ok(RunningServer {
+        app,
+        connection_registry,
+        auth_token_service,
+        host,
+        port,
+        shutdown,
+        server_task,
+        auth_failure_limiter,
+    })
+}
+
+async fn create_default_auth_service(
+    home_dir: &Path,
+) -> Result<AuthTokenService, StartServerError> {
+    let token_store = Arc::new(TokenStore::create(home_dir).await?);
+    let environment = std::env::vars().collect::<HashMap<_, _>>();
+    let password_hash = resolve_password_hash(&environment).await?;
+    Ok(create_auth_token_service(token_store, password_hash))
+}
+
+async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    while shutdown.changed().await.is_ok() {
+        if *shutdown.borrow() {
+            return;
+        }
+    }
+}
+
+// Original: start.ts, listenWithPortRetry().
+pub async fn listen_with_port_retry(
+    host: &str,
+    requested_port: u16,
+    max_retries: usize,
+) -> io::Result<TcpListener> {
+    if requested_port == 0 {
+        return TcpListener::bind((host, 0)).await;
+    }
+
+    let mut port = requested_port;
+    for attempt in 0..=max_retries {
+        match TcpListener::bind((host, port)).await {
+            Ok(listener) => return Ok(listener),
+            Err(error)
+                if error.kind() == io::ErrorKind::AddrInUse
+                    && attempt < max_retries
+                    && port < u16::MAX =>
+            {
+                port += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("bounded retry loop always returns")
+}
+
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
 #[cfg(test)]
 mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
     use super::*;
 
     #[test]
     fn defaults_match_typescript_server() {
         assert_eq!(DEFAULT_HOST, "127.0.0.1");
         assert_eq!(DEFAULT_PORT, 58_627);
+        assert_eq!(PORT_RETRY_LIMIT, 100);
         let options = ServerStartOptions::default();
         assert!(options.host.is_none());
         assert!(options.port.is_none());
@@ -118,5 +357,87 @@ mod tests {
         let debug = format!("{options:?}");
         assert!(!debug.contains("secret"));
         assert!(debug.contains("[redacted]"));
+    }
+
+    #[tokio::test]
+    async fn retries_the_next_port_and_ephemeral_bind() {
+        let occupied = TcpListener::bind((DEFAULT_HOST, 0)).await.unwrap();
+        let occupied_port = occupied.local_addr().unwrap().port();
+        if occupied_port < u16::MAX {
+            let listener = listen_with_port_retry(DEFAULT_HOST, occupied_port, 1)
+                .await
+                .unwrap();
+            assert_eq!(listener.local_addr().unwrap().port(), occupied_port + 1);
+        }
+        let listener = listen_with_port_retry(DEFAULT_HOST, 0, 0).await.unwrap();
+        assert_ne!(listener.local_addr().unwrap().port(), 0);
+    }
+
+    #[tokio::test]
+    async fn starts_serves_health_and_releases_registration_on_close() {
+        let home = tempfile::tempdir().unwrap();
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let registration_path = home.path().join("server").join("instances").join(format!(
+            "{}.json",
+            std::fs::read_dir(home.path().join("server").join("instances"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .trim_end_matches(".json")
+        ));
+        assert!(registration_path.exists());
+
+        let response = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/healthz")
+                    .header("host", "localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        server.close().await.unwrap();
+        assert!(!registration_path.exists());
+    }
+
+    #[tokio::test]
+    async fn protects_authenticated_routes_and_docs() {
+        let home = tempfile::tempdir().unwrap();
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        for path in ["/api/v1/meta", "/openapi.json", "/asyncapi.json"] {
+            let response = server
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("host", "localhost")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        server.close().await.unwrap();
     }
 }
