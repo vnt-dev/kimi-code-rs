@@ -140,6 +140,13 @@ impl McpOAuthClientProvider {
         self.cache.lock().unwrap().state.clone()
     }
 
+    /// Rust OAuth transport adaptation: the RMCP authorization manager owns
+    /// CSRF generation, so retain its generated state for the callback check
+    /// performed by `McpOAuthService.complete`.
+    pub fn set_expected_state(&self, state: String) {
+        self.cache.lock().unwrap().state = Some(state);
+    }
+
     // Original: resetFlow().
     pub fn reset_flow(&self) {
         let mut cache = self.cache.lock().unwrap();
