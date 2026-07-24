@@ -6,7 +6,11 @@ use std::{
 use serde_json::{Map, Value};
 
 use crate::{
-    _base::di::instantiation::ServiceIdentifier,
+    _base::di::{
+        descriptors::SyncDescriptor,
+        instantiation::{ServiceIdentifier, ServicesAccessorExt},
+        scope::{InstantiationType, LifecycleScope, register_scoped_service},
+    },
     agent::{
         context_size::{
             CONTEXT_SIZE_MEASURED, CONTEXT_SIZE_MODEL, ContextSizeMeasuredPayload,
@@ -14,9 +18,10 @@ use crate::{
         },
         swarm::SWARM_EXIT,
     },
-    app::event::event_bus::{DomainEvent, EventBusContract},
+    app::event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusContract, EventBusHandle},
     kosong::contract::tokens::estimate_tokens_for_messages,
     wire::{
+        contract::{WIRE_SERVICE_ID, WireServiceHandle},
         op::Op,
         wire_service::{WireService, WireServiceError},
     },
@@ -111,6 +116,11 @@ impl AgentContextMemoryService {
         Self { wire, event_bus }
     }
 
+    // Original: contextMemoryService.ts, dependency-injected constructor.
+    pub fn from_handles(wire: WireServiceHandle, event_bus: EventBusHandle) -> Self {
+        Self::new(wire.0, event_bus.0)
+    }
+
     fn publish_splice(
         &self,
         start: usize,
@@ -147,6 +157,25 @@ impl AgentContextMemoryService {
             ) as f64,
         })?])
     }
+}
+
+// Original: contextMemoryService.ts, registerScopedService(..., Eager,
+// "contextMemory").
+pub fn register_agent_context_memory_service() {
+    register_scoped_service(
+        LifecycleScope::Agent,
+        AGENT_CONTEXT_MEMORY_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let wire = accessor.get(WIRE_SERVICE_ID)?;
+            let event_bus = accessor.get(EVENT_BUS_SERVICE_ID)?;
+            let service: Arc<dyn AgentContextMemoryServiceContract> = Arc::new(
+                AgentContextMemoryService::from_handles((*wire).clone(), (*event_bus).clone()),
+            );
+            Ok(AgentContextMemoryServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "contextMemory",
+    );
 }
 
 impl AgentContextMemoryServiceContract for AgentContextMemoryService {

@@ -1,9 +1,14 @@
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use crate::{
-    _base::di::instantiation::ServiceIdentifier,
+    _base::di::{
+        descriptors::SyncDescriptor,
+        instantiation::{ServiceIdentifier, ServicesAccessorExt},
+        scope::{InstantiationType, LifecycleScope, register_scoped_service},
+    },
     agent::context_memory::{
-        AgentContextMemoryServiceContract, ContextMemoryServiceError, ContextMessage, PromptOrigin,
+        AGENT_CONTEXT_MEMORY_SERVICE_ID, AgentContextMemoryServiceContract,
+        AgentContextMemoryServiceHandle, ContextMemoryServiceError, ContextMessage, PromptOrigin,
         vacuous_content::trim_ecmascript_whitespace,
     },
     kosong::contract::message::{ContentPart, Message, Role},
@@ -17,9 +22,19 @@ pub trait AgentSystemReminderServiceContract: Send + Sync {
     ) -> Result<ContextMessage, ContextMemoryServiceError>;
 }
 
-pub const AGENT_SYSTEM_REMINDER_SERVICE_ID: ServiceIdentifier<
-    dyn AgentSystemReminderServiceContract,
-> = ServiceIdentifier::new("agentSystemReminderService");
+#[derive(Clone)]
+pub struct AgentSystemReminderServiceHandle(pub Arc<dyn AgentSystemReminderServiceContract>);
+
+impl Deref for AgentSystemReminderServiceHandle {
+    type Target = dyn AgentSystemReminderServiceContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const AGENT_SYSTEM_REMINDER_SERVICE_ID: ServiceIdentifier<AgentSystemReminderServiceHandle> =
+    ServiceIdentifier::new("agentSystemReminderService");
 
 pub struct AgentSystemReminderService {
     context: Arc<dyn AgentContextMemoryServiceContract>,
@@ -29,6 +44,28 @@ impl AgentSystemReminderService {
     pub fn new(context: Arc<dyn AgentContextMemoryServiceContract>) -> Self {
         Self { context }
     }
+
+    // Original: systemReminderService.ts, dependency-injected constructor.
+    pub fn from_handle(context: AgentContextMemoryServiceHandle) -> Self {
+        Self::new(context.0)
+    }
+}
+
+// Original: systemReminderService.ts, registerScopedService(..., Eager,
+// "systemReminder").
+pub fn register_agent_system_reminder_service() {
+    register_scoped_service(
+        LifecycleScope::Agent,
+        AGENT_SYSTEM_REMINDER_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let context = accessor.get(AGENT_CONTEXT_MEMORY_SERVICE_ID)?;
+            let service: Arc<dyn AgentSystemReminderServiceContract> =
+                Arc::new(AgentSystemReminderService::from_handle((*context).clone()));
+            Ok(AgentSystemReminderServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "systemReminder",
+    );
 }
 
 impl AgentSystemReminderServiceContract for AgentSystemReminderService {
