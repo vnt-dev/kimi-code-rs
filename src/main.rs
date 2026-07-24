@@ -22,6 +22,7 @@ use kimi_code_rs::cli::{
     main_command::{MainCommandRuntime, MainCommandRuntimeError},
     options::CliOptions,
     prompt_runtime::{ProcessPromptOutput, SystemPromptRuntime},
+    run_shell::{RunShellOptions, run_shell},
     startup_error::{StartupErrorFormatOptions, StartupFailure, format_startup_error},
     sub::{
         doctor::{DoctorOptions, DoctorTarget, handle_doctor},
@@ -117,11 +118,14 @@ impl MainCommandRuntime for SystemEntrypointRuntime {
             .map_err(MainCommandRuntimeError::new)
     }
 
-    async fn run_shell(&self, _: &CliOptions, _: &str) -> Result<(), MainCommandRuntimeError> {
-        Err(MainCommandRuntimeError::new(MigrationPending {
-            original: "src/main.ts runShell()",
-            completion: "port the SDK harness and KimiTUI coordinator runtime",
-        }))
+    async fn run_shell(
+        &self,
+        options: &CliOptions,
+        version: &str,
+    ) -> Result<(), MainCommandRuntimeError> {
+        run_shell(options, version, RunShellOptions::default())
+            .await
+            .map_err(MainCommandRuntimeError::new)
     }
 }
 
