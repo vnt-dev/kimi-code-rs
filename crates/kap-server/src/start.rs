@@ -23,7 +23,7 @@ use crate::services::gui_store::GuiStoreService;
 use crate::services::server_logger::{ServerLogLevel, ServerLogger, create_server_logger};
 use crate::transport::ws::connection_registry::ConnectionRegistry;
 use crate::version::get_server_version;
-use crate::web::{AppState, create_router};
+use crate::web::{AgentCoreBridge, AppState, TodoAgentCoreBridge, create_router};
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 58_627;
@@ -52,6 +52,7 @@ pub struct ServerStartOptions {
     pub skill_dirs: Vec<PathBuf>,
     pub web_assets_dir: Option<PathBuf>,
     pub version: Option<String>,
+    pub core_bridge: Option<Arc<dyn AgentCoreBridge>>,
 }
 
 impl std::fmt::Debug for ServerStartOptions {
@@ -81,6 +82,10 @@ impl std::fmt::Debug for ServerStartOptions {
             .field("skill_dirs", &self.skill_dirs)
             .field("web_assets_dir", &self.web_assets_dir)
             .field("version", &self.version)
+            .field(
+                "core_bridge",
+                &self.core_bridge.as_ref().map(|_| "[configured]"),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -212,6 +217,11 @@ pub async fn start_server(options: ServerStartOptions) -> Result<RunningServer, 
         .then(|| Arc::new(AuthFailureLimiter::new(AuthFailureLimiterOptions::default())));
     let (shutdown, shutdown_rx) = watch::channel(false);
     let enable_shutdown = exposure_class == BindClass::Loopback || options.allow_remote_shutdown;
+    let enable_terminals = exposure_class == BindClass::Loopback || options.allow_remote_terminals;
+    let debug_endpoints = exposure_class == BindClass::Loopback && options.debug_endpoints;
+    let core_bridge = options
+        .core_bridge
+        .unwrap_or_else(|| Arc::new(TodoAgentCoreBridge));
     let state = Arc::new(AppState {
         auth_token_service: auth_token_service.clone(),
         credential_validator,
@@ -228,10 +238,13 @@ pub async fn start_server(options: ServerStartOptions) -> Result<RunningServer, 
         auth_failure_limiter: auth_failure_limiter.clone(),
         exposure_class,
         enable_shutdown,
+        enable_terminals,
+        debug_endpoints,
         server_version: version,
         server_id: registration.server_id.clone(),
         started_at: AppState::started_at_now(),
         shutdown: shutdown.clone(),
+        core_bridge,
     });
     let app = create_router(state);
     let listener = match listen_with_port_retry(&host, requested_port, PORT_RETRY_LIMIT).await {
@@ -330,11 +343,36 @@ fn now_millis() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use serde_json::Value;
     use tower::ServiceExt;
 
     use super::*;
+    use crate::web::{CoreHttpRequest, CoreHttpResponse, CoreOperation};
+
+    #[derive(Default)]
+    struct RecordingCoreBridge {
+        calls: Mutex<Vec<(CoreOperation, CoreHttpRequest)>>,
+    }
+
+    #[async_trait]
+    impl AgentCoreBridge for RecordingCoreBridge {
+        async fn invoke(
+            &self,
+            operation: CoreOperation,
+            request: CoreHttpRequest,
+        ) -> CoreHttpResponse {
+            self.calls
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push((operation, request));
+            CoreHttpResponse::json(serde_json::json!({"proxied": true}))
+        }
+    }
 
     #[test]
     fn defaults_match_typescript_server() {
@@ -438,6 +476,96 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         }
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatches_core_routes_at_the_interface_boundary() {
+        let home = tempfile::tempdir().unwrap();
+        let bridge = Arc::new(RecordingCoreBridge::default());
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            core_bridge: Some(Arc::clone(&bridge) as Arc<dyn AgentCoreBridge>),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let token = server.auth_token_service.get_token();
+        let response = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/models?refresh=false")
+                    .header("host", "localhost")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        {
+            let calls = bridge
+                .calls
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, CoreOperation::ListModels);
+            assert_eq!(calls[0].1.method, "GET");
+            assert_eq!(calls[0].1.path, "/api/v1/models");
+            assert_eq!(calls[0].1.query.as_deref(), Some("refresh=false"));
+        }
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn serves_gui_store_interfaces_without_agent_core() {
+        let home = tempfile::tempdir().unwrap();
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let authorization = format!("Bearer {}", server.auth_token_service.get_token());
+        let set_response = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/gui/store/setItem")
+                    .header("host", "localhost")
+                    .header("authorization", &authorization)
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"key":"theme","value":"dark"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(set_response.status(), StatusCode::OK);
+        let get_response = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/gui/store/getItem?key=theme")
+                    .header("host", "localhost")
+                    .header("authorization", authorization)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(get_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["value"], "dark");
         server.close().await.unwrap();
     }
 }

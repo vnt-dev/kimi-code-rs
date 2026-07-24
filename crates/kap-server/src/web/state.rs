@@ -10,6 +10,8 @@ use crate::services::auth::{AuthTokenService, CredentialValidator};
 use crate::services::gui_store::GuiStoreService;
 use crate::transport::ws::connection_registry::ConnectionRegistry;
 
+use super::core_bridge::AgentCoreBridge;
+
 pub struct AppState {
     pub auth_token_service: AuthTokenService,
     pub credential_validator: CredentialValidator,
@@ -22,10 +24,13 @@ pub struct AppState {
     pub auth_failure_limiter: Option<Arc<AuthFailureLimiter>>,
     pub exposure_class: BindClass,
     pub enable_shutdown: bool,
+    pub enable_terminals: bool,
+    pub debug_endpoints: bool,
     pub server_version: String,
     pub server_id: String,
     pub started_at: String,
     pub shutdown: watch::Sender<bool>,
+    pub core_bridge: Arc<dyn AgentCoreBridge>,
 }
 
 impl AppState {

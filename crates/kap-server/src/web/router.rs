@@ -1,15 +1,19 @@
 use std::sync::Arc;
 
-use axum::extract::{Extension, State};
+use axum::body::Bytes;
+use axum::extract::{Extension, RawQuery, State};
 use axum::http::StatusCode;
 use axum::middleware::from_fn_with_state;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use kimi_code_protocol::{AsyncApiDocumentOptions, create_async_api_document, ok_envelope};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::transport::ws::connection_registry::ConnectionLike;
 
+use super::api::{create_open_api_document, register_core_routes};
 use super::middleware::{RequestId, boundary};
 use super::state::AppState;
 
@@ -108,30 +112,141 @@ async fn async_api(State(state): State<Arc<AppState>>) -> Json<Value> {
 }
 
 async fn open_api(State(state): State<Arc<AppState>>) -> Json<Value> {
-    Json(json!({
-        "openapi": "3.1.0",
-        "info": {
-            "title": "Kimi Code Server API",
-            "description": "REST API for the Kimi Code local server. All JSON responses are wrapped in a uniform envelope `{ code, msg, data, request_id }`.",
-            "version": state.server_version
-        },
-        "paths": {
-            "/api/v1/healthz": {"get": {"description": "Health check"}},
-            "/api/v1/meta": {"get": {"description": "Get server metadata"}},
-            "/api/v1/connections": {"get": {"description": "List active WebSocket clients connected to the server"}},
-            "/api/v1/shutdown": {"post": {"description": "Shut down the server"}}
+    Json(create_open_api_document(&state))
+}
+
+#[derive(Deserialize)]
+struct GuiSetItem {
+    key: String,
+    value: String,
+}
+
+#[derive(Deserialize)]
+struct GuiKey {
+    key: String,
+}
+
+// Original: routes/guiStore.ts, getItem handler.
+async fn gui_get_item(
+    State(state): State<Arc<AppState>>,
+    Extension(request_id): Extension<RequestId>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let key = query.as_deref().and_then(|query| {
+        url::form_urlencoded::parse(query.as_bytes())
+            .find(|(name, _)| name == "key")
+            .map(|(_, value)| value.into_owned())
+    });
+    let Some(key) = key else {
+        return validation_error(request_id.0, "query parameter `key` is required");
+    };
+    match state.gui_store.get_item(&key).await {
+        Ok(value) => {
+            Json(json!(ok_envelope(json!({"value": value}), request_id.0))).into_response()
         }
-    }))
+        Err(error) => internal_error(request_id.0, error.to_string()),
+    }
+}
+
+// Original: routes/guiStore.ts, setItem handler.
+async fn gui_set_item(
+    State(state): State<Arc<AppState>>,
+    Extension(request_id): Extension<RequestId>,
+    body: Bytes,
+) -> Response {
+    let body = match serde_json::from_slice::<GuiSetItem>(&body) {
+        Ok(body) => body,
+        Err(error) => return validation_error(request_id.0, error.to_string()),
+    };
+    match state.gui_store.set_item(body.key, body.value).await {
+        Ok(()) => Json(json!(ok_envelope(Value::Null, request_id.0))).into_response(),
+        Err(error) => internal_error(request_id.0, error.to_string()),
+    }
+}
+
+// Original: routes/guiStore.ts, removeItem handler.
+async fn gui_remove_item(
+    State(state): State<Arc<AppState>>,
+    Extension(request_id): Extension<RequestId>,
+    body: Bytes,
+) -> Response {
+    let body = match serde_json::from_slice::<GuiKey>(&body) {
+        Ok(body) => body,
+        Err(error) => return validation_error(request_id.0, error.to_string()),
+    };
+    match state.gui_store.remove_item(&body.key).await {
+        Ok(()) => Json(json!(ok_envelope(Value::Null, request_id.0))).into_response(),
+        Err(error) => internal_error(request_id.0, error.to_string()),
+    }
+}
+
+// Original: routes/guiStore.ts, clear handler.
+async fn gui_clear(
+    State(state): State<Arc<AppState>>,
+    Extension(request_id): Extension<RequestId>,
+) -> Response {
+    match state.gui_store.clear().await {
+        Ok(()) => Json(json!(ok_envelope(Value::Null, request_id.0))).into_response(),
+        Err(error) => internal_error(request_id.0, error.to_string()),
+    }
+}
+
+// Original: routes/guiStore.ts, length handler.
+async fn gui_length(
+    State(state): State<Arc<AppState>>,
+    Extension(request_id): Extension<RequestId>,
+) -> Response {
+    match state.gui_store.len().await {
+        Ok(length) => {
+            Json(json!(ok_envelope(json!({"length": length}), request_id.0))).into_response()
+        }
+        Err(error) => internal_error(request_id.0, error.to_string()),
+    }
+}
+
+fn validation_error(request_id: String, message: impl Into<String>) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "code": 40001,
+            "msg": message.into(),
+            "data": null,
+            "request_id": request_id
+        })),
+    )
+        .into_response()
+}
+
+fn internal_error(request_id: String, message: impl Into<String>) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "code": 50000,
+            "msg": message.into(),
+            "data": null,
+            "request_id": request_id
+        })),
+    )
+        .into_response()
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let mut router = Router::<Arc<AppState>>::new()
         .route("/api/v1/healthz", get(health))
         .route("/api/v1/meta", get(meta))
         .route("/api/v1/connections", get(connections))
-        .route("/api/v1/shutdown", post(shutdown))
+        .route("/api/v1/gui/store/getItem", get(gui_get_item))
+        .route("/api/v1/gui/store/setItem", post(gui_set_item))
+        .route("/api/v1/gui/store/removeItem", post(gui_remove_item))
+        .route("/api/v1/gui/store/clear", post(gui_clear))
+        .route("/api/v1/gui/store/length", get(gui_length))
         .route("/asyncapi.json", get(async_api))
-        .route("/openapi.json", get(open_api))
+        .route("/openapi.json", get(open_api));
+    if state.enable_shutdown {
+        router = router.route("/api/v1/shutdown", post(shutdown));
+    }
+    let router = register_core_routes(router, &state);
+    router
         .with_state(Arc::clone(&state))
         .layer(from_fn_with_state(state, boundary))
 }
