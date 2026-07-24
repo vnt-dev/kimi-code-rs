@@ -156,8 +156,9 @@ fn encode_key_event(event: KeyEvent) -> Option<String> {
         KeyCode::Backspace => Some("\u{7f}".to_owned()),
         KeyCode::Delete => Some("\u{1b}[3~".to_owned()),
         KeyCode::Esc => Some("\u{1b}".to_owned()),
+        KeyCode::BackTab => Some("\u{1b}[Z".to_owned()),
         KeyCode::Tab if modifiers.contains(KeyModifiers::SHIFT) => Some("\u{1b}[Z".to_owned()),
-        KeyCode::Tab | KeyCode::BackTab => Some("\t".to_owned()),
+        KeyCode::Tab => Some("\t".to_owned()),
         KeyCode::Up => Some("\u{1b}[A".to_owned()),
         KeyCode::Down => Some("\u{1b}[B".to_owned()),
         KeyCode::Left => Some(modified_arrow('D', modifiers)),
@@ -238,6 +239,10 @@ mod tests {
         assert_eq!(
             encode_key_event(key(KeyCode::Enter, KeyModifiers::NONE)).as_deref(),
             Some("\r")
+        );
+        assert_eq!(
+            encode_key_event(key(KeyCode::BackTab, KeyModifiers::SHIFT)).as_deref(),
+            Some("\u{1b}[Z")
         );
     }
 
