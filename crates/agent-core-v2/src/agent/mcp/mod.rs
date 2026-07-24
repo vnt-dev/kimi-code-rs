@@ -3,6 +3,7 @@
 pub mod config_loader;
 pub mod config_schema;
 pub mod output;
+pub mod session_config;
 pub mod tool_naming;
 pub mod tools;
 pub mod types;
@@ -14,5 +15,6 @@ pub use config_schema::{
     parse_mcp_server_config,
 };
 pub use output::*;
+pub use session_config::*;
 pub use tool_naming::*;
 pub use types::*;
