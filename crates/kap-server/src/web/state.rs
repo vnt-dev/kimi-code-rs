@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use kimi_code_agent_core_v2::_base::utils::iso_date_time::{IsoDateTime, now_iso_date_time};
+use kimi_code_agent_core_v2::app::auth_legacy::AuthLegacyServiceHandle;
 use tokio::sync::watch;
 
 use crate::middleware::hostnames::HostCheckOptions;
@@ -31,6 +32,7 @@ pub struct AppState {
     pub server_id: String,
     pub started_at: IsoDateTime,
     pub shutdown: watch::Sender<bool>,
+    pub auth_legacy_service: Option<AuthLegacyServiceHandle>,
     pub core_bridge: Arc<dyn AgentCoreBridge>,
     pub web_assets_dir: Option<PathBuf>,
 }

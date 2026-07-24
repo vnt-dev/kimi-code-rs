@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
+use kimi_code_agent_core_v2::app::auth_legacy::AuthLegacyServiceHandle;
 use kimi_code_agent_core_v2::app::bootstrap::{
     BootstrapInput, BootstrapResolveError, resolve_bootstrap_options,
 };
@@ -56,6 +57,7 @@ pub struct ServerStartOptions {
     pub skill_dirs: Vec<PathBuf>,
     pub web_assets_dir: Option<PathBuf>,
     pub version: Option<String>,
+    pub auth_legacy_service: Option<AuthLegacyServiceHandle>,
     pub core_bridge: Option<Arc<dyn AgentCoreBridge>>,
 }
 
@@ -86,6 +88,10 @@ impl std::fmt::Debug for ServerStartOptions {
             .field("skill_dirs", &self.skill_dirs)
             .field("web_assets_dir", &self.web_assets_dir)
             .field("version", &self.version)
+            .field(
+                "auth_legacy_service",
+                &self.auth_legacy_service.as_ref().map(|_| "[configured]"),
+            )
             .field(
                 "core_bridge",
                 &self.core_bridge.as_ref().map(|_| "[configured]"),
@@ -269,6 +275,7 @@ pub async fn start_server(options: ServerStartOptions) -> Result<RunningServer, 
         server_id: registration.server_id.clone(),
         started_at: AppState::started_at_now(),
         shutdown: shutdown.clone(),
+        auth_legacy_service: options.auth_legacy_service,
         core_bridge,
         web_assets_dir,
     });
@@ -370,11 +377,17 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use futures_util::{SinkExt, StreamExt};
+    use kimi_code_agent_core_v2::app::auth_legacy::{
+        AuthLegacyResult, AuthLegacyServiceContract, AuthSummary as CoreAuthSummary,
+        ManagedProviderStatus as CoreManagedProviderStatus,
+        ManagedProviderSummary as CoreManagedProviderSummary,
+    };
     use serde_json::Value;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message as ClientWsMessage;
@@ -388,6 +401,38 @@ mod tests {
     #[derive(Default)]
     struct RecordingCoreBridge {
         calls: Mutex<Vec<(CoreOperation, CoreHttpRequest)>>,
+    }
+
+    struct StubAuthLegacyService {
+        result: Result<CoreAuthSummary, String>,
+        calls: AtomicUsize,
+    }
+
+    impl StubAuthLegacyService {
+        fn succeeds(summary: CoreAuthSummary) -> Self {
+            Self {
+                result: Ok(summary),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn fails(message: impl Into<String>) -> Self {
+            Self {
+                result: Err(message.into()),
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AuthLegacyServiceContract for StubAuthLegacyService {
+        async fn get(&self) -> AuthLegacyResult<CoreAuthSummary> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.result
+                .as_ref()
+                .cloned()
+                .map_err(|message| std::io::Error::other(message.clone()).into())
+        }
     }
 
     #[async_trait]
@@ -514,10 +559,19 @@ mod tests {
     async fn dispatches_core_routes_at_the_interface_boundary() {
         let home = tempfile::tempdir().unwrap();
         let bridge = Arc::new(RecordingCoreBridge::default());
+        let auth = Arc::new(StubAuthLegacyService::succeeds(CoreAuthSummary {
+            ready: true,
+            providers_count: 1,
+            default_model: Some("kimi-for-coding".into()),
+            managed_provider: None,
+        }));
         let server = start_server(ServerStartOptions {
             port: Some(0),
             home_dir: Some(home.path().to_owned()),
             debug_endpoints: true,
+            auth_legacy_service: Some(AuthLegacyServiceHandle(
+                Arc::clone(&auth) as Arc<dyn AuthLegacyServiceContract>
+            )),
             core_bridge: Some(Arc::clone(&bridge) as Arc<dyn AgentCoreBridge>),
             ..ServerStartOptions::default()
         })
@@ -550,17 +604,129 @@ mod tests {
             );
         }
         {
+            let bridge_specs = specs
+                .iter()
+                .filter(|spec| spec.operation != CoreOperation::GetAuth)
+                .collect::<Vec<_>>();
             let calls = bridge
                 .calls
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            assert_eq!(calls.len(), specs.len());
-            for (call, spec) in calls.iter().zip(&specs) {
+            assert_eq!(calls.len(), bridge_specs.len());
+            for (call, spec) in calls.iter().zip(bridge_specs) {
                 assert_eq!(call.0, spec.operation);
                 assert_eq!(call.1.method, spec.method);
                 assert_eq!(call.1.path, materialize_route_path(spec.runtime_path));
             }
         }
+        assert_eq!(auth.calls.load(Ordering::SeqCst), 1);
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_route_returns_legacy_summary_envelope() {
+        let home = tempfile::tempdir().unwrap();
+        let auth = Arc::new(StubAuthLegacyService::succeeds(CoreAuthSummary {
+            ready: true,
+            providers_count: 2,
+            default_model: Some("kimi-for-coding".into()),
+            managed_provider: Some(CoreManagedProviderSummary {
+                name: "kimi-code".into(),
+                status: CoreManagedProviderStatus::Authenticated,
+            }),
+        }));
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            auth_legacy_service: Some(AuthLegacyServiceHandle(
+                Arc::clone(&auth) as Arc<dyn AuthLegacyServiceContract>
+            )),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let response = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/auth")
+                    .header("host", "localhost")
+                    .header("x-request-id", "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+                    .header(
+                        "authorization",
+                        format!("Bearer {}", server.auth_token_service.get_token()),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["code"], 0);
+        assert_eq!(body["msg"], "success");
+        assert_eq!(
+            body["data"],
+            serde_json::json!({
+                "ready": true,
+                "providers_count": 2,
+                "default_model": "kimi-for-coding",
+                "managed_provider": {
+                    "name": "kimi-code",
+                    "status": "authenticated"
+                }
+            })
+        );
+        assert_eq!(body["request_id"], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(auth.calls.load(Ordering::SeqCst), 1);
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_route_maps_service_errors_to_internal_error_envelope() {
+        let home = tempfile::tempdir().unwrap();
+        let auth = Arc::new(StubAuthLegacyService::fails("config load failed"));
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            auth_legacy_service: Some(AuthLegacyServiceHandle(
+                Arc::clone(&auth) as Arc<dyn AuthLegacyServiceContract>
+            )),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let response = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/auth")
+                    .header("host", "localhost")
+                    .header("x-request-id", "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+                    .header(
+                        "authorization",
+                        format!("Bearer {}", server.auth_token_service.get_token()),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["code"], 50_001);
+        assert_eq!(body["msg"], "config load failed");
+        assert!(body["data"].is_null());
+        assert_eq!(body["request_id"], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(auth.calls.load(Ordering::SeqCst), 1);
         server.close().await.unwrap();
     }
 
