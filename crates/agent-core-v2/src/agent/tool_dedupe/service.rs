@@ -466,7 +466,116 @@ pub fn register_agent_tool_dedupe_service() {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use async_trait::async_trait;
+    use futures_util::StreamExt;
+
     use super::*;
+    use crate::{
+        _base::{di::lifecycle::DisposableHandle, utils::abort::AbortController},
+        agent::{
+            loop_::{
+                AgentLoopHooks, AgentLoopServiceContract, AgentLoopStatus, EnqueueReceipt,
+                LoopErrorHandler, LoopErrorHandlerRegistrationOptions, LoopRunOptions,
+                LoopRunResult, LoopValue, StepEnqueueOptions, StepRequest,
+            },
+            tool_executor::{
+                AgentToolExecutorService, AgentToolExecutorServiceContract,
+                ToolExecutorExecuteOptions,
+            },
+            tool_registry::{
+                AgentToolRegistryService, AgentToolRegistryServiceContract, ToolRegistrationOptions,
+            },
+            tool_result_truncation::{
+                AgentToolResultTruncationServiceContract, ToolResultTruncationInput,
+            },
+        },
+        app::{
+            event::{event_bus::EventBusHandle, event_bus_service::EventBusService},
+            telemetry::noop_telemetry_service,
+        },
+        kosong::contract::{
+            message::{ToolCall, ToolCallType},
+            tool::Tool,
+        },
+        tool::{ExecutableTool, RunnableToolExecution, ToolExecution},
+    };
+
+    struct TestLoop {
+        hooks: AgentLoopHooks,
+    }
+
+    #[async_trait]
+    impl AgentLoopServiceContract for TestLoop {
+        fn enqueue(
+            &self,
+            _: Arc<dyn StepRequest>,
+            _: Option<StepEnqueueOptions>,
+        ) -> Result<EnqueueReceipt, LoopValue> {
+            panic!("not used")
+        }
+        async fn run(&self, _: LoopRunOptions) -> LoopRunResult {
+            panic!("not used")
+        }
+        fn status(&self) -> AgentLoopStatus {
+            panic!("not used")
+        }
+        fn cancel(&self, _: Option<i64>, _: Option<LoopValue>) -> bool {
+            false
+        }
+        async fn settled(&self) {}
+        fn has_pending_requests(&self) -> bool {
+            false
+        }
+        fn register_loop_error_handler(
+            &self,
+            _: Arc<dyn LoopErrorHandler>,
+            _: LoopErrorHandlerRegistrationOptions<'_>,
+        ) -> Result<DisposableHandle, LoopValue> {
+            panic!("not used")
+        }
+        fn hooks(&self) -> &AgentLoopHooks {
+            &self.hooks
+        }
+    }
+
+    struct PassthroughTruncation;
+
+    #[async_trait]
+    impl AgentToolResultTruncationServiceContract for PassthroughTruncation {
+        async fn truncate_for_model(
+            &self,
+            input: ToolResultTruncationInput,
+        ) -> ExecutableToolResult {
+            input.result
+        }
+    }
+
+    struct EchoTool {
+        definition: Tool,
+    }
+
+    #[async_trait]
+    impl ExecutableTool for EchoTool {
+        type Input = serde_json::Value;
+        fn tool(&self) -> &Tool {
+            &self.definition
+        }
+        async fn resolve_execution(&self, input: Self::Input) -> ToolExecution {
+            let text = input["text"].as_str().unwrap_or_default().to_owned();
+            ToolExecution::Runnable(RunnableToolExecution::new(
+                "always",
+                Arc::new(move |_| {
+                    let text = text.clone();
+                    Box::pin(async move {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        ExecutableToolResult::success(text)
+                    })
+                }),
+            ))
+        }
+    }
     #[test]
     fn reminders_append_to_text_content_and_preserve_error_state() {
         let result = append_reminder(ExecutableToolResult::error("failed"), " reminder");
@@ -491,5 +600,62 @@ mod tests {
             args_hash(&serde_json::json!({"b": 2, "a": 1})),
             args_hash(&serde_json::json!({"a": 1, "b": 2}))
         );
+    }
+
+    #[tokio::test]
+    async fn same_step_duplicate_waits_for_the_original_without_deadlocking() {
+        let registry = AgentToolRegistryService::new();
+        let _registration = registry.register(Arc::new(EchoTool { definition: Tool { name: "Echo".into(), description: "Echoes text".into(), parameters: serde_json::json!({"type":"object","required":["text"],"properties":{"text":{"type":"string"}}}).as_object().unwrap().clone(), deferred: None } }), ToolRegistrationOptions::default());
+        let executor: Arc<dyn AgentToolExecutorServiceContract> =
+            Arc::new(AgentToolExecutorService::new(
+                Arc::new(registry),
+                EventBusHandle(Arc::new(EventBusService::new())),
+                noop_telemetry_service(),
+                Arc::new(PassthroughTruncation),
+            ));
+        let loop_service = AgentLoopServiceHandle(Arc::new(TestLoop {
+            hooks: AgentLoopHooks::default(),
+        }));
+        let dedupe = AgentToolDedupeService::new(
+            noop_telemetry_service(),
+            loop_service,
+            AgentToolExecutorServiceHandle(Arc::clone(&executor)),
+        )
+        .unwrap();
+        dedupe.begin_step(1, 1);
+        let calls = ["original", "duplicate"]
+            .into_iter()
+            .map(|id| ToolCall {
+                call_type: ToolCallType::Function,
+                id: id.into(),
+                name: "Echo".into(),
+                arguments: Some(r#"{"text":"same"}"#.into()),
+                extras: None,
+                stream_index: None,
+            })
+            .collect();
+        let results = tokio::time::timeout(
+            Duration::from_secs(1),
+            executor
+                .execute(
+                    calls,
+                    ToolExecutorExecuteOptions {
+                        signal: AbortController::new().signal(),
+                        turn_id: 1,
+                        trace: None,
+                        on_tool_call: None,
+                    },
+                )
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(results.len(), 2);
+        for result in results {
+            assert_eq!(
+                result.unwrap().result.output,
+                ExecutableToolOutput::Text("same".into())
+            );
+        }
     }
 }
