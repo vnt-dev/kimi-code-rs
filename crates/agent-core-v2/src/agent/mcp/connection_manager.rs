@@ -11,11 +11,12 @@ use std::{
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 
 use crate::{
     _base::event::{Emitter, Event},
     _base::log::contract::{LogContext, LogPayload, Logger},
+    _base::utils::abort::{AbortError, AbortSignal},
     agent::mcp::{
         HttpMcpClient, HttpMcpClientOptions, McpClient, McpClientError, McpServerConfig,
         McpToolDefinition, SseMcpClient, SseMcpClientOptions, StdioMcpClient,
@@ -163,6 +164,8 @@ pub struct McpConnectionManager {
     changed: Arc<Emitter<McpServerEntry>>,
     options: McpConnectionManagerOptions,
     log: Arc<dyn Logger>,
+    initial_load_attempt: Mutex<u64>,
+    initial_load_completed: watch::Sender<u64>,
     initial_started: Mutex<Option<Instant>>,
     initial_finished: Mutex<Option<Instant>>,
 }
@@ -170,6 +173,7 @@ pub struct McpConnectionManager {
 impl McpConnectionManager {
     // Original: McpConnectionManager.constructor().
     pub fn new(options: McpConnectionManagerOptions) -> Arc<Self> {
+        let (initial_load_completed, _) = watch::channel(0_u64);
         Arc::new(Self {
             entries: Mutex::new(HashMap::new()),
             changed: Arc::new(Emitter::new()),
@@ -178,6 +182,8 @@ impl McpConnectionManager {
                 .clone()
                 .unwrap_or_else(|| Arc::new(SilentLogger)),
             options,
+            initial_load_attempt: Mutex::new(0),
+            initial_load_completed,
             initial_started: Mutex::new(None),
             initial_finished: Mutex::new(None),
         })
@@ -244,6 +250,11 @@ impl McpConnectionManager {
     // Original: connectAll(). Failures are recorded per server; the aggregate
     // deliberately resolves once every configured connection has settled.
     pub async fn connect_all(self: &Arc<Self>, configs: HashMap<String, McpServerConfig>) {
+        let attempt_id = {
+            let mut attempt = self.initial_load_attempt.lock().await;
+            *attempt += 1;
+            *attempt
+        };
         *self.initial_started.lock().await = Some(Instant::now());
         *self.initial_finished.lock().await = None;
         let mut tasks = Vec::new();
@@ -256,7 +267,10 @@ impl McpConnectionManager {
         for task in tasks {
             let _ = task.await;
         }
-        *self.initial_finished.lock().await = Some(Instant::now());
+        if *self.initial_load_attempt.lock().await == attempt_id {
+            *self.initial_finished.lock().await = Some(Instant::now());
+            self.initial_load_completed.send_replace(attempt_id);
+        }
     }
 
     pub async fn connect(
@@ -362,6 +376,37 @@ impl McpConnectionManager {
             .unwrap_or_else(Instant::now)
             .saturating_duration_since(started)
             .as_millis()
+    }
+
+    // Original: waitForInitialLoad(). A caller waits for the latest initial
+    // batch that existed when it entered, rather than for later reconnects.
+    pub async fn wait_for_initial_load(
+        &self,
+        signal: Option<&AbortSignal>,
+    ) -> Result<(), Arc<AbortError>> {
+        if let Some(signal) = signal {
+            signal.throw_if_aborted()?;
+        }
+        let target_attempt = *self.initial_load_attempt.lock().await;
+        let mut completed = self.initial_load_completed.subscribe();
+        loop {
+            if *completed.borrow() >= target_attempt {
+                return Ok(());
+            }
+            if let Some(signal) = signal {
+                tokio::select! {
+                    biased;
+                    reason = signal.cancelled() => return Err(reason),
+                    changed = completed.changed() => {
+                        if changed.is_err() {
+                            return Ok(());
+                        }
+                    }
+                }
+            } else if completed.changed().await.is_err() {
+                return Ok(());
+            }
+        }
     }
 
     async fn connect_one(
@@ -646,6 +691,7 @@ mod tests {
     use super::*;
     use crate::{
         _base::log::contract::{LogContext, LogPayload},
+        _base::utils::abort::{AbortController, AbortError},
         agent::mcp::{McpExecutor, McpServerCommonFields, McpServerStdioConfig},
     };
 
@@ -756,5 +802,24 @@ mod tests {
         assert_eq!(entry.status, McpServerStatus::Failed);
         assert!(entry.error.unwrap().contains("executor 'kaos'"));
         assert_eq!(*log.0.lock().unwrap(), vec!["mcp server unavailable"]);
+    }
+
+    #[tokio::test]
+    async fn waits_for_the_latest_initial_batch_and_honors_cancellation() {
+        let manager = McpConnectionManager::new(Default::default());
+        manager.connect_all(HashMap::new()).await;
+        manager.wait_for_initial_load(None).await.unwrap();
+
+        let abort = AbortController::new();
+        abort.abort(Some(AbortError::new("session closed")));
+        let signal = abort.signal();
+        assert_eq!(
+            manager
+                .wait_for_initial_load(Some(&signal))
+                .await
+                .unwrap_err()
+                .to_string(),
+            "session closed"
+        );
     }
 }
