@@ -2,6 +2,7 @@
 //!
 //! Original: `agent/permissionPolicy/policies`.
 
+pub mod agent_swarm_exclusive_deny;
 pub mod auto_mode_approve;
 pub mod auto_mode_ask_user_question_deny;
 pub mod default_tool_approve;
@@ -16,6 +17,7 @@ pub mod sensitive_file_access_ask;
 pub mod user_configured_rule;
 pub mod yolo_mode_approve;
 
+pub use agent_swarm_exclusive_deny::*;
 pub use auto_mode_approve::*;
 pub use auto_mode_ask_user_question_deny::*;
 pub use default_tool_approve::*;
