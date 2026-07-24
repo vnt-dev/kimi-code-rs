@@ -12,6 +12,7 @@ pub mod core_bridge;
 pub mod middleware;
 pub mod router;
 pub mod state;
+pub mod web_assets;
 pub mod websocket;
 
 pub use core_bridge::{

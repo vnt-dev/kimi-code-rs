@@ -23,6 +23,7 @@ use crate::services::gui_store::GuiStoreService;
 use crate::services::server_logger::{ServerLogLevel, ServerLogger, create_server_logger};
 use crate::transport::ws::connection_registry::ConnectionRegistry;
 use crate::version::get_server_version;
+use crate::web::web_assets::validate_web_assets;
 use crate::web::{AgentCoreBridge, AppState, TodoAgentCoreBridge, create_router};
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
@@ -106,6 +107,14 @@ pub enum StartServerError {
     NonLoopbackWithoutTls {
         host: String,
         exposure_class: BindClass,
+    },
+    #[error(
+        "Kimi web assets were not found at {path}. Run the package build before starting the server"
+    )]
+    WebAssetsNotFound {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
     },
 }
 
@@ -212,6 +221,16 @@ pub async fn start_server(options: ServerStartOptions) -> Result<RunningServer, 
     };
     let credential_validator =
         CredentialValidator::new(auth_token_service.clone(), options.rpc_token);
+    let web_assets_dir = options.web_assets_dir;
+    if let Some(assets_dir) = &web_assets_dir
+        && let Err(source) = validate_web_assets(assets_dir).await
+    {
+        registration.release().await?;
+        return Err(StartServerError::WebAssetsNotFound {
+            path: assets_dir.clone(),
+            source,
+        });
+    }
     let connection_registry = Arc::new(ConnectionRegistry::default());
     let auth_failure_limiter = (exposure_class != BindClass::Loopback)
         .then(|| Arc::new(AuthFailureLimiter::new(AuthFailureLimiterOptions::default())));
@@ -245,6 +264,7 @@ pub async fn start_server(options: ServerStartOptions) -> Result<RunningServer, 
         started_at: AppState::started_at_now(),
         shutdown: shutdown.clone(),
         core_bridge,
+        web_assets_dir,
     });
     let app = create_router(state);
     let listener = match listen_with_port_retry(&host, requested_port, PORT_RETRY_LIMIT).await {
@@ -697,5 +717,76 @@ mod tests {
             error => panic!("expected HTTP rejection, got {error}"),
         }
         server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn serves_auth_exempt_web_assets_with_spa_fallback() {
+        let home = tempfile::tempdir().unwrap();
+        let assets = tempfile::tempdir().unwrap();
+        std::fs::write(assets.path().join("index.html"), "<main>Kimi</main>").unwrap();
+        std::fs::write(assets.path().join("app.js"), "console.log('kimi')").unwrap();
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            web_assets_dir: Some(assets.path().to_owned()),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+
+        for (path, expected_type) in [
+            ("/", "text/html; charset=utf-8"),
+            ("/sessions/local", "text/html; charset=utf-8"),
+            ("/app.js", "text/javascript; charset=utf-8"),
+        ] {
+            let response = server
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("host", "localhost")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers().get("content-type").unwrap(),
+                expected_type
+            );
+        }
+        let reserved = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/not-a-route")
+                    .header("host", "localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reserved.status(), StatusCode::UNAUTHORIZED);
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_web_asset_build_and_releases_registration() {
+        let home = tempfile::tempdir().unwrap();
+        let assets = tempfile::tempdir().unwrap();
+        let error = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            web_assets_dir: Some(assets.path().to_owned()),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(error, StartServerError::WebAssetsNotFound { .. }));
+        let instances = home.path().join("server").join("instances");
+        assert_eq!(std::fs::read_dir(instances).unwrap().count(), 0);
     }
 }

@@ -16,6 +16,7 @@ use crate::transport::ws::connection_registry::ConnectionLike;
 use super::api::{create_open_api_document, register_core_routes};
 use super::middleware::{RequestId, boundary};
 use super::state::AppState;
+use super::web_assets::serve_web_asset;
 use super::websocket::{WS_PATH, ws_upgrade};
 
 // Original: routes/registerApiV1Routes.ts, registerHealthRoute().
@@ -249,6 +250,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     }
     let router = register_core_routes(router, &state);
     router
+        .fallback(serve_web_asset)
         .with_state(Arc::clone(&state))
         .layer(from_fn_with_state(state, boundary))
 }

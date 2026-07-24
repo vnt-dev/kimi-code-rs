@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{SecondsFormat, Utc};
@@ -31,6 +32,7 @@ pub struct AppState {
     pub started_at: String,
     pub shutdown: watch::Sender<bool>,
     pub core_bridge: Arc<dyn AgentCoreBridge>,
+    pub web_assets_dir: Option<PathBuf>,
 }
 
 impl AppState {
