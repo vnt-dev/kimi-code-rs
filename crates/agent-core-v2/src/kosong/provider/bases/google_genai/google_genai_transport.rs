@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use indexmap::IndexMap;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value};
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -30,12 +30,19 @@ pub trait GoogleGenAiClient: Send + Sync {
     ) -> Result<GoogleGenAiHttpResponse, ProviderError>;
 }
 
+#[async_trait]
+pub trait GoogleAdcProvider: Send + Sync {
+    async fn access_token(&self) -> Result<String, ProviderError>;
+    async fn project_id(&self) -> Result<String, ProviderError>;
+}
+
 pub struct ReqwestGoogleGenAiClient {
     client: reqwest::Client,
     base_url: Option<String>,
     api_key: Option<String>,
     default_headers: Option<IndexMap<String, String>>,
     vertex: Option<(String, String)>,
+    adc_provider: Option<std::sync::Arc<dyn GoogleAdcProvider>>,
 }
 
 impl ReqwestGoogleGenAiClient {
@@ -45,6 +52,7 @@ impl ReqwestGoogleGenAiClient {
         api_key: Option<String>,
         default_headers: Option<IndexMap<String, String>>,
         vertex: Option<(String, String)>,
+        adc_provider: Option<std::sync::Arc<dyn GoogleAdcProvider>>,
     ) -> Self {
         Self {
             client,
@@ -52,6 +60,7 @@ impl ReqwestGoogleGenAiClient {
             api_key,
             default_headers,
             vertex,
+            adc_provider,
         }
     }
 }
@@ -64,10 +73,15 @@ impl GoogleGenAiClient for ReqwestGoogleGenAiClient {
         stream: bool,
         signal: Option<&CancellationToken>,
     ) -> Result<GoogleGenAiHttpResponse, ProviderError> {
+        let bearer_token = match self.adc_provider.as_ref() {
+            Some(provider) => Some(provider.access_token().await?),
+            None => None,
+        };
         send_google_gen_ai_request(
             &self.client,
             self.base_url.as_deref(),
             self.api_key.as_deref(),
+            bearer_token.as_deref(),
             self.default_headers.as_ref(),
             self.vertex
                 .as_ref()
@@ -86,6 +100,7 @@ fn boxed(error: ChatProviderError) -> ProviderError {
 
 fn headers(
     api_key: Option<&str>,
+    bearer_token: Option<&str>,
     defaults: Option<&IndexMap<String, String>>,
 ) -> Result<HeaderMap, ChatProviderError> {
     let mut result = HeaderMap::new();
@@ -108,6 +123,18 @@ fn headers(
             "x-goog-api-key",
             HeaderValue::from_str(api_key).map_err(|error| ChatProviderError::ChatProvider {
                 message: format!("GoogleGenAIChatProvider: invalid apiKey header: {error}"),
+            })?,
+        );
+    }
+    if let Some(token) = bearer_token {
+        result.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|error| {
+                ChatProviderError::ChatProvider {
+                    message: format!(
+                        "GoogleGenAIChatProvider: invalid ADC authorization header: {error}"
+                    ),
+                }
             })?,
         );
     }
@@ -205,6 +232,7 @@ pub async fn send_google_gen_ai_request(
     client: &reqwest::Client,
     base_url: Option<&str>,
     api_key: Option<&str>,
+    bearer_token: Option<&str>,
     default_headers: Option<&IndexMap<String, String>>,
     vertex: Option<(&str, &str)>,
     params: Map<String, Value>,
@@ -220,7 +248,7 @@ pub async fn send_google_gen_ai_request(
         signal,
         client
             .post(url)
-            .headers(headers(api_key, default_headers).map_err(boxed)?)
+            .headers(headers(api_key, bearer_token, default_headers).map_err(boxed)?)
             .json(&rest_body(params))
             .send(),
     )
@@ -358,7 +386,70 @@ fn find_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
+
+    struct StubGoogleAdcProvider {
+        token_calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl GoogleAdcProvider for StubGoogleAdcProvider {
+        async fn access_token(&self) -> Result<String, ProviderError> {
+            self.token_calls.fetch_add(1, Ordering::SeqCst);
+            Ok("adc-token".to_owned())
+        }
+
+        async fn project_id(&self) -> Result<String, ProviderError> {
+            Ok("adc-project".to_owned())
+        }
+    }
+
+    #[test]
+    fn adc_uses_bearer_authorization_without_api_key() {
+        let headers = headers(
+            None,
+            Some("adc-token"),
+            Some(&IndexMap::from([("x-client".into(), "kimi".into())])),
+        )
+        .unwrap();
+        assert_eq!(headers[AUTHORIZATION], "Bearer adc-token");
+        assert_eq!(headers["x-client"], "kimi");
+        assert!(!headers.contains_key("x-goog-api-key"));
+    }
+
+    #[tokio::test]
+    async fn adc_token_is_requested_when_generate_starts() {
+        let token_calls = Arc::new(AtomicUsize::new(0));
+        let client = ReqwestGoogleGenAiClient::new(
+            reqwest::Client::new(),
+            None,
+            None,
+            None,
+            Some(("project".to_owned(), "location".to_owned())),
+            Some(Arc::new(StubGoogleAdcProvider {
+                token_calls: Arc::clone(&token_calls),
+            })),
+        );
+        let signal = CancellationToken::new();
+        signal.cancel();
+
+        assert!(
+            client
+                .generate(
+                    Map::from_iter([("model".to_owned(), Value::String("gemini".to_owned()))]),
+                    false,
+                    Some(&signal),
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(token_calls.load(Ordering::SeqCst), 1);
+    }
 
     #[tokio::test]
     async fn maps_sdk_config_and_parses_fragmented_sse() {
