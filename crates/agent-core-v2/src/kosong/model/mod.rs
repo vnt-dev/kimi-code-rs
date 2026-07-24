@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod catalog_service;
 pub mod completion_budget;
 pub mod config_section;
 pub mod contract;
@@ -21,6 +22,10 @@ pub use catalog::{
     has_configured_api_key, location_from_vertex_ai_base_url, model_ids_for_provider,
     profile_for_attribution, resolve_model_capabilities, resolve_outbound_headers,
     strip_trailing_v1, to_protocol_model, to_protocol_model_fallback, to_protocol_provider,
+};
+pub use catalog_service::{
+    MODEL_CATALOG_SERVICE_ID, ModelCatalog, ModelCatalogContract, ModelCatalogError,
+    ModelCatalogHandle, ModelCatalogResult, register_model_catalog,
 };
 pub use config_section::{
     MODELS_SCHEMA, models_from_toml, models_to_toml, register_models_config_section,
