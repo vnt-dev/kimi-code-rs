@@ -259,9 +259,33 @@ impl McpConnectionManager {
         *self.initial_finished.lock().await = None;
         let mut tasks = Vec::new();
         for (name, config) in configs {
+            let disabled = config.common().enabled == Some(false);
+            let entry = InternalEntry {
+                name: name.clone(),
+                config,
+                attempt_id: 1,
+                status: if disabled {
+                    McpServerStatus::Disabled
+                } else {
+                    McpServerStatus::Pending
+                },
+                tools: None,
+                raw_tools: None,
+                enabled_names: None,
+                error: None,
+                client: None,
+            };
+            // Original: connectAllNow() replaces the entry directly. In
+            // particular, it does not route through connect() and therefore
+            // does not close an overwritten pre-existing client here.
+            self.entries.lock().await.insert(name.clone(), entry);
+            self.emit(&name).await;
+            if disabled {
+                continue;
+            }
             let manager = Arc::clone(self);
             tasks.push(tokio::spawn(async move {
-                let _ = manager.connect(name, config).await;
+                let _ = manager.connect_one(name, 1).await;
             }));
         }
         for task in tasks {
