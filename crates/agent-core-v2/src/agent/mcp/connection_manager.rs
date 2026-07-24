@@ -21,6 +21,7 @@ use crate::{
         HttpMcpClient, HttpMcpClientOptions, McpClient, McpClientError, McpServerConfig,
         McpToolDefinition, SseMcpClient, SseMcpClientOptions, StdioMcpClient,
         StdioMcpClientOptions, UnexpectedCloseReason, assert_mcp_input_schema,
+        oauth::McpOAuthService,
     },
     kosong::contract::tool::Tool,
 };
@@ -28,13 +29,6 @@ use crate::{
 use super::client_stdio::UnexpectedCloseListener;
 
 pub const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 30_000;
-
-// MIGRATION-TODO:
-// Original: `McpConnectionManager.resolveOAuthProvider()` and
-// `McpConnectionManager.shouldMarkNeedsAuth()`.
-// Missing dependency: the session-scoped `McpOAuthService` and its RMCP auth
-// bridge have not yet been migrated. Remote OAuth failures therefore remain
-// `Failed` rather than `NeedsAuth` until that service is integrated.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum McpServerStatus {
@@ -145,6 +139,7 @@ pub struct McpConnectionManagerOptions {
     pub stdio_cwd: Option<PathBuf>,
     pub env_lookup: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
     pub log: Option<Arc<dyn Logger>>,
+    pub oauth_service: Option<Arc<McpOAuthService>>,
 }
 
 struct SilentLogger;
@@ -445,7 +440,7 @@ impl McpConnectionManager {
                 .ok_or_else(|| McpConnectionManagerError::NotFound(name.clone()))?;
             entry.config.clone()
         };
-        let client = match self.create_client(&config) {
+        let client = match self.create_client(&config, &name).await {
             Ok(client) => client,
             Err(error) => {
                 let mut entries = self.entries.lock().await;
@@ -510,8 +505,16 @@ impl McpConnectionManager {
                     }
                 }
                 Err(error) => {
-                    entry.status = McpServerStatus::Failed;
-                    entry.error = Some(error);
+                    if self.should_mark_needs_auth(&entry.config, &error) {
+                        entry.status = McpServerStatus::NeedsAuth;
+                        entry.error = Some(format!(
+                            "{} requires OAuth — run /mcp-config login {}",
+                            entry.name, entry.name
+                        ));
+                    } else {
+                        entry.status = McpServerStatus::Failed;
+                        entry.error = Some(error);
+                    }
                 }
             }
         }
@@ -525,15 +528,30 @@ impl McpConnectionManager {
         Ok(())
     }
 
-    fn create_client(
+    async fn create_client(
         &self,
         config: &McpServerConfig,
+        name: &str,
     ) -> Result<Arc<dyn RuntimeMcpClient>, McpConnectionManagerError> {
         let env = self
             .options
             .env_lookup
             .clone()
             .unwrap_or_else(|| Arc::new(|name| std::env::var(name).ok()));
+        let oauth_access_token = match config {
+            McpServerConfig::Http(remote) | McpServerConfig::Sse(remote)
+                if remote.bearer_token_env_var.is_none() && remote.headers.is_none() =>
+            {
+                match &self.options.oauth_service {
+                    Some(service) => service
+                        .access_token(name, &remote.url)
+                        .await
+                        .map_err(|error| McpConnectionManagerError::Startup(error.to_string()))?,
+                    None => None,
+                }
+            }
+            _ => None,
+        };
         match config {
             McpServerConfig::Stdio(config) => Ok(Arc::new(
                 StdioMcpClient::new(
@@ -551,6 +569,7 @@ impl McpConnectionManager {
                     config.clone(),
                     HttpMcpClientOptions {
                         tool_call_timeout_ms: config.common.tool_timeout_ms,
+                        oauth_access_token,
                         ..Default::default()
                     },
                     move |name| env(name),
@@ -562,6 +581,7 @@ impl McpConnectionManager {
                     config.clone(),
                     SseMcpClientOptions {
                         tool_call_timeout_ms: config.common.tool_timeout_ms,
+                        oauth_access_token,
                         ..Default::default()
                     },
                     move |name| env(name),
@@ -638,6 +658,18 @@ impl McpConnectionManager {
             }
             self.changed.fire(&entry);
         }
+    }
+
+    fn should_mark_needs_auth(&self, config: &McpServerConfig, error: &str) -> bool {
+        let (McpServerConfig::Http(remote) | McpServerConfig::Sse(remote)) = config else {
+            return false;
+        };
+        self.options.oauth_service.is_some()
+            && remote.bearer_token_env_var.is_none()
+            && remote.headers.is_none()
+            && (error.contains("401")
+                || error.to_ascii_lowercase().contains("unauthorized")
+                || error.to_ascii_lowercase().contains("auth required"))
     }
 }
 

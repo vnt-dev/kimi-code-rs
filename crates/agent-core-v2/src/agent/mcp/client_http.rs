@@ -38,6 +38,7 @@ pub struct HttpMcpClientOptions {
     pub client_name: Option<String>,
     pub client_version: Option<String>,
     pub tool_call_timeout_ms: Option<u64>,
+    pub oauth_access_token: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -106,6 +107,18 @@ impl HttpMcpClient {
                 Ok((parsed_name, parsed_value))
             })
             .collect::<Result<HashMap<_, _>, _>>()?;
+        let mut headers = headers;
+        if let Some(token) = options.oauth_access_token.as_deref() {
+            headers.insert(
+                HeaderName::from_static("authorization"),
+                HeaderValue::try_from(format!("Bearer {token}")).map_err(|_| {
+                    McpHttpClientError::InvalidHeader {
+                        name: "Authorization".into(),
+                        value: format!("Bearer {token}"),
+                    }
+                })?,
+            );
+        }
         Ok(Self {
             url: config.url,
             headers,

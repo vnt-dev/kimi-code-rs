@@ -236,6 +236,27 @@ impl McpOAuthService {
             .is_some())
     }
 
+    /// Returns the persisted bearer token used by remote MCP transports after
+    /// a completed browser authorization.
+    pub async fn access_token(
+        &self,
+        server_name: &str,
+        server_url: &str,
+    ) -> Result<Option<String>, McpOAuthServiceError> {
+        Ok(self
+            .get_provider(server_name, server_url)
+            .await?
+            .tokens()
+            .await
+            .and_then(|tokens| {
+                tokens
+                    .get("access_token")
+                    .and_then(Value::as_str)
+                    .filter(|token| !token.is_empty())
+                    .map(str::to_owned)
+            }))
+    }
+
     // Original: beginAuthorization().
     pub async fn begin_authorization(
         &self,

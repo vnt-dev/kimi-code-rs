@@ -91,6 +91,7 @@ pub struct SseMcpClientOptions {
     pub client_name: Option<String>,
     pub client_version: Option<String>,
     pub tool_call_timeout_ms: Option<u64>,
+    pub oauth_access_token: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -163,6 +164,15 @@ impl SseMcpClient {
                 }
             })?;
             header_map.insert(name, value);
+        }
+        if let Some(token) = options.oauth_access_token.as_deref() {
+            let value = reqwest::header::HeaderValue::try_from(format!("Bearer {token}")).map_err(
+                |_| McpSseClientError::InvalidHeader {
+                    name: "Authorization".into(),
+                    value: format!("Bearer {token}"),
+                },
+            )?;
+            header_map.insert(reqwest::header::AUTHORIZATION, value);
         }
         Ok(Self {
             url: config.url,
