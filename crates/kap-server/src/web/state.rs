@@ -6,6 +6,7 @@ use kimi_code_agent_core_v2::app::auth::OAuthServiceHandle;
 use kimi_code_agent_core_v2::app::auth_legacy::AuthLegacyServiceHandle;
 use kimi_code_agent_core_v2::app::config::ConfigServiceHandle;
 use kimi_code_agent_core_v2::app::event::EventServiceHandle;
+use kimi_code_agent_core_v2::app::message_legacy::MessageLegacyServiceHandle;
 use tokio::sync::watch;
 
 use crate::middleware::hostnames::HostCheckOptions;
@@ -39,6 +40,7 @@ pub struct AppState {
     pub oauth_service: Option<OAuthServiceHandle>,
     pub config_service: Option<ConfigServiceHandle>,
     pub event_service: Option<EventServiceHandle>,
+    pub message_legacy_service: Option<MessageLegacyServiceHandle>,
     pub core_bridge: Arc<dyn AgentCoreBridge>,
     pub web_assets_dir: Option<PathBuf>,
 }

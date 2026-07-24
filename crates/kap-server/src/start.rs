@@ -13,6 +13,7 @@ use kimi_code_agent_core_v2::app::bootstrap::{
 };
 use kimi_code_agent_core_v2::app::config::ConfigServiceHandle;
 use kimi_code_agent_core_v2::app::event::EventServiceHandle;
+use kimi_code_agent_core_v2::app::message_legacy::MessageLegacyServiceHandle;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -64,6 +65,7 @@ pub struct ServerStartOptions {
     pub oauth_service: Option<OAuthServiceHandle>,
     pub config_service: Option<ConfigServiceHandle>,
     pub event_service: Option<EventServiceHandle>,
+    pub message_legacy_service: Option<MessageLegacyServiceHandle>,
     pub core_bridge: Option<Arc<dyn AgentCoreBridge>>,
 }
 
@@ -109,6 +111,10 @@ impl std::fmt::Debug for ServerStartOptions {
             .field(
                 "event_service",
                 &self.event_service.as_ref().map(|_| "[configured]"),
+            )
+            .field(
+                "message_legacy_service",
+                &self.message_legacy_service.as_ref().map(|_| "[configured]"),
             )
             .field(
                 "core_bridge",
@@ -297,6 +303,7 @@ pub async fn start_server(options: ServerStartOptions) -> Result<RunningServer, 
         oauth_service: options.oauth_service,
         config_service: options.config_service,
         event_service: options.event_service,
+        message_legacy_service: options.message_legacy_service,
         core_bridge,
         web_assets_dir,
     });
@@ -408,6 +415,7 @@ mod tests {
         Disposable, DisposableHandle, DisposeResult,
     };
     use kimi_code_agent_core_v2::_base::event::{Event, Listener};
+    use kimi_code_agent_core_v2::agent::context_memory::protocol_message::ProtocolMessage;
     use kimi_code_agent_core_v2::app::auth::oauth_protocol::{
         AlwaysTrue, NonEmptyString, OAuthFlowSnapshot as CoreOAuthFlowSnapshot,
         OAuthFlowStart as CoreOAuthFlowStart,
@@ -429,6 +437,10 @@ mod tests {
         ConfigServiceContract, ConfigServiceError, ConfigTarget, ResolvedConfig,
     };
     use kimi_code_agent_core_v2::app::event::{EventServiceContract, GlobalDomainEvent};
+    use kimi_code_agent_core_v2::app::message_legacy::{
+        MessageLegacyResult, MessageLegacyServiceContract, MessageListQuery,
+        PageResponse as CoreMessagePage,
+    };
     use kimi_code_agent_core_v2::kosong::provider::config::OAuthRef;
     use kimi_code_oauth::BearerTokenProvider;
     use serde_json::{Map, Value};
@@ -449,6 +461,37 @@ mod tests {
     struct StubAuthLegacyService {
         result: Result<CoreAuthSummary, String>,
         calls: AtomicUsize,
+    }
+
+    #[derive(Default)]
+    struct StubMessageLegacyService {
+        list_calls: Mutex<Vec<(String, MessageListQuery)>>,
+    }
+
+    #[async_trait]
+    impl MessageLegacyServiceContract for StubMessageLegacyService {
+        async fn list(
+            &self,
+            session_id: &str,
+            query: MessageListQuery,
+        ) -> MessageLegacyResult<CoreMessagePage<ProtocolMessage>> {
+            self.list_calls
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push((session_id.into(), query));
+            Ok(CoreMessagePage {
+                items: Vec::new(),
+                has_more: false,
+            })
+        }
+
+        async fn get(
+            &self,
+            _session_id: &str,
+            _message_id: &str,
+        ) -> MessageLegacyResult<ProtocolMessage> {
+            Err(std::io::Error::other("message unavailable").into())
+        }
     }
 
     #[derive(Default)]
@@ -829,6 +872,7 @@ mod tests {
         let config = Arc::new(StubConfigService::default());
         let events = Arc::new(RecordingEventService::default());
         let oauth = Arc::new(StubOAuthService::default());
+        let messages = Arc::new(StubMessageLegacyService::default());
         let server = start_server(ServerStartOptions {
             port: Some(0),
             home_dir: Some(home.path().to_owned()),
@@ -844,6 +888,9 @@ mod tests {
             )),
             event_service: Some(EventServiceHandle(
                 Arc::clone(&events) as Arc<dyn EventServiceContract>
+            )),
+            message_legacy_service: Some(MessageLegacyServiceHandle(
+                Arc::clone(&messages) as Arc<dyn MessageLegacyServiceContract>
             )),
             core_bridge: Some(Arc::clone(&bridge) as Arc<dyn AgentCoreBridge>),
             ..ServerStartOptions::default()
@@ -889,6 +936,8 @@ mod tests {
                             | CoreOperation::StartOauthLogin
                             | CoreOperation::DeleteOauthLogin
                             | CoreOperation::OauthLogout
+                            | CoreOperation::ListMessages
+                            | CoreOperation::GetMessage
                     )
                 })
                 .collect::<Vec<_>>();
@@ -904,6 +953,62 @@ mod tests {
             }
         }
         assert_eq!(auth.calls.load(Ordering::SeqCst), 1);
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_messages_calls_legacy_message_service() {
+        let home = tempfile::tempdir().unwrap();
+        let messages = Arc::new(StubMessageLegacyService::default());
+        let server = start_server(ServerStartOptions {
+            port: Some(0),
+            home_dir: Some(home.path().to_owned()),
+            message_legacy_service: Some(MessageLegacyServiceHandle(
+                Arc::clone(&messages) as Arc<dyn MessageLegacyServiceContract>
+            )),
+            ..ServerStartOptions::default()
+        })
+        .await
+        .unwrap();
+        let response = server
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/sessions/session-1/messages?page_size=10&role=system&after_id=m1")
+                    .header("host", "localhost")
+                    .header(
+                        "authorization",
+                        format!("Bearer {}", server.auth_token_service.get_token()),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let envelope: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(envelope["code"], 0, "{envelope}");
+        assert_eq!(
+            envelope["data"],
+            serde_json::json!({"items": [], "has_more": false})
+        );
+        {
+            let calls = messages.list_calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, "session-1");
+            assert_eq!(calls[0].1.page_size, Some(10));
+            assert_eq!(calls[0].1.after_id.as_deref(), Some("m1"));
+            assert_eq!(
+                calls[0].1.role,
+                Some(
+                    kimi_code_agent_core_v2::agent::context_memory::protocol_message::MessageRole::System
+                )
+            );
+        }
         server.close().await.unwrap();
     }
 
