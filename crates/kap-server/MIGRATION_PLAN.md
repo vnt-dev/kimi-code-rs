@@ -98,8 +98,8 @@ The following source units now have tested Rust counterparts:
 | TypeScript source | Rust counterpart | Notes |
 | --- | --- | --- |
 | `security/bindClassify.ts` | `src/security/bind_classify.rs` | Complete |
-| `middleware/hostnames.ts`, `origin.ts` | `src/middleware/hostnames.rs`, `origin.rs` | Predicates complete; HTTP hook wiring awaits the server adapter |
-| `middleware/auth.ts`, `rateLimit.ts`, `securityHeaders.ts` | matching `src/middleware/*.rs` | Policy complete; HTTP hook wiring awaits the server adapter |
+| `middleware/hostnames.ts`, `origin.ts` | `src/middleware/hostnames.rs`, `origin.rs`, `src/web/middleware.rs` | Predicates and Axum request-boundary wiring complete |
+| `middleware/auth.ts`, `rateLimit.ts`, `securityHeaders.ts` | matching `src/middleware/*.rs`, `src/web/middleware.rs` | Policy and HTTP hook wiring complete |
 | `services/auth/*` | `src/services/auth/*` | Complete, including live token rotation |
 | `instanceRegistry.ts` | `src/instance_registry.rs` | Complete for explicit home/instances directories |
 | `services/guiStore/guiStoreService.ts` | `src/services/gui_store/service.rs` | Complete; core-v2 DI decorator registration deferred |
@@ -116,6 +116,10 @@ The following source units now have tested Rust counterparts:
 | `request-id.ts`, `requestLogging.ts`, `version.ts` | matching top-level Rust modules | Pure behavior complete |
 | `services/pinoLoggerService.ts` | `src/services/server_logger.rs` | JSON logger counterpart complete |
 | protocol DTO modules | sibling `kimi-code-protocol` crate | Reused rather than duplicated |
+| `start.ts`, `listenWithPortRetry()` | `src/start.rs` | Axum listener, exposure policy, auth, instance registration, port retry and graceful transport shutdown complete |
+| `routes/registerApiV1Routes.ts`, route modules | `src/web/api.rs`, `src/web/router.rs` | Full documented interface surface registered; core-dependent operations use the explicit bridge below |
+| `routes/webAssets.ts` | `src/web/web_assets.rs` | Async static files, MIME mapping, SPA fallback and reserved paths complete |
+| `transport/ws/v1/registerWsV1.ts`, connection control methods | `src/web/websocket.rs` | Upgrade/auth/subprotocol, hello, control ACKs, registry and close lifecycle complete |
 
 ## Explicit agent-core-v2 Boundaries
 
@@ -123,21 +127,23 @@ These production paths intentionally use `todo!` with `MIGRATION-TODO`
 comments, as requested, because their original implementation calls unfinished
 `agent-core-v2` services:
 
-- `startServer` and ordered `RunningServer.close`;
 - default Kimi home resolution in the instance registry;
 - full `SnapshotReader.read` assembly;
-- RPC channel discovery/reflection.
+- RPC channel discovery/reflection;
+- every REST handler represented by `CoreOperation`, through
+  `TodoAgentCoreBridge::invoke`;
+- WebSocket durable event replay/subscription validation and filesystem-watch
+  operations, through the same bridge.
 
-The REST route handlers, transcript/core event binding, model refresh
-scheduler, filesystem watch bridge, session event broadcaster, and complete
-WebSocket connection are not exposed as fake implementations. They remain part
-of the same core-v2 integration boundary and must be migrated when the required
-core contracts stabilize.
+`RunningServer.close` completes transport shutdown, limiter disposal, WebSocket
+close-all and instance-release ordering. Agent-core-v2 Scope disposal, the
+model refresh scheduler, the durable event broadcaster and filesystem-watch
+lifecycles remain documented integration points until those Rust services
+exist.
 
-## Remaining Server-Adapter Work
+## Remaining Integration Work
 
-The Rust crate deliberately does not start a partial HTTP daemon. After
-core-v2 bootstrap is available, the next unit is a Tokio HTTP/WebSocket adapter
-(Axum/Tower or equivalent) that wires the already-migrated policies and local
-services, followed by route modules one at a time and the end-to-end parity
-suite.
+The Tokio/Axum HTTP and WebSocket adapter is operational. The next migration
+units are the agent-core-v2-backed implementations behind `AgentCoreBridge`,
+followed by durable WebSocket broadcast/replay, filesystem watches, endpoint
+DTO validation parity and cross-implementation end-to-end fixtures.
