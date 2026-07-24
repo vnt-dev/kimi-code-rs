@@ -12,6 +12,7 @@ pub mod file;
 pub mod flag;
 pub mod git;
 pub mod host_folder_browser;
+pub mod message_legacy;
 pub mod plugin;
 pub mod session_index;
 pub mod skill_catalog;
