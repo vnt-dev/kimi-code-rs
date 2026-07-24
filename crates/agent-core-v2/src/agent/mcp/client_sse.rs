@@ -1,4 +1,4 @@
-//! Legacy server-sent-events framing for MCP transports.
+//! Legacy server-sent-events framing and request correlation for MCP transports.
 //!
 //! Original: `agent/mcp/client-sse.ts`, `SSEClientTransport` input stream.
 
@@ -39,6 +39,51 @@ pub struct McpSseDecoder {
     event: Option<String>,
     data: Vec<String>,
     id: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error, Clone, Eq, PartialEq)]
+pub enum McpSseRequestError {
+    #[error("MCP SSE response is not a JSON-RPC response with a numeric id")]
+    InvalidResponse,
+    #[error("MCP SSE request was closed before its response arrived")]
+    Closed,
+}
+
+/// Correlates legacy SSE JSON-RPC response envelopes with the POST request
+/// that originated them. The TypeScript SDK keeps this bookkeeping inside its
+/// SSE transport; Rust makes it explicit so stream teardown can fail waiters.
+#[derive(Default)]
+pub struct McpSseResponseRouter {
+    pending: std::collections::HashMap<u64, tokio::sync::oneshot::Sender<serde_json::Value>>,
+}
+
+impl McpSseResponseRouter {
+    pub fn register(&mut self, id: u64) -> tokio::sync::oneshot::Receiver<serde_json::Value> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        if let Some(previous) = self.pending.insert(id, sender) {
+            drop(previous);
+        }
+        receiver
+    }
+
+    pub fn deliver(&mut self, message: serde_json::Value) -> Result<bool, McpSseRequestError> {
+        let id = message
+            .get("id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or(McpSseRequestError::InvalidResponse)?;
+        Ok(self
+            .pending
+            .remove(&id)
+            .is_some_and(|sender| sender.send(message).is_ok()))
+    }
+
+    pub fn close(&mut self) {
+        self.pending.clear();
+    }
+
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
 }
 
 impl McpSseDecoder {
@@ -165,5 +210,30 @@ mod tests {
             resolve_sse_message_endpoint("https://mcp.example/events", ""),
             Err(McpSseEndpointError::EmptyEndpoint)
         ));
+    }
+
+    #[tokio::test]
+    async fn routes_numeric_json_rpc_responses_and_closes_pending_requests() {
+        let mut router = McpSseResponseRouter::default();
+        let first = router.register(1);
+        let second = router.register(2);
+        assert!(
+            router
+                .deliver(serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {"ok": true}}))
+                .unwrap()
+        );
+        assert_eq!(first.await.unwrap()["result"]["ok"], true);
+        assert_eq!(router.pending_count(), 1);
+        assert!(
+            !router
+                .deliver(serde_json::json!({"jsonrpc": "2.0", "id": 3, "result": null}))
+                .unwrap()
+        );
+        assert!(matches!(
+            router.deliver(serde_json::json!({"id": "two"})),
+            Err(McpSseRequestError::InvalidResponse)
+        ));
+        router.close();
+        assert!(second.await.is_err());
     }
 }
