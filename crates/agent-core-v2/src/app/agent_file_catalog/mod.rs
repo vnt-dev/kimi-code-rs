@@ -3,6 +3,7 @@
 pub mod agent_file;
 pub mod agent_profile_source;
 pub mod agent_roots;
+pub mod file_discovery;
 pub mod paths;
 pub mod profile_from_file;
 pub mod runtime_options;
@@ -18,6 +19,7 @@ pub use agent_profile_source::{
 pub use agent_roots::{
     AgentRootWarn, configured_agent_roots, project_agent_roots, user_agent_roots,
 };
+pub use file_discovery::{DiscoverAgentFilesWarn, discover_agent_files};
 pub use paths::{is_directory_path, is_file_path, path_exists, resolve_agent_path};
 pub use profile_from_file::agent_profile_from_file;
 pub use runtime_options::{
