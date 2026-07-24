@@ -43,6 +43,9 @@ pub enum SkillSourceError {
 
     #[error("plugin skill source failed: {0}")]
     Plugin(Box<dyn std::error::Error + Send + Sync>),
+
+    #[error("initial skill catalog load failed: {0}")]
+    Cached(Box<dyn std::error::Error + Send + Sync>),
 }
 
 pub type SkillSourceResult<T> = Result<T, SkillSourceError>;
