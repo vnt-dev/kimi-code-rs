@@ -30,7 +30,8 @@ use super::client_stdio::UnexpectedCloseListener;
 
 pub const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 30_000;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum McpServerStatus {
     Pending,
     Connected,
@@ -39,7 +40,8 @@ pub enum McpServerStatus {
     NeedsAuth,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpServerEntry {
     pub name: String,
     pub transport: String,
