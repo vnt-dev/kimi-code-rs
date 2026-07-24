@@ -27,4 +27,5 @@ pub mod tool_executor;
 pub mod tool_policy;
 pub mod tool_registry;
 pub mod tool_result_truncation;
+pub mod tool_select;
 pub mod usage;
