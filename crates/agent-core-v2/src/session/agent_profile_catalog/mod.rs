@@ -4,6 +4,7 @@
 pub mod contract;
 pub mod explicit_file_agent_source;
 pub mod extra_file_agent_source;
+pub mod merge;
 pub mod project_file_agent_source;
 
 pub use contract::*;
@@ -15,6 +16,7 @@ pub use extra_file_agent_source::{
     EXTRA_FILE_AGENT_SOURCE_ID, ExtraFileAgentSource, ExtraFileAgentSourceHandle,
     register_extra_file_agent_source,
 };
+pub use merge::{ProfileContributionWithPriority, merge_agent_profiles};
 pub use project_file_agent_source::{
     PROJECT_FILE_AGENT_SOURCE_ID, ProjectFileAgentSource, ProjectFileAgentSourceHandle,
     register_project_file_agent_source,
