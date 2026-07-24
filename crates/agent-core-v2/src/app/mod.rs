@@ -18,6 +18,7 @@ pub mod plugin;
 pub mod session_export;
 pub mod session_index;
 pub mod session_legacy;
+pub mod session_lifecycle;
 pub mod skill_catalog;
 pub mod task;
 pub mod telemetry;

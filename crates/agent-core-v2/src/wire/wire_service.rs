@@ -232,6 +232,8 @@ impl WireService {
             let (event, record) = {
                 let mut runtime = self.runtime.lock().unwrap();
                 let instance = ensure_model(&mut runtime.models, Arc::clone(&model));
+                op.descriptor
+                    .validate(instance.state.as_ref(), op.payload())?;
                 let previous = std::mem::replace(&mut instance.state, model.initial_state());
                 instance.state = op.descriptor.apply(previous, op.payload())?;
                 let event = if silent {
@@ -653,6 +655,37 @@ mod tests {
         restored.restore().await.unwrap();
         assert_eq!(restored.restore_phase(), RestorePhase::Ready);
         assert_eq!(restored.get_model(&model), 3);
+    }
+
+    #[test]
+    fn apply_validation_rejects_before_replacing_live_model_state() {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let model = define_model("validated-counter", || 7_i64, ModelOptions::default());
+        let op_type = format!(
+            "wire.test.validate.{}",
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let op = model
+            .define_op(
+                op_type,
+                DefineOpOptions::new(|state, amount: &i64| state + amount).with_apply_validation(
+                    |_state, amount| {
+                        if *amount < 0 {
+                            Err(Box::new(std::io::Error::other("negative amount")))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                ),
+            )
+            .unwrap();
+        let service = service(Arc::new(MemoryLog::default()));
+        let error = service.dispatch([op.create(-1).unwrap()]).unwrap_err();
+        assert!(matches!(
+            error,
+            WireServiceError::OpType(OpTypeError::Apply { .. })
+        ));
+        assert_eq!(service.get_model(&model), 7);
     }
 
     #[tokio::test]

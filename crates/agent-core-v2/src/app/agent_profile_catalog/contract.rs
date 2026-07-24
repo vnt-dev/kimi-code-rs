@@ -39,6 +39,10 @@ pub struct AgentProfileContext {
     pub now: Option<String>,
     pub skills: Option<String>,
     pub skill_active: Option<bool>,
+    // The source context has an open string index signature. This profile
+    // domain key is surfaced separately by `SystemPromptContext` in
+    // `agent/profile/profile.ts`.
+    pub agents_md_warning: Option<String>,
 }
 
 pub type AgentSystemPrompt = Arc<dyn Fn(&AgentProfileContext) -> String + Send + Sync>;
