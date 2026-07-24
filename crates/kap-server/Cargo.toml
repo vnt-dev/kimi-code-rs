@@ -7,3 +7,5 @@ license = "MIT"
 publish = false
 
 [dependencies]
+kimi-code-protocol = { path = "../protocol" }
+url = "2"
