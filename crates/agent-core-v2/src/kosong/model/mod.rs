@@ -1,6 +1,7 @@
 pub mod completion_budget;
 pub mod config_section;
 pub mod contract;
+pub mod discovery;
 pub mod discovery_config_section;
 pub mod errors;
 pub mod host_request_headers;
@@ -10,6 +11,12 @@ pub mod types;
 
 pub use config_section::{
     MODELS_SCHEMA, models_from_toml, models_to_toml, register_models_config_section,
+};
+pub use discovery::{
+    DiscoveryValidationError, PROVIDER_DISCOVERY_SERVICE_ID, ProviderDiscoveryResult,
+    ProviderDiscoveryServiceContract, ProviderDiscoveryServiceHandle, ProviderRefreshChange,
+    ProviderRefreshFailure, RefreshProviderModelsOptions, RefreshProviderModelsResponse,
+    RefreshProviderModelsScope,
 };
 pub use discovery_config_section::{
     MODEL_CATALOG_CONFIG_SCHEMA, MODEL_CATALOG_SECTION, ModelCatalogConfig,
