@@ -6,6 +6,9 @@ use crate::tui::{
         editor::{CustomEditor, EditorAction, InputMode},
         render::truncate_to_width,
     },
+    controllers::slash_command_surface::{
+        SlashCommandSurfaceAction, resolve_slash_command_surface,
+    },
     runtime::{TuiApp, TuiControl},
     theme::{ColorToken, current_theme},
 };
@@ -136,8 +139,8 @@ impl KimiTui {
             return TuiControl::Continue;
         }
         self.editor.add_to_history(&text);
-        if let Some(command) = text.strip_prefix('/') {
-            return self.handle_slash_command(command);
+        if text.starts_with('/') {
+            return self.handle_slash_command(&text);
         }
 
         self.transcript.push(TranscriptLine::User(text));
@@ -152,36 +155,58 @@ impl KimiTui {
         TuiControl::Continue
     }
 
-    fn handle_slash_command(&mut self, command: &str) -> TuiControl {
-        let (name, _) = command.split_once(' ').unwrap_or((command, ""));
-        match name {
-            "exit" | "quit" => TuiControl::Exit,
-            "clear" => {
+    fn handle_slash_command(&mut self, input: &str) -> TuiControl {
+        match resolve_slash_command_surface(input, &self.version) {
+            SlashCommandSurfaceAction::Exit => TuiControl::Exit,
+            SlashCommandSurfaceAction::ClearTranscript => {
                 self.transcript.clear();
-                self.status = Some("Transcript cleared.".to_owned());
+                // MIGRATION-TODO:
+                // Original: /new (and its /clear alias) creates a fresh v2
+                // session in the current workspace.
+                // Temporary behavior: clear the local transcript because no
+                // v2 session has been composed yet.
+                self.status =
+                    Some("Local transcript cleared; v2 session creation is pending.".to_owned());
                 TuiControl::Continue
             }
-            "help" => {
-                self.transcript.push(TranscriptLine::System(
-                    "Available now: /help, /clear, /exit. Other commands return a migration notice."
-                        .to_owned(),
-                ));
+            SlashCommandSurfaceAction::ShowHelp(lines) => {
+                self.transcript
+                    .extend(lines.into_iter().map(TranscriptLine::System));
                 self.status = Some("Help".to_owned());
                 TuiControl::Continue
             }
-            "" => {
+            SlashCommandSurfaceAction::ShowVersion(version) => {
+                self.transcript.push(TranscriptLine::System(version));
+                self.status = Some("Version".to_owned());
+                TuiControl::Continue
+            }
+            SlashCommandSurfaceAction::Empty => {
                 self.status = Some("Enter a slash command.".to_owned());
                 TuiControl::Continue
             }
-            other => {
+            SlashCommandSurfaceAction::Pending { command_name, args } => {
                 // MIGRATION-TODO:
                 // Original: commands/dispatch.ts and KimiTUI route the full
-                // slash-command registry. Preserve an observable response
-                // until each command's v2 service is connected.
+                // slash-command registry into controllers and session
+                // services. The registered operation and its arguments have
+                // been accepted, but its v2-backed behavior is not composed.
+                let argument_notice = if args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" Arguments received: {args}")
+                };
                 self.transcript.push(TranscriptLine::System(format!(
-                    "/{other} is recognized by the migration shell but is not implemented yet."
+                    "/{command_name} is available, but its backend is not connected yet.{argument_notice}"
                 )));
                 self.status = Some("Command acknowledged.".to_owned());
+                TuiControl::Continue
+            }
+            SlashCommandSurfaceAction::Unknown(name) => {
+                self.transcript.push(TranscriptLine::System(format!(
+                    "Unknown command: /{}. Type /help to list commands.",
+                    name.trim_start_matches('/')
+                )));
+                self.status = Some("Unknown command.".to_owned());
                 TuiControl::Continue
             }
         }
@@ -301,12 +326,29 @@ mod tests {
         for input in ["/", "h", "e", "l", "p", "\r"] {
             assert_eq!(tui.handle_terminal_input(input), TuiControl::Continue);
         }
-        assert!(tui.render(80).join("\n").contains("Available now"));
+        assert!(tui.render(80).join("\n").contains("Slash commands"));
 
         for input in ["/", "m", "o", "d", "e", "l", "\r"] {
             assert_eq!(tui.handle_terminal_input(input), TuiControl::Continue);
         }
-        assert!(tui.render(80).join("\n").contains("/model is recognized"));
+        assert!(tui.render(80).join("\n").contains("/model is available"));
+    }
+
+    #[test]
+    fn slash_aliases_version_arguments_and_unknown_commands_are_visible() {
+        let mut tui = KimiTui::new("1.2.3", None);
+        tui.handle_terminal_resize(80, 40);
+
+        for input in ["/version", "/goal ship it", "/missing", "/help"] {
+            tui.submit(input.to_owned());
+        }
+        let rendered = tui.render(100).join("\n");
+        assert!(rendered.contains("Kimi Code v1.2.3"));
+        assert!(rendered.contains("Arguments received: ship it"));
+        assert!(rendered.contains("Unknown command: /missing"));
+        assert!(rendered.contains("/yolo"));
+
+        assert_eq!(tui.submit("/q".to_owned()), TuiControl::Exit);
     }
 
     #[test]
