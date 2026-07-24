@@ -1,8 +1,8 @@
 //! Image-ingestion format gate.
 //!
-//! Original: `packages/agent-core-v2/src/agent/media/image-compress.ts`,
-//! `gateImageFormatParts()`. Compression and crop codecs are migrated in a
-//! later unit; this pure gate intentionally precedes every codec path.
+//! Original: `packages/agent-core-v2/src/agent/media/image-compress.ts`.
+//! The format gate, compression ladder, caption helpers, content-part
+//! integration, and crop path are translated here.
 
 use std::{
     io::Cursor,
@@ -28,6 +28,9 @@ pub const IMAGE_BYTE_BUDGET: usize = 3_932_160;
 pub const READ_IMAGE_BYTE_BUDGET: usize = 262_144;
 pub const MAX_IMAGE_DECODE_BYTES: usize = 67_108_864;
 const MAX_DECODE_PIXELS: u64 = 100_000_000;
+const JPEG_QUALITY_STEPS: [u8; 4] = [80, 60, 40, 20];
+const FALLBACK_EDGES_PX: [u32; 6] = [2000, 1000, 768, 512, 384, 256];
+const PNG_RESCALE_FLOOR_PX: u32 = 1000;
 
 static CONFIGURED_MAX_EDGE: OnceLock<Mutex<Option<u32>>> = OnceLock::new();
 static CONFIGURED_READ_BUDGET: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
@@ -144,21 +147,25 @@ pub fn compress_image_for_model(
         return passthrough();
     };
     let (ow, oh) = (image.width(), image.height());
-    let resized = fit_within_edge(image, max_edge);
-    let candidates = encode_candidates(&resized, normalized == "image/jpeg");
-    let Some((data, output_mime)) = candidates.into_iter().min_by_key(|(data, _)| data.len())
-    else {
+    let mut image = image;
+    fit_within_edge(&mut image, max_edge);
+    let Some(encoded) = encode_within_budget(
+        image,
+        normalized == "image/jpeg",
+        budget,
+        &FALLBACK_EDGES_PX,
+    ) else {
         return passthrough();
     };
-    if data.len() >= bytes.len() && resized.width() == ow && resized.height() == oh {
+    if encoded.data.len() >= bytes.len() && encoded.width == ow && encoded.height == oh {
         return passthrough();
     }
     CompressImageResult {
-        final_byte_length: data.len(),
-        data,
-        mime_type: output_mime.into(),
-        width: resized.width() as i64,
-        height: resized.height() as i64,
+        final_byte_length: encoded.data.len(),
+        data: encoded.data,
+        mime_type: encoded.mime_type.into(),
+        width: encoded.width as i64,
+        height: encoded.height as i64,
         original_width: ow as i64,
         original_height: oh as i64,
         changed: true,
@@ -354,23 +361,34 @@ pub fn crop_image_for_model(
     let encoded = if options.skip_resize {
         encode_skip_resize(&cropped, jpeg_only)
     } else {
-        let resized = fit_within_edge(
-            cropped,
+        let mut resized = cropped;
+        fit_within_edge(
+            &mut resized,
             options
                 .compress
                 .max_edge
                 .unwrap_or_else(resolve_max_image_edge_px),
         );
-        encode_candidates(&resized, jpeg_only)
-            .into_iter()
-            .min_by_key(|(data, _)| data.len())
-            .map(|(data, mime)| (data, mime, resized.width(), resized.height()))
+        encode_within_budget(resized, jpeg_only, budget, &FALLBACK_EDGES_PX).map(|encoded| {
+            (
+                encoded.data,
+                encoded.mime_type,
+                encoded.width,
+                encoded.height,
+            )
+        })
     };
     let Some((data, output_mime, width, height)) = encoded else {
         return fail("Failed to decode the image for cropping: image encoding failed.".into());
     };
-    if data.len() > budget {
-        return fail(format!("The cropped region encodes to {} bytes ({}) , over the {}-byte ({}) per-image limit. Choose a smaller region, or allow downscaling.",data.len(),format_byte_size(data.len() as f64),budget,format_byte_size(budget as f64)).replace(") ,", "),"));
+    if options.skip_resize && data.len() > budget {
+        return fail(format!(
+            "The cropped region encodes to {} bytes ({}), over the {}-byte ({}) per-image limit. Choose a smaller region, or allow downscaling.",
+            data.len(),
+            format_byte_size(data.len() as f64),
+            budget,
+            format_byte_size(budget as f64),
+        ));
     }
     CropImageOutcome::Success(CropImageSuccess {
         final_byte_length: data.len(),
@@ -415,37 +433,141 @@ fn format_for_mime(mime: &str) -> ImageFormat {
         _ => ImageFormat::WebP,
     }
 }
-fn fit_within_edge(image: DynamicImage, edge: u32) -> DynamicImage {
+// Original: fitWithinEdge(). The source modifies the same Jimp image between
+// ladder steps, so each fallback edge is relative to the preceding resize.
+fn fit_within_edge(image: &mut DynamicImage, edge: u32) -> bool {
     let longest = image.width().max(image.height());
     if longest <= edge {
-        image
-    } else {
-        image.resize(
-            (image.width() as u64 * edge as u64 / longest as u64).max(1) as u32,
-            (image.height() as u64 * edge as u64 / longest as u64).max(1) as u32,
-            FilterType::Lanczos3,
-        )
+        return false;
     }
+    let factor = edge as f64 / longest as f64;
+    let width = (image.width() as f64 * factor).round().max(1.0) as u32;
+    let height = (image.height() as f64 * factor).round().max(1.0) as u32;
+    *image = image.resize(width, height, FilterType::Lanczos3);
+    true
 }
-fn encode_candidates(image: &DynamicImage, jpeg_only: bool) -> Vec<(Vec<u8>, &'static str)> {
-    let mut out = Vec::new();
+
+struct EncodedImage {
+    data: Vec<u8>,
+    mime_type: &'static str,
+    width: u32,
+    height: u32,
+}
+
+fn encode_png(image: &DynamicImage) -> Option<Vec<u8>> {
+    let mut data = Cursor::new(Vec::new());
+    image.write_to(&mut data, ImageFormat::Png).ok()?;
+    Some(data.into_inner())
+}
+
+fn encode_jpeg(image: &DynamicImage, quality: u8) -> Option<Vec<u8>> {
+    let mut jpeg = Vec::new();
+    JpegEncoder::new_with_quality(&mut jpeg, quality)
+        .encode_image(image)
+        .ok()?;
+    Some(jpeg)
+}
+
+fn consider_encoded(
+    smallest: &mut Option<EncodedImage>,
+    data: Vec<u8>,
+    mime_type: &'static str,
+    image: &DynamicImage,
+) -> EncodedImage {
+    let candidate = EncodedImage {
+        data,
+        mime_type,
+        width: image.width(),
+        height: image.height(),
+    };
+    if smallest
+        .as_ref()
+        .is_none_or(|current| candidate.data.len() < current.data.len())
+    {
+        *smallest = Some(EncodedImage {
+            data: candidate.data.clone(),
+            mime_type,
+            width: candidate.width,
+            height: candidate.height,
+        });
+    }
+    candidate
+}
+
+fn jpeg_ladder(
+    image: &DynamicImage,
+    byte_budget: usize,
+    smallest: &mut Option<EncodedImage>,
+) -> Option<EncodedImage> {
+    for quality in JPEG_QUALITY_STEPS {
+        let jpeg = encode_jpeg(image, quality)?;
+        let candidate = consider_encoded(smallest, jpeg, "image/jpeg", image);
+        if candidate.data.len() <= byte_budget {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+// Original: encodeWithinBudget(). As in the source, if no candidate meets the
+// byte budget it returns the smallest candidate rather than failing.
+fn encode_within_budget(
+    mut image: DynamicImage,
+    jpeg_only: bool,
+    byte_budget: usize,
+    fallback_edges: &[u32],
+) -> Option<EncodedImage> {
+    let mut smallest = None;
+
     if !jpeg_only {
-        let mut png = Cursor::new(Vec::new());
-        if image.write_to(&mut png, ImageFormat::Png).is_ok() {
-            out.push((png.into_inner(), "image/png"));
+        let png = encode_png(&image)?;
+        let candidate = consider_encoded(&mut smallest, png, "image/png", &image);
+        if candidate.data.len() <= byte_budget {
+            return Some(candidate);
+        }
+
+        for &edge in fallback_edges {
+            if edge < PNG_RESCALE_FLOOR_PX {
+                break;
+            }
+            if !fit_within_edge(&mut image, edge) {
+                continue;
+            }
+            let png = encode_png(&image)?;
+            let candidate = consider_encoded(&mut smallest, png, "image/png", &image);
+            if candidate.data.len() <= byte_budget {
+                return Some(candidate);
+            }
+        }
+
+        if let Some(encoded) = jpeg_ladder(&image, byte_budget, &mut smallest) {
+            return Some(encoded);
+        }
+        for &edge in fallback_edges {
+            if edge >= PNG_RESCALE_FLOOR_PX || !fit_within_edge(&mut image, edge) {
+                continue;
+            }
+            if let Some(encoded) = jpeg_ladder(&image, byte_budget, &mut smallest) {
+                return Some(encoded);
+            }
+        }
+        return smallest;
+    }
+
+    if let Some(encoded) = jpeg_ladder(&image, byte_budget, &mut smallest) {
+        return Some(encoded);
+    }
+    for &edge in fallback_edges {
+        if !fit_within_edge(&mut image, edge) {
+            continue;
+        }
+        if let Some(encoded) = jpeg_ladder(&image, byte_budget, &mut smallest) {
+            return Some(encoded);
         }
     }
-    for quality in [80, 60, 40, 20] {
-        let mut jpeg = Vec::new();
-        if JpegEncoder::new_with_quality(&mut jpeg, quality)
-            .encode_image(image)
-            .is_ok()
-        {
-            out.push((jpeg, "image/jpeg"));
-        }
-    }
-    out
+    smallest
 }
+
 fn is_animated_webp(bytes: &[u8]) -> bool {
     bytes
         .windows(4)
@@ -764,6 +886,36 @@ mod tests {
         assert_eq!((compressed.width, compressed.height), (2, 1));
         assert_eq!(compressed.original_byte_length, bytes.len());
     }
+
+    #[test]
+    fn compression_uses_source_rounding_and_progressive_fallback_edges() {
+        let bitmap = DynamicImage::new_rgb8(4, 3);
+        let mut encoded = Cursor::new(Vec::new());
+        bitmap.write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let rounded = compress_image_for_model(
+            &encoded.into_inner(),
+            "image/png",
+            &CompressImageOptions {
+                max_edge: Some(2),
+                ..Default::default()
+            },
+        );
+        assert_eq!((rounded.width, rounded.height), (2, 2));
+
+        let bitmap = DynamicImage::new_rgb8(600, 400);
+        let mut encoded = Cursor::new(Vec::new());
+        bitmap.write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let fallback = compress_image_for_model(
+            &encoded.into_inner(),
+            "image/png",
+            &CompressImageOptions {
+                byte_budget: Some(1),
+                ..Default::default()
+            },
+        );
+        assert!(fallback.changed);
+        assert_eq!((fallback.width, fallback.height), (256, 171));
+    }
     #[tokio::test]
     async fn compresses_gated_content_parts_and_emits_annotations_only_when_requested() {
         let bitmap = DynamicImage::new_rgb8(4, 2);
@@ -817,6 +969,27 @@ mod tests {
                 resized: false,
                 ..
             })
+        ));
+        let downscaled_over_budget = crop_image_for_model(
+            &bytes,
+            "image/png",
+            ImageCropRegion {
+                x: 0.0,
+                y: 0.0,
+                width: 4.0,
+                height: 3.0,
+            },
+            &CropImageOptions {
+                compress: CompressImageOptions {
+                    byte_budget: Some(1),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            downscaled_over_budget,
+            CropImageOutcome::Success(_)
         ));
         let invalid = crop_image_for_model(
             &bytes,
