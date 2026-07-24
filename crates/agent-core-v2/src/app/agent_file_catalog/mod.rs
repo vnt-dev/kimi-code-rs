@@ -9,6 +9,7 @@ pub mod profile_from_file;
 pub mod runtime_options;
 pub mod system_file;
 pub mod types;
+pub mod user_file_agent_source;
 
 pub use agent_file::{AgentFileParseError, ParseAgentFileOptions, parse_agent_file_text};
 pub use agent_profile_source::{
@@ -30,4 +31,8 @@ pub use runtime_options::{
 pub use system_file::{SYSTEM_MD_FILENAME, load_system_md_profile};
 pub use types::{
     AgentFileDefinition, AgentFileDiscoveryResult, AgentFileRoot, AgentFileSource, SkippedAgentFile,
+};
+pub use user_file_agent_source::{
+    USER_FILE_AGENT_SOURCE_ID, UserFileAgentSource, UserFileAgentSourceHandle,
+    register_user_file_agent_source,
 };
