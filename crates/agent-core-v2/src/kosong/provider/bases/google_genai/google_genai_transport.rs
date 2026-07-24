@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use indexmap::IndexMap;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -17,6 +18,66 @@ pub type GoogleGenAiEventStream = Pin<Box<dyn Stream<Item = Result<Value, Provid
 pub enum GoogleGenAiHttpResponse {
     Response(Value),
     Stream(GoogleGenAiEventStream),
+}
+
+#[async_trait]
+pub trait GoogleGenAiClient: Send + Sync {
+    async fn generate(
+        &self,
+        params: Map<String, Value>,
+        stream: bool,
+        signal: Option<&CancellationToken>,
+    ) -> Result<GoogleGenAiHttpResponse, ProviderError>;
+}
+
+pub struct ReqwestGoogleGenAiClient {
+    client: reqwest::Client,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    default_headers: Option<IndexMap<String, String>>,
+    vertex: Option<(String, String)>,
+}
+
+impl ReqwestGoogleGenAiClient {
+    pub fn new(
+        client: reqwest::Client,
+        base_url: Option<String>,
+        api_key: Option<String>,
+        default_headers: Option<IndexMap<String, String>>,
+        vertex: Option<(String, String)>,
+    ) -> Self {
+        Self {
+            client,
+            base_url,
+            api_key,
+            default_headers,
+            vertex,
+        }
+    }
+}
+
+#[async_trait]
+impl GoogleGenAiClient for ReqwestGoogleGenAiClient {
+    async fn generate(
+        &self,
+        params: Map<String, Value>,
+        stream: bool,
+        signal: Option<&CancellationToken>,
+    ) -> Result<GoogleGenAiHttpResponse, ProviderError> {
+        send_google_gen_ai_request(
+            &self.client,
+            self.base_url.as_deref(),
+            self.api_key.as_deref(),
+            self.default_headers.as_ref(),
+            self.vertex
+                .as_ref()
+                .map(|(project, location)| (project.as_str(), location.as_str())),
+            params,
+            stream,
+            signal,
+        )
+        .await
+    }
 }
 
 fn boxed(error: ChatProviderError) -> ProviderError {

@@ -5,7 +5,7 @@ use regex::Regex;
 use serde_json::{Map, Value};
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 use tokio_util::sync::CancellationToken;
 
@@ -18,13 +18,13 @@ use crate::kosong::contract::message::{
     is_tool_declaration_only_message,
 };
 use crate::kosong::contract::provider::{
-    ChatProvider, FinishReason, GenerateOptions, ProviderError, ResponseFormat, StreamedMessage,
-    ThinkingEffort, TraceId,
+    ChatProvider, FinishReason, GenerateOptions, ProviderError, ProviderRequestAuth,
+    ResponseFormat, StreamedMessage, ThinkingEffort, TraceId,
 };
 use crate::kosong::contract::tool::Tool;
 use crate::kosong::contract::usage::TokenUsage;
 use crate::kosong::provider::bases::google_genai::google_genai_transport::{
-    GoogleGenAiHttpResponse, send_google_gen_ai_request,
+    GoogleGenAiClient, GoogleGenAiHttpResponse, ReqwestGoogleGenAiClient,
 };
 use crate::kosong::provider::bases::merge_user_messages::{
     ConsecutiveUserMessageMergePolicy, merge_consecutive_user_messages,
@@ -898,6 +898,7 @@ pub struct GoogleGenAiOptions {
     pub thinking_effort: Option<ThinkingEffort>,
     pub default_headers: Option<IndexMap<String, String>>,
     pub http_client: Option<reqwest::Client>,
+    pub client_factory: Option<GoogleGenAiClientFactory>,
 }
 
 impl GoogleGenAiOptions {
@@ -913,16 +914,21 @@ impl GoogleGenAiOptions {
             thinking_effort: None,
             default_headers: None,
             http_client: None,
+            client_factory: None,
         }
     }
 }
 
 // MIGRATION-TODO:
-// Original: GoogleGenAIOptions.clientFactory and Vertex ADC authentication.
+// Original: Vertex ADC authentication.
 // Temporary behavior: reusable reqwest client injection is supported; Vertex
 // requests require an explicit API key plus project/location (or their common
-// environment variables). Completion condition: add an auth-aware transport
-// factory and Google Application Default Credentials token provider.
+// environment variables). Completion condition: add a Google Application
+// Default Credentials token provider.
+
+pub type GoogleGenAiClientFactory = Arc<
+    dyn Fn(ProviderRequestAuth) -> Result<Arc<dyn GoogleGenAiClient>, ProviderError> + Send + Sync,
+>;
 
 // Original: google-genai.ts, GoogleGenAIChatProvider
 pub struct GoogleGenAiChatProvider {
@@ -937,6 +943,8 @@ pub struct GoogleGenAiChatProvider {
     default_headers: Option<IndexMap<String, String>>,
     generation_kwargs: GoogleGenAiGenerationKwargs,
     http_client: reqwest::Client,
+    cached_client: Option<Arc<dyn GoogleGenAiClient>>,
+    client_factory: Option<GoogleGenAiClientFactory>,
 }
 
 impl GoogleGenAiChatProvider {
@@ -946,18 +954,36 @@ impl GoogleGenAiChatProvider {
             None => std::env::var("GOOGLE_API_KEY").ok(),
         }
         .filter(|api_key| !api_key.is_empty());
+        let vertex_ai = options.vertex_ai.unwrap_or(false);
+        let base_url = options.base_url.filter(|base_url| !base_url.is_empty());
+        let http_client = options.http_client.unwrap_or_default();
+        let cached_client = if vertex_ai {
+            None
+        } else {
+            api_key.as_ref().map(|api_key| {
+                Arc::new(ReqwestGoogleGenAiClient::new(
+                    http_client.clone(),
+                    base_url.clone(),
+                    Some(api_key.clone()),
+                    options.default_headers.clone(),
+                    None,
+                )) as Arc<dyn GoogleGenAiClient>
+            })
+        };
         Self {
             model: options.model,
             api_key,
-            base_url: options.base_url.filter(|base_url| !base_url.is_empty()),
-            vertex_ai: options.vertex_ai.unwrap_or(false),
+            base_url,
+            vertex_ai,
             project: options.project,
             location: options.location,
             stream: options.stream.unwrap_or(true),
             thinking_effort: options.thinking_effort,
             default_headers: options.default_headers,
             generation_kwargs: Map::new(),
-            http_client: options.http_client.unwrap_or_default(),
+            http_client,
+            cached_client,
+            client_factory: options.client_factory,
         }
     }
 
@@ -978,6 +1004,45 @@ impl GoogleGenAiChatProvider {
                 message: "GoogleGenAIChatProvider: Vertex AI requires project and location. Provide providerOptions.project/location or GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION.".to_owned(),
             })),
         }
+    }
+
+    // Original: GoogleGenAIChatProvider._createClient().
+    fn create_client(
+        &self,
+        auth: Option<&ProviderRequestAuth>,
+    ) -> Result<Arc<dyn GoogleGenAiClient>, ProviderError> {
+        if let Some(factory) = self.client_factory.as_ref() {
+            return factory(auth.cloned().unwrap_or_default());
+        }
+        if auth.is_none()
+            && let Some(client) = self.cached_client.as_ref()
+        {
+            return Ok(Arc::clone(client));
+        }
+        let (api_key, vertex) = if self.vertex_ai {
+            let api_key = self.api_key.clone().ok_or_else(|| {
+                Box::new(ChatProviderError::ChatProvider {
+                    message: "GoogleGenAIChatProvider: Vertex Application Default Credentials have not been migrated; provide an explicit API key for the current Rust transport.".to_owned(),
+                }) as ProviderError
+            })?;
+            (Some(api_key), Some(self.vertex_identity()?))
+        } else {
+            (
+                Some(require_provider_api_key(
+                    "GoogleGenAIChatProvider",
+                    auth,
+                    self.api_key.as_deref(),
+                )?),
+                None,
+            )
+        };
+        Ok(Arc::new(ReqwestGoogleGenAiClient::new(
+            self.http_client.clone(),
+            self.base_url.clone(),
+            api_key,
+            self.default_headers.clone(),
+            vertex,
+        )))
     }
 }
 
@@ -1017,40 +1082,17 @@ impl ChatProvider for GoogleGenAiChatProvider {
             history,
             options,
         )?;
-        let (api_key, vertex_identity) = if self.vertex_ai {
-            let api_key = self.api_key.clone().ok_or_else(|| {
-                Box::new(ChatProviderError::ChatProvider {
-                    message: "GoogleGenAIChatProvider: Vertex Application Default Credentials have not been migrated; provide an explicit API key for the current Rust transport.".to_owned(),
-                }) as ProviderError
-            })?;
-            (Some(api_key), Some(self.vertex_identity()?))
-        } else {
-            (
-                Some(require_provider_api_key(
-                    "GoogleGenAIChatProvider",
-                    options.and_then(|options| options.auth.as_ref()),
-                    self.api_key.as_deref(),
-                )?),
-                None,
-            )
-        };
+        let client = self.create_client(options.and_then(|options| options.auth.as_ref()))?;
         if let Some(callback) = options.and_then(|options| options.on_request_sent.as_ref()) {
             callback();
         }
-        let vertex = vertex_identity
-            .as_ref()
-            .map(|(project, location)| (project.as_str(), location.as_str()));
-        let response = send_google_gen_ai_request(
-            &self.http_client,
-            self.base_url.as_deref(),
-            api_key.as_deref(),
-            self.default_headers.as_ref(),
-            vertex,
-            params,
-            self.stream,
-            options.and_then(|options| options.signal.as_ref()),
-        )
-        .await?;
+        let response = client
+            .generate(
+                params,
+                self.stream,
+                options.and_then(|options| options.signal.as_ref()),
+            )
+            .await?;
         let signal = options.and_then(|options| options.signal.clone());
         Ok(match response {
             GoogleGenAiHttpResponse::Response(response) => {
@@ -1065,8 +1107,24 @@ impl ChatProvider for GoogleGenAiChatProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::kosong::contract::message::{ToolCall, ToolCallType};
+
+    struct StubGoogleGenAiClient;
+
+    #[async_trait]
+    impl GoogleGenAiClient for StubGoogleGenAiClient {
+        async fn generate(
+            &self,
+            _: Map<String, Value>,
+            _: bool,
+            _: Option<&CancellationToken>,
+        ) -> Result<GoogleGenAiHttpResponse, ProviderError> {
+            Ok(GoogleGenAiHttpResponse::Response(serde_json::json!({})))
+        }
+    }
 
     #[test]
     fn wire_conversion_preserves_media_and_tool_response_order() {
@@ -1203,5 +1261,36 @@ mod tests {
             error.to_string(),
             "GoogleGenAIChatProvider: apiKey is required. Provide it via the constructor options, the provider's API-key environment variable, options.auth.apiKey on each request, or an OAuth login."
         );
+    }
+
+    #[test]
+    fn google_client_factory_wins_and_cache_only_serves_absent_auth() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let factory_received = Arc::clone(&received);
+        let mut factory_options = GoogleGenAiOptions::new("gemini-2.5-pro");
+        factory_options.client_factory = Some(Arc::new(move |auth| {
+            factory_received.lock().unwrap().push(auth);
+            Ok(Arc::new(StubGoogleGenAiClient))
+        }));
+        let factory_provider = GoogleGenAiChatProvider::new(factory_options);
+        factory_provider.create_client(None).unwrap();
+        let auth = ProviderRequestAuth {
+            api_key: Some("request-key".into()),
+            headers: Some(IndexMap::from([("x-request".into(), "yes".into())])),
+        };
+        factory_provider.create_client(Some(&auth)).unwrap();
+        assert_eq!(
+            *received.lock().unwrap(),
+            vec![ProviderRequestAuth::default(), auth.clone()]
+        );
+
+        let mut cached_options = GoogleGenAiOptions::new("gemini-2.5-pro");
+        cached_options.api_key = Some("default-key".into());
+        let cached_provider = GoogleGenAiChatProvider::new(cached_options);
+        let first = cached_provider.create_client(None).unwrap();
+        let second = cached_provider.create_client(None).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        let rebuilt = cached_provider.create_client(Some(&auth)).unwrap();
+        assert!(!Arc::ptr_eq(&first, &rebuilt));
     }
 }
