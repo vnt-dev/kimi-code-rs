@@ -2,7 +2,7 @@
 //!
 //! Original: `session/agentLifecycle/mainAgent.ts`.
 
-pub const MAIN_AGENT_ID: &str = "main";
+pub use super::contract::MAIN_AGENT_ID;
 
 /// Minimal lifecycle surface needed by the conventional-main composition
 /// helper. The concrete registry is migrated separately.
