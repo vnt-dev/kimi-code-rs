@@ -21,7 +21,10 @@ use tokio::{
 };
 
 use crate::{
-    _base::errors::errors::{Error2Options, ErrorCause},
+    _base::{
+        errors::errors::{Error2Options, ErrorCause},
+        exec_env::buffered_readable::BufferedReadable,
+    },
     os::interface::host_process::{
         HostProcess, HostProcessError, HostProcessOptions, HostProcessService,
         OS_PROCESS_KILL_FAILED, OS_PROCESS_SPAWN_FAILED, ProcessReader, ProcessShell,
@@ -153,16 +156,22 @@ impl HostProcessService for LocalHostProcessService {
             )
         })?;
         let stdin: SharedProcessWriter = Arc::new(Mutex::new(Box::new(stdin) as ProcessWriter));
-        let stdout: SharedProcessReader = Arc::new(Mutex::new(Box::new(stdout) as ProcessReader));
+        let stdout: SharedProcessReader = Arc::new(Mutex::new(Box::new(BufferedReadable::new(
+            stdout,
+        )) as ProcessReader));
         let (stderr, ignored_stderr): (SharedProcessReader, Option<SharedProcessReader>) =
             if options.merge_stderr.unwrap_or(false) {
                 (
                     Arc::clone(&stdout),
-                    Some(Arc::new(Mutex::new(Box::new(raw_stderr) as ProcessReader))),
+                    Some(Arc::new(Mutex::new(
+                        Box::new(BufferedReadable::new(raw_stderr)) as ProcessReader,
+                    ))),
                 )
             } else {
                 (
-                    Arc::new(Mutex::new(Box::new(raw_stderr) as ProcessReader)),
+                    Arc::new(Mutex::new(
+                        Box::new(BufferedReadable::new(raw_stderr)) as ProcessReader
+                    )),
                     None,
                 )
             };
@@ -397,6 +406,29 @@ mod tests {
         assert_eq!(process.wait().await.unwrap(), 0);
         assert_eq!(process.wait().await.unwrap(), 0);
         assert_eq!(process.exit_code(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn output_remains_readable_after_waiting_for_exit() {
+        let process = LocalHostProcessService::default()
+            .spawn(
+                "sh",
+                &["-c".into(), "printf %s buffered-after-wait".into()],
+                HostProcessOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(process.wait().await.unwrap(), 0);
+        let mut output = String::new();
+        process
+            .stdout()
+            .lock()
+            .await
+            .read_to_string(&mut output)
+            .await
+            .unwrap();
+        assert_eq!(output, "buffered-after-wait");
     }
 
     #[tokio::test]

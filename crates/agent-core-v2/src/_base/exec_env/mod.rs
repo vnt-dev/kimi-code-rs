@@ -1,3 +1,4 @@
+pub mod buffered_readable;
 pub mod decode_text;
 pub mod environment_probe;
 pub mod glob_pattern;
