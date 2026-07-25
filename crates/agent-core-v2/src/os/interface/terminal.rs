@@ -6,6 +6,7 @@
 use std::{
     error::Error,
     fmt,
+    ops::Deref,
     path::Path,
     sync::{Arc, LazyLock},
 };
@@ -257,7 +258,18 @@ pub trait HostTerminalService: Send + Sync {
     ) -> Result<Arc<dyn TerminalProcess>, TerminalProcessError>;
 }
 
-pub const HOST_TERMINAL_SERVICE_ID: ServiceIdentifier<dyn HostTerminalService> =
+#[derive(Clone)]
+pub struct HostTerminalServiceHandle(pub Arc<dyn HostTerminalService>);
+
+impl Deref for HostTerminalServiceHandle {
+    type Target = dyn HostTerminalService;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const HOST_TERMINAL_SERVICE_ID: ServiceIdentifier<HostTerminalServiceHandle> =
     ServiceIdentifier::new("hostTerminalService");
 
 #[derive(Clone, Debug, Eq, PartialEq)]

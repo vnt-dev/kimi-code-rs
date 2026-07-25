@@ -13,13 +13,17 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 
 use crate::{
     _base::{
-        di::lifecycle::{Disposable, DisposeResult},
+        di::{
+            descriptors::SyncDescriptor,
+            lifecycle::{Disposable, DisposeResult},
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
         errors::unexpected_error::on_unexpected_error,
         event::{Emitter, Event},
     },
     os::interface::terminal::{
-        HostTerminalService, TerminalProcess, TerminalProcessError, TerminalProcessExit,
-        TerminalSpawnOptions,
+        HOST_TERMINAL_SERVICE_ID, HostTerminalService, HostTerminalServiceHandle, TerminalProcess,
+        TerminalProcessError, TerminalProcessExit, TerminalSpawnOptions,
     },
 };
 
@@ -78,6 +82,21 @@ impl LocalHostTerminalService {
             environment: Some(environment),
         }
     }
+}
+
+/// Original: `hostTerminalService.ts`, App-scope eager registration.
+pub fn register_local_host_terminal_service() {
+    register_scoped_service(
+        LifecycleScope::App,
+        HOST_TERMINAL_SERVICE_ID,
+        SyncDescriptor::new(|_| {
+            let service: Arc<dyn HostTerminalService> =
+                Arc::new(LocalHostTerminalService::default());
+            Ok(HostTerminalServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "terminal",
+    );
 }
 
 #[async_trait]
