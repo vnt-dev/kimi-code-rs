@@ -188,11 +188,9 @@ async fn await_turn(
     let mut ready_pending = on_ready.is_some();
     let mut cancellation_sent = false;
     loop {
-        if !cancellation_sent {
-            if let Some(reason) = signal.reason() {
-                cancel_turn(loop_service, turn, reason);
-                cancellation_sent = true;
-            }
+        if !cancellation_sent && let Some(reason) = signal.reason() {
+            cancel_turn(loop_service, turn, reason);
+            cancellation_sent = true;
         }
         tokio::select! {
             result = turn.0.result() => {
@@ -203,10 +201,8 @@ async fn await_turn(
             }
             ready = turn.0.ready(), if ready_pending => {
                 ready_pending = false;
-                if ready.is_ok() {
-                    if let Some(on_ready) = on_ready.as_ref() {
-                        on_ready();
-                    }
+                if ready.is_ok() && let Some(on_ready) = on_ready.as_ref() {
+                    on_ready();
                 }
             }
             reason = signal.cancelled(), if !cancellation_sent => {
@@ -288,10 +284,10 @@ fn classify_turn_result(result: LoopRunResult) -> Result<(), BoxError> {
 fn loop_value_to_error(value: LoopValue) -> BoxError {
     match value {
         LoopValue::Error(error) => {
-            if let Some(provider) = error.downcast_ref::<ChatProviderError>() {
-                if is_provider_rate_limit_error(provider) {
-                    return Box::new(provider.clone());
-                }
+            if let Some(provider) = error.downcast_ref::<ChatProviderError>()
+                && is_provider_rate_limit_error(provider)
+            {
+                return Box::new(provider.clone());
             }
             if let Some(error2) = error.downcast_ref::<Error2>() {
                 if error2.code == PROVIDER_RATE_LIMIT {

@@ -136,16 +136,9 @@ pub const SESSION_SUBAGENT_SERVICE_ID: ServiceIdentifier<SessionSubagentServiceH
 /// Reusable event ownership for the concrete service.  Kept separate from the
 /// contract because it gives the service RAII disposal without leaking emitter
 /// mutation to observers.
+#[derive(Default)]
 pub struct AgentTaskStopEmitter {
     emitter: Emitter<AgentTaskStopHookContext>,
-}
-
-impl Default for AgentTaskStopEmitter {
-    fn default() -> Self {
-        Self {
-            emitter: Emitter::new(),
-        }
-    }
 }
 
 impl AgentTaskStopEmitter {
