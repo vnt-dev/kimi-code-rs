@@ -5,20 +5,19 @@
 
 use std::{ops::Deref, sync::Arc};
 
-use futures_util::future::{BoxFuture, Shared};
-use tokio_util::sync::CancellationToken;
-
 use crate::{
     _base::{
         di::instantiation::ServiceIdentifier,
         event::{Emitter, Event},
         lifecycle::lifecycle_machine::BoxError,
+        utils::abort::AbortSignal,
     },
     agent::loop_::TurnHandle,
     app::agent_profile_catalog::AgentProfileSummaryPolicy,
     hooks::OrderedHookSlot,
     kosong::contract::usage::TokenUsage,
 };
+use futures_util::future::{BoxFuture, Shared};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentRunRequest {
@@ -29,14 +28,14 @@ pub enum AgentRunRequest {
 #[derive(Clone)]
 pub struct RunAgentOptions {
     /// Original `AbortSignal`; cancellation must reach the target turn.
-    pub signal: CancellationToken,
+    pub signal: AbortSignal,
     pub summary_policy: Option<AgentProfileSummaryPolicy>,
     /// Fires once the first turn request is committed.
     pub on_ready: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl RunAgentOptions {
-    pub fn new(signal: CancellationToken) -> Self {
+    pub fn new(signal: AbortSignal) -> Self {
         Self {
             signal,
             summary_policy: None,
@@ -65,7 +64,7 @@ pub struct AgentRunHandle {
 pub struct AgentTaskStartHookContext {
     pub agent_name: String,
     pub prompt: String,
-    pub signal: CancellationToken,
+    pub signal: AbortSignal,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -173,7 +172,8 @@ mod tests {
             SESSION_SUBAGENT_SERVICE_ID.to_string(),
             "sessionSubagentService"
         );
-        let options = RunAgentOptions::new(CancellationToken::new());
+        let options =
+            RunAgentOptions::new(crate::_base::utils::abort::AbortController::new().signal());
         assert!(options.summary_policy.is_none());
 
         let turn = TurnHandle(Arc::new(Turn));
