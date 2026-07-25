@@ -156,10 +156,14 @@ mod tests {
                 path: "https://example.com/plugin.zip".to_owned(),
             }
         );
+        let local = std::env::current_dir()
+            .unwrap()
+            .join("plugins")
+            .join("demo");
         assert_eq!(
-            resolve_install_source("  /opt/plugins/demo  ").unwrap(),
+            resolve_install_source(&format!("  {}  ", local.display())).unwrap(),
             ResolvedSource::LocalPath {
-                path: "/opt/plugins/demo".to_owned(),
+                path: local.to_string_lossy().into_owned(),
             }
         );
         assert_eq!(

@@ -477,19 +477,19 @@ mod tests {
         fs::create_dir_all(project.join(".git")).unwrap();
         fs::create_dir_all(nested.join(".kimi-code")).unwrap();
         fs::write(brand.join("AGENTS.md"), " brand ").unwrap();
-        fs::write(home.join(".agents/agents.md"), "generic").unwrap();
+        fs::write(home.join(".agents/AGENTS.md"), "generic").unwrap();
         fs::write(project.join("AGENTS.md"), "project").unwrap();
         fs::write(nested.join(".kimi-code/AGENTS.md"), "nested").unwrap();
 
-        let content = load_agents_md(&deps(home), &nested, Some(&brand)).await;
+        let content = load_agents_md(&deps(home.clone()), &nested, Some(&brand)).await;
         assert_eq!(
             content,
             format!(
                 "<!-- From: {} -->\nbrand\n\n<!-- From: {} -->\ngeneric\n\n<!-- From: {} -->\nproject\n\n<!-- From: {} -->\nnested",
                 brand.join("AGENTS.md").display(),
-                root.0.join("home/.agents/agents.md").display(),
+                home.join(".agents").join("AGENTS.md").display(),
                 project.join("AGENTS.md").display(),
-                nested.join(".kimi-code/AGENTS.md").display(),
+                nested.join(".kimi-code").join("AGENTS.md").display(),
             )
         );
     }

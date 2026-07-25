@@ -165,13 +165,14 @@ mod tests {
 
     #[test]
     fn parses_worktree_markers_and_git_path_components() {
+        let marker_parent = Path::new("work").join("child");
         assert_eq!(
             parse_local_git_dir(
                 "\u{feff} gitdir: ../repo/.git/worktrees/a\n",
-                Path::new("/work/child")
+                &marker_parent
             )
-            .as_deref(),
-            Some("/work/child/../repo/.git/worktrees/a")
+            .map(PathBuf::from),
+            Some(marker_parent.join("../repo/.git/worktrees/a"))
         );
         assert!(parse_local_git_dir("not-a-marker", Path::new("/work")).is_none());
         assert!(has_git_path_component(

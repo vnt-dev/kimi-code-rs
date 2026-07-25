@@ -13,7 +13,12 @@ use thiserror::Error;
 
 use super::types::{PluginCapabilityState, PluginGithubMetadata, PluginSource};
 
-const INSTALLED_REL: &str = "plugins/installed.json";
+const INSTALLED_DIR: &str = "plugins";
+const INSTALLED_FILE: &str = "installed.json";
+
+fn installed_path(kimi_home_dir: &Path) -> PathBuf {
+    kimi_home_dir.join(INSTALLED_DIR).join(INSTALLED_FILE)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +72,7 @@ pub enum InstalledStoreError {
 pub async fn read_installed(
     kimi_home_dir: impl AsRef<Path>,
 ) -> Result<InstalledFile, InstalledStoreError> {
-    let file_path = kimi_home_dir.as_ref().join(INSTALLED_REL);
+    let file_path = installed_path(kimi_home_dir.as_ref());
     let text = match tokio::fs::read_to_string(&file_path).await {
         Ok(text) => text,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(InstalledFile::default()),
@@ -152,7 +157,7 @@ mod tests {
         };
 
         write_installed(&home, &data).await.unwrap();
-        let path = home.join(INSTALLED_REL);
+        let path = installed_path(&home);
         let text = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(!text.ends_with('\n'));
         assert!(text.contains("\n  \"plugins\": ["));

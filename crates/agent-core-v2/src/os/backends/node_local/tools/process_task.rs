@@ -393,24 +393,26 @@ mod tests {
     }
 
     async fn shell(command: &str) -> Arc<dyn HostProcess> {
+        #[cfg(windows)]
+        let (shell, args) = (
+            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()),
+            vec!["/D".into(), "/S".into(), "/C".into(), command.into()],
+        );
+        #[cfg(not(windows))]
+        let (shell, args) = ("/bin/sh".to_owned(), vec!["-c".into(), command.into()]);
         LocalHostProcessService::default()
-            .spawn(
-                "/bin/sh",
-                &["-c".into(), command.into()],
-                HostProcessOptions::default(),
-            )
+            .spawn(&shell, &args, HostProcessOptions::default())
             .await
             .unwrap()
     }
 
     #[tokio::test]
     async fn task_forwards_both_streams_settles_and_reports_info() {
-        let task = ProcessTask::new(
-            shell("printf out; printf err >&2").await,
-            "command",
-            "description",
-            None,
-        );
+        #[cfg(windows)]
+        let command = "echo|set /p=out&echo|set /p=err 1>&2&exit /b 0";
+        #[cfg(not(windows))]
+        let command = "printf out; printf err >&2";
+        let task = ProcessTask::new(shell(command).await, "command", "description", None);
         let controller = AbortController::new();
         let sink = Sink {
             signal: controller.signal(),
@@ -441,7 +443,11 @@ mod tests {
 
     #[tokio::test]
     async fn executor_returns_typed_nonzero_exit_error() {
-        let process = shell("printf output; exit 7").await;
+        #[cfg(windows)]
+        let command = "echo|set /p=output&exit /b 7";
+        #[cfg(not(windows))]
+        let command = "printf output; exit 7";
+        let process = shell(command).await;
         let output = Mutex::new(String::new());
         let error = execute_process(
             process,
@@ -460,7 +466,11 @@ mod tests {
 
     #[tokio::test]
     async fn already_aborted_task_terminates_and_settles_killed() {
-        let task = ProcessTask::new(shell("sleep 30").await, "sleep", "sleeping", None);
+        #[cfg(windows)]
+        let command = "ping 127.0.0.1 -n 31 >nul";
+        #[cfg(not(windows))]
+        let command = "sleep 30";
+        let task = ProcessTask::new(shell(command).await, "sleep", "sleeping", None);
         let controller = AbortController::new();
         controller.abort(None);
         let sink = Sink {

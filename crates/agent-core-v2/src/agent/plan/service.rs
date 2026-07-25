@@ -575,7 +575,14 @@ mod tests {
 
         let status = service.status().await.unwrap().unwrap();
         assert!(status.content.is_empty());
-        assert!(status.path.ends_with("agents/main/plans/plan-1.md"));
+        assert!(
+            Path::new(&status.path).ends_with(
+                Path::new("agents")
+                    .join("main")
+                    .join("plans")
+                    .join("plan-1.md")
+            )
+        );
         host_fs
             .write_text(Path::new(&status.path), "draft")
             .await

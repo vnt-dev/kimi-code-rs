@@ -452,7 +452,9 @@ mod tests {
         assert_eq!(skill.mermaid.as_deref(), Some("graph TD"));
         assert_eq!(skill.d2.as_deref(), Some("a -> b"));
         assert!(Path::new(&skill.path).is_absolute());
-        assert!(skill.path.ends_with("skills/review/SKILL.md"));
+        assert!(
+            Path::new(&skill.path).ends_with(Path::new("skills").join("review").join("SKILL.md"))
+        );
     }
 
     #[test]

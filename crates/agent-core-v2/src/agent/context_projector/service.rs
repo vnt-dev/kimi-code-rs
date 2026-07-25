@@ -269,8 +269,8 @@ fn project(
         }
         let can_merge =
             source.message.role == Role::User && matches!(source.origin, Some(PromptOrigin::User));
-        if can_merge && user_merge.is_some() {
-            let prior = &mut out[user_merge.unwrap()];
+        if can_merge && let Some(user_merge) = user_merge {
+            let prior = &mut out[user_merge];
             prior.content.push(ContentPart::Text {
                 text: "\n\n".into(),
             });
@@ -316,13 +316,12 @@ fn project_strict(messages: Vec<Message>, anomalies: &mut Vec<ProjectionAnomaly>
                 }
             });
         }
-        if message.role == Role::Tool {
-            if let Some(id) = message.tool_call_id.clone() {
-                if results.insert(id.clone(), out.len()).is_some() {
-                    anomalies.push(ProjectionAnomaly::DuplicateToolResultDropped(id));
-                    continue;
-                }
-            }
+        if message.role == Role::Tool
+            && let Some(id) = message.tool_call_id.clone()
+            && results.insert(id.clone(), out.len()).is_some()
+        {
+            anomalies.push(ProjectionAnomaly::DuplicateToolResultDropped(id));
+            continue;
         }
         if out.last().is_some_and(|previous: &Message| {
             previous.role == Role::Assistant && message.role == Role::Assistant

@@ -104,13 +104,18 @@ fn parse_positive_usize(value: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
     fn config_uses_defaults_and_javascript_integer_prefixes() {
         let defaults = resolve_logging_config("/home/kimi", &HashMap::new());
         assert_eq!(defaults.level, LogLevel::Info);
-        assert_eq!(defaults.global_log_path, "/home/kimi/logs/kimi-code.log");
+        assert_eq!(
+            PathBuf::from(defaults.global_log_path),
+            Path::new("/home/kimi").join("logs").join("kimi-code.log")
+        );
         let env = HashMap::from([
             ("KIMI_LOG_LEVEL".into(), " DEBUG ".into()),
             ("KIMI_LOG_GLOBAL_MAX_BYTES".into(), "2048px".into()),

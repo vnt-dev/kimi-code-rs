@@ -199,6 +199,9 @@ impl FileWorkspaceLocalConfigService {
         if let Some(relative) = value.strip_prefix("~/") {
             return path_to_string(&self.bootstrap.os_home_dir().join(relative));
         }
+        if let Some(relative) = value.strip_prefix("~\\") {
+            return path_to_string(&self.bootstrap.os_home_dir().join(relative));
+        }
         value.into()
     }
 
@@ -511,7 +514,7 @@ mod tests {
         let repo = root.join("repo");
         let nested = repo.join("nested");
         let shared = root.join("shared");
-        let home_extra = root.join("os-home/extra");
+        let home_extra = root.join("os-home").join("extra");
         for path in [&nested, &repo.join(".git"), &shared, &home_extra] {
             tokio::fs::create_dir_all(path).await.unwrap();
         }

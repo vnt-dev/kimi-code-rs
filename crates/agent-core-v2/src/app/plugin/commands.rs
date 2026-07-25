@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(command.body, "run $ARGUMENTS");
         assert_eq!(command.plugin_id, "demo");
         assert!(Path::new(&command.path).is_absolute());
-        assert!(command.path.ends_with("commands/fallback.md"));
+        assert!(Path::new(&command.path).ends_with(Path::new("commands").join("fallback.md")));
     }
 
     #[test]

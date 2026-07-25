@@ -532,21 +532,17 @@ mod tests {
 
     #[test]
     fn resolves_relative_stdio_cwd_against_default_cwd() {
+        let workspace = std::env::current_dir().unwrap().join("workspace/project");
         assert_eq!(
-            resolve_stdio_cwd(
-                Some("servers/../mcp"),
-                Some(Path::new("/workspace/project"))
-            ),
-            Some(PathBuf::from("/workspace/project/mcp"))
+            resolve_stdio_cwd(Some("servers/../mcp"), Some(&workspace)),
+            Some(workspace.join("mcp"))
         );
+        let absolute = std::env::temp_dir().join("mcp");
         assert_eq!(
-            resolve_stdio_cwd(Some("/tmp/mcp"), Some(Path::new("/workspace/project"))),
-            Some(PathBuf::from("/tmp/mcp"))
+            resolve_stdio_cwd(absolute.to_str(), Some(&workspace)),
+            Some(absolute)
         );
-        assert_eq!(
-            resolve_stdio_cwd(None, Some(Path::new("/workspace/project"))),
-            None
-        );
+        assert_eq!(resolve_stdio_cwd(None, Some(&workspace)), None);
     }
 
     #[test]

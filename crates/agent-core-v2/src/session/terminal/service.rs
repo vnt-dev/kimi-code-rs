@@ -473,7 +473,10 @@ pub fn register_session_terminal_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, sync::Mutex};
+    use std::{
+        path::{Path, PathBuf},
+        sync::Mutex,
+    };
 
     use crate::{
         _base::event::{Emitter, Event},
@@ -635,10 +638,14 @@ mod tests {
             })
             .await
             .unwrap();
+        let expected_cwd = Path::new("/workspace")
+            .join("subdir")
+            .to_string_lossy()
+            .into_owned();
         assert_eq!(terminal.session_id, "session-1");
-        assert_eq!(terminal.cwd, "/workspace/subdir");
+        assert_eq!(terminal.cwd, expected_cwd);
         assert_eq!(terminal.cols, 100);
-        assert_eq!(host.options.lock().unwrap()[0].cwd, "/workspace/subdir");
+        assert_eq!(host.options.lock().unwrap()[0].cwd, terminal.cwd);
 
         let process = host.processes.lock().unwrap()[0].clone();
         process.emit_data("first");

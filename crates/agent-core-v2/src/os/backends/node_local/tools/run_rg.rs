@@ -193,12 +193,32 @@ mod tests {
         os::backends::node_local::host_process_service::LocalHostProcessService,
     };
 
+    #[cfg(windows)]
+    fn test_shell(script: &str) -> Vec<String> {
+        vec![
+            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()),
+            "/D".into(),
+            "/S".into(),
+            "/C".into(),
+            script.into(),
+        ]
+    }
+
+    #[cfg(not(windows))]
+    fn test_shell(script: &str) -> Vec<String> {
+        vec!["/bin/sh".into(), "-c".into(), script.into()]
+    }
+
     #[tokio::test]
     async fn captures_caps_and_reports_normal_result() {
         let controller = AbortController::new();
+        #[cfg(windows)]
+        let command = "echo|set /p=123456789&exit /b 0";
+        #[cfg(not(windows))]
+        let command = "printf 123456789";
         let result = run_rg_with_options(
             &LocalHostProcessService::default(),
-            &["/bin/sh".into(), "-c".into(), "printf 123456789".into()],
+            &test_shell(command),
             &controller.signal(),
             None,
             RunOptions {
@@ -235,10 +255,15 @@ mod tests {
 
         let during = AbortController::new();
         let signal = during.signal();
+        #[cfg(windows)]
+        let command = "ping 127.0.0.1 -n 31 >nul";
+        #[cfg(not(windows))]
+        let command = "sleep 30";
+        let shell = test_shell(command);
         let task = tokio::spawn(async move {
             run_rg_with_options(
                 &LocalHostProcessService::default(),
-                &["/bin/sh".into(), "-c".into(), "sleep 30".into()],
+                &shell,
                 &signal,
                 None,
                 RunOptions {

@@ -15,16 +15,9 @@ use super::{
     AgentFullCompactionServiceHandle, FullCompactionInput, FullCompactionTask,
 };
 
+#[derive(Default)]
 pub struct AgentFullCompactionService {
     hooks: AgentFullCompactionHooks,
-}
-
-impl Default for AgentFullCompactionService {
-    fn default() -> Self {
-        Self {
-            hooks: AgentFullCompactionHooks::default(),
-        }
-    }
 }
 
 impl AgentFullCompactionServiceContract for AgentFullCompactionService {

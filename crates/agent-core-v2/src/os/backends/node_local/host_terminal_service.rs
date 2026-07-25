@@ -271,20 +271,17 @@ mod tests {
 
     #[tokio::test]
     async fn spawns_writes_resizes_emits_output_and_exit() {
-        let service = LocalHostTerminalService::with_environment(Arc::new(
-            [
-                ("KIMI_PTY_ENV".into(), "snapshot".into()),
-                (
-                    "PATH".into(),
-                    std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
-                ),
-            ]
-            .into(),
-        ));
+        let mut environment: HashMap<String, String> = std::env::vars().collect();
+        environment.insert("KIMI_PTY_ENV".into(), "snapshot".into());
+        let service = LocalHostTerminalService::with_environment(Arc::new(environment));
+        #[cfg(windows)]
+        let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
+        #[cfg(not(windows))]
+        let shell = "/bin/sh".to_owned();
         let process = service
             .spawn(TerminalSpawnOptions {
                 cwd: std::env::temp_dir().to_string_lossy().into_owned(),
-                shell: "/bin/sh".into(),
+                shell,
                 cols: 80,
                 rows: 24,
             })
@@ -299,6 +296,27 @@ mod tests {
             let _ = exit_tx.send(*exit);
         });
         process.resize(100, 30).unwrap();
+        #[cfg(windows)]
+        {
+            let cursor_query = tokio::time::timeout(Duration::from_secs(3), async {
+                let mut startup = String::new();
+                while let Some(chunk) = data_rx.recv().await {
+                    startup.push_str(&chunk);
+                    if startup.contains("\u{1b}[6n") {
+                        break;
+                    }
+                }
+                startup
+            })
+            .await
+            .unwrap();
+            assert!(cursor_query.contains("\u{1b}[6n"));
+            process.write("\u{1b}[1;1R").unwrap();
+            process
+                .write("echo __PTY_OK__:%KIMI_PTY_ENV%&exit\r\n")
+                .unwrap();
+        }
+        #[cfg(not(windows))]
         process
             .write("printf __PTY_OK__:$KIMI_PTY_ENV; exit\n")
             .unwrap();

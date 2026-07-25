@@ -201,7 +201,7 @@ pub fn convert_tool_message_content(
     }
 }
 
-pub const OPENAI_REASONING_CAPABILITY: ModelCapability = ModelCapability {
+pub static OPENAI_REASONING_CAPABILITY: ModelCapability = ModelCapability {
     image_in: false,
     video_in: false,
     audio_in: false,
@@ -211,7 +211,7 @@ pub const OPENAI_REASONING_CAPABILITY: ModelCapability = ModelCapability {
     dynamically_loaded_tools: None,
 };
 
-pub const OPENAI_VISION_TOOL_CAPABILITY: ModelCapability = ModelCapability {
+pub static OPENAI_VISION_TOOL_CAPABILITY: ModelCapability = ModelCapability {
     image_in: true,
     video_in: false,
     audio_in: false,
@@ -221,7 +221,7 @@ pub const OPENAI_VISION_TOOL_CAPABILITY: ModelCapability = ModelCapability {
     dynamically_loaded_tools: None,
 };
 
-pub const OPENAI_TEXT_TOOL_CAPABILITY: ModelCapability = ModelCapability {
+pub static OPENAI_TEXT_TOOL_CAPABILITY: ModelCapability = ModelCapability {
     image_in: false,
     video_in: false,
     audio_in: false,

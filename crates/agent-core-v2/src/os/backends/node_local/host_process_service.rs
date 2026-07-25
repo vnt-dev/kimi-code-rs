@@ -5,6 +5,7 @@
 use std::{
     collections::HashMap,
     error::Error,
+    path::Path,
     process::Stdio,
     sync::{
         Arc,
@@ -215,18 +216,31 @@ fn build_command(
             process
         }
         Some(shell) => {
-            let shell = match shell {
-                ProcessShell::Default if cfg!(windows) => "cmd.exe",
-                ProcessShell::Default => "/bin/sh",
-                ProcessShell::Command(shell) => shell,
+            let (shell, is_cmd) = match shell {
+                ProcessShell::Default if cfg!(windows) => ("cmd.exe", true),
+                ProcessShell::Default => ("/bin/sh", false),
+                ProcessShell::Command(shell) => (
+                    shell.as_str(),
+                    cfg!(windows)
+                        && Path::new(shell)
+                            .file_stem()
+                            .is_some_and(|name| name.eq_ignore_ascii_case("cmd")),
+                ),
             };
             let mut process = Command::new(shell);
-            if cfg!(windows) {
-                process.arg("/C");
+            if is_cmd {
+                process.args(["/D", "/S", "/C"]);
+                #[cfg(windows)]
+                {
+                    // `cmd.exe` parses its command tail directly rather than
+                    // with the Windows C runtime argv rules. Passing it via
+                    // `arg` would turn embedded quotes into literal `\"`.
+                    process.raw_arg(shell_command(command, args, true));
+                }
             } else {
                 process.arg("-c");
+                process.arg(shell_command(command, args, false));
             }
-            process.arg(shell_command(command, args));
             process
         }
     };
@@ -242,19 +256,21 @@ fn build_command(
     process
 }
 
-fn shell_command(command: &str, args: &[String]) -> String {
+fn shell_command(command: &str, args: &[String], is_cmd: bool) -> String {
     std::iter::once(command.to_owned())
-        .chain(args.iter().map(|argument| shell_quote(argument)))
+        .chain(args.iter().map(|argument| shell_quote(argument, is_cmd)))
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-fn shell_quote(value: &str) -> String {
+fn shell_quote(value: &str, is_cmd: bool) -> String {
     if value
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || b"_+-./:".contains(&byte))
     {
         value.into()
+    } else if is_cmd {
+        format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
@@ -380,13 +396,31 @@ mod tests {
 
     use super::*;
 
+    #[cfg(windows)]
+    fn test_shell(script: &str) -> (String, Vec<String>) {
+        (
+            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()),
+            vec!["/D".into(), "/S".into(), "/C".into(), script.into()],
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn test_shell(script: &str) -> (String, Vec<String>) {
+        ("/bin/sh".into(), vec!["-c".into(), script.into()])
+    }
+
     #[tokio::test]
     async fn spawns_captures_output_merges_environment_and_caches_exit() {
         let service = LocalHostProcessService::default();
+        #[cfg(windows)]
+        let script = "echo|set /p=%KIMI_HOST_PROCESS_TEST%&exit /b 0";
+        #[cfg(not(windows))]
+        let script = "printf %s \"$KIMI_HOST_PROCESS_TEST\"";
+        let (shell, args) = test_shell(script);
         let process = service
             .spawn(
-                "sh",
-                &["-c".into(), "printf %s \"$KIMI_HOST_PROCESS_TEST\"".into()],
+                &shell,
+                &args,
                 HostProcessOptions {
                     env: Some([("KIMI_HOST_PROCESS_TEST".into(), "ok".into())].into()),
                     ..HostProcessOptions::default()
@@ -410,12 +444,13 @@ mod tests {
 
     #[tokio::test]
     async fn output_remains_readable_after_waiting_for_exit() {
+        #[cfg(windows)]
+        let script = "echo|set /p=buffered-after-wait&exit /b 0";
+        #[cfg(not(windows))]
+        let script = "printf %s buffered-after-wait";
+        let (shell, args) = test_shell(script);
         let process = LocalHostProcessService::default()
-            .spawn(
-                "sh",
-                &["-c".into(), "printf %s buffered-after-wait".into()],
-                HostProcessOptions::default(),
-            )
+            .spawn(&shell, &args, HostProcessOptions::default())
             .await
             .unwrap();
 
@@ -440,13 +475,15 @@ mod tests {
             ]
             .into(),
         ));
+        #[cfg(windows)]
+        let script = "echo|set /p=%KIMI_BASE%:%KIMI_OVERRIDE%&exit /b 0";
+        #[cfg(not(windows))]
+        let script = "printf '%s:%s' \"$KIMI_BASE\" \"$KIMI_OVERRIDE\"";
+        let (shell, args) = test_shell(script);
         let process = service
             .spawn(
-                "/bin/sh",
-                &[
-                    "-c".into(),
-                    "printf '%s:%s' \"$KIMI_BASE\" \"$KIMI_OVERRIDE\"".into(),
-                ],
+                &shell,
+                &args,
                 HostProcessOptions {
                     env: Some([("KIMI_OVERRIDE".into(), "new".into())].into()),
                     ..HostProcessOptions::default()
@@ -472,10 +509,22 @@ mod tests {
     #[tokio::test]
     async fn shell_option_executes_command_as_script_and_quotes_arguments() {
         let service = LocalHostProcessService::default();
+        #[cfg(windows)]
+        let (command, args, expected) = (
+            "echo|set /p=shell-script:argument with spaces&exit /b 0",
+            Vec::new(),
+            "shell-script:argument with spaces",
+        );
+        #[cfg(not(windows))]
+        let (command, args, expected) = (
+            "printf '%s:%s' shell-script",
+            vec!["argument with spaces".into()],
+            "shell-script:argument with spaces",
+        );
         let process = service
             .spawn(
-                "printf '%s:%s' shell-script",
-                &["argument with spaces".into()],
+                command,
+                &args,
                 HostProcessOptions {
                     shell: Some(ProcessShell::Default),
                     ..HostProcessOptions::default()
@@ -492,7 +541,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(process.wait().await.unwrap(), 0);
-        assert_eq!(output, "shell-script:argument with spaces");
+        assert_eq!(output, expected);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn default_cmd_shell_preserves_a_spaced_argument() {
+        let process = LocalHostProcessService::default()
+            .spawn(
+                "echo|set /p=",
+                &["argument with spaces".into()],
+                HostProcessOptions {
+                    shell: Some(ProcessShell::Default),
+                    ..HostProcessOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        let mut output = String::new();
+        process
+            .stdout()
+            .lock()
+            .await
+            .read_to_string(&mut output)
+            .await
+            .unwrap();
+        assert_eq!(process.wait().await.unwrap(), 1);
+        assert_eq!(output, "argument with spaces");
     }
 
     #[tokio::test]

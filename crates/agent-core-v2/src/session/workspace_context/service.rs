@@ -216,47 +216,64 @@ mod tests {
 
     #[test]
     fn resolves_mutates_and_deduplicates_workspace_roots_lexically() {
-        let service = SessionWorkspaceContextService::new(&context("/repo/./nested/..")).unwrap();
-        assert_eq!(service.work_dir(), Path::new("/repo"));
+        let root = std::env::temp_dir().join("workspace-context-repo");
+        let nested = root.join("nested").join("..");
+        let service =
+            SessionWorkspaceContextService::new(&context(&nested.to_string_lossy())).unwrap();
+        assert_eq!(service.work_dir(), root);
+        assert_eq!(service.resolve("src/../README.md"), root.join("README.md"));
+        let absolute_outside = std::env::temp_dir().join("workspace-context-outside");
         assert_eq!(
-            service.resolve("src/../README.md"),
-            Path::new("/repo/README.md")
+            service.resolve(&absolute_outside.to_string_lossy()),
+            absolute_outside
         );
-        assert_eq!(service.resolve("/../../outside"), Path::new("/outside"));
+        let shared = std::env::temp_dir().join("workspace-context-shared");
+        let other = std::env::temp_dir().join("workspace-context-other");
         service
-            .set_additional_dirs(&["/shared".into(), "/shared/./".into()])
+            .set_additional_dirs(&[
+                shared.to_string_lossy().into_owned(),
+                shared.join(".").to_string_lossy().into_owned(),
+            ])
             .unwrap();
-        service.add_additional_dir("/other").unwrap();
-        service.add_additional_dir("/other").unwrap();
-        assert_eq!(
-            service.additional_dirs(),
-            [PathBuf::from("/shared"), PathBuf::from("/other")]
-        );
-        service.remove_additional_dir("/shared").unwrap();
-        assert_eq!(service.additional_dirs(), [PathBuf::from("/other")]);
+        service
+            .add_additional_dir(&other.to_string_lossy())
+            .unwrap();
+        service
+            .add_additional_dir(&other.to_string_lossy())
+            .unwrap();
+        assert_eq!(service.additional_dirs(), [shared.clone(), other.clone()]);
+        service
+            .remove_additional_dir(&shared.to_string_lossy())
+            .unwrap();
+        assert_eq!(service.additional_dirs(), [other]);
     }
 
     #[test]
     fn enforces_workspace_and_additional_directory_boundaries() {
-        let service = SessionWorkspaceContextService::new(&context("/repo")).unwrap();
-        service.add_additional_dir("/shared").unwrap();
-        assert!(service.is_within("/repo"));
-        assert!(service.is_within("/repo/src/lib.rs"));
-        assert!(service.is_within("/shared/file"));
-        assert!(!service.is_within("/repository/file"));
-        assert!(!service.is_within("/outside"));
+        let root = std::env::temp_dir().join("workspace-context-boundary-repo");
+        let shared = std::env::temp_dir().join("workspace-context-boundary-shared");
+        let outside = std::env::temp_dir().join("workspace-context-boundary-outside");
+        let sibling = std::env::temp_dir().join("workspace-context-boundary-repository");
+        let service =
+            SessionWorkspaceContextService::new(&context(&root.to_string_lossy())).unwrap();
+        service
+            .add_additional_dir(&shared.to_string_lossy())
+            .unwrap();
+        assert!(service.is_within(&root.to_string_lossy()));
+        assert!(service.is_within(&root.join("src/lib.rs").to_string_lossy()));
+        assert!(service.is_within(&shared.join("file").to_string_lossy()));
+        assert!(!service.is_within(&sibling.join("file").to_string_lossy()));
+        assert!(!service.is_within(&outside.to_string_lossy()));
         assert_eq!(
             service
                 .assert_allowed("src/lib.rs", PathAccessOperation::Read)
                 .unwrap(),
-            Path::new("/repo/src/lib.rs")
+            root.join("src/lib.rs")
         );
-        assert_eq!(
-            service
-                .assert_allowed("/outside", PathAccessOperation::Execute)
-                .unwrap_err()
-                .to_string(),
-            "Path outside workspace (execute): /outside"
-        );
+        let error = service
+            .assert_allowed(&outside.to_string_lossy(), PathAccessOperation::Execute)
+            .unwrap_err();
+        assert_eq!(error.path, outside);
+        assert_eq!(error.operation, PathAccessOperation::Execute);
     }
 }

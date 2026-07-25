@@ -224,13 +224,13 @@ impl AgentLlmRequesterService {
                 Ok(finish) => {
                     let _ = self.usage.record(
                         resolved.model_alias,
-                        finish.usage.clone(),
+                        finish.usage,
                         overrides.source.clone(),
                     );
                     let _ = self.context_size.measured(
                         &messages,
                         std::slice::from_ref(&finish.message),
-                        finish.usage.clone(),
+                        finish.usage,
                     );
                     return Ok(finish);
                 }
