@@ -25,6 +25,7 @@ pub struct AgentProfileCatalogService {
 impl AgentProfileCatalogService {
     // Original: AgentProfileCatalogService.constructor().
     pub fn new() -> Self {
+        crate::session::agent_lifecycle::register_builtin_agent_lifecycle_profiles();
         Self::from_profiles(get_agent_profile_contributions())
     }
 
