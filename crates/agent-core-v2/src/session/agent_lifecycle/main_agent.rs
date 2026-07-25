@@ -1,36 +1,131 @@
-//! Main-agent lifecycle convenience helpers.
+//! Main-agent lifecycle convenience helper.
 //!
-//! Original: `session/agentLifecycle/mainAgent.ts`.
+//! Original: `session/agentLifecycle/mainAgent.ts`, `ensureMainAgent()`.
 
-pub use super::contract::MAIN_AGENT_ID;
+use crate::{
+    _base::{di::scope::ScopeHandle, lifecycle::lifecycle_machine::BoxError},
+    session::agent_lifecycle::{
+        AGENT_LIFECYCLE_SERVICE_ID, AgentScopeHandle, CreateAgentOptions, MAIN_AGENT_ID,
+    },
+};
 
-/// Minimal lifecycle surface needed by the conventional-main composition
-/// helper. The concrete registry is migrated separately.
-pub trait MainAgentLifecycle {
-    type Agent;
-    type Error;
-    async fn create_main(&self) -> Result<Self::Agent, Self::Error>;
-}
-
-// Original: ensureMainAgent().
-pub async fn ensure_main_agent<L: MainAgentLifecycle>(lifecycle: &L) -> Result<L::Agent, L::Error> {
-    lifecycle.create_main().await
+/// Returns the conventional main agent, creating it through the session's
+/// lifecycle service when necessary. As in the source, the conventional ID
+/// overrides any value supplied by the caller while all other options pass
+/// through unchanged.
+pub async fn ensure_main_agent(
+    session: &ScopeHandle,
+    options: Option<CreateAgentOptions>,
+) -> Result<AgentScopeHandle, BoxError> {
+    let lifecycle = session
+        .get(AGENT_LIFECYCLE_SERVICE_ID)
+        .map_err(|error| Box::new(error) as BoxError)?;
+    let mut options = options.unwrap_or_default();
+    options.agent_id = Some(MAIN_AGENT_ID.into());
+    lifecycle.create(options).await
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use futures_util::{FutureExt, future::BoxFuture};
+
+    use crate::{
+        _base::{
+            di::{
+                scope::{Scope, ScopeOptions},
+                service_collection::ServiceCollection,
+            },
+            event::Event,
+        },
+        agent::permission_policy::PermissionMode,
+        session::agent_lifecycle::{
+            AgentLifecycleServiceContract, AgentLifecycleServiceHandle, AgentListFilter,
+            ForkAgentOptions,
+        },
+    };
+
     use super::*;
-    struct Lifecycle;
-    impl MainAgentLifecycle for Lifecycle {
-        type Agent = &'static str;
-        type Error = ();
-        async fn create_main(&self) -> Result<Self::Agent, Self::Error> {
-            Ok(MAIN_AGENT_ID)
+
+    struct Lifecycle {
+        returned: AgentScopeHandle,
+        options: Mutex<Vec<CreateAgentOptions>>,
+    }
+
+    impl AgentLifecycleServiceContract for Lifecycle {
+        fn on_did_create(&self) -> Event<AgentScopeHandle> {
+            Event::none()
+        }
+
+        fn on_did_dispose(&self) -> Event<String> {
+            Event::none()
+        }
+
+        fn create(
+            &self,
+            options: CreateAgentOptions,
+        ) -> BoxFuture<'static, Result<AgentScopeHandle, BoxError>> {
+            self.options.lock().unwrap().push(options);
+            futures_util::future::ready(Ok(self.returned.clone())).boxed()
+        }
+
+        fn fork(
+            &self,
+            _: String,
+            _: ForkAgentOptions,
+        ) -> BoxFuture<'static, Result<AgentScopeHandle, BoxError>> {
+            futures_util::future::pending().boxed()
+        }
+
+        fn get(&self, _: &str) -> Option<AgentScopeHandle> {
+            None
+        }
+
+        fn list(&self, _: Option<&AgentListFilter>) -> Vec<AgentScopeHandle> {
+            Vec::new()
+        }
+
+        fn broadcast_permission_mode(&self, _: PermissionMode) {}
+
+        fn remove(&self, _: String) -> BoxFuture<'static, Result<(), BoxError>> {
+            futures_util::future::ready(Ok(())).boxed()
         }
     }
+
     #[tokio::test]
-    async fn creates_the_conventional_main_agent() {
-        assert_eq!(ensure_main_agent(&Lifecycle).await, Ok("main"));
-        assert_eq!(MAIN_AGENT_ID, "main");
+    async fn resolves_session_lifecycle_and_forces_the_conventional_main_id() {
+        let returned = Scope::create_app(ScopeOptions {
+            id: Some("returned-agent".into()),
+            ..ScopeOptions::default()
+        })
+        .to_handle();
+        let lifecycle = Arc::new(Lifecycle {
+            returned: returned.clone(),
+            options: Mutex::new(Vec::new()),
+        });
+        let mut services = ServiceCollection::new();
+        let handle: Arc<dyn AgentLifecycleServiceContract> = lifecycle.clone();
+        services.set_instance(
+            AGENT_LIFECYCLE_SERVICE_ID,
+            Arc::new(AgentLifecycleServiceHandle(handle)),
+        );
+        let session = Scope::create_app(ScopeOptions {
+            id: Some("session".into()),
+            extra: services,
+        })
+        .to_handle();
+
+        let options = CreateAgentOptions {
+            agent_id: Some("wrong".into()),
+            forked_from: Some("source".into()),
+            ..CreateAgentOptions::default()
+        };
+        let created = ensure_main_agent(&session, Some(options)).await.unwrap();
+        assert_eq!(created.id(), returned.id());
+        let seen = lifecycle.options.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].agent_id.as_deref(), Some(MAIN_AGENT_ID));
+        assert_eq!(seen[0].forked_from.as_deref(), Some("source"));
     }
 }
