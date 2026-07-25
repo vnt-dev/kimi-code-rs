@@ -12,6 +12,7 @@ pub mod goal_queue_edit_dialog;
 pub mod goal_queue_manager;
 pub mod goal_start_permission_prompt;
 pub mod help_panel;
+pub mod migration_notice;
 pub mod model_selector;
 pub mod permission_selector;
 pub mod platform_selector;
@@ -58,6 +59,7 @@ pub use goal_start_permission_prompt::{
     goal_start_options,
 };
 pub use help_panel::{HelpPanelCommand, HelpPanelComponent, KeyboardShortcut};
+pub use migration_notice::MigrationNoticeDialog;
 pub use model_selector::{
     ModelSelection, ModelSelectorComponent, ModelSelectorOptions, ThinkingAvailability,
 };

@@ -11,6 +11,7 @@ pub mod prompt_runtime;
 pub mod prompt_session;
 pub mod prompt_store;
 pub mod run_prompt;
+pub mod run_shell;
 pub mod startup_error;
 pub mod sub;
 pub mod telemetry;

@@ -22,6 +22,7 @@ use kimi_code_rs::cli::{
     main_command::{MainCommandRuntime, MainCommandRuntimeError},
     options::CliOptions,
     prompt_runtime::{ProcessPromptOutput, SystemPromptRuntime},
+    run_shell::{RunShellOptions, run_shell},
     startup_error::{StartupErrorFormatOptions, StartupFailure, format_startup_error},
     sub::{
         doctor::{DoctorOptions, DoctorTarget, handle_doctor},
@@ -34,7 +35,11 @@ use kimi_code_rs::cli::{
             DeprecatedServerDisposition, DeprecatedServerRuntime, handle_deprecated_server,
         },
     },
-    update::types::UpdatePreflightResult,
+    update::{
+        preflight_runtime::{SystemUpdatePreflightRuntime, UpdatePreflightObserver},
+        run_preflight::{UpdatePreflightError, run_update_preflight},
+        types::UpdatePreflightResult,
+    },
     version::{create_kimi_code_user_agent, get_host_package_root, get_version},
 };
 use kimi_code_rs::utils::paths::get_data_dir;
@@ -77,6 +82,20 @@ impl UpgradeObserver for PendingTelemetryObserver {
     }
 }
 
+impl UpdatePreflightObserver for PendingTelemetryObserver {
+    fn track(&self, _: &str, _: &Map<String, Value>) -> Result<(), UpdatePreflightError> {
+        Ok(())
+    }
+
+    fn log_info(&self, _: &str, _: &Map<String, Value>) -> Result<(), UpdatePreflightError> {
+        Ok(())
+    }
+
+    fn log_warn(&self, _: &str, _: &Map<String, Value>) -> Result<(), UpdatePreflightError> {
+        Ok(())
+    }
+}
+
 impl DeprecatedServerRuntime for SystemEntrypointRuntime {
     fn write_stderr(&self, text: &str) {
         eprint!("{text}");
@@ -87,16 +106,23 @@ impl DeprecatedServerRuntime for SystemEntrypointRuntime {
 impl MainCommandRuntime for SystemEntrypointRuntime {
     async fn run_update_preflight(
         &self,
-        _: &str,
-        _: Option<bool>,
+        version: &str,
+        is_tty: Option<bool>,
     ) -> Result<UpdatePreflightResult, MainCommandRuntimeError> {
         // MIGRATION-TODO:
-        // Original: src/main.ts, runUpdatePreflight().
-        // Missing dependency: the process entrypoint cannot yet compose the
-        // SDK-backed update observer and telemetry client.
-        // Temporary behavior: continue to the selected UI runner.
-        // Completion condition: construct SystemUpdatePreflightRuntime here.
-        Ok(UpdatePreflightResult::Continue)
+        // Original: src/main.ts passes the global telemetry track() function.
+        // Temporary behavior: update telemetry and diagnostic logs are
+        // discarded while all update decisions and side effects use the
+        // migrated system runtime.
+        // Completion condition: compose the process telemetry observer here.
+        let runtime = Arc::new(SystemUpdatePreflightRuntime::new(
+            get_host_package_root(),
+            KIMI_BUILD_INFO.build_target.is_some(),
+            Arc::new(PendingTelemetryObserver),
+            is_tty,
+        ));
+
+        Ok(run_update_preflight(runtime, version).await)
     }
 
     async fn run_prompt(
@@ -117,11 +143,14 @@ impl MainCommandRuntime for SystemEntrypointRuntime {
             .map_err(MainCommandRuntimeError::new)
     }
 
-    async fn run_shell(&self, _: &CliOptions, _: &str) -> Result<(), MainCommandRuntimeError> {
-        Err(MainCommandRuntimeError::new(MigrationPending {
-            original: "src/main.ts runShell()",
-            completion: "port the SDK harness and KimiTUI coordinator runtime",
-        }))
+    async fn run_shell(
+        &self,
+        options: &CliOptions,
+        version: &str,
+    ) -> Result<(), MainCommandRuntimeError> {
+        run_shell(options, version, RunShellOptions::default())
+            .await
+            .map_err(MainCommandRuntimeError::new)
     }
 }
 
