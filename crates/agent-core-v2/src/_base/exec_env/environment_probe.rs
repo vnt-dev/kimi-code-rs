@@ -103,7 +103,7 @@ async fn locate_windows_git_bash(
     deps: &HostEnvironmentProbeDeps,
 ) -> Result<String, HostEnvironmentProbeError> {
     let mut checked = Vec::new();
-    if let Some(override_path) = non_blank(deps.env.get("KIMI_SHELL_PATH")) {
+    if let Some(override_path) = non_blank(environment_value(deps, "KIMI_SHELL_PATH")) {
         checked.push(override_path.to_owned());
         if (deps.is_file)(override_path.to_owned()).await {
             return Ok(override_path.to_owned());
@@ -111,7 +111,7 @@ async fn locate_windows_git_bash(
     }
     let git_executables = find_executables_on_path(
         "git.exe",
-        deps.env.get("PATH").map(String::as_str),
+        environment_value(deps, "PATH").map(String::as_str),
         "win32",
         Arc::clone(&deps.is_file),
     )
@@ -148,7 +148,7 @@ async fn locate_windows_git_bash(
         r"C:\Program Files (x86)\Git\bin\bash.exe".to_owned(),
         r"C:\Program Files (x86)\Git\usr\bin\bash.exe".to_owned(),
     ];
-    if let Some(local) = non_blank(deps.env.get("LOCALAPPDATA")) {
+    if let Some(local) = non_blank(environment_value(deps, "LOCALAPPDATA")) {
         candidates.push(format!(r"{local}\Programs\Git\bin\bash.exe"));
         candidates.push(format!(r"{local}\Programs\Git\usr\bin\bash.exe"));
     }
@@ -173,13 +173,29 @@ fn non_blank(value: Option<&String>) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
+fn environment_value<'a>(deps: &'a HostEnvironmentProbeDeps, name: &str) -> Option<&'a String> {
+    deps.env.get(name).or_else(|| {
+        (deps.platform == "win32")
+            .then(|| {
+                deps.env
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                    .map(|(_, value)| value)
+            })
+            .flatten()
+    })
+}
+
 fn git_bash_candidates_from_git_exe(git_exe: &str) -> Vec<String> {
     let normalized = normalize_windows_path(git_exe);
     let mut parts = normalized.split('\\').collect::<Vec<_>>();
+    let Some(_file_name) = parts.pop() else {
+        return Vec::new();
+    };
     let Some(directory) = parts.pop() else {
         return Vec::new();
     };
-    if directory != "cmd" && directory != "bin" {
+    if !directory.eq_ignore_ascii_case("cmd") && !directory.eq_ignore_ascii_case("bin") {
         return Vec::new();
     }
     git_bash_candidates_from_root(&parts.join("\\"))
@@ -320,6 +336,15 @@ pub async fn probe_host_environment_from_node()
                 home_dir: env
                     .get("HOME")
                     .or_else(|| env.get("USERPROFILE"))
+                    .or_else(|| {
+                        (platform == "win32")
+                            .then(|| {
+                                env.iter()
+                                    .find(|(key, _)| key.eq_ignore_ascii_case("USERPROFILE"))
+                                    .map(|(_, value)| value)
+                            })
+                            .flatten()
+                    })
                     .cloned()
                     .unwrap_or_default(),
                 env,
@@ -369,6 +394,47 @@ mod tests {
             assert_eq!(info.shell_path, r"C:\msys64\usr\bin\bash.exe");
             assert_eq!(info.shell_name, ShellName::Bash);
         }
+    }
+
+    #[tokio::test]
+    async fn windows_environment_keys_are_case_insensitive() {
+        let git = r"D:\Program Files\Git\cmd\git.exe".to_owned();
+        let bash = r"D:\Program Files\Git\bin\bash.exe".to_owned();
+        let existing = Arc::new(HashSet::from([git, bash.clone()]));
+        let is_file: IsFile = Arc::new(move |path| {
+            let existing = Arc::clone(&existing);
+            Box::pin(async move { existing.contains(&path) })
+        });
+        let info = probe_host_environment(&HostEnvironmentProbeDeps {
+            platform: "win32".into(),
+            arch: "x86_64".into(),
+            release: "1.2.3".into(),
+            home_dir: r"C:\Users\me".into(),
+            env: HashMap::from([("Path".into(), r"D:\Program Files\Git\cmd".into())]),
+            is_file,
+            exec_file_text: Arc::new(|_, _, _| Box::pin(async { None })),
+        })
+        .await
+        .unwrap();
+        assert_eq!(info.shell_path, bash);
+
+        let override_path = r"D:\portable\bash.exe".to_owned();
+        let override_file = override_path.clone();
+        let overridden = probe_host_environment(&HostEnvironmentProbeDeps {
+            platform: "win32".into(),
+            arch: "x86_64".into(),
+            release: "1.2.3".into(),
+            home_dir: r"C:\Users\me".into(),
+            env: HashMap::from([("kimi_shell_path".into(), override_path.clone())]),
+            is_file: Arc::new(move |path| {
+                let override_file = override_file.clone();
+                Box::pin(async move { path == override_file })
+            }),
+            exec_file_text: Arc::new(|_, _, _| Box::pin(async { None })),
+        })
+        .await
+        .unwrap();
+        assert_eq!(overridden.shell_path, override_path);
     }
 
     #[tokio::test]
