@@ -10,7 +10,10 @@ use serde_json::Value;
 
 use crate::{
     _base::{
-        di::{instantiation::ServiceIdentifier, lifecycle::DisposableHandle},
+        di::{
+            instantiation::ServiceIdentifier,
+            lifecycle::{Disposable, DisposableHandle},
+        },
         utils::abort::AbortSignal,
     },
     hooks::OrderedHookSlot,
@@ -137,6 +140,14 @@ pub trait StepHandleContract: Send + Sync {
 #[derive(Clone)]
 pub struct StepHandle(pub Arc<dyn StepHandleContract>);
 
+impl Deref for StepHandle {
+    type Target = dyn StepHandleContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TurnState {
     Queued,
@@ -157,6 +168,14 @@ pub trait TurnHandleContract: Send + Sync {
 
 #[derive(Clone)]
 pub struct TurnHandle(pub Arc<dyn TurnHandleContract>);
+
+impl Deref for TurnHandle {
+    type Target = dyn TurnHandleContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
 
 #[derive(Clone)]
 pub struct StepAssignment {
@@ -260,6 +279,10 @@ pub trait AgentLoopServiceContract: Send + Sync {
     ) -> Result<DisposableHandle, LoopValue>;
 
     fn hooks(&self) -> &AgentLoopHooks;
+
+    fn dispose(&self) -> crate::_base::di::lifecycle::DisposeResult {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -270,6 +293,12 @@ impl Deref for AgentLoopServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for AgentLoopServiceHandle {
+    fn dispose(&self) -> crate::_base::di::lifecycle::DisposeResult {
+        AgentLoopServiceContract::dispose(self.0.as_ref())
     }
 }
 
