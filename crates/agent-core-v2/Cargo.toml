@@ -9,6 +9,7 @@ publish = false
 async-trait = "0.1.91"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
+dirs = "6"
 flate2 = "1"
 futures-util = "0.3"
 getrandom = "0.3"

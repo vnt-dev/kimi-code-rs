@@ -53,9 +53,10 @@ pub fn resolve_bootstrap_options(
     let env = input.env.unwrap_or_else(current_environment);
     let os_home_dir = match input.os_home_dir {
         Some(home) => home,
-        None => current_home_dir(&env).ok_or(BootstrapResolveError::HomeDirectoryUnavailable)?,
+        None => current_home_dir().ok_or(BootstrapResolveError::HomeDirectoryUnavailable)?,
     };
-    let home_dir = resolve_kimi_home(input.home_dir.as_deref(), &env, &os_home_dir);
+    let home_dir =
+        resolve_kimi_home_with_environment(input.home_dir.as_deref(), &env, &os_home_dir);
     let config_path = resolve_config_path(
         Some(&home_dir),
         input.config_path.as_deref(),
@@ -78,8 +79,22 @@ pub fn resolve_bootstrap_options(
     })
 }
 
-// Original: resolveKimiHome().
-pub fn resolve_kimi_home(
+// Original: resolveKimiHome(). This public entry point implements the source
+// defaults (`process.env` and `os.homedir()`) through the maintained `dirs`
+// crate rather than duplicating platform-specific home-directory probing.
+pub fn resolve_kimi_home(home_dir: Option<&Path>) -> Result<PathBuf, BootstrapResolveError> {
+    let env = current_environment();
+    let os_home_dir = current_home_dir().ok_or(BootstrapResolveError::HomeDirectoryUnavailable)?;
+    Ok(resolve_kimi_home_with_environment(
+        home_dir,
+        &env,
+        &os_home_dir,
+    ))
+}
+
+/// Resolves the same precedence with explicitly captured host facts. Bootstrap
+/// uses this to freeze startup state, while tests avoid reading process state.
+pub fn resolve_kimi_home_with_environment(
     home_dir: Option<&Path>,
     env: &HashMap<String, String>,
     os_home_dir: &Path,
@@ -97,9 +112,9 @@ pub fn resolve_config_path(
     env: &HashMap<String, String>,
     os_home_dir: &Path,
 ) -> PathBuf {
-    config_path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| resolve_kimi_home(home_dir, env, os_home_dir).join("config.toml"))
+    config_path.map(Path::to_path_buf).unwrap_or_else(|| {
+        resolve_kimi_home_with_environment(home_dir, env, os_home_dir).join("config.toml")
+    })
 }
 
 // Original: ensureKimiHome(). This intentionally remains synchronous because
@@ -121,25 +136,8 @@ fn current_environment() -> HashMap<String, String> {
         .collect()
 }
 
-#[cfg(unix)]
-fn current_home_dir(env: &HashMap<String, String>) -> Option<PathBuf> {
-    use uzers::os::unix::UserExt;
-
-    env.get("HOME").map(PathBuf::from).or_else(|| {
-        uzers::get_user_by_uid(uzers::get_current_uid()).map(|user| user.home_dir().to_path_buf())
-    })
-}
-
-#[cfg(windows)]
-fn current_home_dir(env: &HashMap<String, String>) -> Option<PathBuf> {
-    env.get("USERPROFILE")
-        .map(PathBuf::from)
-        .or_else(|| Some(PathBuf::from(env.get("HOMEDRIVE")?).join(env.get("HOMEPATH")?)))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn current_home_dir(env: &HashMap<String, String>) -> Option<PathBuf> {
-    env.get("HOME").map(PathBuf::from)
+fn current_home_dir() -> Option<PathBuf> {
+    dirs::home_dir()
 }
 
 fn node_platform() -> String {
@@ -169,15 +167,15 @@ mod tests {
     fn explicit_home_precedes_environment_and_os_home() {
         let env = HashMap::from([("KIMI_CODE_HOME".into(), "/c".into())]);
         assert_eq!(
-            resolve_kimi_home(Some(Path::new("/a")), &env, Path::new("/b")),
+            resolve_kimi_home_with_environment(Some(Path::new("/a")), &env, Path::new("/b")),
             Path::new("/a")
         );
         assert_eq!(
-            resolve_kimi_home(None, &env, Path::new("/b")),
+            resolve_kimi_home_with_environment(None, &env, Path::new("/b")),
             Path::new("/c")
         );
         assert_eq!(
-            resolve_kimi_home(None, &HashMap::new(), Path::new("/b")),
+            resolve_kimi_home_with_environment(None, &HashMap::new(), Path::new("/b")),
             Path::new("/b/.kimi-code")
         );
     }

@@ -10,6 +10,8 @@ use std::{
 use serde::Deserialize;
 use tokio::fs;
 
+use crate::app::bootstrap::resolve_kimi_home;
+
 use super::{McpServerConfig, parse_mcp_server_config};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,7 +66,8 @@ pub async fn resolve_mcp_json_paths(
     input: &ResolveMcpJsonPathsInput,
 ) -> Result<McpJsonPaths, McpConfigLoadError> {
     let project_root = find_project_root(&input.cwd).await?;
-    let home_dir = resolve_kimi_home(input.home_dir.as_deref())?;
+    let home_dir = resolve_kimi_home(input.home_dir.as_deref())
+        .map_err(|_| McpConfigLoadError::HomeDirectoryUnavailable)?;
     Ok(McpJsonPaths {
         user: home_dir.join("mcp.json"),
         project_root: project_root.join(".mcp.json"),
@@ -127,30 +130,6 @@ async fn path_exists(path: &Path) -> std::io::Result<bool> {
         }
         Err(error) => Err(error),
     }
-}
-
-fn resolve_kimi_home(home_dir: Option<&Path>) -> Result<PathBuf, McpConfigLoadError> {
-    if let Some(home_dir) = home_dir {
-        return Ok(home_dir.into());
-    }
-    if let Some(home_dir) = std::env::var_os("KIMI_CODE_HOME") {
-        return Ok(PathBuf::from(home_dir));
-    }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            #[cfg(unix)]
-            {
-                use uzers::os::unix::UserExt;
-                uzers::get_user_by_uid(uzers::get_current_uid()).map(|user| user.home_dir().into())
-            }
-            #[cfg(not(unix))]
-            {
-                None
-            }
-        })
-        .ok_or(McpConfigLoadError::HomeDirectoryUnavailable)?;
-    Ok(home.join(".kimi-code"))
 }
 
 async fn read_mcp_json(

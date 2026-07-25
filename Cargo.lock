@@ -1401,6 +1401,7 @@ dependencies = [
  "async-trait",
  "base64",
  "chrono",
+ "dirs",
  "flate2",
  "futures-util",
  "gcp_auth",
