@@ -611,14 +611,15 @@ mod tests {
         });
         tokio::task::yield_now().await;
 
-        let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].event, "SubagentStart");
-        assert_eq!(calls[0].input.as_ref().unwrap()["agentName"], "coder");
-        assert_eq!(calls[0].input.as_ref().unwrap()["prompt"], "implement");
-        assert_eq!(calls[1].event, "SubagentStop");
-        assert_eq!(calls[1].input.as_ref().unwrap()["response"], "done");
-        drop(calls);
+        {
+            let calls = runner.calls.lock().unwrap();
+            assert_eq!(calls.len(), 2);
+            assert_eq!(calls[0].event, "SubagentStart");
+            assert_eq!(calls[0].input.as_ref().unwrap()["agentName"], "coder");
+            assert_eq!(calls[0].input.as_ref().unwrap()["prompt"], "implement");
+            assert_eq!(calls[1].event, "SubagentStop");
+            assert_eq!(calls[1].input.as_ref().unwrap()["response"], "done");
+        }
 
         let aborted = AbortController::new();
         aborted.abort(None);
