@@ -1,6 +1,7 @@
 pub mod blob;
 pub mod context_injector;
 pub mod context_memory;
+pub mod context_projector;
 pub mod context_size;
 pub mod external_hooks;
 pub mod fault_injection;

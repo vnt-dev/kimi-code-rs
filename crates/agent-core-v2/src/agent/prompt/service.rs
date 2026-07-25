@@ -50,15 +50,15 @@ use crate::{
 };
 
 use super::{
-    errors::{
-        PROMPT_NOT_FOUND, REQUEST_INVALID, SESSION_UNDO_UNAVAILABLE,
-        ensure_prompt_errors_registered,
-    },
     contract::{
         AGENT_PROMPT_SERVICE_ID, AgentPromptHooks, AgentPromptServiceContract,
         AgentPromptServiceHandle, PromptCompletion, PromptCompletionFuture, PromptCompletionState,
         PromptHandle, PromptHandleContract, PromptInput, PromptLaunchedFuture, PromptQueueSnapshot,
         PromptServiceResult, PromptSnapshot, PromptState, PromptSubmitContext,
+    },
+    errors::{
+        PROMPT_NOT_FOUND, REQUEST_INVALID, SESSION_UNDO_UNAVAILABLE,
+        ensure_prompt_errors_registered,
     },
     step_requests::{PromptStepRequest, RetryStepRequest, SteerStepRequest},
 };
