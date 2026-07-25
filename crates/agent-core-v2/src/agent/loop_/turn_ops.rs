@@ -80,6 +80,18 @@ pub static CANCEL_TURN: LazyLock<DefinedOp<TurnModelState, CancelTurnPayload>> =
             .expect("turn.cancel must have one global definition")
     });
 
+/// Registers the turn model, its cross-model reducer, and persisted operations.
+///
+/// TypeScript performs this registration while evaluating `turnOps.ts`.
+/// Rust statics are lazy, so the loop service must force the equivalent side
+/// effects before the wire log is restored.
+pub(crate) fn ensure_turn_wire_registered() {
+    LazyLock::force(&TURN_MODEL);
+    LazyLock::force(&PROMPT_TURN);
+    LazyLock::force(&STEER_TURN);
+    LazyLock::force(&CANCEL_TURN);
+}
+
 fn observe_restored_turn_id(
     state: TurnModelState,
     payload: &ContextAppendLoopEventPayload,
@@ -140,7 +152,28 @@ pub fn cancel_turn(turn_id: Option<f64>) -> Result<Op, serde_json::Error> {
 
 #[cfg(test)]
 mod tests {
+    use crate::wire::{model::model_cross_reducers, op::registered_op};
+
     use super::*;
+
+    #[test]
+    fn registration_covers_every_persisted_turn_operation() {
+        ensure_turn_wire_registered();
+
+        for op_type in ["turn.prompt", "turn.steer", "turn.cancel"] {
+            assert!(
+                registered_op(op_type).is_some(),
+                "{op_type} must be registered before wire restore"
+            );
+        }
+        assert!(
+            model_cross_reducers("context.append_loop_event")
+                .iter()
+                .any(|reducer| reducer.model.id() == TURN_MODEL.id()),
+            "context loop events must restore the turn counter"
+        );
+    }
+
     #[test]
     fn prompt_increments_and_replayed_events_advance_without_tool_results() {
         let state = TurnModelState { next_turn_id: 2 };

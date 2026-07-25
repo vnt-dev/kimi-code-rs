@@ -285,7 +285,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         WorkspaceRegistryService::new(workspace_persistence, Arc::clone(&storage), Arc::clone(&fs));
     let workspace_record = workspace_registry.create_or_touch(&cwd, None).await?;
     let workspace_id = workspace_record.id;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = "test".to_owned();
     let events: Arc<dyn EventServiceContract> = Arc::new(EventService::new());
     let event_handle = EventServiceHandle(events);
 

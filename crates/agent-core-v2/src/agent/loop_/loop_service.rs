@@ -89,7 +89,8 @@ use super::{
     StepRequestAdmission, StepRequestBatch, StepRequestQueue, StepRequestState, StepResult,
     StepResultFuture, StepState, TURN_MODEL, TurnHandle, TurnHandleContract, TurnReadyFuture,
     TurnResultFuture, TurnSeed, TurnState, cancel_turn, create_max_steps_exceeded_error,
-    is_displayable_prompt_origin, is_max_steps_exceeded_error, prompt_turn, turn_prompt_text,
+    ensure_turn_wire_registered, is_displayable_prompt_origin, is_max_steps_exceeded_error,
+    prompt_turn, turn_prompt_text,
 };
 
 type AssignmentPromise = Promise<Result<StepAssignment, LoopValue>>;
@@ -292,6 +293,7 @@ impl AgentLoopService {
         telemetry: Arc<dyn TelemetryServiceContract>,
         telemetry_context: Arc<dyn AgentTelemetryContextServiceContract>,
     ) -> Arc<Self> {
+        ensure_turn_wire_registered();
         Arc::new_cyclic(|weak| Self {
             context,
             llm_requester,

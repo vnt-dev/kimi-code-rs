@@ -81,8 +81,8 @@ use super::{
     PROFILE_MODEL, PrepareSystemPromptContextOptions, ProfileBindingSnapshot, ProfileContextDeps,
     ProfileData, ProfileErrorCode, ProfileModelContext, ProfileServiceError, ProfileServiceOptions,
     ProfileSetModelResult, ProfileUpdateData, ResolvedAgentProfile, SystemPromptContext,
-    config_update, create_profile_error, prepare_system_prompt_context, profile_bind,
-    reset_active_tools, set_active_tools,
+    config_update, create_profile_error, ensure_profile_wire_registered,
+    prepare_system_prompt_context, profile_bind, reset_active_tools, set_active_tools,
 };
 
 #[derive(Default)]
@@ -137,6 +137,7 @@ impl AgentProfileService {
         tool_registry: AgentToolRegistryServiceHandle,
         builtin_profiles: AgentProfileCatalogHandle,
     ) -> Self {
+        ensure_profile_wire_registered();
         Self {
             wire,
             event_bus,

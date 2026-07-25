@@ -160,6 +160,20 @@ pub static RESET_ACTIVE_TOOLS: LazyLock<DefinedOp<ActiveToolsState, EmptyProfile
             .expect("tools.reset_active_tools must have one global definition")
     });
 
+/// Registers the profile models, cross-model reducers, and persisted operations.
+///
+/// TypeScript performs this registration while evaluating `profileOps.ts`.
+/// Rust statics are lazy, so the profile service must force the equivalent
+/// side effects before the wire log is restored.
+pub(crate) fn ensure_profile_wire_registered() {
+    LazyLock::force(&PROFILE_MODEL);
+    LazyLock::force(&ACTIVE_TOOLS_MODEL);
+    LazyLock::force(&PROFILE_BIND);
+    LazyLock::force(&CONFIG_UPDATE);
+    LazyLock::force(&SET_ACTIVE_TOOLS);
+    LazyLock::force(&RESET_ACTIVE_TOOLS);
+}
+
 fn apply_profile_bind(state: ProfileModelState, payload: &ProfileBindPayload) -> ProfileModelState {
     ProfileModelState {
         cwd: payload.cwd.clone().or(state.cwd),
@@ -293,7 +307,7 @@ pub fn reset_active_tools() -> Result<Op, serde_json::Error> {
 
 #[cfg(test)]
 mod tests {
-    use crate::wire::model::model_cross_reducers;
+    use crate::wire::{model::model_cross_reducers, op::registered_op};
 
     use super::*;
 
@@ -312,6 +326,29 @@ mod tests {
             .unwrap()
             .payload_value,
             serde_json::json!({"thinkingEffort": "high"})
+        );
+    }
+
+    #[test]
+    fn registration_covers_every_persisted_profile_operation() {
+        ensure_profile_wire_registered();
+
+        for op_type in [
+            "profile.bind",
+            "config.update",
+            "tools.set_active_tools",
+            "tools.reset_active_tools",
+        ] {
+            assert!(
+                registered_op(op_type).is_some(),
+                "{op_type} must be registered before wire restore"
+            );
+        }
+        assert!(
+            model_cross_reducers("profile.bind")
+                .iter()
+                .any(|reducer| reducer.model.id() == ACTIVE_TOOLS_MODEL.id()),
+            "profile.bind must restore the active-tools projection"
         );
     }
 
