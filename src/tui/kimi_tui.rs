@@ -1,28 +1,35 @@
 use std::{any::Any, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
-use kimi_code_agent_core_v2::app::auth::OAuthToolkitContract;
-use kimi_code_oauth::{
-    DeviceAuthorization, DeviceCodeObserver, KimiOAuthLoginOptions, OAuthManagerError,
+use kimi_code_agent_core_v2::app::auth::{
+    AuthOperationError, OAuthToolkitContract, OAuthToolkitService,
 };
+use kimi_code_oauth::{
+    DeviceAuthorization, DeviceCodeObserver, KimiOAuthLoginOptions, KimiOAuthLoginResult,
+    LoginAbortSignal, OAuthManagerError,
+};
+use tokio::{sync::mpsc, task::JoinHandle};
 
-use crate::tui::{
-    agent_core::TuiAgentCore,
-    components::{
-        Component, ComponentRole,
-        editor::{CustomEditor, EditorAction, InputMode},
-        render::truncate_to_width,
-    },
-    controllers::{
-        dialog_focus::{
-            DialogOutcome, MountedDialog, help_dialog, migration_notice_dialog, permission_dialog,
-            settings_dialog, theme_dialog,
+use crate::{
+    cli::sub::login_flow::LoginCancellation,
+    tui::{
+        agent_core::TuiAgentCore,
+        components::{
+            Component, ComponentRole,
+            editor::{CustomEditor, EditorAction, InputMode},
+            render::truncate_to_width,
         },
-        slash_autocomplete::{SlashAutocompleteSurface, build_builtin_slash_autocomplete},
-        slash_command_surface::{SlashCommandSurfaceAction, resolve_slash_command_surface},
+        controllers::{
+            dialog_focus::{
+                DialogOutcome, MountedDialog, help_dialog, migration_notice_dialog,
+                permission_dialog, settings_dialog, theme_dialog,
+            },
+            slash_autocomplete::{SlashAutocompleteSurface, build_builtin_slash_autocomplete},
+            slash_command_surface::{SlashCommandSurfaceAction, resolve_slash_command_surface},
+        },
+        runtime::{TuiApp, TuiControl},
+        theme::{ColorToken, current_theme},
     },
-    runtime::{TuiApp, TuiControl},
-    theme::{ColorToken, current_theme},
 };
 
 const DEFAULT_PENDING_RESPONSE: &str =
@@ -33,6 +40,23 @@ enum TranscriptLine {
     User(String),
     Assistant(String),
     System(String),
+}
+
+enum LoginUpdate {
+    DeviceCode(DeviceAuthorization),
+    Finished(Result<KimiOAuthLoginResult, AuthOperationError>),
+}
+
+struct ActiveLogin {
+    cancellation: LoginCancellation,
+    updates: mpsc::UnboundedReceiver<LoginUpdate>,
+    task: JoinHandle<()>,
+}
+
+impl Drop for ActiveLogin {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 // Original:
@@ -55,6 +79,7 @@ pub struct KimiTui {
     slash_autocomplete: SlashAutocompleteSurface,
     active_dialog: Option<MountedDialog>,
     agent_core: Option<TuiAgentCore>,
+    active_login: Option<ActiveLogin>,
 }
 
 impl KimiTui {
@@ -86,6 +111,7 @@ impl KimiTui {
             slash_autocomplete,
             active_dialog: None,
             agent_core: None,
+            active_login: None,
         }
     }
 
@@ -271,7 +297,7 @@ impl KimiTui {
             }
             SlashCommandSurfaceAction::Pending { command_name, args } => {
                 if command_name == "login" {
-                    return self.login().await;
+                    return self.login();
                 }
                 // MIGRATION-TODO:
                 // Original: commands/dispatch.ts and KimiTUI route the full
@@ -300,42 +326,101 @@ impl KimiTui {
 
     // Original: apps/kimi-code/src/tui/commands/auth.ts,
     // handleKimiCodeOAuthLogin(). The v2 toolkit owns device-code polling and
-    // credential persistence; the TUI only opens the received authorization URL.
-    async fn login(&mut self) -> TuiControl {
+    // credential persistence while the TUI keeps rendering and accepting the
+    // source command's Ctrl-C cancellation input.
+    fn login(&mut self) -> TuiControl {
+        if self.active_login.is_some() {
+            self.status = Some("Kimi login is already in progress.".to_owned());
+            return TuiControl::Continue;
+        }
         let Some(agent_core) = self.agent_core.as_ref() else {
             self.status = Some("agent-core-v2 OAuth is not connected.".to_owned());
             return TuiControl::Continue;
         };
 
         self.status = Some("Opening browser for Kimi login…".to_owned());
-        let observer = TuiDeviceCodeObserver;
-        match agent_core
-            .oauth_toolkit()
-            .login(
-                Some("kimi-code"),
-                KimiOAuthLoginOptions {
-                    on_device_code: Some(&observer),
-                    ..KimiOAuthLoginOptions::default()
-                },
-            )
-            .await
-        {
-            Ok(result) if result.ok => {
-                self.status = Some(
-                    "Kimi Code credentials saved; v2 model provisioning is not connected yet."
-                        .to_owned(),
-                );
+        let oauth_toolkit = Arc::clone(agent_core.oauth_toolkit());
+        let cancellation = LoginCancellation::default();
+        let task_cancellation = cancellation.clone();
+        let (updates_tx, updates) = mpsc::unbounded_channel();
+        let task = tokio::spawn(run_login(oauth_toolkit, task_cancellation, updates_tx));
+        self.active_login = Some(ActiveLogin {
+            cancellation,
+            updates,
+            task,
+        });
+        TuiControl::Continue
+    }
+
+    fn cancel_login(&mut self) {
+        let Some(login) = self.active_login.take() else {
+            return;
+        };
+        login.cancellation.abort();
+        self.status = Some("Login cancelled.".to_owned());
+    }
+
+    fn poll_login(&mut self) -> bool {
+        let Some(login) = self.active_login.as_mut() else {
+            return false;
+        };
+        let mut updates = Vec::new();
+        let disconnected = loop {
+            match login.updates.try_recv() {
+                Ok(update) => updates.push(update),
+                Err(mpsc::error::TryRecvError::Empty) => break false,
+                Err(mpsc::error::TryRecvError::Disconnected) => break true,
             }
-            Ok(_) => {
-                self.status = Some("Kimi login did not complete.".to_owned());
-            }
-            Err(error) => {
-                self.transcript
-                    .push(TranscriptLine::System(format!("Login failed: {error}")));
-                self.status = Some("Login failed.".to_owned());
+        };
+        let changed = disconnected || !updates.is_empty();
+        let mut finished = false;
+        for update in updates {
+            match update {
+                LoginUpdate::DeviceCode(authorization) => {
+                    self.transcript
+                        .push(TranscriptLine::System("Sign in to Kimi Code".to_owned()));
+                    self.transcript.push(TranscriptLine::System(format!(
+                        "Open: {}",
+                        authorization.verification_uri_complete
+                    )));
+                    self.transcript.push(TranscriptLine::System(format!(
+                        "Code: {} · Press Ctrl-C to cancel",
+                        authorization.user_code
+                    )));
+                    self.status = Some("Waiting for authorization…".to_owned());
+                }
+                LoginUpdate::Finished(result) => {
+                    finished = true;
+                    match result {
+                        Ok(result) if result.ok => {
+                            self.status = Some(
+                                "Kimi Code credentials saved; v2 model provisioning is not connected yet."
+                                    .to_owned(),
+                            );
+                        }
+                        Ok(_) => {
+                            self.status = Some("Kimi login did not complete.".to_owned());
+                        }
+                        Err(error) => {
+                            self.transcript
+                                .push(TranscriptLine::System(format!("Login failed: {error}")));
+                            self.status = Some("Login failed.".to_owned());
+                        }
+                    }
+                }
             }
         }
-        TuiControl::Continue
+        if disconnected && !finished {
+            finished = true;
+            self.transcript.push(TranscriptLine::System(
+                "Login failed: background login task stopped unexpectedly".to_owned(),
+            ));
+            self.status = Some("Login failed.".to_owned());
+        }
+        if finished {
+            self.active_login.take();
+        }
+        changed
     }
 
     fn render_transcript_line(line: &TranscriptLine) -> String {
@@ -353,7 +438,17 @@ impl KimiTui {
     }
 }
 
-struct TuiDeviceCodeObserver;
+struct TuiLoginAbortSignal(LoginCancellation);
+
+impl LoginAbortSignal for TuiLoginAbortSignal {
+    fn is_aborted(&self) -> bool {
+        self.0.is_aborted()
+    }
+}
+
+struct TuiDeviceCodeObserver {
+    updates: mpsc::UnboundedSender<LoginUpdate>,
+}
 
 #[async_trait]
 impl DeviceCodeObserver for TuiDeviceCodeObserver {
@@ -361,9 +456,34 @@ impl DeviceCodeObserver for TuiDeviceCodeObserver {
         &self,
         authorization: &DeviceAuthorization,
     ) -> Result<(), OAuthManagerError> {
+        let _ = self
+            .updates
+            .send(LoginUpdate::DeviceCode(authorization.clone()));
         crate::utils::open_url::open_url(&authorization.verification_uri_complete);
         Ok(())
     }
+}
+
+async fn run_login(
+    oauth_toolkit: Arc<OAuthToolkitService>,
+    cancellation: LoginCancellation,
+    updates: mpsc::UnboundedSender<LoginUpdate>,
+) {
+    let observer = TuiDeviceCodeObserver {
+        updates: updates.clone(),
+    };
+    let signal = TuiLoginAbortSignal(cancellation);
+    let result = oauth_toolkit
+        .login(
+            Some("kimi-code"),
+            KimiOAuthLoginOptions {
+                on_device_code: Some(&observer),
+                signal: Some(&signal),
+                ..KimiOAuthLoginOptions::default()
+            },
+        )
+        .await;
+    let _ = updates.send(LoginUpdate::Finished(result));
 }
 
 impl Component for KimiTui {
@@ -431,6 +551,10 @@ impl TuiApp for KimiTui {
         if data == "\u{1b}[I" || data == "\u{1b}[O" {
             return TuiControl::Continue;
         }
+        if data == "\u{3}" && self.active_login.is_some() {
+            self.cancel_login();
+            return TuiControl::Continue;
+        }
         if self.active_dialog.is_some() {
             return self.handle_dialog_input(data);
         }
@@ -446,6 +570,10 @@ impl TuiApp for KimiTui {
     fn handle_terminal_resize(&mut self, _columns: u16, rows: u16) {
         self.terminal_rows = usize::from(rows).max(1);
         self.editor.set_terminal_rows(self.terminal_rows);
+    }
+
+    fn poll_background(&mut self) -> bool {
+        self.poll_login()
     }
 }
 
@@ -501,6 +629,70 @@ mod tests {
                 .join("\n")
                 .contains("agent-core-v2 OAuth is not connected")
         );
+    }
+
+    #[tokio::test]
+    async fn background_login_updates_show_device_code_and_completion() {
+        let mut tui = KimiTui::new("0.1.0", None);
+        let cancellation = LoginCancellation::default();
+        let (updates_tx, updates) = mpsc::unbounded_channel();
+        let task = tokio::spawn(std::future::pending::<()>());
+        tui.active_login = Some(ActiveLogin {
+            cancellation,
+            updates,
+            task,
+        });
+
+        updates_tx
+            .send(LoginUpdate::DeviceCode(DeviceAuthorization {
+                user_code: "ABCD-EFGH".to_owned(),
+                device_code: "device".to_owned(),
+                verification_uri: "https://example.com/device".to_owned(),
+                verification_uri_complete: "https://example.com/device?code=ABCD-EFGH".to_owned(),
+                expires_in: Some(900.0),
+                interval: 5.0,
+            }))
+            .expect("device update");
+
+        assert!(tui.poll_background());
+        let waiting = tui.render(160).join("\n");
+        assert!(waiting.contains("https://example.com/device?code=ABCD-EFGH"));
+        assert!(waiting.contains("ABCD-EFGH"));
+        assert!(waiting.contains("Waiting for authorization"));
+
+        updates_tx
+            .send(LoginUpdate::Finished(Ok(KimiOAuthLoginResult {
+                provider_name: "kimi-code".to_owned(),
+                ok: true,
+                provision: None,
+            })))
+            .expect("completion update");
+
+        assert!(tui.poll_background());
+        assert!(tui.active_login.is_none());
+        assert!(tui.render(160).join("\n").contains("credentials saved"));
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_cancels_an_active_login_without_exiting() {
+        let mut tui = KimiTui::new("0.1.0", None);
+        let cancellation = LoginCancellation::default();
+        let cancellation_probe = cancellation.clone();
+        let (_updates_tx, updates) = mpsc::unbounded_channel();
+        let task = tokio::spawn(std::future::pending::<()>());
+        tui.active_login = Some(ActiveLogin {
+            cancellation,
+            updates,
+            task,
+        });
+
+        assert_eq!(
+            tui.handle_terminal_input("\u{3}").await,
+            TuiControl::Continue
+        );
+        assert!(cancellation_probe.is_aborted());
+        assert!(tui.active_login.is_none());
+        assert!(tui.render(80).join("\n").contains("Login cancelled"));
     }
 
     #[tokio::test]

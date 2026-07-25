@@ -30,6 +30,10 @@ pub trait TerminalBackend: Send {
     fn leave(&mut self) -> io::Result<()>;
     fn size(&self) -> io::Result<(u16, u16)>;
     fn draw(&mut self, lines: &[String]) -> io::Result<()>;
+
+    /// Waits for the next input event. Implementations must be cancellation
+    /// safe because the runtime also wakes periodically for background UI
+    /// updates.
     async fn next_event(&mut self) -> io::Result<Option<TerminalEvent>>;
 }
 

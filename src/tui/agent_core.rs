@@ -5,7 +5,7 @@
 //! interactive TUI still uses the legacy KimiHarness, so this Rust boundary
 //! starts with the one v2 service that can operate independently: OAuth.
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, sync::Arc};
 
 use kimi_code_agent_core_v2::app::{
     auth::{AuthOperationError, OAuthToolkitService},
@@ -17,7 +17,7 @@ use kimi_code_agent_core_v2::app::{
 
 pub struct TuiAgentCore {
     bootstrap: BootstrapOptions,
-    oauth_toolkit: OAuthToolkitService,
+    oauth_toolkit: Arc<OAuthToolkitService>,
 }
 
 impl TuiAgentCore {
@@ -34,11 +34,11 @@ impl TuiAgentCore {
         let oauth_toolkit = OAuthToolkitService::new(&bootstrap.home_dir)?;
         Ok(Self {
             bootstrap,
-            oauth_toolkit,
+            oauth_toolkit: Arc::new(oauth_toolkit),
         })
     }
 
-    pub fn oauth_toolkit(&self) -> &OAuthToolkitService {
+    pub fn oauth_toolkit(&self) -> &Arc<OAuthToolkitService> {
         &self.oauth_toolkit
     }
 
