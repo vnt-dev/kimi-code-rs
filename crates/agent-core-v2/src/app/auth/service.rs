@@ -36,16 +36,13 @@ use crate::{
     },
     app::{
         config::{CONFIG_SERVICE_ID, ConfigServiceHandle, ConfigTarget},
-        event::{
-            EVENT_SERVICE_ID, EventServiceHandle,
-            global_event::GlobalDomainEvent,
-        },
+        event::{EVENT_SERVICE_ID, EventServiceHandle, global_event::GlobalDomainEvent},
         telemetry::{TELEMETRY_SERVICE_ID, TelemetryServiceHandle},
     },
     kosong::{
         model::contract::{DEFAULT_MODEL_SECTION, MODELS_SECTION},
         provider::{
-            PROVIDERS_SECTION, PROVIDER_SERVICE_ID, OAuthRef, OAuthStorage, ProviderConfig,
+            OAuthRef, OAuthStorage, PROVIDER_SERVICE_ID, PROVIDERS_SECTION, ProviderConfig,
             ProviderServiceHandle, ProviderType,
         },
     },
@@ -151,9 +148,12 @@ impl OAuthService {
     }
 
     fn runtime_oauth_ref(&self, provider: &str, requested: Option<&OAuthRef>) -> Option<OAuthRef> {
-        requested
-            .cloned()
-            .or_else(|| self.worker.providers.get(provider).and_then(|value| value.oauth))
+        requested.cloned().or_else(|| {
+            self.worker
+                .providers
+                .get(provider)
+                .and_then(|value| value.oauth)
+        })
     }
 
     fn abort_existing(&self, provider: &str) {
@@ -167,11 +167,7 @@ impl OAuthService {
         }
     }
 
-    fn set_terminal(
-        state: &mut FlowState,
-        status: OAuthFlowStatus,
-        error_message: Option<String>,
-    ) {
+    fn set_terminal(state: &mut FlowState, status: OAuthFlowStatus, error_message: Option<String>) {
         state.status = status;
         state.error_message = error_message;
         state.resolved_at = Some(Utc::now());
@@ -225,9 +221,11 @@ impl OAuthService {
             verification_uri: Url::parse(&device.verification_uri).ok()?,
             verification_uri_complete: Url::parse(&device.verification_uri_complete).ok()?,
             user_code: NonEmptyString::new(device.user_code.clone()).ok()?,
-            expires_in: positive_seconds(device.expires_in.unwrap_or(
-                DEFAULT_DEVICE_EXPIRES_IN_SEC as f64,
-            )),
+            expires_in: positive_seconds(
+                device
+                    .expires_in
+                    .unwrap_or(DEFAULT_DEVICE_EXPIRES_IN_SEC as f64),
+            ),
             expires_at: state.expires_at,
             interval: positive_seconds(device.interval),
             resolved_at: state.resolved_at,
@@ -235,7 +233,9 @@ impl OAuthService {
         })
     }
 
-    async fn refresh_models(&self) -> Result<RefreshOAuthProviderModelsResponse, AuthOperationError> {
+    async fn refresh_models(
+        &self,
+    ) -> Result<RefreshOAuthProviderModelsResponse, AuthOperationError> {
         let _guard = self.refresh_gate.lock().await;
         self.worker.config.reload().await.map_err(operation_error)?;
         let Some(provider) = self.worker.providers.get(KIMI_CODE_PROVIDER_NAME) else {
@@ -287,7 +287,10 @@ impl OAuthService {
             ManagedKimiCodeApplyOptions {
                 models: &models,
                 base_url: provider.base_url.as_deref(),
-                oauth_key: provider.oauth.as_ref().map(|reference| reference.key.as_str()),
+                oauth_key: provider
+                    .oauth
+                    .as_ref()
+                    .map(|reference| reference.key.as_str()),
                 oauth_host: provider
                     .oauth
                     .as_ref()
@@ -337,7 +340,10 @@ impl OAuthService {
         result
     }
 
-    async fn write_managed_config(&self, config: &Map<String, Value>) -> Result<(), AuthOperationError> {
+    async fn write_managed_config(
+        &self,
+        config: &Map<String, Value>,
+    ) -> Result<(), AuthOperationError> {
         for section in [PROVIDERS_SECTION, MODELS_SECTION, SERVICES_SECTION] {
             self.worker
                 .config
@@ -357,7 +363,11 @@ impl OAuthService {
 
     async fn deprovision(&self, provider: &str) -> Result<(), AuthOperationError> {
         if provider != KIMI_CODE_PROVIDER_NAME {
-            self.worker.providers.delete(provider).await.map_err(operation_error)?;
+            self.worker
+                .providers
+                .delete(provider)
+                .await
+                .map_err(operation_error)?;
             return Ok(());
         }
         let mut config = self.user_config_shape();
@@ -535,8 +545,7 @@ impl OAuthServiceContract for OAuthService {
     fn get_flow(&self, provider: Option<&str>) -> Option<OAuthFlowSnapshot> {
         let provider = Self::provider_name(provider);
         let state = self.flows.lock().unwrap().get(&provider).cloned()?;
-        let snapshot = Self::snapshot(&state.lock().unwrap());
-        snapshot
+        Self::snapshot(&state.lock().unwrap())
     }
 
     async fn cancel_login(

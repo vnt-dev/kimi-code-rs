@@ -34,9 +34,7 @@ use crate::{
         },
         bootstrap::{BOOTSTRAP_SERVICE_ID, BootstrapServiceHandle},
         config::{CONFIG_SERVICE_ID, ConfigServiceHandle},
-        event::{
-            event_bus::{DomainEvent, EventBusHandle, EVENT_BUS_SERVICE_ID},
-        },
+        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusHandle},
         telemetry::{
             AGENT_TELEMETRY_CONTEXT_SERVICE_ID, AgentTelemetryContextPatch,
             AgentTelemetryContextServiceHandle, TELEMETRY_SERVICE_ID, TelemetryServiceHandle,
@@ -58,9 +56,7 @@ use crate::{
             types::ModelOverrides,
             types::{ModelThinkingCapabilities, ModelThinkingMetadata},
         },
-        protocol::identity::{
-            PROTOCOL_ADAPTER_REGISTRY_SERVICE_ID, ProtocolAdapterRegistryHandle,
-        },
+        protocol::identity::{PROTOCOL_ADAPTER_REGISTRY_SERVICE_ID, ProtocolAdapterRegistryHandle},
     },
     os::interface::{
         host_environment::{HOST_ENVIRONMENT_SERVICE_ID, HostEnvironmentHandle},
@@ -82,9 +78,9 @@ use crate::{
 use super::{
     ACTIVE_TOOLS_MODEL, AGENT_PROFILE_SERVICE_ID, AgentConfigData, AgentProfileServiceContract,
     AgentProfileServiceHandle, ApplyProfileOptions, BindAgentInput, ConfigUpdatePayload,
-    ProfileBindingSnapshot, ProfileContextDeps, ProfileData, ProfileErrorCode, ProfileModelContext,
-    ProfileServiceError, ProfileServiceOptions, ProfileSetModelResult, ProfileUpdateData,
-    PROFILE_MODEL, PrepareSystemPromptContextOptions, ResolvedAgentProfile, SystemPromptContext,
+    PROFILE_MODEL, PrepareSystemPromptContextOptions, ProfileBindingSnapshot, ProfileContextDeps,
+    ProfileData, ProfileErrorCode, ProfileModelContext, ProfileServiceError, ProfileServiceOptions,
+    ProfileSetModelResult, ProfileUpdateData, ResolvedAgentProfile, SystemPromptContext,
     config_update, create_profile_error, prepare_system_prompt_context, profile_bind,
     reset_active_tools, set_active_tools,
 };
@@ -225,10 +221,13 @@ impl AgentProfileService {
         model: Option<&Model>,
     ) -> ThinkingEffort {
         let config = self.thinking_config();
-        let defaults = config.as_ref().map(|config| crate::kosong::model::types::ThinkingDefaults {
-            enabled: config.enabled,
-            effort: config.effort.clone(),
-        });
+        let defaults =
+            config
+                .as_ref()
+                .map(|config| crate::kosong::model::types::ThinkingDefaults {
+                    enabled: config.enabled,
+                    effort: config.effort.clone(),
+                });
         let metadata = model.map(Self::thinking_metadata);
         resolve_thinking_effort_for_model(
             requested,
@@ -441,13 +440,8 @@ impl AgentProfileService {
         if let Some(alias) = self.model_alias() {
             fields.insert("model".into(), Value::String(alias));
         }
-        if include_thinking_effort
-            && let Ok(effort) = self.get_effective_thinking_level()
-        {
-            fields.insert(
-                "thinkingEffort".into(),
-                Value::String(effort.to_string()),
-            );
+        if include_thinking_effort && let Ok(effort) = self.get_effective_thinking_level() {
+            fields.insert("thinkingEffort".into(), Value::String(effort.to_string()));
         }
         if let Ok(capabilities) = self.get_model_capabilities() {
             fields.insert(
@@ -636,10 +630,7 @@ impl AgentProfileService {
                 self.event_bus.publish(DomainEvent::new(
                     "warning",
                     Map::from_iter([
-                        (
-                            "code".into(),
-                            Value::String("tool-pattern-no-match".into()),
-                        ),
+                        ("code".into(), Value::String("tool-pattern-no-match".into())),
                         (
                             "message".into(),
                             Value::String(Self::describe_inactive_tool_pattern(
@@ -698,16 +689,17 @@ impl AgentProfileServiceContract for AgentProfileService {
             state.active_profile = None;
             state.active_tool_names_overlay = None;
         }
-        self.wire.dispatch([profile_bind(super::ProfileBindPayload {
-            cwd: Some(snapshot.cwd.clone()),
-            model_alias: snapshot.model_alias.clone(),
-            profile_name: snapshot.profile_name.clone(),
-            thinking_effort: ThinkingEffort::from(snapshot.thinking_level.clone()),
-            system_prompt: snapshot.system_prompt.clone(),
-            active_tool_names: snapshot.active_tool_names,
-            disallowed_tools: snapshot.disallowed_tools.clone().unwrap_or_default(),
-            subagents: snapshot.subagents,
-        })?])?;
+        self.wire
+            .dispatch([profile_bind(super::ProfileBindPayload {
+                cwd: Some(snapshot.cwd.clone()),
+                model_alias: snapshot.model_alias.clone(),
+                profile_name: snapshot.profile_name.clone(),
+                thinking_effort: ThinkingEffort::from(snapshot.thinking_level.clone()),
+                system_prompt: snapshot.system_prompt.clone(),
+                active_tool_names: snapshot.active_tool_names,
+                disallowed_tools: snapshot.disallowed_tools.clone().unwrap_or_default(),
+                subagents: snapshot.subagents,
+            })?])?;
         self.after_config_dispatch(&ProfileUpdateData {
             cwd: Some(snapshot.cwd),
             model_alias: snapshot.model_alias,
@@ -806,16 +798,17 @@ impl AgentProfileServiceContract for AgentProfileService {
             state.active_profile = Some(Arc::clone(&profile));
             state.active_tool_names_overlay = None;
         }
-        self.wire.dispatch([profile_bind(super::ProfileBindPayload {
-            cwd: input.cwd.clone(),
-            model_alias: Some(alias.clone()),
-            profile_name: Some(profile.name.clone()),
-            thinking_effort: thinking.clone(),
-            system_prompt: system_prompt.clone(),
-            active_tool_names: profile.tools.clone(),
-            disallowed_tools: profile.disallowed_tools.clone().unwrap_or_default(),
-            subagents: profile.subagents.clone(),
-        })?])?;
+        self.wire
+            .dispatch([profile_bind(super::ProfileBindPayload {
+                cwd: input.cwd.clone(),
+                model_alias: Some(alias.clone()),
+                profile_name: Some(profile.name.clone()),
+                thinking_effort: thinking.clone(),
+                system_prompt: system_prompt.clone(),
+                active_tool_names: profile.tools.clone(),
+                disallowed_tools: profile.disallowed_tools.clone().unwrap_or_default(),
+                subagents: profile.subagents.clone(),
+            })?])?;
         self.after_config_dispatch(&ProfileUpdateData {
             cwd: input.cwd,
             model_alias: Some(alias),
@@ -924,12 +917,7 @@ impl AgentProfileServiceContract for AgentProfileService {
             .await?;
         self.use_profile(profile, context.clone())?;
         self.cache_and_publish_agents_md_warning(&context);
-        let active = self
-            .state
-            .lock()
-            .unwrap()
-            .active_profile
-            .clone();
+        let active = self.state.lock().unwrap().active_profile.clone();
         self.publish_tool_pattern_warnings(active.as_deref());
         Ok(())
     }
