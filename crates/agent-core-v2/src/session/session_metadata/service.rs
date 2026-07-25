@@ -4,16 +4,28 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use async_trait::async_trait;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::{
-    _base::event::{Emitter, Event},
-    persistence::interface::atomic_document_store::AtomicDocumentStoreHandle,
-    session::session_context::SessionContext,
+    _base::{
+        di::{
+            descriptors::SyncDescriptor,
+            instantiation::ServicesAccessorExt,
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
+        event::{Emitter, Event},
+    },
+    persistence::interface::atomic_document_store::{
+        ATOMIC_DOCUMENT_STORE_SERVICE_ID, AtomicDocumentStoreHandle,
+    },
+    session::session_context::{SESSION_CONTEXT_ID, SessionContext},
 };
 
 use super::{
-    AgentMeta, SESSION_META_VERSION, SessionMeta, SessionMetaPatch, SessionMetadataChangedEvent,
+    AgentMeta, SESSION_META_VERSION, SESSION_METADATA_ID, SessionMeta, SessionMetaPatch,
+    SessionMetadataChangedEvent, SessionMetadataContract, SessionMetadataError,
+    SessionMetadataHandle,
 };
 
 const META_KEY: &str = "state.json";
@@ -164,6 +176,60 @@ impl SessionMetadataService {
         *self.data.lock().unwrap() = Some(data);
         Ok(())
     }
+}
+
+#[async_trait]
+impl SessionMetadataContract for SessionMetadataService {
+    async fn ready(&self) -> Result<(), SessionMetadataError> {
+        Self::ready(self).await
+    }
+
+    fn on_did_change_metadata(&self) -> Event<SessionMetadataChangedEvent> {
+        Self::on_did_change_metadata(self)
+    }
+
+    async fn read(&self) -> Result<SessionMeta, SessionMetadataError> {
+        Self::read(self).await
+    }
+
+    async fn update(&self, patch: SessionMetaPatch) -> Result<(), SessionMetadataError> {
+        Self::update(self, patch).await
+    }
+
+    async fn set_title(&self, title: String) -> Result<(), SessionMetadataError> {
+        Self::set_title(self, title).await
+    }
+
+    async fn set_archived(&self, archived: bool) -> Result<(), SessionMetadataError> {
+        Self::set_archived(self, archived).await
+    }
+
+    async fn register_agent(
+        &self,
+        agent_id: String,
+        meta: AgentMeta,
+    ) -> Result<(), SessionMetadataError> {
+        Self::register_agent(self, agent_id, meta).await
+    }
+}
+
+/// Register the eager Session-scope metadata service.
+///
+/// Original: `registerScopedService(LifecycleScope.Session, ISessionMetadata, ...)`.
+pub fn register_session_metadata() {
+    register_scoped_service(
+        LifecycleScope::Session,
+        SESSION_METADATA_ID,
+        SyncDescriptor::new(|accessor| {
+            let context = accessor.get(SESSION_CONTEXT_ID)?;
+            let store = accessor.get(ATOMIC_DOCUMENT_STORE_SERVICE_ID)?;
+            let service: Arc<dyn SessionMetadataContract> =
+                Arc::new(SessionMetadataService::new(&context, (*store).clone()));
+            Ok(SessionMetadataHandle(service))
+        }),
+        InstantiationType::Eager,
+        "sessionMetadata",
+    );
 }
 
 pub fn normalize_session_meta(mut raw: SessionMeta, session_id: &str) -> SessionMeta {

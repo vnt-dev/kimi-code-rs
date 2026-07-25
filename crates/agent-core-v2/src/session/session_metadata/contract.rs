@@ -1,6 +1,9 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Deref, sync::Arc};
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+
+use crate::_base::{di::instantiation::ServiceIdentifier, event::Event};
 
 pub const SESSION_META_VERSION: u64 = 2;
 
@@ -83,4 +86,48 @@ pub struct SessionMetaPatch {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionMetadataChangedEvent {
     pub changed: Vec<String>,
+}
+
+/// Session-scoped durable session metadata.
+///
+/// Original: `session/sessionMetadata/sessionMetadata.ts`, `ISessionMetadata`.
+pub type SessionMetadataError = Box<dyn std::error::Error + Send + Sync>;
+
+#[async_trait]
+pub trait SessionMetadataContract: Send + Sync {
+    async fn ready(&self) -> Result<(), SessionMetadataError>;
+    fn on_did_change_metadata(&self) -> Event<SessionMetadataChangedEvent>;
+    async fn read(&self) -> Result<SessionMeta, SessionMetadataError>;
+    async fn update(&self, patch: SessionMetaPatch) -> Result<(), SessionMetadataError>;
+    async fn set_title(&self, title: String) -> Result<(), SessionMetadataError>;
+    async fn set_archived(&self, archived: bool) -> Result<(), SessionMetadataError>;
+    async fn register_agent(
+        &self,
+        agent_id: String,
+        meta: AgentMeta,
+    ) -> Result<(), SessionMetadataError>;
+}
+
+#[derive(Clone)]
+pub struct SessionMetadataHandle(pub Arc<dyn SessionMetadataContract>);
+
+impl Deref for SessionMetadataHandle {
+    type Target = dyn SessionMetadataContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const SESSION_METADATA_ID: ServiceIdentifier<SessionMetadataHandle> =
+    ServiceIdentifier::new("sessionMetadata");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_identifier_matches_source_decorator() {
+        assert_eq!(SESSION_METADATA_ID.to_string(), "sessionMetadata");
+    }
 }

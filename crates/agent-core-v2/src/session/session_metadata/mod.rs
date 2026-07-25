@@ -7,4 +7,4 @@ pub mod contract;
 pub mod service;
 
 pub use contract::*;
-pub use service::*;
+pub use service::{SessionMetadataService, register_session_metadata};
