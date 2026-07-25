@@ -16,6 +16,7 @@ pub mod session_metadata;
 pub mod skill_catalog;
 pub mod subagent;
 pub mod swarm;
+pub mod terminal;
 pub mod todo;
 pub mod tool_policy;
 pub mod workspace_context;
