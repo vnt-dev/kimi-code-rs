@@ -47,7 +47,7 @@ pub type SessionTerminalResult<T> = Result<T, SessionTerminalError>;
 #[derive(Debug, thiserror::Error)]
 pub enum SessionTerminalError {
     #[error(transparent)]
-    NotFound(#[from] Error2),
+    NotFound(Box<Error2>),
     #[error(transparent)]
     Path(#[from] PathAccessError),
     #[error(transparent)]
@@ -316,10 +316,10 @@ fn require_record<'a>(
     session_id: &str,
 ) -> SessionTerminalResult<&'a mut TerminalRecord> {
     state.records.get_mut(terminal_id).ok_or_else(|| {
-        SessionTerminalError::NotFound(Error2::new(
+        SessionTerminalError::NotFound(Box::new(Error2::new(
             TERMINAL_NOT_FOUND,
             format!("terminal {terminal_id} does not exist in session {session_id}"),
-        ))
+        )))
     })
 }
 
@@ -653,17 +653,18 @@ mod tests {
         process.emit_data("second");
         process.emit_exit(Some(7));
 
-        let frames = sink.frames.lock().unwrap();
-        assert!(
-            matches!(&frames[0], TerminalFrame::Output { seq: 1, payload, .. } if payload.data == "first")
-        );
-        assert!(
-            matches!(&frames[1], TerminalFrame::Output { seq: 2, payload, .. } if payload.data == "second")
-        );
-        assert!(
-            matches!(&frames[2], TerminalFrame::Exit { payload, .. } if payload.exit_code == Some(Value::from(7)))
-        );
-        drop(frames);
+        {
+            let frames = sink.frames.lock().unwrap();
+            assert!(
+                matches!(&frames[0], TerminalFrame::Output { seq: 1, payload, .. } if payload.data == "first")
+            );
+            assert!(
+                matches!(&frames[1], TerminalFrame::Output { seq: 2, payload, .. } if payload.data == "second")
+            );
+            assert!(
+                matches!(&frames[2], TerminalFrame::Exit { payload, .. } if payload.exit_code == Some(Value::from(7)))
+            );
+        }
         let fetched = service.get(&terminal.id).await.unwrap();
         assert_eq!(fetched.status, TerminalStatus::Exited);
         assert_eq!(fetched.exit_code, Some(Value::from(7)));
@@ -697,9 +698,10 @@ mod tests {
     async fn rejects_unknown_terminals_with_the_source_error_code() {
         let (service, _) = service();
         let error = service.get("missing").await.unwrap_err();
-        assert!(
-            matches!(error, SessionTerminalError::NotFound(Error2 { code, .. }) if code == TERMINAL_NOT_FOUND)
-        );
+        assert!(matches!(
+            error,
+            SessionTerminalError::NotFound(error) if error.code == TERMINAL_NOT_FOUND
+        ));
         assert_eq!(
             SESSION_TERMINAL_SERVICE_ID.to_string(),
             "sessionTerminalService"
