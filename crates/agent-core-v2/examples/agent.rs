@@ -22,6 +22,7 @@ use kimi_code_agent_core_v2::{
     },
     agent::{
         blob::AgentBlobService,
+        context_injector::{AgentContextInjectorService, AgentContextInjectorServiceContract},
         context_memory::{
             AgentContextMemoryService, AgentContextMemoryServiceContract,
             AgentContextMemoryServiceHandle, ContextMessage, PromptOrigin,
@@ -38,8 +39,8 @@ use kimi_code_agent_core_v2::{
         },
         llm_requester::{AgentLlmRequesterService, AgentLlmRequesterServiceContract},
         loop_::{
-            AgentLoopService, AgentLoopServiceContract, LoopRunResult, StepRequest,
-            register_loop_control_config_section,
+            AgentLoopService, AgentLoopServiceContract, AgentLoopServiceHandle, LoopRunResult,
+            StepRequest, register_loop_control_config_section,
         },
         profile::{
             AgentProfileService, AgentProfileServiceContract, AgentProfileServiceHandle,
@@ -48,6 +49,11 @@ use kimi_code_agent_core_v2::{
         prompt::PromptStepRequest,
         scope_context::{AgentScopeContextInput, make_agent_scope_context},
         system_reminder::{AgentSystemReminderService, AgentSystemReminderServiceContract},
+        task::{
+            AGENT_TASK_SERVICE_ID, AgentTaskService, AgentTaskServiceContract,
+            AgentTaskServiceHandle, register_task_config_sections,
+            tools::{register_task_list_tool, register_task_output_tool, register_task_stop_tool},
+        },
         tool_executor::{
             AgentToolExecutorService, AgentToolExecutorServiceContract,
             AgentToolExecutorServiceHandle,
@@ -149,10 +155,12 @@ use kimi_code_agent_core_v2::{
     os::{
         backends::node_local::{
             host_environment_service::LocalHostEnvironmentService, host_fs_service::HostFileSystem,
+            host_process_service::LocalHostProcessService, tools::register_bash_tool,
         },
         interface::{
             host_environment::{HostEnvironment, HostEnvironmentHandle},
             host_file_system::{HostFileSystemService, HostFileSystemServiceHandle},
+            host_process::{HostProcessService, HostProcessServiceHandle},
         },
     },
     persistence::{
@@ -175,7 +183,11 @@ use kimi_code_agent_core_v2::{
             SessionAgentProfileCatalogContract, SessionAgentProfileCatalogHandle,
             SessionAgentProfileCatalogService,
         },
-        session_context::{SessionContextInput, make_session_context},
+        process::{
+            SESSION_PROCESS_RUNNER_SERVICE_ID, SessionProcessRunner, SessionProcessRunnerContract,
+            SessionProcessRunnerHandle,
+        },
+        session_context::{SESSION_CONTEXT_ID, SessionContextInput, make_session_context},
         session_metadata::{AgentMeta, AgentMetaType, SessionMetadataService},
         skill_catalog::{
             ExplicitFileSkillSource, ExtraFileSkillSource, PluginSkillSource,
@@ -455,7 +467,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     skills.ready().await?;
     let skills_handle = SessionSkillCatalogHandle(Arc::clone(&skills));
     let session_policy: Arc<dyn SessionToolPolicyContract> = Arc::new(
-        SessionToolPolicyService::new(&session_context, json_documents_handle),
+        SessionToolPolicyService::new(&session_context, json_documents_handle.clone()),
     );
     session_policy.ready().await?;
     let session_policy_handle = SessionToolPolicyHandle(session_policy);
@@ -475,7 +487,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config_handle.clone(),
         catalog_handle.clone(),
         protocol_handle,
-        host_env_handle,
+        host_env_handle.clone(),
         fs_handle,
         Arc::clone(&session_context),
         bootstrap_handle.clone(),
@@ -504,7 +516,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let policy: Arc<dyn AgentToolPolicyServiceContract> = Arc::new(AgentToolPolicyService::new(
         profile_handle.clone(),
         config_handle.clone(),
-        session_policy_handle,
+        session_policy_handle.clone(),
         tools_handle.clone(),
     ));
     let policy_handle = AgentToolPolicyServiceHandle(policy);
@@ -520,7 +532,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Arc::new(AgentToolSelectService::new(
             Arc::clone(&registry),
             profile_handle.clone(),
-            policy_handle,
+            policy_handle.clone(),
             Arc::clone(&context),
             tools_handle,
             flags_handle.clone(),
@@ -533,16 +545,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         host_headers,
     ));
     let web_fetch_handle = WebFetchServiceHandle(web_fetch);
-
-    ensure_builtin_tool_contributions_registered();
-    let mut tool_services = ServiceCollection::new();
-    tool_services.set_instance(
-        AGENT_TOOL_SELECT_SERVICE_ID,
-        Arc::new(tool_select_handle.clone()),
-    );
-    tool_services.set_instance(WEB_FETCH_SERVICE_ID, Arc::new(web_fetch_handle));
-    let tool_services = InstantiationService::new(tool_services);
-    let builtin_tools = AgentBuiltinToolsRegistrar::new(&tool_services, &registry_handle)?;
 
     let projector: Arc<dyn AgentContextProjectorServiceContract> = Arc::new(
         AgentContextProjectorService::new(log_handle, telemetry_handle.clone()),
@@ -565,8 +567,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             context_handle,
             projector_handle,
             context_size_handle,
-            registry_handle,
-            tool_select_handle,
+            registry_handle.clone(),
+            tool_select_handle.clone(),
             profile_handle,
             usage_handle,
             catalog_handle,
@@ -578,10 +580,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Arc::clone(&event_bus_contract),
         tools,
         Arc::clone(&config),
-        wire_handle,
+        wire_handle.clone(),
         telemetry,
         telemetry_context,
     );
+    let agent_contract: Arc<dyn AgentLoopServiceContract> = agent.clone();
+    let reminders: Arc<dyn AgentSystemReminderServiceContract> =
+        Arc::new(AgentSystemReminderService::new(Arc::clone(&context)));
+    let injector = AgentContextInjectorService::new(
+        Arc::clone(&context),
+        AgentLoopServiceHandle(Arc::clone(&agent_contract)),
+        Arc::clone(&reminders),
+        event_bus_handle.clone(),
+        wire_handle.clone(),
+    )?;
+    let injector_contract: Arc<dyn AgentContextInjectorServiceContract> = injector.clone();
+    let task_service: Arc<dyn AgentTaskServiceContract> =
+        Arc::new(AgentTaskService::from_dependencies(
+            telemetry_handle,
+            Arc::clone(&context),
+            config_handle.clone(),
+            json_documents_handle,
+            FileSystemStorageServiceHandle(Arc::clone(&storage)),
+            &session_context,
+            &agent_scope,
+            wire_handle,
+            event_bus_handle,
+            injector_contract.as_ref(),
+            agent_contract,
+        )?);
+    let task_handle = AgentTaskServiceHandle(Arc::clone(&task_service));
+    let host_process: Arc<dyn HostProcessService> = Arc::new(LocalHostProcessService::default());
+    let process_runner: Arc<dyn SessionProcessRunnerContract> =
+        Arc::new(SessionProcessRunner::new(
+            Arc::clone(&session_context),
+            HostProcessServiceHandle(host_process),
+        ));
+    let process_runner_handle = SessionProcessRunnerHandle(process_runner);
+
+    ensure_builtin_tool_contributions_registered();
+    let mut tool_services = ServiceCollection::new();
+    tool_services.set_instance(
+        AGENT_TOOL_SELECT_SERVICE_ID,
+        Arc::new(tool_select_handle.clone()),
+    );
+    tool_services.set_instance(WEB_FETCH_SERVICE_ID, Arc::new(web_fetch_handle));
+    tool_services.set_instance(SESSION_CONTEXT_ID, Arc::clone(&session_context));
+    tool_services.set_instance(
+        SESSION_PROCESS_RUNNER_SERVICE_ID,
+        Arc::new(process_runner_handle),
+    );
+    tool_services.set_instance(
+        kimi_code_agent_core_v2::os::interface::host_environment::HOST_ENVIRONMENT_SERVICE_ID,
+        Arc::new(host_env_handle),
+    );
+    tool_services.set_instance(AGENT_TASK_SERVICE_ID, Arc::new(task_handle));
+    tool_services.set_instance(
+        kimi_code_agent_core_v2::agent::tool_policy::AGENT_TOOL_POLICY_SERVICE_ID,
+        Arc::new(policy_handle),
+    );
+    tool_services.set_instance(
+        kimi_code_agent_core_v2::app::config::CONFIG_SERVICE_ID,
+        Arc::new(config_handle.clone()),
+    );
+    let tool_services = InstantiationService::new(tool_services);
 
     wire.seal().await?;
     session_metadata
@@ -605,6 +667,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             cwd: Some(cwd),
         })
         .await?;
+    let builtin_tools = AgentBuiltinToolsRegistrar::new(&tool_services, &registry_handle)?;
 
     let _assistant_output = event_bus.subscribe_type(
         "assistant.delta",
@@ -616,8 +679,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }),
     );
 
-    let reminders: Arc<dyn AgentSystemReminderServiceContract> =
-        Arc::new(AgentSystemReminderService::new(Arc::clone(&context)));
     let request: Arc<dyn StepRequest> = Arc::new(PromptStepRequest::new(
         ContextMessage {
             message: Message::new(
@@ -650,6 +711,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Disposable::dispose(agent.as_ref())?;
     Disposable::dispose(&builtin_tools)?;
     Disposable::dispose(&tool_services)?;
+    Disposable::dispose(task_service.as_ref())?;
+    Disposable::dispose(injector.as_ref())?;
     Disposable::dispose(session_catalog.as_ref())?;
     Disposable::dispose(skills.as_ref())?;
     Disposable::dispose(plugin_service.as_ref())?;
@@ -699,6 +762,7 @@ fn ensure_config_sections_registered() {
         register_loop_control_config_section();
         register_agent_file_catalog_config_sections();
         register_skill_catalog_config_sections();
+        register_task_config_sections();
     });
 }
 
@@ -707,5 +771,9 @@ fn ensure_builtin_tool_contributions_registered() {
     REGISTER.call_once(|| {
         register_select_tools_tool();
         register_fetch_url_tool();
+        register_task_list_tool();
+        register_task_output_tool();
+        register_task_stop_tool();
+        register_bash_tool();
     });
 }
