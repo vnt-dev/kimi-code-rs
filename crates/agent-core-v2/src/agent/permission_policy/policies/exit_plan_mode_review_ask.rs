@@ -51,13 +51,13 @@ struct PlanReview {
 }
 
 fn prepared(result: ExecutableToolResult) -> PermissionPolicyResolution {
-    PermissionPolicyResolution::Prepared(PrepareToolExecutionResult {
+    PermissionPolicyResolution::Prepared(Box::new(PrepareToolExecutionResult {
         block: None,
         reason: None,
         synthetic_result: Some(result),
         execution_metadata: None,
         updated_args: None,
-    })
+    }))
 }
 fn track(telemetry: &dyn TelemetryServiceContract, event: PlanResolvedEvent) {
     let _ = telemetry.track_event(&event);

@@ -90,9 +90,7 @@ pub async fn find_local_git_work_tree_marker(cwd: &str) -> Option<PermissionGitW
         if let Some(marker) = probe_local_git_marker(&dot_git, &current).await {
             return Some(marker);
         }
-        let Some(parent) = current.parent() else {
-            return None;
-        };
+        let parent = current.parent()?;
         if parent == current {
             return None;
         }

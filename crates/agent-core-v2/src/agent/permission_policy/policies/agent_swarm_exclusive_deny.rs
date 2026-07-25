@@ -16,9 +16,11 @@ use crate::agent::{
 pub struct AgentSwarmExclusiveDenyPermissionPolicy;
 
 pub fn multiple_agent_swarm_denied_message(has_other_tool_calls: bool) -> String {
-    let suffix = has_other_tool_calls
-        .then_some(" AgentSwarm also must not be combined with other tools in the same response.")
-        .unwrap_or_default();
+    let suffix = if has_other_tool_calls {
+        " AgentSwarm also must not be combined with other tools in the same response."
+    } else {
+        ""
+    };
     format!(
         "AgentSwarm must be called one swarm at a time. Multiple AgentSwarm calls are not forbidden, but issue them sequentially: call one AgentSwarm, wait for its result, then call the next; or merge the work into a single AgentSwarm when one swarm can cover it.{suffix}"
     )

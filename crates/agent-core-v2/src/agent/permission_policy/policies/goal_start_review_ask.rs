@@ -62,13 +62,12 @@ impl PermissionPolicy for GoalStartReviewAskPermissionPolicy {
                 reason: None,
                 resolve_error: None,
                 resolve_approval: Some(Box::new(move |result| {
-                    if result.decision == ApprovalDecision::Approved {
-                        if let Some(next_mode) =
+                    if result.decision == ApprovalDecision::Approved
+                        && let Some(next_mode) =
                             to_permission_mode(result.selected_label.as_deref())
-                            && next_mode != mode.mode()
-                        {
-                            let _ = mode.set_mode(next_mode);
-                        }
+                        && next_mode != mode.mode()
+                    {
+                        let _ = mode.set_mode(next_mode);
                     }
                     None
                 })),

@@ -44,7 +44,7 @@ pub type ErrorResolver = Box<dyn Fn(Value) -> Option<PermissionPolicyResolution>
 
 pub enum PermissionPolicyResolution {
     Result(PermissionPolicyResult),
-    Prepared(PrepareToolExecutionResult),
+    Prepared(Box<PrepareToolExecutionResult>),
 }
 
 pub enum PermissionPolicyResult {
