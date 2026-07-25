@@ -80,9 +80,9 @@ impl AgentTask for SubagentTask {
             Err(error)
                 if signal.aborted()
                     && (is_abort_error(error.as_ref())
-                        || signal
-                            .reason()
-                            .is_some_and(|reason| Arc::ptr_eq(&reason, &error))) =>
+                        || signal.reason().is_some_and(|reason| {
+                            std::ptr::addr_eq(Arc::as_ptr(&reason), Arc::as_ptr(&error))
+                        })) =>
             {
                 sink.settle(AgentTaskSettlement {
                     status: AgentTaskSettlementStatus::Killed,
