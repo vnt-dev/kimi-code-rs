@@ -1,6 +1,7 @@
 use std::{error::Error, fmt, path::Path};
 
 use crate::tui::{
+    agent_core::{TuiAgentCore, TuiAgentCoreError},
     config::{TuiConfig, TuiConfigIoError, get_tui_config_path, load_tui_config},
     kimi_tui::KimiTui,
     runtime::{ProcessTerminal, TuiRuntime},
@@ -21,6 +22,7 @@ pub struct ShellStartupConfig {
 
 #[derive(Debug)]
 pub enum RunShellError {
+    AgentCore(TuiAgentCoreError),
     ConfigPath(crate::utils::paths::HomeDirectoryUnavailable),
     Config(TuiConfigIoError),
     Terminal(std::io::Error),
@@ -29,6 +31,7 @@ pub enum RunShellError {
 impl fmt::Display for RunShellError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AgentCore(error) => error.fmt(formatter),
             Self::ConfigPath(error) => error.fmt(formatter),
             Self::Config(error) => error.fmt(formatter),
             Self::Terminal(error) => error.fmt(formatter),
@@ -39,6 +42,7 @@ impl fmt::Display for RunShellError {
 impl Error for RunShellError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::AgentCore(error) => Some(error),
             Self::ConfigPath(error) => Some(error),
             Self::Config(error) => Some(error),
             Self::Terminal(error) => Some(error),
@@ -78,8 +82,9 @@ pub async fn load_shell_startup_config(
 //   runShell()
 //
 // Rust adaptation:
-//   Configuration I/O is asynchronous. The remaining harness and TUI
-//   composition must target kimi-code-agent-core-v2 directly.
+//   Configuration I/O is asynchronous. The TUI now composes the standalone
+//   v2 OAuth service; native session and agent service composition remains a
+//   separate migration unit.
 pub async fn run_shell(
     options: &CliOptions,
     version: &str,
@@ -112,7 +117,8 @@ async fn start_v2_shell(
                 .to_owned(),
         );
     }
-    let mut tui = KimiTui::new(version, startup_warning);
+    let agent_core = TuiAgentCore::bootstrap(version).map_err(RunShellError::AgentCore)?;
+    let mut tui = KimiTui::with_agent_core(version, startup_warning, agent_core);
     TuiRuntime::new(ProcessTerminal::new())
         .run(&mut tui)
         .await

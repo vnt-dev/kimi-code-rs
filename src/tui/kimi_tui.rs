@@ -1,6 +1,13 @@
 use std::{any::Any, path::PathBuf, sync::Arc};
 
+use async_trait::async_trait;
+use kimi_code_agent_core_v2::app::auth::OAuthToolkitContract;
+use kimi_code_oauth::{
+    DeviceAuthorization, DeviceCodeObserver, KimiOAuthLoginOptions, OAuthManagerError,
+};
+
 use crate::tui::{
+    agent_core::TuiAgentCore,
     components::{
         Component, ComponentRole,
         editor::{CustomEditor, EditorAction, InputMode},
@@ -17,7 +24,6 @@ use crate::tui::{
     runtime::{TuiApp, TuiControl},
     theme::{ColorToken, current_theme},
 };
-use async_trait::async_trait;
 
 const DEFAULT_PENDING_RESPONSE: &str =
     "Agent runtime is not connected yet. Your input was received.";
@@ -48,6 +54,7 @@ pub struct KimiTui {
     startup_warning: Option<String>,
     slash_autocomplete: SlashAutocompleteSurface,
     active_dialog: Option<MountedDialog>,
+    agent_core: Option<TuiAgentCore>,
 }
 
 impl KimiTui {
@@ -78,7 +85,18 @@ impl KimiTui {
             startup_warning,
             slash_autocomplete,
             active_dialog: None,
+            agent_core: None,
         }
+    }
+
+    pub fn with_agent_core(
+        version: impl Into<String>,
+        startup_warning: Option<String>,
+        agent_core: TuiAgentCore,
+    ) -> Self {
+        let mut tui = Self::new(version, startup_warning);
+        tui.agent_core = Some(agent_core);
+        tui
     }
 
     pub fn editor_text(&self) -> String {
@@ -87,7 +105,7 @@ impl KimiTui {
 
     async fn handle_editor_action(&mut self, action: EditorAction) -> TuiControl {
         match action {
-            EditorAction::Submit(text) => self.submit(text),
+            EditorAction::Submit(text) => self.submit(text).await,
             EditorAction::CtrlC => {
                 if self.editor.text().is_empty() {
                     TuiControl::Exit
@@ -201,7 +219,7 @@ impl KimiTui {
         TuiControl::Continue
     }
 
-    fn submit(&mut self, text: String) -> TuiControl {
+    async fn submit(&mut self, text: String) -> TuiControl {
         let text = text.trim().to_owned();
         if text.is_empty() {
             self.status = Some("Enter a message or /help.".to_owned());
@@ -209,7 +227,7 @@ impl KimiTui {
         }
         self.editor.add_to_history(&text);
         if text.starts_with('/') {
-            return self.handle_slash_command(&text);
+            return self.handle_slash_command(&text).await;
         }
 
         self.transcript.push(TranscriptLine::User(text));
@@ -224,7 +242,7 @@ impl KimiTui {
         TuiControl::Continue
     }
 
-    fn handle_slash_command(&mut self, input: &str) -> TuiControl {
+    async fn handle_slash_command(&mut self, input: &str) -> TuiControl {
         match resolve_slash_command_surface(input, &self.version) {
             SlashCommandSurfaceAction::Exit => TuiControl::Exit,
             SlashCommandSurfaceAction::ClearTranscript => {
@@ -252,6 +270,9 @@ impl KimiTui {
                 TuiControl::Continue
             }
             SlashCommandSurfaceAction::Pending { command_name, args } => {
+                if command_name == "login" {
+                    return self.login().await;
+                }
                 // MIGRATION-TODO:
                 // Original: commands/dispatch.ts and KimiTUI route the full
                 // slash-command registry into controllers and session
@@ -277,6 +298,46 @@ impl KimiTui {
         }
     }
 
+    // Original: apps/kimi-code/src/tui/commands/auth.ts,
+    // handleKimiCodeOAuthLogin(). The v2 toolkit owns device-code polling and
+    // credential persistence; the TUI only opens the received authorization URL.
+    async fn login(&mut self) -> TuiControl {
+        let Some(agent_core) = self.agent_core.as_ref() else {
+            self.status = Some("agent-core-v2 OAuth is not connected.".to_owned());
+            return TuiControl::Continue;
+        };
+
+        self.status = Some("Opening browser for Kimi login…".to_owned());
+        let observer = TuiDeviceCodeObserver;
+        match agent_core
+            .oauth_toolkit()
+            .login(
+                Some("kimi-code"),
+                KimiOAuthLoginOptions {
+                    on_device_code: Some(&observer),
+                    ..KimiOAuthLoginOptions::default()
+                },
+            )
+            .await
+        {
+            Ok(result) if result.ok => {
+                self.status = Some(
+                    "Kimi Code credentials saved; v2 model provisioning is not connected yet."
+                        .to_owned(),
+                );
+            }
+            Ok(_) => {
+                self.status = Some("Kimi login did not complete.".to_owned());
+            }
+            Err(error) => {
+                self.transcript
+                    .push(TranscriptLine::System(format!("Login failed: {error}")));
+                self.status = Some("Login failed.".to_owned());
+            }
+        }
+        TuiControl::Continue
+    }
+
     fn render_transcript_line(line: &TranscriptLine) -> String {
         match line {
             TranscriptLine::User(text) => format!(
@@ -289,6 +350,19 @@ impl KimiTui {
             ),
             TranscriptLine::System(text) => current_theme().fg(ColorToken::TextMuted, text),
         }
+    }
+}
+
+struct TuiDeviceCodeObserver;
+
+#[async_trait]
+impl DeviceCodeObserver for TuiDeviceCodeObserver {
+    async fn on_device_code(
+        &self,
+        authorization: &DeviceAuthorization,
+    ) -> Result<(), OAuthManagerError> {
+        crate::utils::open_url::open_url(&authorization.verification_uri_complete);
+        Ok(())
     }
 }
 
@@ -416,13 +490,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn slash_aliases_version_arguments_and_unknown_commands_are_visible() {
+    #[tokio::test]
+    async fn login_reports_when_agent_core_is_not_composed() {
+        let mut tui = KimiTui::new("0.1.0", None);
+        for input in ["/", "l", "o", "g", "i", "n", "\r"] {
+            assert_eq!(tui.handle_terminal_input(input).await, TuiControl::Continue);
+        }
+        assert!(
+            tui.render(80)
+                .join("\n")
+                .contains("agent-core-v2 OAuth is not connected")
+        );
+    }
+
+    #[tokio::test]
+    async fn slash_aliases_version_arguments_and_unknown_commands_are_visible() {
         let mut tui = KimiTui::new("1.2.3", None);
         tui.handle_terminal_resize(80, 40);
 
         for input in ["/version", "/goal ship it", "/missing"] {
-            tui.submit(input.to_owned());
+            tui.submit(input.to_owned()).await;
             if tui.active_dialog.is_some() {
                 tui.handle_dialog_input("\u{1b}");
             }
@@ -431,7 +518,7 @@ mod tests {
         assert!(rendered.contains("Kimi Code v1.2.3"));
         assert!(rendered.contains("Unknown command: /missing"));
 
-        assert_eq!(tui.submit("/q".to_owned()), TuiControl::Exit);
+        assert_eq!(tui.submit("/q".to_owned()).await, TuiControl::Exit);
     }
 
     #[tokio::test]
@@ -480,7 +567,7 @@ mod tests {
         tui.editor.set_text("draft");
         assert!(tui.render(100).join("\n").contains(CURSOR_MARKER));
 
-        tui.submit("/settings".to_owned());
+        tui.submit("/settings".to_owned()).await;
         let dialog = tui.render(100).join("\n");
         assert!(dialog.contains("Settings"));
         assert!(!dialog.contains(CURSOR_MARKER));

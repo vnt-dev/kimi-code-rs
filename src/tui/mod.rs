@@ -1,3 +1,4 @@
+pub mod agent_core;
 pub mod banner;
 pub mod commands;
 pub mod components;
