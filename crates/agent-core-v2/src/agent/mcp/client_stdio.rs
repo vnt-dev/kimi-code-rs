@@ -74,6 +74,7 @@ pub enum McpStdioClientError {
 
 type RunningStdioClient = RunningService<RoleClient, ClientInfo>;
 
+#[derive(Default)]
 struct StdioMcpClientState {
     started: bool,
     closed: bool,
@@ -83,21 +84,6 @@ struct StdioMcpClientState {
     pending_unexpected_close: Option<UnexpectedCloseReason>,
     stderr_task: Option<JoinHandle<()>>,
     close_monitor: Option<JoinHandle<()>>,
-}
-
-impl Default for StdioMcpClientState {
-    fn default() -> Self {
-        Self {
-            started: false,
-            closed: false,
-            ready: false,
-            running: None,
-            unexpected_close_listener: None,
-            pending_unexpected_close: None,
-            stderr_task: None,
-            close_monitor: None,
-        }
-    }
 }
 
 /// MCP client backed by a local child process and its standard streams.
@@ -521,6 +507,19 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).into(), (*value).into()))
             .collect()
+    }
+
+    #[test]
+    fn default_state_is_not_started_connected_or_closed() {
+        let state = StdioMcpClientState::default();
+        assert!(!state.started);
+        assert!(!state.closed);
+        assert!(!state.ready);
+        assert!(state.running.is_none());
+        assert!(state.unexpected_close_listener.is_none());
+        assert!(state.pending_unexpected_close.is_none());
+        assert!(state.stderr_task.is_none());
+        assert!(state.close_monitor.is_none());
     }
 
     #[test]

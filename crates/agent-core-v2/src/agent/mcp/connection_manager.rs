@@ -136,10 +136,13 @@ struct InternalEntry {
     client: Option<Arc<dyn RuntimeMcpClient>>,
 }
 
+/// Original `McpConnectionManagerOptions.envLookup` callback.
+pub type McpEnvLookup = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 #[derive(Clone, Default)]
 pub struct McpConnectionManagerOptions {
     pub stdio_cwd: Option<PathBuf>,
-    pub env_lookup: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+    pub env_lookup: Option<McpEnvLookup>,
     pub log: Option<Arc<dyn Logger>>,
     pub oauth_service: Option<Arc<McpOAuthService>>,
 }
@@ -709,13 +712,16 @@ fn compute_enabled_names(config: &McpServerConfig, tools: &[Tool]) -> HashSet<St
         .collect()
 }
 fn to_public_entry(entry: &InternalEntry) -> McpServerEntry {
+    let tool_count = if entry.status == McpServerStatus::Connected {
+        entry.enabled_names.as_ref().map_or(0, HashSet::len)
+    } else {
+        0
+    };
     McpServerEntry {
         name: entry.name.clone(),
         transport: entry.config.transport().into(),
         status: entry.status,
-        tool_count: (entry.status == McpServerStatus::Connected)
-            .then(|| entry.enabled_names.as_ref().map_or(0, HashSet::len))
-            .unwrap_or(0),
+        tool_count,
         error: entry.error.clone(),
     }
 }
@@ -790,6 +796,28 @@ mod tests {
             compute_enabled_names(&config, &tools),
             HashSet::from(["one".into()])
         );
+    }
+
+    #[test]
+    fn public_tool_count_requires_a_connected_entry_and_enabled_names() {
+        let mut entry = InternalEntry {
+            name: "server".into(),
+            config: stdio_config(Default::default()),
+            attempt_id: 0,
+            status: McpServerStatus::Pending,
+            tools: None,
+            raw_tools: None,
+            enabled_names: Some(HashSet::from(["one".into(), "two".into()])),
+            error: None,
+            client: None,
+        };
+        assert_eq!(to_public_entry(&entry).tool_count, 0);
+
+        entry.status = McpServerStatus::Connected;
+        assert_eq!(to_public_entry(&entry).tool_count, 2);
+
+        entry.enabled_names = None;
+        assert_eq!(to_public_entry(&entry).tool_count, 0);
     }
 
     #[tokio::test]
