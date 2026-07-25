@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    ops::Deref,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     _base::di::instantiation::ServiceIdentifier,
@@ -32,7 +35,18 @@ pub trait AgentContextSizeServiceContract: Send + Sync {
     ) -> Result<(), ContextSizeServiceError>;
 }
 
-pub const AGENT_CONTEXT_SIZE_SERVICE_ID: ServiceIdentifier<dyn AgentContextSizeServiceContract> =
+#[derive(Clone)]
+pub struct AgentContextSizeServiceHandle(pub Arc<dyn AgentContextSizeServiceContract>);
+
+impl Deref for AgentContextSizeServiceHandle {
+    type Target = dyn AgentContextSizeServiceContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const AGENT_CONTEXT_SIZE_SERVICE_ID: ServiceIdentifier<AgentContextSizeServiceHandle> =
     ServiceIdentifier::new("agentContextSizeService");
 
 #[derive(Debug, thiserror::Error)]
