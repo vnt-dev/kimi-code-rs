@@ -729,6 +729,28 @@ impl Drop for ManagedExecutionStream {
     }
 }
 
+// Original: registerScopedService(... AgentToolExecutorService ...).
+pub fn register_agent_tool_executor_service() {
+    register_scoped_service(
+        LifecycleScope::Agent,
+        AGENT_TOOL_EXECUTOR_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let registry: AgentToolRegistryServiceHandle =
+                (*accessor.get(AGENT_TOOL_REGISTRY_SERVICE_ID)?).clone();
+            let event_bus: EventBusHandle = (*accessor.get(EVENT_BUS_SERVICE_ID)?).clone();
+            let telemetry: TelemetryServiceHandle = (*accessor.get(TELEMETRY_SERVICE_ID)?).clone();
+            let truncation: AgentToolResultTruncationServiceHandle =
+                (*accessor.get(AGENT_TOOL_RESULT_TRUNCATION_SERVICE_ID)?).clone();
+            let service: Arc<dyn AgentToolExecutorServiceContract> = Arc::new(
+                AgentToolExecutorService::new(registry.0, event_bus, telemetry, truncation.0),
+            );
+            Ok(AgentToolExecutorServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "toolExecutor",
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -888,25 +910,4 @@ mod tests {
         );
         assert!(!result.result.is_error);
     }
-}
-
-pub fn register_agent_tool_executor_service() {
-    register_scoped_service(
-        LifecycleScope::Agent,
-        AGENT_TOOL_EXECUTOR_SERVICE_ID,
-        SyncDescriptor::new(|accessor| {
-            let registry: AgentToolRegistryServiceHandle =
-                (*accessor.get(AGENT_TOOL_REGISTRY_SERVICE_ID)?).clone();
-            let event_bus: EventBusHandle = (*accessor.get(EVENT_BUS_SERVICE_ID)?).clone();
-            let telemetry: TelemetryServiceHandle = (*accessor.get(TELEMETRY_SERVICE_ID)?).clone();
-            let truncation: AgentToolResultTruncationServiceHandle =
-                (*accessor.get(AGENT_TOOL_RESULT_TRUNCATION_SERVICE_ID)?).clone();
-            let service: Arc<dyn AgentToolExecutorServiceContract> = Arc::new(
-                AgentToolExecutorService::new(registry.0, event_bus, telemetry, truncation.0),
-            );
-            Ok(AgentToolExecutorServiceHandle(service))
-        }),
-        InstantiationType::Eager,
-        "toolExecutor",
-    );
 }
