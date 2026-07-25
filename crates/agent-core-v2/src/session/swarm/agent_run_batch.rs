@@ -449,7 +449,12 @@ fn start_attempt<T, L>(
         let completion = abortable(handle.completion, &signal)
             .await
             .map_err(|error| Box::new((*error).clone()) as BoxError)
-            .and_then(|result| result);
+            .and_then(|result| {
+                result.map_err(|error| {
+                    Box::new(crate::session::subagent::SharedAgentRunError(error.into()))
+                        as BoxError
+                })
+            });
         drop(deadline.take());
         drop(task_link);
         drop(batch_link);

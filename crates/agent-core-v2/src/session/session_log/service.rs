@@ -132,7 +132,7 @@ pub fn register_session_log_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::collections::HashMap;
 
     use tokio::fs;
 

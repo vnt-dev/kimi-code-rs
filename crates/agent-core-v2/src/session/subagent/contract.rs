@@ -3,7 +3,7 @@
 //! Original: `packages/agent-core-v2/src/session/subagent/subagent.ts`,
 //! `ISessionSubagentService`.
 
-use std::{ops::Deref, sync::Arc};
+use std::{error::Error, fmt, ops::Deref, sync::Arc};
 
 use crate::{
     _base::{
@@ -50,8 +50,35 @@ pub struct AgentRunCompletion {
     pub usage: Option<TokenUsage>,
 }
 
+/// A shared future needs a cloneable rejection value. `Arc` also preserves one
+/// shared failure identity for all observers, like the original Promise.
+pub type AgentRunCompletionError = Arc<dyn Error + Send + Sync>;
 pub type AgentRunCompletionFuture =
-    Shared<BoxFuture<'static, Result<AgentRunCompletion, BoxError>>>;
+    Shared<BoxFuture<'static, Result<AgentRunCompletion, AgentRunCompletionError>>>;
+
+/// Adapts a shared completion error at APIs that still use boxed errors.
+pub struct SharedAgentRunError(pub AgentRunCompletionError);
+
+impl fmt::Debug for SharedAgentRunError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("SharedAgentRunError")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+impl fmt::Display for SharedAgentRunError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl Error for SharedAgentRunError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
 
 #[derive(Clone)]
 pub struct AgentRunHandle {
@@ -149,10 +176,10 @@ mod tests {
             Some(TurnState::Queued)
         }
         fn signal(&self) -> crate::_base::utils::abort::AbortSignal {
-            crate::_base::utils::abort::AbortSignal::new()
+            crate::_base::utils::abort::AbortController::new().signal()
         }
         fn ready(&self) -> TurnReadyFuture {
-            futures_util::future::ready(()).boxed().shared()
+            futures_util::future::ready(Ok(())).boxed().shared()
         }
         fn result(&self) -> TurnResultFuture {
             futures_util::future::pending().boxed().shared()
