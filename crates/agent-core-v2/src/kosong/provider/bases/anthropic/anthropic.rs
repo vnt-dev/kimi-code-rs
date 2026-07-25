@@ -660,8 +660,11 @@ fn javascript_max(left: f64, right: f64) -> f64 {
     }
 }
 
-fn extend_defined(target: &mut Map<String, Value>, patch: Map<String, Value>) {
-    target.extend(patch.into_iter().filter(|(_, value)| !value.is_null()));
+fn extend_hook_patch(target: &mut Map<String, Value>, patch: Map<String, Value>) {
+    // A trait's JavaScript `undefined` is represented as JSON null inside the
+    // Rust-only hook boundary. Keep it in kwargs so it shadows a seeded value;
+    // request serialization below already omits null values.
+    target.extend(patch);
 }
 
 // Original:
@@ -740,7 +743,7 @@ pub fn build_anthropic_request(
             )
         });
         if let Some(hooked) = hooked {
-            extend_defined(&mut kwargs, hooked);
+            extend_hook_patch(&mut kwargs, hooked);
         } else {
             encode_thinking(
                 model,

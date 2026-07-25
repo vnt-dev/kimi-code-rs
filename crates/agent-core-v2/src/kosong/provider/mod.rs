@@ -19,5 +19,10 @@ pub use contract::{
     PROVIDER_SERVICE_ID, ProviderServiceContract, ProviderServiceError, ProviderServiceHandle,
     ProviderServiceResult,
 };
-pub use protocol_adapter_registry::register_protocol_adapter_registry;
 pub use provider_service::{ProviderService, register_provider_service};
+
+pub fn register_protocol_adapter_registry() {
+    providers::ensure_provider_definitions_registered()
+        .expect("built-in provider definitions must register exactly once");
+    protocol_adapter_registry::register_protocol_adapter_registry();
+}
