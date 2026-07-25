@@ -5,6 +5,52 @@ use super::subagent_task::SubagentHandle;
 pub const USER_INTERRUPTED_SUBAGENT_MESSAGE: &str =
     "The subagent was stopped before it finished by user.";
 pub const SUBAGENT_STOPPED_MESSAGE: &str = "The subagent was stopped before it finished.";
+pub const DEFAULT_PROFILE_NAME: &str = "coder";
+pub const RESUME_WITH_TYPE_UNAVAILABLE: &str =
+    "Cannot set subagent_type when resuming an existing agent. Resume by agent id only.";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentToolInput {
+    pub prompt: String,
+    pub description: String,
+    pub subagent_type: Option<String>,
+    pub resume: Option<String>,
+    pub run_in_background: Option<bool>,
+}
+
+pub fn normalize_agent_tool_input(mut input: AgentToolInput) -> AgentToolInput {
+    let has_resume = input
+        .resume
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty());
+    let has_type = input
+        .subagent_type
+        .as_ref()
+        .is_some_and(|value| !value.is_empty());
+    if !has_type && !has_resume {
+        input.subagent_type = Some(DEFAULT_PROFILE_NAME.into());
+    }
+    if !has_type && has_resume {
+        input.subagent_type = None;
+    }
+    input
+}
+
+pub fn validate_agent_tool_input(input: &AgentToolInput) -> Result<(), &'static str> {
+    if input
+        .resume
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+        && input
+            .subagent_type
+            .as_ref()
+            .is_some_and(|value| !value.is_empty())
+    {
+        Err(RESUME_WITH_TYPE_UNAVAILABLE)
+    } else {
+        Ok(())
+    }
+}
 
 pub fn format_background_agent_result(
     task_id: &str,
@@ -67,6 +113,30 @@ mod tests {
         assert_eq!(
             format_subagent_stopped_message(Some("lost")),
             "The subagent was stopped before it finished. Reason: lost"
+        );
+    }
+    #[test]
+    fn input_normalization_matches_preprocess_branches() {
+        let base = |resume, kind| AgentToolInput {
+            prompt: "p".into(),
+            description: "d".into(),
+            resume,
+            subagent_type: kind,
+            run_in_background: None,
+        };
+        assert_eq!(
+            normalize_agent_tool_input(base(None, None))
+                .subagent_type
+                .as_deref(),
+            Some("coder")
+        );
+        assert!(
+            normalize_agent_tool_input(base(Some("agent-1".into()), None))
+                .subagent_type
+                .is_none()
+        );
+        assert!(
+            validate_agent_tool_input(&base(Some("agent-1".into()), Some("coder".into()))).is_err()
         );
     }
 }
