@@ -13,6 +13,10 @@ use tokio::sync::OnceCell;
 
 use crate::{
     _base::{
+        di::{
+            descriptors::SyncDescriptor,
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
         errors::errors::BugIndicatingError,
         exec_env::{
             environment_probe::{
@@ -22,7 +26,9 @@ use crate::{
             login_shell_path::apply_login_shell_path,
         },
     },
-    os::interface::host_environment::HostEnvironment,
+    os::interface::host_environment::{
+        HOST_ENVIRONMENT_SERVICE_ID, HostEnvironment, HostEnvironmentHandle,
+    },
 };
 
 #[derive(Clone)]
@@ -54,6 +60,20 @@ impl LocalHostEnvironmentService {
             )))),
         }
     }
+}
+
+/// Original: app-scope host environment service registration.
+pub fn register_local_host_environment_service() {
+    register_scoped_service(
+        LifecycleScope::App,
+        HOST_ENVIRONMENT_SERVICE_ID,
+        SyncDescriptor::new(|_| {
+            let service: Arc<dyn HostEnvironment> = Arc::new(LocalHostEnvironmentService::new());
+            Ok(HostEnvironmentHandle(service))
+        }),
+        InstantiationType::Eager,
+        "hostEnvironment",
+    );
 }
 
 #[async_trait]

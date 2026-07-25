@@ -2,6 +2,8 @@
 //!
 //! Original: `packages/agent-core-v2/src/os/interface/hostEnvironment.ts`.
 
+use std::{ops::Deref, sync::Arc};
+
 use async_trait::async_trait;
 
 use crate::_base::{
@@ -39,7 +41,18 @@ pub trait HostEnvironment: Send + Sync {
     }
 }
 
-pub const HOST_ENVIRONMENT_SERVICE_ID: ServiceIdentifier<dyn HostEnvironment> =
+#[derive(Clone)]
+pub struct HostEnvironmentHandle(pub Arc<dyn HostEnvironment>);
+
+impl Deref for HostEnvironmentHandle {
+    type Target = dyn HostEnvironment;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const HOST_ENVIRONMENT_SERVICE_ID: ServiceIdentifier<HostEnvironmentHandle> =
     ServiceIdentifier::new("hostEnvironment");
 
 #[cfg(test)]
