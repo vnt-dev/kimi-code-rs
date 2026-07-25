@@ -1,7 +1,12 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use indexmap::IndexMap;
+
 use crate::{
-    sdk::types::PermissionMode,
+    sdk::{
+        model_alias::ModelAlias,
+        types::{PermissionMode, ThinkingEffort},
+    },
     tui::{
         commands::registry::BUILTIN_SLASH_COMMANDS,
         components::{
@@ -10,6 +15,8 @@ use crate::{
                 HelpPanelCommand, HelpPanelComponent, MigrationNoticeDialog,
                 PermissionSelectorComponent, SettingsSelectorComponent, ThemeSelectorComponent,
                 help_panel::HelpPanelOptions,
+                model_selector::ModelSelection,
+                tabbed_model_selector::{TabbedModelSelectorComponent, TabbedModelSelectorOptions},
             },
         },
     },
@@ -21,6 +28,7 @@ pub enum DialogKind {
     Settings,
     Permission,
     Theme,
+    Model,
     MigrationNotice,
 }
 
@@ -28,6 +36,7 @@ pub enum DialogKind {
 pub enum DialogOutcome {
     Cancelled,
     Selected(String),
+    ModelSelected(ModelSelection),
 }
 
 type SharedOutcome = Arc<Mutex<Option<DialogOutcome>>>;
@@ -161,6 +170,36 @@ pub fn theme_dialog() -> MountedDialog {
         move || set_outcome(&cancel_outcome, DialogOutcome::Cancelled),
     );
     mounted(DialogKind::Theme, selector, outcome)
+}
+
+/// Mounts the same searchable, provider-tabbed selector used by the source
+/// `/model` command. The async config/runtime update is deliberately handled
+/// by the coordinator after this typed outcome is emitted.
+pub fn model_dialog(
+    models: IndexMap<String, ModelAlias>,
+    current_value: impl Into<String>,
+    selected_value: Option<String>,
+    current_thinking_effort: ThinkingEffort,
+    warning: Option<String>,
+) -> MountedDialog {
+    let current_value = current_value.into();
+    let outcome = Arc::new(Mutex::new(None));
+    let select_outcome = Arc::clone(&outcome);
+    let cancel_outcome = Arc::clone(&outcome);
+    let mut options = TabbedModelSelectorOptions::new(
+        models,
+        current_value,
+        current_thinking_effort,
+        move |selection| {
+            set_outcome(&select_outcome, DialogOutcome::ModelSelected(selection));
+        },
+        move || set_outcome(&cancel_outcome, DialogOutcome::Cancelled),
+    );
+    options.selected_value = selected_value;
+    options.warning = warning;
+    let mut selector = TabbedModelSelectorComponent::new(options);
+    selector.focused = true;
+    mounted(DialogKind::Model, selector, outcome)
 }
 
 pub fn migration_notice_dialog(command_name: &str, args: &str) -> MountedDialog {

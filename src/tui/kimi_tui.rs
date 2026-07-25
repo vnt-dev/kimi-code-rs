@@ -1,6 +1,7 @@
 use std::{any::Any, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
+use indexmap::IndexMap;
 use kimi_code_agent_core_v2::app::auth::{
     AuthOperationError, OAuthToolkitContract, OAuthToolkitService,
 };
@@ -11,17 +12,26 @@ use kimi_code_oauth::{
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
-    cli::sub::login_flow::LoginCancellation,
+    cli::sub::{
+        login_flow::LoginCancellation,
+        provider::{ModelDefinition, ProviderConfig, ProviderConfigPatch},
+        provider_config::ProviderConfigStore,
+    },
+    sdk::{
+        model_alias::{ModelAlias, ProviderType, effective_model_alias},
+        types::ThinkingEffort,
+    },
     tui::{
         agent_core::TuiAgentCore,
         components::{
             Component, ComponentRole,
+            dialogs::model_selector::{ModelSelection, model_display_name, segments_for},
             editor::{CustomEditor, EditorAction, InputMode},
             render::truncate_to_width,
         },
         controllers::{
             dialog_focus::{
-                DialogOutcome, MountedDialog, help_dialog, migration_notice_dialog,
+                DialogOutcome, MountedDialog, help_dialog, migration_notice_dialog, model_dialog,
                 permission_dialog, settings_dialog, theme_dialog,
             },
             slash_autocomplete::{SlashAutocompleteSurface, build_builtin_slash_autocomplete},
@@ -29,11 +39,13 @@ use crate::{
         },
         runtime::{TuiApp, TuiControl},
         theme::{ColorToken, current_theme},
+        utils::thinking_config::thinking_effort_to_config,
     },
 };
 
 const DEFAULT_PENDING_RESPONSE: &str =
     "Agent runtime is not connected yet. Your input was received.";
+const MODEL_SWITCH_CACHE_WARNING: &str = "Note: Switching models invalidates the existing prompt cache. Use /new to avoid extra token costs.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TranscriptLine {
@@ -79,6 +91,9 @@ pub struct KimiTui {
     slash_autocomplete: SlashAutocompleteSurface,
     active_dialog: Option<MountedDialog>,
     agent_core: Option<TuiAgentCore>,
+    model_config_store: Option<ProviderConfigStore>,
+    model: String,
+    thinking_effort: ThinkingEffort,
     active_login: Option<ActiveLogin>,
 }
 
@@ -111,6 +126,9 @@ impl KimiTui {
             slash_autocomplete,
             active_dialog: None,
             agent_core: None,
+            model_config_store: None,
+            model: String::new(),
+            thinking_effort: ThinkingEffort::from("off"),
             active_login: None,
         }
     }
@@ -121,6 +139,9 @@ impl KimiTui {
         agent_core: TuiAgentCore,
     ) -> Self {
         let mut tui = Self::new(version, startup_warning);
+        tui.model_config_store = Some(ProviderConfigStore::new(
+            agent_core.bootstrap_options().config_path.clone(),
+        ));
         tui.agent_core = Some(agent_core);
         tui
     }
@@ -219,7 +240,7 @@ impl KimiTui {
         self.editor.set_focused(true);
     }
 
-    fn handle_dialog_input(&mut self, data: &str) -> TuiControl {
+    async fn handle_dialog_input(&mut self, data: &str) -> TuiControl {
         let Some(dialog) = &mut self.active_dialog else {
             return TuiControl::Continue;
         };
@@ -241,8 +262,144 @@ impl KimiTui {
                 self.transcript.push(TranscriptLine::System(message));
                 self.status = Some("Selection acknowledged.".to_owned());
             }
+            DialogOutcome::ModelSelected(selection) => {
+                self.apply_model_selection(selection).await;
+            }
         }
         TuiControl::Continue
+    }
+
+    async fn show_model_picker(&mut self, requested_alias: &str) -> TuiControl {
+        let Some(store) = self.model_config_store.as_ref() else {
+            self.show_command_error(
+                "Model configuration is unavailable because agent-core-v2 did not start.",
+            );
+            return TuiControl::Continue;
+        };
+        let config = match store.get_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.show_command_error(&format!("Failed to load models: {error}"));
+                return TuiControl::Continue;
+            }
+        };
+        let models = match model_aliases_from_config(&config) {
+            Ok(models) => models,
+            Err(error) => {
+                self.show_command_error(&format!("Failed to load models: {error}"));
+                return TuiControl::Continue;
+            }
+        };
+        if models.is_empty() {
+            self.transcript.push(TranscriptLine::System(
+                "No models configured. Run /login to sign in to Kimi, or /provider to add another provider from a model catalog."
+                    .to_owned(),
+            ));
+            self.status = Some("No models configured".to_owned());
+            return TuiControl::Continue;
+        }
+        if !requested_alias.is_empty() && !models.contains_key(requested_alias) {
+            self.show_command_error(&format!("Unknown model alias: {requested_alias}"));
+            return TuiControl::Continue;
+        }
+
+        if self.model.is_empty() {
+            self.model = config
+                .default_model
+                .as_deref()
+                .filter(|alias| models.contains_key(*alias))
+                .unwrap_or_default()
+                .to_owned();
+            self.thinking_effort = configured_thinking_effort(&config, &self.model, &models);
+        }
+        let selected_value = if requested_alias.is_empty() {
+            (!self.model.is_empty()).then(|| self.model.clone())
+        } else {
+            Some(requested_alias.to_owned())
+        };
+        let warning = self
+            .transcript
+            .iter()
+            .any(|line| matches!(line, TranscriptLine::User(_) | TranscriptLine::Assistant(_)))
+            .then(|| MODEL_SWITCH_CACHE_WARNING.to_owned());
+        self.mount_dialog(model_dialog(
+            models,
+            self.model.clone(),
+            selected_value,
+            self.thinking_effort.clone(),
+            warning,
+        ));
+        TuiControl::Continue
+    }
+
+    async fn apply_model_selection(&mut self, selection: ModelSelection) {
+        let Some(store) = self.model_config_store.as_ref() else {
+            self.show_command_error("Model configuration is unavailable.");
+            return;
+        };
+        let config = match store.get_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.show_command_error(&format!("Failed to save model: {error}"));
+                return;
+            }
+        };
+        let models = match model_aliases_from_config(&config) {
+            Ok(models) => models,
+            Err(error) => {
+                self.show_command_error(&format!("Failed to save model: {error}"));
+                return;
+            }
+        };
+        let Some(model) = models.get(&selection.alias) else {
+            self.show_command_error(&format!("Unknown model alias: {}", selection.alias));
+            return;
+        };
+        let thinking =
+            thinking_effort_to_config(&selection.thinking, model.support_efforts.as_deref());
+        let mut thinking_value = serde_json::Map::from_iter([(
+            "enabled".to_owned(),
+            serde_json::Value::Bool(thinking.enabled),
+        )]);
+        if let Some(effort) = thinking.effort {
+            thinking_value.insert("effort".to_owned(), serde_json::Value::String(effort));
+        }
+        let previous_model = self.model.clone();
+        let previous_effort = self.thinking_effort.clone();
+        if let Err(error) = store
+            .set_config(&ProviderConfigPatch {
+                default_model: Some(selection.alias.clone()),
+                thinking: Some(serde_json::Value::Object(thinking_value)),
+                ..ProviderConfigPatch::default()
+            })
+            .await
+        {
+            self.show_command_error(&format!("Failed to save model: {error}"));
+            return;
+        }
+
+        self.model.clone_from(&selection.alias);
+        self.thinking_effort.clone_from(&selection.thinking);
+        let display_name = model_display_name(&selection.alias, Some(model));
+        self.status = Some(if previous_model != selection.alias {
+            format!(
+                "Switched to {display_name} with thinking {}.",
+                selection.thinking.as_str()
+            )
+        } else if previous_effort != selection.thinking {
+            format!("Thinking set to {}.", selection.thinking.as_str())
+        } else {
+            format!(
+                "Already using {display_name} with thinking {}.",
+                selection.thinking.as_str()
+            )
+        });
+    }
+
+    fn show_command_error(&mut self, message: &str) {
+        self.transcript
+            .push(TranscriptLine::System(format!("Error: {message}")));
+        self.status = Some(message.to_owned());
     }
 
     async fn submit(&mut self, text: String) -> TuiControl {
@@ -298,6 +455,9 @@ impl KimiTui {
             SlashCommandSurfaceAction::Pending { command_name, args } => {
                 if command_name == "login" {
                     return self.login();
+                }
+                if command_name == "model" {
+                    return self.show_model_picker(args.trim()).await;
                 }
                 // MIGRATION-TODO:
                 // Original: commands/dispatch.ts and KimiTUI route the full
@@ -438,6 +598,95 @@ impl KimiTui {
     }
 }
 
+fn model_aliases_from_config(
+    config: &ProviderConfig,
+) -> Result<IndexMap<String, ModelAlias>, String> {
+    config
+        .models
+        .iter()
+        .map(|(alias, definition)| {
+            let model = model_alias_from_definition(alias, definition)?;
+            let provider_type = config
+                .providers
+                .get(&model.provider)
+                .and_then(|provider| provider_type(&provider.provider_type));
+            Ok((alias.clone(), effective_model_alias(&model, provider_type)))
+        })
+        .collect()
+}
+
+fn model_alias_from_definition(
+    alias: &str,
+    definition: &ModelDefinition,
+) -> Result<ModelAlias, String> {
+    let value = serde_json::to_value(definition)
+        .map_err(|error| format!("invalid model alias {alias:?}: {error}"))?;
+    serde_json::from_value(value).map_err(|error| format!("invalid model alias {alias:?}: {error}"))
+}
+
+fn provider_type(value: &str) -> Option<ProviderType> {
+    match value {
+        "anthropic" => Some(ProviderType::Anthropic),
+        "openai" => Some(ProviderType::Openai),
+        "kimi" => Some(ProviderType::Kimi),
+        "google-genai" => Some(ProviderType::GoogleGenai),
+        "openai_responses" => Some(ProviderType::OpenaiResponses),
+        "vertexai" => Some(ProviderType::Vertexai),
+        _ => None,
+    }
+}
+
+fn configured_thinking_effort(
+    config: &ProviderConfig,
+    alias: &str,
+    models: &IndexMap<String, ModelAlias>,
+) -> ThinkingEffort {
+    let thinking = config
+        .thinking
+        .as_ref()
+        .and_then(serde_json::Value::as_object);
+    if thinking
+        .and_then(|thinking| thinking.get("enabled"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
+    {
+        return ThinkingEffort::from("off");
+    }
+    if let Some(effort) = thinking
+        .and_then(|thinking| thinking.get("effort"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return ThinkingEffort::new(effort);
+    }
+    let Some(model) = models.get(alias) else {
+        return ThinkingEffort::from("off");
+    };
+    if let Some(efforts) = model
+        .support_efforts
+        .as_ref()
+        .filter(|efforts| !efforts.is_empty())
+    {
+        return ThinkingEffort::new(
+            model
+                .default_effort
+                .as_ref()
+                .filter(|effort| efforts.contains(*effort))
+                .unwrap_or(&efforts[efforts.len() / 2]),
+        );
+    }
+    let segments = segments_for(model);
+    if segments.iter().any(|effort| effort == "on") {
+        ThinkingEffort::from("on")
+    } else {
+        ThinkingEffort::new(
+            segments
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "off".to_owned()),
+        )
+    }
+}
+
 struct TuiLoginAbortSignal(LoginCancellation);
 
 impl LoginAbortSignal for TuiLoginAbortSignal {
@@ -556,7 +805,7 @@ impl TuiApp for KimiTui {
             return TuiControl::Continue;
         }
         if self.active_dialog.is_some() {
-            return self.handle_dialog_input(data);
+            return self.handle_dialog_input(data).await;
         }
         let outcome = self.editor.handle_input_event(data);
         for action in outcome.actions {
@@ -579,8 +828,83 @@ impl TuiApp for KimiTui {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::BTreeMap,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use serde_json::{Map, Value};
+
     use super::*;
+    use crate::cli::sub::provider::ProviderDefinition;
     use crate::tui::components::render::visible_width;
+
+    fn temporary_model_config_path() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!("kimi-tui-model-{unique}"))
+            .join("config.toml")
+    }
+
+    fn configured_model(provider: &str, model: &str, display_name: &str) -> ModelDefinition {
+        ModelDefinition {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            additional_fields: Map::from_iter([
+                ("maxContextSize".to_owned(), Value::from(128_000)),
+                ("capabilities".to_owned(), serde_json::json!(["thinking"])),
+                (
+                    "supportEfforts".to_owned(),
+                    serde_json::json!(["low", "high"]),
+                ),
+                ("defaultEffort".to_owned(), Value::String("low".to_owned())),
+                (
+                    "displayName".to_owned(),
+                    Value::String(display_name.to_owned()),
+                ),
+            ]),
+        }
+    }
+
+    async fn tui_with_models() -> (KimiTui, ProviderConfigStore, PathBuf) {
+        let path = temporary_model_config_path();
+        let store = ProviderConfigStore::new(&path);
+        store
+            .set_config(&ProviderConfigPatch {
+                providers: Some(BTreeMap::from([(
+                    "test".to_owned(),
+                    ProviderDefinition {
+                        provider_type: "anthropic".to_owned(),
+                        base_url: Some("https://example.test".to_owned()),
+                        api_key: Some("test-key".to_owned()),
+                        oauth: None,
+                        source: None,
+                        additional_fields: Map::new(),
+                    },
+                )])),
+                models: Some(BTreeMap::from([
+                    (
+                        "test/first".to_owned(),
+                        configured_model("test", "first", "First"),
+                    ),
+                    (
+                        "test/second".to_owned(),
+                        configured_model("test", "second", "Second"),
+                    ),
+                ])),
+                default_model: Some("test/first".to_owned()),
+                thinking: Some(serde_json::json!({"enabled": true, "effort": "low"})),
+            })
+            .await
+            .expect("seed config");
+        let mut tui = KimiTui::new("0.1.0", None);
+        tui.model_config_store = Some(store.clone());
+        tui.handle_terminal_resize(120, 40);
+        (tui, store, path)
+    }
 
     #[tokio::test]
     async fn accepts_text_and_returns_a_visible_default_response() {
@@ -772,5 +1096,64 @@ mod tests {
         let restored = tui.render(100).join("\n");
         assert!(restored.contains(CURSOR_MARKER));
         assert_eq!(tui.editor_text(), "draft");
+    }
+
+    #[tokio::test]
+    async fn model_command_opens_requested_alias_and_persists_selection() {
+        let (mut tui, store, path) = tui_with_models().await;
+
+        assert_eq!(
+            tui.submit("/model test/second".to_owned()).await,
+            TuiControl::Continue
+        );
+        assert_eq!(
+            tui.active_dialog.as_ref().map(|dialog| dialog.kind),
+            Some(crate::tui::controllers::dialog_focus::DialogKind::Model)
+        );
+        let picker = tui.render(120).join("\n");
+        assert!(picker.contains("Select a model"));
+        assert!(picker.contains("Second"));
+
+        assert_eq!(tui.handle_terminal_input("\r").await, TuiControl::Continue);
+        assert!(tui.active_dialog.is_none());
+        assert_eq!(tui.model, "test/second");
+        assert_eq!(tui.thinking_effort.as_str(), "low");
+        assert!(
+            tui.render(120)
+                .join("\n")
+                .contains("Switched to Second with thinking low.")
+        );
+
+        let persisted = store.get_config().await.expect("persisted config");
+        assert_eq!(persisted.default_model.as_deref(), Some("test/second"));
+        assert_eq!(
+            persisted.thinking,
+            Some(serde_json::json!({"enabled": true, "effort": "low"}))
+        );
+        let _ = std::fs::remove_dir_all(path.parent().expect("config parent"));
+    }
+
+    #[tokio::test]
+    async fn model_command_reports_unknown_alias_and_empty_configuration() {
+        let (mut tui, _, path) = tui_with_models().await;
+        tui.submit("/model missing".to_owned()).await;
+        assert!(
+            tui.render(120)
+                .join("\n")
+                .contains("Unknown model alias: missing")
+        );
+
+        let empty_path = temporary_model_config_path();
+        let mut empty = KimiTui::new("0.1.0", None);
+        empty.model_config_store = Some(ProviderConfigStore::new(&empty_path));
+        empty.submit("/model".to_owned()).await;
+        assert!(
+            empty
+                .render(120)
+                .join("\n")
+                .contains("No models configured")
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().expect("config parent"));
     }
 }
