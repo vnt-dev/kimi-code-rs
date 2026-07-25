@@ -91,7 +91,7 @@ async fn forward<R>(
 ) where
     R: AsyncRead + Send + Unpin + 'static,
 {
-    let result = async {
+    let result: io::Result<()> = async {
         let mut chunk = [0_u8; 8 * 1024];
         loop {
             let read = tokio::select! {
