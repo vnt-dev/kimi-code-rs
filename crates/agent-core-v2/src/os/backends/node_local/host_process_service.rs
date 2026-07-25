@@ -27,8 +27,8 @@ use crate::{
     },
     os::interface::host_process::{
         HostProcess, HostProcessError, HostProcessOptions, HostProcessService,
-        OS_PROCESS_KILL_FAILED, OS_PROCESS_SPAWN_FAILED, ProcessReader, ProcessShell,
-        ProcessSignal, ProcessWriter, SharedProcessReader, SharedProcessWriter,
+        OS_PROCESS_SPAWN_FAILED, ProcessReader, ProcessShell, ProcessSignal, ProcessWriter,
+        SharedProcessReader, SharedProcessWriter,
     },
 };
 
