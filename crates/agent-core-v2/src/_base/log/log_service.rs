@@ -61,6 +61,15 @@ impl BoundLogger {
         *self.level.write().unwrap() = level;
     }
 
+    /// Creates another concrete bound logger. `Logger::child()` erases this
+    /// type for callers, while scoped services need the concrete form to keep
+    /// exposing mutable level and flush behavior.
+    pub fn with_context(&self, context: LogContext) -> Self {
+        let mut bound = self.bound.clone();
+        bound.extend(context);
+        Self::with_parts(Arc::clone(&self.writer), Arc::clone(&self.level), bound)
+    }
+
     // Original: BoundLogger.emit(). Bound context overrides payload context.
     fn emit(&self, level: LogLevel, message: &str, payload: Option<LogPayload>) {
         if !level_enabled(level, self.level()) {
@@ -103,13 +112,7 @@ impl Logger for BoundLogger {
     }
 
     fn child(&self, context: LogContext) -> Arc<dyn Logger> {
-        let mut bound = self.bound.clone();
-        bound.extend(context);
-        Arc::new(Self::with_parts(
-            Arc::clone(&self.writer),
-            Arc::clone(&self.level),
-            bound,
-        ))
+        Arc::new(self.with_context(context))
     }
 }
 
