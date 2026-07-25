@@ -38,15 +38,16 @@ use kimi_code_agent_core_v2::{
         },
         llm_requester::{AgentLlmRequesterService, AgentLlmRequesterServiceContract},
         loop_::{
-            AgentLoopService, AgentLoopServiceContract, LoopRunResult, MessageStepRequest,
-            MessageStepRequestOptions, StepRequest, StepRequestAdmission, StepRequestOptions,
+            AgentLoopService, AgentLoopServiceContract, LoopRunResult, StepRequest,
             register_loop_control_config_section,
         },
         profile::{
             AgentProfileService, AgentProfileServiceContract, AgentProfileServiceHandle,
             BindAgentInput,
         },
+        prompt::PromptStepRequest,
         scope_context::{AgentScopeContextInput, make_agent_scope_context},
+        system_reminder::{AgentSystemReminderService, AgentSystemReminderServiceContract},
         tool_executor::{
             AgentToolExecutorService, AgentToolExecutorServiceContract,
             AgentToolExecutorServiceHandle,
@@ -115,6 +116,10 @@ use kimi_code_agent_core_v2::{
             WEB_FETCH_SERVICE_ID, WebFetchService, WebFetchServiceContract, WebFetchServiceHandle,
             register_fetch_url_tool,
         },
+        workspace_registry::{
+            FileWorkspacePersistence, WorkspacePersistenceContract, WorkspaceRegistryContract,
+            WorkspaceRegistryService,
+        },
     },
     kosong::{
         contract::message::{ContentPart, Message, Role},
@@ -171,6 +176,7 @@ use kimi_code_agent_core_v2::{
             SessionAgentProfileCatalogService,
         },
         session_context::{SessionContextInput, make_session_context},
+        session_metadata::{AgentMeta, AgentMetaType, SessionMetadataService},
         skill_catalog::{
             ExplicitFileSkillSource, ExtraFileSkillSource, PluginSkillSource,
             SessionSkillCatalogContract, SessionSkillCatalogHandle, SessionSkillCatalogService,
@@ -242,9 +248,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let storage: Arc<dyn FileSystemStorageService> = Arc::new(
         FileStorageService::with_default_modes(bootstrap_options.home_dir.clone()),
     );
+    let fs: Arc<dyn HostFileSystemService> = Arc::new(HostFileSystem);
+    let fs_handle = HostFileSystemServiceHandle(Arc::clone(&fs));
     let json_documents: Arc<dyn AtomicDocumentStoreService> =
         Arc::new(JsonAtomicDocumentStore::new(Arc::clone(&storage)));
-    let json_documents_handle = AtomicDocumentStoreHandle(json_documents);
+    let json_documents_handle = AtomicDocumentStoreHandle(Arc::clone(&json_documents));
     let toml_documents: Arc<dyn AtomicDocumentStoreService> =
         Arc::new(TomlAtomicDocumentStore::new(Arc::clone(&storage)));
     let toml_documents_handle = AtomicDocumentStoreHandle(toml_documents);
@@ -271,6 +279,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .await?;
     }
     let config_handle = ConfigServiceHandle(Arc::clone(&config));
+    let workspace_persistence: Arc<dyn WorkspacePersistenceContract> =
+        Arc::new(FileWorkspacePersistence::new(Arc::clone(&json_documents)));
+    let workspace_registry =
+        WorkspaceRegistryService::new(workspace_persistence, Arc::clone(&storage), Arc::clone(&fs));
+    let workspace_record = workspace_registry.create_or_touch(&cwd, None).await?;
+    let workspace_id = workspace_record.id;
+    let session_id = uuid::Uuid::new_v4().to_string();
     let events: Arc<dyn EventServiceContract> = Arc::new(EventService::new());
     let event_handle = EventServiceHandle(events);
 
@@ -304,22 +319,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     ));
     let catalog_handle = ModelCatalogHandle(catalog);
 
+    let session_scope = bootstrap_handle.session_scope(&workspace_id, &session_id);
+    let session_dir = bootstrap_handle.session_dir(&workspace_id, &session_id);
+    let agent_homedir = bootstrap_handle.agent_homedir(&workspace_id, &session_id, "main");
     let session_context = Arc::new(make_session_context(SessionContextInput {
-        session_id: uuid::Uuid::new_v4().to_string(),
-        workspace_id: "example".into(),
-        session_dir: bootstrap_options
-            .home_dir
-            .join("sessions/example")
-            .to_string_lossy()
-            .into_owned(),
-        session_scope: "sessions/example".into(),
+        session_id: session_id.clone(),
+        workspace_id: workspace_id.clone(),
+        session_dir: session_dir.to_string_lossy().into_owned(),
+        session_scope,
         cwd: cwd.clone(),
         meta_scope: None,
     }));
     let agent_scope = make_agent_scope_context(AgentScopeContextInput {
         agent_id: "main".into(),
-        agent_scope: session_context.scope(Some("agents/main")),
+        agent_scope: bootstrap_handle.agent_scope(&workspace_id, &session_id, "main"),
     });
+    let session_metadata =
+        SessionMetadataService::new(&session_context, json_documents_handle.clone());
     let blob_store = BlobStoreHandle(Arc::new(BlobStoreService::new(Arc::clone(&storage))));
     let agent_blobs = Arc::new(AgentBlobService::new(blob_store, &agent_scope));
 
@@ -328,7 +344,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let event_bus_handle = EventBusHandle(Arc::clone(&event_bus_contract));
     let publisher: Arc<dyn DomainEventPublisher> = event_bus.clone();
     let wire = Arc::new(WireService::new(
-        "examples/agent",
+        agent_scope.scope(None),
         AppendLogStoreHandle(Arc::new(AppendLogStore::new(Arc::clone(&storage)))),
         agent_blobs,
         publisher,
@@ -342,8 +358,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let workspace: Arc<dyn SessionWorkspaceContextContract> =
         Arc::new(SessionWorkspaceContextService::new(&session_context)?);
     let workspace_handle = SessionWorkspaceContextHandle(workspace);
-    let fs: Arc<dyn HostFileSystemService> = Arc::new(HostFileSystem);
-    let fs_handle = HostFileSystemServiceHandle(fs);
     let logger: Arc<dyn Logger> = log_handle.0.clone();
 
     let builtin_catalog = Arc::new(AgentProfileCatalogService::new());
@@ -472,15 +486,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         registry_handle.clone(),
         builtin_handle,
     ));
-    profile
-        .bind(BindAgentInput {
-            profile: "agent".into(),
-            model: Some(model_alias),
-            thinking: None,
-            strict_thinking: None,
-            cwd: Some(cwd),
-        })
-        .await?;
     let profile_handle = AgentProfileServiceHandle(Arc::clone(&profile));
 
     let truncation: Arc<dyn AgentToolResultTruncationServiceContract> =
@@ -578,6 +583,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         telemetry_context,
     );
 
+    wire.seal().await?;
+    session_metadata
+        .register_agent(
+            "main".into(),
+            AgentMeta {
+                homedir: Some(agent_homedir.to_string_lossy().into_owned()),
+                r#type: Some(AgentMetaType::Main),
+                ..AgentMeta::default()
+            },
+        )
+        .await?;
+    wire.restore().await?;
+    eprintln!("Session {}: {}", session_id, session_dir.to_string_lossy());
+    profile
+        .bind(BindAgentInput {
+            profile: "agent".into(),
+            model: Some(model_alias),
+            thinking: None,
+            strict_thinking: None,
+            cwd: Some(cwd),
+        })
+        .await?;
+
     let _assistant_output = event_bus.subscribe_type(
         "assistant.delta",
         Arc::new(|event: &DomainEvent| {
@@ -588,7 +616,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }),
     );
 
-    let request: Arc<dyn StepRequest> = Arc::new(MessageStepRequest::new(
+    let reminders: Arc<dyn AgentSystemReminderServiceContract> =
+        Arc::new(AgentSystemReminderService::new(Arc::clone(&context)));
+    let request: Arc<dyn StepRequest> = Arc::new(PromptStepRequest::new(
         ContextMessage {
             message: Message::new(
                 Role::User,
@@ -601,13 +631,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             is_error: None,
             note: None,
         },
-        MessageStepRequestOptions {
-            request: StepRequestOptions {
-                admission: Some(StepRequestAdmission::NewTurn),
-                ..StepRequestOptions::default()
-            },
-            kind: Some("prompt".into()),
-        },
+        Vec::new(),
+        reminders,
     ));
     let assignment = agent.enqueue(request, None)?.assigned.await?;
     let result = assignment.turn.result().await;
