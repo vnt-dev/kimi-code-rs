@@ -3,17 +3,53 @@
 //! Original: `session/approval/approvalService.ts`.
 
 use std::{
+    ops::Deref,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::session::interaction::{
-    InteractionKind, InteractionOrigin, InteractionRequest, SessionInteractionService,
+use async_trait::async_trait;
+
+use crate::{
+    _base::di::{
+        descriptors::SyncDescriptor,
+        instantiation::{ServiceIdentifier, ServicesAccessorExt},
+        scope::{InstantiationType, LifecycleScope, register_scoped_service},
+    },
+    session::interaction::{
+        InteractionKind, InteractionOrigin, InteractionRequest, SESSION_INTERACTION_SERVICE_ID,
+        SessionInteractionService, SessionInteractionServiceHandle,
+    },
 };
 
 use super::{ApprovalRequest, ApprovalResponse};
 
 pub type ApprovalServiceError = serde_json::Error;
+
+#[async_trait]
+pub trait SessionApprovalServiceContract: Send + Sync {
+    async fn request(
+        &self,
+        request: ApprovalRequest,
+    ) -> Result<ApprovalResponse, ApprovalServiceError>;
+    async fn enqueue(&self, request: ApprovalRequest) -> ApprovalRequest;
+    async fn decide(&self, id: &str, response: ApprovalResponse);
+    async fn list_pending(&self) -> Vec<ApprovalRequest>;
+}
+
+#[derive(Clone)]
+pub struct SessionApprovalServiceHandle(pub Arc<dyn SessionApprovalServiceContract>);
+
+impl Deref for SessionApprovalServiceHandle {
+    type Target = dyn SessionApprovalServiceContract;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const SESSION_APPROVAL_SERVICE_ID: ServiceIdentifier<SessionApprovalServiceHandle> =
+    ServiceIdentifier::new("sessionApprovalService");
 
 pub struct SessionApprovalService {
     interaction: Arc<SessionInteractionService>,
@@ -71,6 +107,44 @@ impl SessionApprovalService {
     pub fn interaction(&self) -> &Arc<SessionInteractionService> {
         &self.interaction
     }
+}
+
+#[async_trait]
+impl SessionApprovalServiceContract for SessionApprovalService {
+    async fn request(
+        &self,
+        request: ApprovalRequest,
+    ) -> Result<ApprovalResponse, ApprovalServiceError> {
+        SessionApprovalService::request(self, request).await
+    }
+
+    async fn enqueue(&self, request: ApprovalRequest) -> ApprovalRequest {
+        SessionApprovalService::enqueue(self, request).await
+    }
+
+    async fn decide(&self, id: &str, response: ApprovalResponse) {
+        SessionApprovalService::decide(self, id, response).await;
+    }
+
+    async fn list_pending(&self) -> Vec<ApprovalRequest> {
+        SessionApprovalService::list_pending(self).await
+    }
+}
+
+pub fn register_session_approval_service() {
+    register_scoped_service(
+        LifecycleScope::Session,
+        SESSION_APPROVAL_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let interaction: SessionInteractionServiceHandle =
+                (*accessor.get(SESSION_INTERACTION_SERVICE_ID)?).clone();
+            let service: Arc<dyn SessionApprovalServiceContract> =
+                Arc::new(SessionApprovalService::new(interaction.0));
+            Ok(SessionApprovalServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "approval",
+    );
 }
 
 fn interaction_request(id: String, request: ApprovalRequest) -> InteractionRequest {

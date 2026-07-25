@@ -42,12 +42,24 @@ use kimi_code_agent_core_v2::{
             AgentLoopService, AgentLoopServiceContract, AgentLoopServiceHandle, LoopRunResult,
             StepRequest, register_loop_control_config_section,
         },
+        permission_gate::{AgentPermissionGate, AgentPermissionGateContract},
+        permission_mode::{AgentPermissionModeService, AgentPermissionModeServiceContract},
+        permission_policy::{
+            AgentPermissionPolicyService, AgentPermissionPolicyServiceContract,
+            AgentPermissionPolicyServiceHandle,
+        },
+        permission_rules::{
+            AgentPermissionRulesService, AgentPermissionRulesServiceContract,
+            register_permission_config_section,
+        },
+        plan::{AgentPlanService, AgentPlanServiceContract},
         profile::{
             AgentProfileService, AgentProfileServiceContract, AgentProfileServiceHandle,
             BindAgentInput,
         },
         prompt::PromptStepRequest,
         scope_context::{AgentScopeContextInput, make_agent_scope_context},
+        swarm::{AgentSwarmService, AgentSwarmServiceContract},
         system_reminder::{AgentSystemReminderService, AgentSystemReminderServiceContract},
         task::{
             AGENT_TASK_SERVICE_ID, AgentTaskService, AgentTaskServiceContract,
@@ -183,6 +195,11 @@ use kimi_code_agent_core_v2::{
             SessionAgentProfileCatalogContract, SessionAgentProfileCatalogHandle,
             SessionAgentProfileCatalogService,
         },
+        approval::{
+            ApprovalDecision, ApprovalRequest, ApprovalResponse, ApprovalScope,
+            SessionApprovalService, SessionApprovalServiceContract, SessionApprovalServiceHandle,
+        },
+        interaction::SessionInteractionService,
         process::{
             SESSION_PROCESS_RUNNER_SERVICE_ID, SessionProcessRunner, SessionProcessRunnerContract,
             SessionProcessRunnerHandle,
@@ -488,10 +505,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         catalog_handle.clone(),
         protocol_handle,
         host_env_handle.clone(),
-        fs_handle,
+        fs_handle.clone(),
         Arc::clone(&session_context),
         bootstrap_handle.clone(),
-        workspace_handle,
+        workspace_handle.clone(),
         session_catalog_handle,
         skills_handle,
         session_policy_handle.clone(),
@@ -578,11 +595,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Arc::clone(&context),
         requester,
         Arc::clone(&event_bus_contract),
-        tools,
+        Arc::clone(&tools),
         Arc::clone(&config),
         wire_handle.clone(),
-        telemetry,
-        telemetry_context,
+        Arc::clone(&telemetry),
+        Arc::clone(&telemetry_context),
     );
     let agent_contract: Arc<dyn AgentLoopServiceContract> = agent.clone();
     let reminders: Arc<dyn AgentSystemReminderServiceContract> =
@@ -595,6 +612,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         wire_handle.clone(),
     )?;
     let injector_contract: Arc<dyn AgentContextInjectorServiceContract> = injector.clone();
+    let interaction = Arc::new(SessionInteractionService::new());
+    let approval: Arc<dyn SessionApprovalServiceContract> =
+        Arc::new(SessionApprovalService::new(interaction));
+    let approval_handle = SessionApprovalServiceHandle(Arc::clone(&approval));
+    let permission_mode: Arc<dyn AgentPermissionModeServiceContract> = Arc::new(
+        AgentPermissionModeService::new(Arc::clone(&wire), injector_contract.as_ref()),
+    );
+    let permission_rules: Arc<dyn AgentPermissionRulesServiceContract> =
+        Arc::new(AgentPermissionRulesService::new(Arc::clone(&wire)));
+    let plan: Arc<dyn AgentPlanServiceContract> = AgentPlanService::new(
+        Arc::clone(&context),
+        fs_handle.0.clone(),
+        Arc::clone(&injector_contract),
+        Arc::clone(&telemetry_context),
+        Arc::clone(&wire),
+        (*session_context).clone(),
+        agent_scope.clone(),
+    )?;
+    let swarm: Arc<dyn AgentSwarmServiceContract> = AgentSwarmService::new(
+        Arc::clone(&wire),
+        Arc::clone(&reminders),
+        Arc::clone(&context),
+        Arc::clone(&event_bus_contract),
+    );
+    let permission_policy: Arc<dyn AgentPermissionPolicyServiceContract> =
+        Arc::new(AgentPermissionPolicyService::from_dependencies(
+            Arc::clone(&permission_mode),
+            Arc::clone(&permission_rules),
+            plan,
+            swarm,
+            Arc::clone(&telemetry),
+            host_env_handle.0.clone(),
+            workspace_handle.0.clone(),
+        ));
+    let permission_gate: Arc<dyn AgentPermissionGateContract> = AgentPermissionGate::new(
+        agent_scope.clone(),
+        permission_mode,
+        permission_rules,
+        AgentPermissionPolicyServiceHandle(permission_policy),
+        (*session_context).clone(),
+        Some(approval_handle.clone()),
+        TelemetryServiceHandle(Arc::clone(&telemetry)),
+        event_bus_handle.clone(),
+        AgentToolExecutorServiceHandle(Arc::clone(&tools)),
+    )?;
     let task_service: Arc<dyn AgentTaskServiceContract> =
         Arc::new(AgentTaskService::from_dependencies(
             telemetry_handle,
@@ -678,6 +740,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }),
     );
+    let _approval_prompt = event_bus.subscribe_type(
+        "permission.approval.requested",
+        Arc::new(move |event: &DomainEvent| {
+            let request =
+                serde_json::from_value::<ApprovalRequest>(Value::Object(event.fields.clone()));
+            let Ok(request) = request else {
+                return;
+            };
+            let approval = approval_handle.clone();
+            tokio::spawn(async move {
+                let request_id = request
+                    .id
+                    .clone()
+                    .or_else(|| request.tool_call_id.clone())
+                    .unwrap_or_else(|| request.tool_name.clone());
+                let response = tokio::task::spawn_blocking(move || prompt_for_approval(&request))
+                    .await
+                    .unwrap_or(ApprovalResponse {
+                        decision: ApprovalDecision::Cancelled,
+                        scope: None,
+                        feedback: Some("Approval prompt was interrupted.".into()),
+                        selected_label: None,
+                    });
+                approval.decide(&request_id, response).await;
+            });
+        }),
+    );
 
     let request: Arc<dyn StepRequest> = Arc::new(PromptStepRequest::new(
         ContextMessage {
@@ -712,6 +801,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Disposable::dispose(&builtin_tools)?;
     Disposable::dispose(&tool_services)?;
     Disposable::dispose(task_service.as_ref())?;
+    Disposable::dispose(permission_gate.as_ref())?;
     Disposable::dispose(injector.as_ref())?;
     Disposable::dispose(session_catalog.as_ref())?;
     Disposable::dispose(skills.as_ref())?;
@@ -763,7 +853,47 @@ fn ensure_config_sections_registered() {
         register_agent_file_catalog_config_sections();
         register_skill_catalog_config_sections();
         register_task_config_sections();
+        register_permission_config_section();
     });
+}
+
+fn prompt_for_approval(request: &ApprovalRequest) -> ApprovalResponse {
+    eprintln!();
+    eprintln!("工具请求确认：{}", request.action);
+    eprintln!("工具：{}", request.tool_name);
+    eprint!("允许执行？[y] 仅本次 / [a] 本会话 / [n] 拒绝 / [c] 取消：");
+    let _ = io::stderr().flush();
+    let mut input = String::new();
+    let decision = match io::stdin().read_line(&mut input) {
+        Ok(_) => input.trim().to_ascii_lowercase(),
+        Err(_) => "c".into(),
+    };
+    match decision.as_str() {
+        "y" | "yes" => ApprovalResponse {
+            decision: ApprovalDecision::Approved,
+            scope: None,
+            feedback: None,
+            selected_label: Some("Approve once".into()),
+        },
+        "a" | "always" => ApprovalResponse {
+            decision: ApprovalDecision::Approved,
+            scope: Some(ApprovalScope::Session),
+            feedback: None,
+            selected_label: Some("Approve for this session".into()),
+        },
+        "c" | "cancel" => ApprovalResponse {
+            decision: ApprovalDecision::Cancelled,
+            scope: None,
+            feedback: None,
+            selected_label: Some("Cancel".into()),
+        },
+        _ => ApprovalResponse {
+            decision: ApprovalDecision::Rejected,
+            scope: None,
+            feedback: None,
+            selected_label: Some("Reject".into()),
+        },
+    }
 }
 
 fn ensure_builtin_tool_contributions_registered() {

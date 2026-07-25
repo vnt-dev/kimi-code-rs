@@ -11,17 +11,32 @@ use futures_util::future::BoxFuture;
 
 use crate::{
     _base::di::{
-        instantiation::ServiceIdentifier,
+        descriptors::SyncDescriptor,
+        instantiation::{ServiceIdentifier, ServicesAccessorExt},
         lifecycle::{DisposableHandle, to_disposable},
+        scope::{InstantiationType, LifecycleScope, register_scoped_service},
     },
     agent::{
-        permission_mode::AgentPermissionModeServiceContract,
-        permission_rules::AgentPermissionRulesServiceContract, plan::AgentPlanServiceContract,
-        swarm::AgentSwarmServiceContract, tool_executor::ResolvedToolExecutionHookContext,
+        permission_mode::{
+            AGENT_PERMISSION_MODE_SERVICE_ID, AgentPermissionModeServiceContract,
+            AgentPermissionModeServiceHandle,
+        },
+        permission_rules::{
+            AGENT_PERMISSION_RULES_SERVICE_ID, AgentPermissionRulesServiceContract,
+            AgentPermissionRulesServiceHandle,
+        },
+        plan::{AGENT_PLAN_SERVICE_ID, AgentPlanServiceContract, AgentPlanServiceHandle},
+        swarm::{AGENT_SWARM_SERVICE_ID, AgentSwarmServiceContract, AgentSwarmServiceHandle},
+        tool_executor::ResolvedToolExecutionHookContext,
     },
-    app::telemetry::TelemetryServiceContract,
-    os::interface::host_environment::HostEnvironment,
-    session::workspace_context::SessionWorkspaceContextContract,
+    app::telemetry::{TELEMETRY_SERVICE_ID, TelemetryServiceContract, TelemetryServiceHandle},
+    os::interface::host_environment::{
+        HOST_ENVIRONMENT_SERVICE_ID, HostEnvironment, HostEnvironmentHandle,
+    },
+    session::workspace_context::{
+        SESSION_WORKSPACE_CONTEXT_ID, SessionWorkspaceContextContract,
+        SessionWorkspaceContextHandle,
+    },
 };
 
 use super::{
@@ -165,4 +180,37 @@ impl AgentPermissionPolicyServiceContract for AgentPermissionPolicyService {
                 .retain(|candidate| !Arc::ptr_eq(candidate, &policy))
         })
     }
+}
+
+pub fn register_agent_permission_policy_service() {
+    register_scoped_service(
+        LifecycleScope::Agent,
+        AGENT_PERMISSION_POLICY_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let mode: AgentPermissionModeServiceHandle =
+                (*accessor.get(AGENT_PERMISSION_MODE_SERVICE_ID)?).clone();
+            let rules: AgentPermissionRulesServiceHandle =
+                (*accessor.get(AGENT_PERMISSION_RULES_SERVICE_ID)?).clone();
+            let plan: AgentPlanServiceHandle = (*accessor.get(AGENT_PLAN_SERVICE_ID)?).clone();
+            let swarm: AgentSwarmServiceHandle = (*accessor.get(AGENT_SWARM_SERVICE_ID)?).clone();
+            let telemetry: TelemetryServiceHandle = (*accessor.get(TELEMETRY_SERVICE_ID)?).clone();
+            let environment: HostEnvironmentHandle =
+                (*accessor.get(HOST_ENVIRONMENT_SERVICE_ID)?).clone();
+            let workspace: SessionWorkspaceContextHandle =
+                (*accessor.get(SESSION_WORKSPACE_CONTEXT_ID)?).clone();
+            let service: Arc<dyn AgentPermissionPolicyServiceContract> =
+                Arc::new(AgentPermissionPolicyService::from_dependencies(
+                    mode.0,
+                    rules.0,
+                    plan.0,
+                    swarm.0,
+                    telemetry.0,
+                    environment.0,
+                    workspace.0,
+                ));
+            Ok(AgentPermissionPolicyServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "permissionPolicy",
+    );
 }

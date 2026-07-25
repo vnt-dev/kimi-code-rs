@@ -10,7 +10,14 @@ use std::{
 
 use tokio::sync::{Mutex, oneshot};
 
-use crate::_base::event::{Emitter, Event};
+use crate::_base::{
+    di::{
+        descriptors::SyncDescriptor,
+        instantiation::ServiceIdentifier,
+        scope::{InstantiationType, LifecycleScope, register_scoped_service},
+    },
+    event::{Emitter, Event},
+};
 
 use super::{
     Interaction, InteractionKind, InteractionPendingChangedEvent, InteractionRequest,
@@ -39,6 +46,20 @@ pub struct SessionInteractionService {
     changed: Arc<Emitter<InteractionPendingChangedEvent>>,
     resolved: Arc<Emitter<InteractionResolution>>,
 }
+
+#[derive(Clone)]
+pub struct SessionInteractionServiceHandle(pub Arc<SessionInteractionService>);
+
+impl std::ops::Deref for SessionInteractionServiceHandle {
+    type Target = SessionInteractionService;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const SESSION_INTERACTION_SERVICE_ID: ServiceIdentifier<SessionInteractionServiceHandle> =
+    ServiceIdentifier::new("sessionInteractionService");
 
 impl Default for SessionInteractionService {
     fn default() -> Self {
@@ -197,6 +218,20 @@ impl SessionInteractionService {
         self.changed.fire(&event);
         interaction
     }
+}
+
+pub fn register_session_interaction_service() {
+    register_scoped_service(
+        LifecycleScope::Session,
+        SESSION_INTERACTION_SERVICE_ID,
+        SyncDescriptor::new(|_| {
+            Ok(SessionInteractionServiceHandle(Arc::new(
+                SessionInteractionService::new(),
+            )))
+        }),
+        InstantiationType::Eager,
+        "interaction",
+    );
 }
 
 fn pending_changed(state: &State) -> InteractionPendingChangedEvent {
