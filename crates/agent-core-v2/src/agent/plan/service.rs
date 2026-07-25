@@ -200,8 +200,9 @@ impl AgentPlanService {
     // Original: AgentPlanService.currentPlanFilePath().
     fn current_plan_file_path(&self) -> PlanFilePath {
         let state = self.wire.get_model(&PLAN_MODEL);
-        (state.active)
-            .then(|| state.id)
+        state
+            .active
+            .then_some(state.id)
             .flatten()
             .map(|id| self.plan_file_path_for(&id))
     }
@@ -515,13 +516,15 @@ mod tests {
         }
     }
 
-    fn setup() -> (
+    type PlanServiceFixture = (
         std::path::PathBuf,
         Arc<dyn HostFileSystemService>,
         Arc<AgentTelemetryContextService>,
         Arc<WireService>,
         Arc<AgentPlanService>,
-    ) {
+    );
+
+    fn setup() -> PlanServiceFixture {
         let root = std::env::temp_dir().join(format!("kimi-plan-service-test-{}", Uuid::new_v4()));
         let log = Arc::new(MemoryLog::default());
         let wire = Arc::new(WireService::new(
@@ -582,7 +585,7 @@ mod tests {
         assert_eq!(service.status().await.unwrap().unwrap().content, "");
 
         service.exit(Some("ignored".into())).unwrap();
-        assert_eq!(wire.get_model(&PLAN_MODEL).active, false);
+        assert!(!wire.get_model(&PLAN_MODEL).active);
         assert_eq!(telemetry.get().mode, AgentTelemetryMode::Agent);
         assert_eq!(service.status().await.unwrap(), None);
         tokio::fs::remove_dir_all(root).await.unwrap();
