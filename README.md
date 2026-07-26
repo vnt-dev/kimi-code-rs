@@ -5,6 +5,11 @@ React, and TypeScript. The desktop client uses `kimi-code-agent-core-v2` for
 authentication, model discovery, agent execution, tool interactions, and
 conversation context management.
 
+This project is a Rust implementation of the original
+[kimi-code](https://github.com/MoonshotAI/kimi-code) repository, corresponding to
+commit
+[e45832398d0d9cad98dbad1cbf1e5b103a20aace](https://github.com/MoonshotAI/kimi-code/commit/e45832398d0d9cad98dbad1cbf1e5b103a20aace).
+
 ## Features
 
 - Organize local workspaces as projects with multiple conversations.
