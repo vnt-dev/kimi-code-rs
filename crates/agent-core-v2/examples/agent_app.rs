@@ -163,7 +163,7 @@ async fn run_app(
     let _assistant_output = event_bus.subscribe_type(
         "assistant.delta",
         Arc::new(|event| {
-            if let Some(text) = event.fields.get("text").and_then(Value::as_str) {
+            if let Some(text) = event.fields.get("delta").and_then(Value::as_str) {
                 print!("{text}");
                 let _ = io::stdout().flush();
             }
