@@ -40,8 +40,7 @@ use kimi_code_agent_core_v2::{
         llm_requester::{AgentLlmRequesterService, AgentLlmRequesterServiceContract},
         loop_::{
             AgentLoopContinuationService, AgentLoopService, AgentLoopServiceContract,
-            AgentLoopServiceHandle, LoopRunResult, StepRequest,
-            register_loop_control_config_section,
+            AgentLoopServiceHandle, LoopRunResult, register_loop_control_config_section,
         },
         permission_gate::{AgentPermissionGate, AgentPermissionGateContract},
         permission_mode::{AgentPermissionModeService, AgentPermissionModeServiceContract},
@@ -58,10 +57,15 @@ use kimi_code_agent_core_v2::{
             AgentProfileService, AgentProfileServiceContract, AgentProfileServiceHandle,
             BindAgentInput,
         },
-        prompt::PromptStepRequest,
+        prompt::{
+            AgentPromptService, AgentPromptServiceContract, PromptCompletionState, PromptInput,
+        },
         scope_context::{AgentScopeContextInput, make_agent_scope_context},
         swarm::{AgentSwarmService, AgentSwarmServiceContract},
-        system_reminder::{AgentSystemReminderService, AgentSystemReminderServiceContract},
+        system_reminder::{
+            AgentSystemReminderService, AgentSystemReminderServiceContract,
+            AgentSystemReminderServiceHandle,
+        },
         task::{
             AGENT_TASK_SERVICE_ID, AgentTaskService, AgentTaskServiceContract,
             AgentTaskServiceHandle, register_task_config_sections,
@@ -233,7 +237,13 @@ use serde_json::{Map, Value};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (prompt, requested_cwd) = read_arguments()?;
+    let (argument_prompt, requested_cwd) = read_arguments()?;
+    let Some(initial_prompt) = (match argument_prompt {
+        Some(prompt) => Some(prompt),
+        None => read_prompt()?,
+    }) else {
+        return Ok(());
+    };
     let bootstrap_options = resolve_bootstrap_options(BootstrapInput {
         cwd: requested_cwd,
         ..BootstrapInput::default()
@@ -671,7 +681,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             wire_handle,
             event_bus_handle,
             injector_contract.as_ref(),
-            agent_contract,
+            Arc::clone(&agent_contract),
         )?);
     let task_handle = AgentTaskServiceHandle(Arc::clone(&task_service));
     let host_process: Arc<dyn HostProcessService> = Arc::new(LocalHostProcessService::default());
@@ -707,7 +717,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         kimi_code_agent_core_v2::app::config::CONFIG_SERVICE_ID,
         Arc::new(config_handle.clone()),
     );
-    let tool_services = InstantiationService::new(tool_services);
+    let tool_services = Arc::new(InstantiationService::new(tool_services));
 
     wire.seal().await?;
     session_metadata
@@ -731,7 +741,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             cwd: Some(cwd),
         })
         .await?;
-    let builtin_tools = AgentBuiltinToolsRegistrar::new(&tool_services, &registry_handle)?;
+    let builtin_tools = AgentBuiltinToolsRegistrar::new(tool_services.as_ref(), &registry_handle)?;
+    let prompt_service = AgentPromptService::new(
+        AgentContextMemoryServiceHandle(Arc::clone(&context)),
+        AgentSystemReminderServiceHandle(Arc::clone(&reminders)),
+        Arc::clone(&tool_services),
+        AgentLoopServiceHandle(Arc::clone(&agent_contract)),
+        AgentToolExecutorServiceHandle(Arc::clone(&tools)),
+        WireServiceHandle(Arc::clone(&wire)),
+        EventBusHandle(Arc::clone(&event_bus_contract)),
+    );
 
     let _assistant_output = event_bus.subscribe_type(
         "assistant.delta",
@@ -770,39 +789,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }),
     );
 
-    let request: Arc<dyn StepRequest> = Arc::new(PromptStepRequest::new(
-        ContextMessage {
-            message: Message::new(
-                Role::User,
-                vec![ContentPart::Text { text: prompt }],
-                Vec::new(),
-            ),
-            id: Some(uuid::Uuid::new_v4().to_string()),
-            provider_message_id: None,
-            origin: Some(PromptOrigin::User),
-            is_error: None,
-            note: None,
-        },
-        Vec::new(),
-        reminders,
-    ));
-    let assignment = agent.enqueue(request, None)?.assigned.await?;
-    let result = assignment.turn.result().await;
-    println!();
+    let mut next_prompt = Some(initial_prompt);
+    loop {
+        let prompt = match next_prompt.take() {
+            Some(prompt) => prompt,
+            None => match read_prompt()? {
+                Some(prompt) => prompt,
+                None => break,
+            },
+        };
+        let handle = prompt_service
+            .enqueue(PromptInput {
+                id: None,
+                message: ContextMessage {
+                    message: Message::new(
+                        Role::User,
+                        vec![ContentPart::Text { text: prompt }],
+                        Vec::new(),
+                    ),
+                    id: None,
+                    provider_message_id: None,
+                    origin: Some(PromptOrigin::User),
+                    is_error: None,
+                    note: None,
+                },
+            })
+            .await?;
+        let completion = handle.completion().await;
+        println!();
 
-    match result {
-        LoopRunResult::Completed {
-            steps, truncated, ..
-        } => eprintln!("Agent 完成：steps={steps}, truncated={truncated}"),
-        LoopRunResult::Failed { error, .. } => return Err(error.into()),
-        LoopRunResult::Cancelled { reason, .. } => return Err(reason.into()),
+        match completion.result {
+            Some(LoopRunResult::Completed {
+                steps, truncated, ..
+            }) => eprintln!("Agent 完成：steps={steps}, truncated={truncated}"),
+            Some(LoopRunResult::Failed { error, .. }) => return Err(error.into()),
+            Some(LoopRunResult::Cancelled { reason, .. }) => return Err(reason.into()),
+            None if completion.state == PromptCompletionState::Blocked => {
+                eprintln!("提示词已被提交钩子阻止")
+            }
+            None => eprintln!("提示词未启动：state={:?}", completion.state),
+        }
+        wire.flush().await?;
     }
 
     wire.flush().await?;
+    Disposable::dispose(&prompt_service)?;
     Disposable::dispose(&loop_continuation)?;
     Disposable::dispose(agent.as_ref())?;
     Disposable::dispose(&builtin_tools)?;
-    Disposable::dispose(&tool_services)?;
+    Disposable::dispose(tool_services.as_ref())?;
     Disposable::dispose(task_service.as_ref())?;
     Disposable::dispose(permission_gate.as_ref())?;
     Disposable::dispose(injector.as_ref())?;
@@ -813,7 +848,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-fn read_arguments() -> Result<(String, Option<PathBuf>), io::Error> {
+fn read_arguments() -> Result<(Option<String>, Option<PathBuf>), io::Error> {
     let mut cwd = None;
     let mut prompt = Vec::new();
     let mut arguments = std::env::args().skip(1);
@@ -824,14 +859,22 @@ fn read_arguments() -> Result<(String, Option<PathBuf>), io::Error> {
             prompt.push(argument);
         }
     }
-    if !prompt.is_empty() {
-        return Ok((prompt.join(" "), cwd));
+    Ok(((!prompt.is_empty()).then(|| prompt.join(" ")), cwd))
+}
+
+fn read_prompt() -> Result<Option<String>, io::Error> {
+    loop {
+        print!("请输入提示词（Ctrl+Z/Ctrl+D 结束）：");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input)? == 0 {
+            return Ok(None);
+        }
+        let prompt = input.trim();
+        if !prompt.is_empty() {
+            return Ok(Some(prompt.to_owned()));
+        }
     }
-    print!("请输入提示词：");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok((input.trim().to_owned(), cwd))
 }
 
 fn ensure_protocols_registered() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
