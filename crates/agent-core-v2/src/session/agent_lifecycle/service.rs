@@ -443,7 +443,7 @@ impl AgentLifecycleService {
             context_injector::AGENT_CONTEXT_INJECTOR_SERVICE_ID,
             loop_::AGENT_LOOP_CONTINUATION_SERVICE_ID,
             mcp::AGENT_MCP_SERVICE_ID,
-            media::IMAGE_CONFIG_BRIDGE_ID,
+            media::{AGENT_MEDIA_TOOLS_REGISTRAR_ID, IMAGE_CONFIG_BRIDGE_ID},
             plan::AGENT_PLAN_SERVICE_ID,
             step_retry::AGENT_STEP_RETRY_SERVICE_ID,
             tool_dedupe::AGENT_TOOL_DEDUPE_SERVICE_ID,
@@ -455,6 +455,7 @@ impl AgentLifecycleService {
         };
 
         handle.get(AGENT_BUILTIN_TOOLS_REGISTRAR_ID)?;
+        handle.get(AGENT_MEDIA_TOOLS_REGISTRAR_ID)?;
         handle.get(IMAGE_CONFIG_BRIDGE_ID)?;
         handle.get(AGENT_TOOL_DEDUPE_SERVICE_ID)?;
         handle.get(AGENT_MCP_SERVICE_ID)?;
