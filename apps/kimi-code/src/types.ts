@@ -63,3 +63,34 @@ export interface ChatStreamEvent {
   kind: "text" | "thinking";
   content: string;
 }
+
+export interface CommandDisplay {
+  kind: "command";
+  command: string;
+  cwd?: string;
+  description?: string;
+  language?: string;
+}
+
+export interface GenericToolDisplay {
+  kind: string;
+  [key: string]: unknown;
+}
+
+export interface ApprovalPayload {
+  toolName: string;
+  action: string;
+  display: CommandDisplay | GenericToolDisplay;
+}
+
+export interface AgentInteraction {
+  id: string;
+  kind: "approval" | "question" | "user_tool";
+  payload: ApprovalPayload | Record<string, unknown>;
+  createdAt: number;
+}
+
+export interface AgentInteractionsEvent {
+  conversationId: string;
+  interactions: AgentInteraction[];
+}

@@ -1046,6 +1046,201 @@ select:focus-visible {
   z-index: 3;
 }
 
+.approval-card {
+  display: grid;
+  width: min(850px, 100%);
+  margin: 0 auto 10px;
+  padding: 14px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid rgba(231, 173, 82, 0.24);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 0 0, rgba(231, 173, 82, 0.08), transparent 34%),
+    #19181a;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.34);
+  animation: approval-in 180ms ease-out;
+}
+
+@keyframes approval-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+}
+
+.approval-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(231, 173, 82, 0.22);
+  border-radius: 10px;
+  color: #e6b76b;
+  background: rgba(231, 173, 82, 0.08);
+}
+
+.approval-content {
+  min-width: 0;
+}
+
+.approval-heading {
+  display: flex;
+  min-height: 36px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.approval-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.approval-heading span {
+  color: #9a7b4d;
+  font-size: 8.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.approval-heading strong {
+  overflow: hidden;
+  color: #d9d6d0;
+  font-size: 11.5px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-tool {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  color: #77747a !important;
+  background: rgba(255, 255, 255, 0.025);
+  font-family: "DM Mono", monospace;
+  font-weight: 450 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+
+.approval-command {
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 9px;
+  background: #111115;
+}
+
+.approval-command > div {
+  display: flex;
+  padding: 7px 10px;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: #65636a;
+  font-size: 8.5px;
+}
+
+.approval-command code {
+  display: block;
+  max-height: 122px;
+  padding: 10px;
+  overflow: auto;
+  color: #d8d4c9;
+  font-family: "DM Mono", monospace;
+  font-size: 10.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.approval-detail {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  color: #aaa6a0;
+  background: #121216;
+  font-size: 10px;
+}
+
+.approval-footer {
+  display: flex;
+  margin-top: 11px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.approval-footer p {
+  margin: 0;
+  color: #68656a;
+  font-size: 8.5px;
+}
+
+.approval-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.approval-actions button {
+  display: flex;
+  min-height: 29px;
+  padding: 0 10px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: #9b989e;
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.approval-actions button:hover:not(:disabled) {
+  color: #d4d1d5;
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.approval-actions .approval-reject:hover:not(:disabled) {
+  color: #dd9999;
+  border-color: rgba(206, 105, 105, 0.25);
+  background: rgba(206, 105, 105, 0.07);
+}
+
+.approval-actions .approval-once {
+  border-color: rgba(231, 173, 82, 0.25);
+  color: #17140e;
+  background: linear-gradient(145deg, #ecc27f, #c7964d);
+  font-weight: 600;
+}
+
+.approval-actions .approval-once:hover:not(:disabled) {
+  color: #110f0b;
+  border-color: rgba(255, 216, 151, 0.4);
+  background: linear-gradient(145deg, #f2cd91, #d3a45b);
+}
+
+.approval-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.approval-actions .spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 1px;
+}
+
 .composer {
   width: min(850px, 100%);
   margin: 0 auto;
@@ -1595,5 +1790,18 @@ select:focus-visible {
   .composer-dock {
     padding-right: 14px;
     padding-left: 14px;
+  }
+
+  .approval-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .approval-actions {
+    width: 100%;
+  }
+
+  .approval-actions button {
+    flex: 1;
   }
 }

@@ -34,6 +34,7 @@ import {
   PanelLeftOpen,
   Plus,
   RefreshCw,
+  ShieldAlert,
   Sparkles,
   SquarePen,
   TerminalSquare,
@@ -52,6 +53,9 @@ import {
   persistState,
 } from "./store";
 import type {
+  AgentInteraction,
+  AgentInteractionsEvent,
+  ApprovalPayload,
   AuthStatus,
   ChatMessage,
   ChatStreamEvent,
@@ -114,6 +118,10 @@ export default function App() {
   const [modelsBusy, setModelsBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [copiedMessage, setCopiedMessage] = useState<string>();
+  const [interactions, setInteractions] = useState<
+    Record<string, AgentInteraction[]>
+  >({});
+  const [resolvingInteraction, setResolvingInteraction] = useState<string>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -127,6 +135,11 @@ export default function App() {
   const isStreaming = activeConversation?.messages.some(
     (message) => message.status === "streaming",
   );
+  const activeApproval = activeConversation
+    ? interactions[activeConversation.id]?.find(
+        (interaction) => interaction.kind === "approval",
+      )
+    : undefined;
 
   const updateDesktop = (
     recipe: (current: DesktopState) => DesktopState,
@@ -178,6 +191,12 @@ export default function App() {
       setDeviceCode(event.payload);
       setLoginOpen(true);
     });
+    const unlistenBrowserError = listen<string>(
+      "auth-browser-open-failed",
+      (event) => {
+        showNotice(`未能自动打开浏览器：${event.payload}`);
+      },
+    );
     const unlistenStream = listen<ChatStreamEvent>("chat-stream", (event) => {
       const delta = event.payload;
       updateDesktop((current) => ({
@@ -215,9 +234,20 @@ export default function App() {
         })),
       }));
     });
+    const unlistenInteractions = listen<AgentInteractionsEvent>(
+      "agent-interactions",
+      (event) => {
+        setInteractions((current) => ({
+          ...current,
+          [event.payload.conversationId]: event.payload.interactions,
+        }));
+      },
+    );
     return () => {
       void unlistenDevice.then((unlisten) => unlisten());
+      void unlistenBrowserError.then((unlisten) => unlisten());
       void unlistenStream.then((unlisten) => unlisten());
+      void unlistenInteractions.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -511,6 +541,35 @@ export default function App() {
     window.setTimeout(() => setCopiedMessage(undefined), 1400);
   };
 
+  const resolveApproval = async (
+    interaction: AgentInteraction,
+    decision: "approved" | "rejected",
+    session = false,
+  ): Promise<void> => {
+    if (!activeConversation || resolvingInteraction) return;
+    setResolvingInteraction(interaction.id);
+    try {
+      await invoke("respond_interaction", {
+        conversationId: activeConversation.id,
+        interactionId: interaction.id,
+        response: {
+          decision,
+          ...(session ? { scope: "session" } : {}),
+          selectedLabel:
+            decision === "rejected"
+              ? "Reject"
+              : session
+                ? "Approve for this session"
+                : "Approve once",
+        },
+      });
+    } catch (error) {
+      showNotice(conciseError(error));
+    } finally {
+      setResolvingInteraction(undefined);
+    }
+  };
+
   return (
     <div className="app-shell">
       <aside className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
@@ -740,6 +799,21 @@ export default function App() {
             </div>
 
             <div className="composer-dock">
+              {activeApproval && (
+                <ApprovalCard
+                  interaction={activeApproval}
+                  busy={resolvingInteraction === activeApproval.id}
+                  onReject={() =>
+                    void resolveApproval(activeApproval, "rejected")
+                  }
+                  onApprove={() =>
+                    void resolveApproval(activeApproval, "approved")
+                  }
+                  onApproveSession={() =>
+                    void resolveApproval(activeApproval, "approved", true)
+                  }
+                />
+              )}
               <form className="composer" onSubmit={handleSubmit}>
                 <textarea
                   ref={textareaRef}
@@ -861,6 +935,75 @@ export default function App() {
         </div>
       )}
     </div>
+  );
+}
+
+function ApprovalCard({
+  interaction,
+  busy,
+  onReject,
+  onApprove,
+  onApproveSession,
+}: {
+  interaction: AgentInteraction;
+  busy: boolean;
+  onReject: () => void;
+  onApprove: () => void;
+  onApproveSession: () => void;
+}) {
+  const payload = interaction.payload as ApprovalPayload;
+  const display = payload.display;
+  const isCommand = display?.kind === "command" && "command" in display;
+  const command = isCommand ? String(display.command) : undefined;
+  const cwd = isCommand && display.cwd ? String(display.cwd) : undefined;
+  const detail =
+    !isCommand && display
+      ? ("path" in display && display.path) ||
+        ("summary" in display && display.summary) ||
+        payload.action
+      : undefined;
+
+  return (
+    <section className="approval-card" aria-live="polite">
+      <div className="approval-icon">
+        <ShieldAlert size={19} />
+      </div>
+      <div className="approval-content">
+        <div className="approval-heading">
+          <div>
+            <span>需要你的批准</span>
+            <strong>{payload.action || `${payload.toolName} 请求执行操作`}</strong>
+          </div>
+          <span className="approval-tool">{payload.toolName}</span>
+        </div>
+        {command ? (
+          <div className="approval-command">
+            <div>
+              <TerminalSquare size={13} />
+              <span>{cwd || "当前项目目录"}</span>
+            </div>
+            <code>{command}</code>
+          </div>
+        ) : (
+          <div className="approval-detail">{String(detail || "该操作需要确认")}</div>
+        )}
+        <div className="approval-footer">
+          <p>请确认命令及工作目录可信后再允许执行。</p>
+          <div className="approval-actions">
+            <button type="button" className="approval-reject" onClick={onReject} disabled={busy}>
+              拒绝
+            </button>
+            <button type="button" className="approval-session" onClick={onApproveSession} disabled={busy}>
+              本会话允许
+            </button>
+            <button type="button" className="approval-once" onClick={onApprove} disabled={busy}>
+              {busy ? <span className="spinner light" /> : <Check size={14} />}
+              允许一次
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 

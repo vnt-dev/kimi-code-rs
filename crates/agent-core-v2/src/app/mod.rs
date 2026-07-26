@@ -1,3 +1,4 @@
+pub mod agent_app_runtime;
 pub mod agent_file_catalog;
 pub mod agent_profile_catalog;
 pub mod auth;
