@@ -94,17 +94,27 @@ pub trait CreateGoalProvider: Send + Sync {
 }
 impl CreateGoalProvider for AgentGoalServiceHandle {
     fn get_goal(&self) -> GoalToolResult {
-        (**self).get_goal()
+        (**self)
+            .get_goal()
+            .expect("goal tools are only resolved for supported agents")
     }
     fn is_goal_tool_target(&self, turn_id: f64, goal_id: &str) -> bool {
-        (**self).is_goal_tool_target(turn_id, goal_id)
+        (**self)
+            .is_goal_tool_target(turn_id, goal_id)
+            .unwrap_or(false)
     }
     fn create_goal(
         &self,
         input: CreateGoalInput,
     ) -> BoxFuture<'static, Result<GoalSnapshot, String>> {
         let service = self.clone();
-        Box::pin(async move { service.0.create_goal(input, Some(GoalActor::Model)).await })
+        Box::pin(async move {
+            service
+                .0
+                .create_goal(input, Some(GoalActor::Model))
+                .await
+                .map_err(|error| error.to_string())
+        })
     }
 }
 pub trait CreateGoalPermissionProvider: Send + Sync {

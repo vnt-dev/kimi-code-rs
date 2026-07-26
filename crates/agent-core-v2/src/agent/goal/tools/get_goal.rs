@@ -42,7 +42,9 @@ pub trait GetGoalProvider: Send + Sync {
 
 impl GetGoalProvider for AgentGoalServiceHandle {
     fn get_goal(&self) -> GoalToolResult {
-        (**self).get_goal()
+        (**self)
+            .get_goal()
+            .expect("goal tools are only resolved for supported agents")
     }
 }
 

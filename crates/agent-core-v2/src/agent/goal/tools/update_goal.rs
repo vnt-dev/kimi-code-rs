@@ -98,10 +98,14 @@ pub trait UpdateGoalProvider: Send + Sync {
 
 impl UpdateGoalProvider for AgentGoalServiceHandle {
     fn get_goal(&self) -> GoalToolResult {
-        (**self).get_goal()
+        (**self)
+            .get_goal()
+            .expect("goal tools are only resolved for supported agents")
     }
     fn is_goal_tool_target(&self, turn_id: f64, goal_id: &str) -> bool {
-        (**self).is_goal_tool_target(turn_id, goal_id)
+        (**self)
+            .is_goal_tool_target(turn_id, goal_id)
+            .unwrap_or(false)
     }
     fn resume_goal(&self) -> BoxFuture<'static, Result<GoalSnapshot, String>> {
         let service = self.clone();
@@ -110,6 +114,7 @@ impl UpdateGoalProvider for AgentGoalServiceHandle {
                 .0
                 .resume_goal(Some(ResumeGoalInput::default()), Some(GoalActor::Model))
                 .await
+                .map_err(|error| error.to_string())
         })
     }
     fn mark_complete(&self) -> BoxFuture<'static, Result<Option<GoalSnapshot>, String>> {
@@ -119,6 +124,7 @@ impl UpdateGoalProvider for AgentGoalServiceHandle {
                 .0
                 .mark_complete(Some(GoalReasonInput::default()), Some(GoalActor::Model))
                 .await
+                .map_err(|error| error.to_string())
         })
     }
     fn mark_blocked(&self) -> BoxFuture<'static, Result<Option<GoalSnapshot>, String>> {
@@ -128,6 +134,7 @@ impl UpdateGoalProvider for AgentGoalServiceHandle {
                 .0
                 .mark_blocked(Some(GoalReasonInput::default()), Some(GoalActor::Model))
                 .await
+                .map_err(|error| error.to_string())
         })
     }
 }

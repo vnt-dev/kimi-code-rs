@@ -127,11 +127,15 @@ pub trait SetGoalBudgetProvider: Send + Sync {
 
 impl SetGoalBudgetProvider for AgentGoalServiceHandle {
     fn get_goal(&self) -> GoalToolResult {
-        (**self).get_goal()
+        (**self)
+            .get_goal()
+            .expect("goal tools are only resolved for supported agents")
     }
 
     fn is_goal_tool_target(&self, turn_id: f64, goal_id: &str) -> bool {
-        (**self).is_goal_tool_target(turn_id, goal_id)
+        (**self)
+            .is_goal_tool_target(turn_id, goal_id)
+            .unwrap_or(false)
     }
 
     fn set_budget_limits(
@@ -144,6 +148,7 @@ impl SetGoalBudgetProvider for AgentGoalServiceHandle {
                 .0
                 .set_budget_limits(input, Some(crate::agent::goal::GoalActor::Model))
                 .await
+                .map_err(|error| error.to_string())
         })
     }
 }
