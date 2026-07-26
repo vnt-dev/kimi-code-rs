@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Kimi Code desktop agent client"
 authors = ["Moonshot AI"]
 edition = "2024"
+license = "MIT"
 
 [lib]
 name = "kimi_code_desktop_lib"

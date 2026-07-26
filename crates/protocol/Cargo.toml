@@ -3,6 +3,7 @@ name = "kimi-code-protocol"
 version = "0.1.0"
 edition = "2024"
 description = "Kimi Code protocol data types and wire-format definitions"
+license = "MIT"
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std"] }

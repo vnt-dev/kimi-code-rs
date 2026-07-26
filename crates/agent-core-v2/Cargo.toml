@@ -3,6 +3,7 @@ name = "kimi-code-agent-core-v2"
 version = "0.1.2"
 edition = "2024"
 description = "Kimi Code agent core model and provider abstractions"
+license = "MIT"
 publish = false
 
 [dependencies]
