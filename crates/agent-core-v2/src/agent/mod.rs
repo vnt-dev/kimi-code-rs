@@ -16,6 +16,7 @@ pub mod permission_mode;
 pub mod permission_policy;
 pub mod permission_rules;
 pub mod plan;
+pub mod plugin;
 pub mod profile;
 pub mod prompt;
 pub mod question_tools;

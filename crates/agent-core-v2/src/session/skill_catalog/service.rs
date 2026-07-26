@@ -26,7 +26,7 @@ use crate::{
 };
 
 use super::{
-    EXPLICIT_FILE_SKILL_SOURCE_ID, EXTRA_FILE_SKILL_SOURCE_ID, PLUGIN_SKILL_SOURCE_ID,
+    EXPLICIT_FILE_SKILL_SOURCE_ID, EXTRA_FILE_SKILL_SOURCE_ID, PLUGIN_SKILL_SOURCE_SERVICE_ID,
     SESSION_SKILL_CATALOG_ID, SessionSkillCatalogContract, SessionSkillCatalogHandle,
     SkillCatalogSinkContract, SkillCatalogSinkOptions, WORKSPACE_FILE_SKILL_SOURCE_ID,
 };
@@ -286,7 +286,7 @@ pub fn register_session_skill_catalog() {
             let explicit = accessor.get(EXPLICIT_FILE_SKILL_SOURCE_ID)?;
             let extra = accessor.get(EXTRA_FILE_SKILL_SOURCE_ID)?;
             let workspace = accessor.get(WORKSPACE_FILE_SKILL_SOURCE_ID)?;
-            let plugin = accessor.get(PLUGIN_SKILL_SOURCE_ID)?;
+            let plugin = accessor.get(PLUGIN_SKILL_SOURCE_SERVICE_ID)?;
             let service: Arc<dyn SessionSkillCatalogContract> = SessionSkillCatalogService::new(
                 builtin.0.clone(),
                 user.0.clone(),

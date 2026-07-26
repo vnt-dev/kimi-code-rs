@@ -20,8 +20,8 @@ pub use extra_source::{
     register_extra_file_skill_source,
 };
 pub use plugin_source::{
-    PLUGIN_SKILL_SOURCE_ID, PluginSkillSource, PluginSkillSourceHandle,
-    register_plugin_skill_source,
+    PLUGIN_SKILL_SOURCE_ID, PLUGIN_SKILL_SOURCE_SERVICE_ID, PluginSkillSource,
+    PluginSkillSourceHandle, register_plugin_skill_source,
 };
 pub use service::{SessionSkillCatalogService, register_session_skill_catalog};
 pub use workspace_source::{

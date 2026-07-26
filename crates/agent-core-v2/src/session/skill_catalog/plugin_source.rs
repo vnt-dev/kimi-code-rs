@@ -35,7 +35,7 @@ impl PluginSkillSource {
 #[async_trait]
 impl SkillSourceContract for PluginSkillSource {
     fn id(&self) -> &str {
-        "plugin"
+        PLUGIN_SKILL_SOURCE_ID
     }
 
     fn priority(&self) -> i32 {
@@ -74,13 +74,15 @@ impl Deref for PluginSkillSourceHandle {
     }
 }
 
-pub const PLUGIN_SKILL_SOURCE_ID: ServiceIdentifier<PluginSkillSourceHandle> =
+pub const PLUGIN_SKILL_SOURCE_ID: &str = "plugin";
+
+pub const PLUGIN_SKILL_SOURCE_SERVICE_ID: ServiceIdentifier<PluginSkillSourceHandle> =
     ServiceIdentifier::new("pluginSkillSource");
 
 pub fn register_plugin_skill_source() {
     register_scoped_service(
         LifecycleScope::Session,
-        PLUGIN_SKILL_SOURCE_ID,
+        PLUGIN_SKILL_SOURCE_SERVICE_ID,
         SyncDescriptor::new(|accessor| {
             let discovery = accessor.get(SKILL_DISCOVERY_SERVICE_ID)?;
             let plugins = accessor.get(PLUGIN_SERVICE_ID)?;
@@ -254,7 +256,11 @@ mod tests {
         plugins.reloaded.fire(&ReloadSummary::default());
         assert_eq!(changes.load(Ordering::Relaxed), 1);
         subscription.dispose().unwrap();
-        assert_eq!(PLUGIN_SKILL_SOURCE_ID.to_string(), "pluginSkillSource");
+        assert_eq!(PLUGIN_SKILL_SOURCE_ID, "plugin");
+        assert_eq!(
+            PLUGIN_SKILL_SOURCE_SERVICE_ID.to_string(),
+            "pluginSkillSource"
+        );
     }
 
     #[tokio::test]
