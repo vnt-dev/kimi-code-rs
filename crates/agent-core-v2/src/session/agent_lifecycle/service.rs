@@ -439,6 +439,7 @@ impl AgentLifecycleService {
     fn ignite_eager_services(&self, handle: &ScopeHandle) -> Result<(), LifecycleError> {
         // The order is intentionally the same as the TypeScript source.
         use crate::agent::{
+            activity_view::AGENT_ACTIVITY_VIEW_ID,
             context_injector::AGENT_CONTEXT_INJECTOR_SERVICE_ID,
             loop_::AGENT_LOOP_CONTINUATION_SERVICE_ID,
             mcp::AGENT_MCP_SERVICE_ID,
@@ -467,6 +468,10 @@ impl AgentLifecycleService {
         handle.get(AGENT_TASK_SERVICE_ID)?;
         handle.get(AGENT_USER_TOOL_SERVICE_ID)?;
         handle.get(AGENT_FULL_COMPACTION_SERVICE_ID)?;
+        // The activity view exists for its event subscriptions. Nothing
+        // injects this delayed service directly, so resolve it before the
+        // first turn just like the TypeScript lifecycle does.
+        handle.get(AGENT_ACTIVITY_VIEW_ID)?;
         Ok(())
     }
 
