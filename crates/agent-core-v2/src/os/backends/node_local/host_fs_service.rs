@@ -6,6 +6,7 @@ use std::{
     collections::VecDeque,
     error::Error,
     path::{Path, PathBuf},
+    sync::Arc,
     time::UNIX_EPOCH,
 };
 
@@ -17,10 +18,17 @@ use tokio::{
 };
 
 use crate::{
-    _base::exec_env::decode_text::{TextDecodeErrors, TextEncoding, decode_text_with_errors},
+    _base::{
+        di::{
+            descriptors::SyncDescriptor,
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
+        exec_env::decode_text::{TextDecodeErrors, TextEncoding, decode_text_with_errors},
+    },
     os::interface::{
         host_file_system::{
-            HostDirEntry, HostFileStat, HostFileSystemService, HostLineStream, ReadTextOptions,
+            HOST_FILE_SYSTEM_SERVICE_ID, HostDirEntry, HostFileStat, HostFileSystemService,
+            HostFileSystemServiceHandle, HostLineStream, ReadTextOptions,
         },
         host_fs_errors::{HostFsError, OS_FS_ALREADY_EXISTS, to_host_fs_error},
     },
@@ -28,6 +36,20 @@ use crate::{
 
 #[derive(Default)]
 pub struct HostFileSystem;
+
+/// Original: `hostFsService.ts`, App-scope eager registration.
+pub fn register_local_host_file_system_service() {
+    register_scoped_service(
+        LifecycleScope::App,
+        HOST_FILE_SYSTEM_SERVICE_ID,
+        SyncDescriptor::new(|_| {
+            let service: Arc<dyn HostFileSystemService> = Arc::new(HostFileSystem);
+            Ok(HostFileSystemServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "hostFs",
+    );
+}
 
 #[async_trait]
 impl HostFileSystemService for HostFileSystem {
@@ -311,6 +333,10 @@ mod tests {
     use futures_util::TryStreamExt;
 
     use super::*;
+    use crate::_base::di::{
+        lifecycle::Disposable,
+        scope::{Scope, ScopeOptions},
+    };
 
     fn temp_dir() -> PathBuf {
         let nonce = SystemTime::now()
@@ -318,6 +344,14 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("kimi-hostfs-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    fn app_scope_registration_resolves_host_file_system() {
+        register_local_host_file_system_service();
+        let app = Scope::create_app(ScopeOptions::default());
+        app.get(HOST_FILE_SYSTEM_SERVICE_ID).unwrap();
+        app.dispose().unwrap();
     }
 
     #[tokio::test]
