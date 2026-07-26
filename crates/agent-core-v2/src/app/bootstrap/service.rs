@@ -222,17 +222,21 @@ fn join_scope(parts: &[&str]) -> String {
         .join("/")
 }
 
+pub(crate) fn bootstrap_service_descriptor() -> SyncDescriptor<BootstrapServiceHandle> {
+    SyncDescriptor::new(|accessor| {
+        let options = accessor.get(BOOTSTRAP_OPTIONS_ID)?;
+        let service: Arc<dyn BootstrapServiceContract> =
+            Arc::new(BootstrapService::new((*options).clone()));
+        Ok(BootstrapServiceHandle(service))
+    })
+}
+
 // Original: registerScopedService(... BootstrapService ...).
 pub fn register_bootstrap_service() {
     register_scoped_service(
         LifecycleScope::App,
         BOOTSTRAP_SERVICE_ID,
-        SyncDescriptor::new(|accessor| {
-            let options = accessor.get(BOOTSTRAP_OPTIONS_ID)?;
-            let service: Arc<dyn BootstrapServiceContract> =
-                Arc::new(BootstrapService::new((*options).clone()));
-            Ok(BootstrapServiceHandle(service))
-        }),
+        bootstrap_service_descriptor(),
         InstantiationType::Eager,
         "bootstrap",
     );

@@ -36,6 +36,12 @@ pub struct BootstrapInput {
     pub client_version: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ResolveConfigPathInput {
+    pub home_dir: Option<PathBuf>,
+    pub config_path: Option<PathBuf>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapResolveError {
     #[error("unable to resolve the current user's home directory")]
@@ -57,7 +63,7 @@ pub fn resolve_bootstrap_options(
     };
     let home_dir =
         resolve_kimi_home_with_environment(input.home_dir.as_deref(), &env, &os_home_dir);
-    let config_path = resolve_config_path(
+    let config_path = resolve_config_path_with_environment(
         Some(&home_dir),
         input.config_path.as_deref(),
         &env,
@@ -105,8 +111,19 @@ pub fn resolve_kimi_home_with_environment(
         .unwrap_or_else(|| os_home_dir.join(".kimi-code"))
 }
 
-// Original: resolveConfigPath().
+// Original: resolveConfigPath(). Like the TypeScript entry point, this reads
+// the current environment only when it needs to derive the default Kimi home.
 pub fn resolve_config_path(
+    input: ResolveConfigPathInput,
+) -> Result<PathBuf, BootstrapResolveError> {
+    if let Some(config_path) = input.config_path {
+        return Ok(config_path);
+    }
+    Ok(resolve_kimi_home(input.home_dir.as_deref())?.join("config.toml"))
+}
+
+/// Deterministic variant used by bootstrap after it freezes the host facts.
+pub fn resolve_config_path_with_environment(
     home_dir: Option<&Path>,
     config_path: Option<&Path>,
     env: &HashMap<String, String>,
@@ -201,7 +218,7 @@ mod tests {
     #[test]
     fn explicit_config_path_precedes_derived_path() {
         assert_eq!(
-            resolve_config_path(
+            resolve_config_path_with_environment(
                 Some(Path::new("/tmp/kimi")),
                 Some(Path::new("/x/config.toml")),
                 &HashMap::new(),
@@ -210,13 +227,33 @@ mod tests {
             Path::new("/x/config.toml")
         );
         assert_eq!(
-            resolve_config_path(
+            resolve_config_path_with_environment(
                 Some(Path::new("/tmp/kimi")),
                 None,
                 &HashMap::new(),
                 Path::new("/home/test"),
             ),
             Path::new("/tmp/kimi/config.toml")
+        );
+    }
+
+    #[test]
+    fn public_config_path_helper_matches_source_input_shape() {
+        assert_eq!(
+            resolve_config_path(ResolveConfigPathInput {
+                home_dir: Some("/tmp/kimi".into()),
+                config_path: None,
+            })
+            .unwrap(),
+            Path::new("/tmp/kimi/config.toml")
+        );
+        assert_eq!(
+            resolve_config_path(ResolveConfigPathInput {
+                home_dir: None,
+                config_path: Some("/tmp/custom.toml".into()),
+            })
+            .unwrap(),
+            Path::new("/tmp/custom.toml")
         );
     }
 
