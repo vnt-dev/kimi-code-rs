@@ -96,31 +96,66 @@ pub struct Scope {
 }
 
 #[derive(Clone)]
+enum ScopeHandleTarget {
+    Scope(Scope),
+    Instantiation(InstantiationService),
+}
+
+#[derive(Clone)]
 pub struct ScopeHandle {
-    scope: Scope,
+    id: Arc<str>,
+    kind: LifecycleScope,
+    target: ScopeHandleTarget,
 }
 
 impl ScopeHandle {
     pub fn id(&self) -> &str {
-        self.scope.id()
+        &self.id
     }
 
     pub fn kind(&self) -> LifecycleScope {
-        self.scope.kind()
+        self.kind
     }
 
     pub fn get<T>(&self, id: ServiceIdentifier<T>) -> Result<Arc<T>, DiError>
     where
         T: Send + Sync + 'static,
     {
-        self.scope.get(id)
+        match &self.target {
+            ScopeHandleTarget::Scope(scope) => scope.get(id),
+            ScopeHandleTarget::Instantiation(instantiation) => instantiation.get(id),
+        }
     }
 }
 
 impl Disposable for ScopeHandle {
     fn dispose(&self) -> DisposeResult {
-        self.scope.dispose()
+        match &self.target {
+            ScopeHandleTarget::Scope(scope) => scope.dispose(),
+            ScopeHandleTarget::Instantiation(instantiation) => instantiation.dispose(),
+        }
     }
+}
+
+/// Creates an independently addressed scoped child backed by the parent's DI
+/// hierarchy.
+///
+/// Original: `createScopedChildHandle()`. This deliberately creates an
+/// `InstantiationService` child rather than a `Scope` tree child: the source
+/// helper returns an independent handle and does not register it in
+/// [`Scope::child_ids`].
+pub fn create_scoped_child_handle(
+    parent: &InstantiationService,
+    kind: LifecycleScope,
+    id: impl Into<String>,
+    options: ScopeOptions,
+) -> Result<ScopeHandle, DiError> {
+    let child = parent.create_child(build_collection(kind, options.extra))?;
+    Ok(ScopeHandle {
+        id: Arc::from(id.into()),
+        kind,
+        target: ScopeHandleTarget::Instantiation(child),
+    })
 }
 
 impl Scope {
@@ -193,7 +228,9 @@ impl Scope {
 
     pub fn to_handle(&self) -> ScopeHandle {
         ScopeHandle {
-            scope: self.clone(),
+            id: Arc::from(self.id()),
+            kind: self.kind(),
+            target: ScopeHandleTarget::Scope(self.clone()),
         }
     }
 
@@ -259,11 +296,24 @@ fn build_collection(kind: LifecycleScope, extra: ServiceCollection) -> ServiceCo
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
     const APP_NAME: ServiceIdentifier<String> = ServiceIdentifier::new("appName");
     const SESSION_NAME: ServiceIdentifier<String> = ServiceIdentifier::new("sessionName");
+    const DISPOSABLE_PROBE: ServiceIdentifier<DisposableProbe> =
+        ServiceIdentifier::new("disposableProbe");
+
+    struct DisposableProbe(Arc<AtomicBool>);
+
+    impl Disposable for DisposableProbe {
+        fn dispose(&self) -> DisposeResult {
+            self.0.store(true, Ordering::Release);
+            Ok(())
+        }
+    }
 
     #[test]
     fn registry_builds_scopes_and_children_inherit_parent_services() {
@@ -311,5 +361,92 @@ mod tests {
             app.create_child(LifecycleScope::App, "bad", ScopeOptions::default())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn scoped_child_handle_inherits_parent_and_applies_extra_last() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_scoped_registry_for_tests();
+        register_scoped_service(
+            LifecycleScope::App,
+            APP_NAME,
+            SyncDescriptor::new(|_| Ok("app".into())),
+            InstantiationType::Eager,
+            "app",
+        );
+        register_scoped_service(
+            LifecycleScope::Session,
+            SESSION_NAME,
+            SyncDescriptor::new(|_| Ok("registered".into())),
+            InstantiationType::Eager,
+            "session",
+        );
+        let app = Scope::create_app(ScopeOptions::default());
+        let parent = app
+            .get(super::super::instantiation::INSTANTIATION_SERVICE_ID)
+            .unwrap();
+        let mut extra = ServiceCollection::new();
+        extra.set_instance(SESSION_NAME, Arc::new("override".into()));
+
+        let handle = create_scoped_child_handle(
+            &parent,
+            LifecycleScope::Session,
+            "session-one",
+            ScopeOptions {
+                id: Some("ignored-like-source".into()),
+                extra,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(handle.id(), "session-one");
+        assert_eq!(handle.kind(), LifecycleScope::Session);
+        assert_eq!(handle.get(APP_NAME).unwrap().as_str(), "app");
+        assert_eq!(handle.get(SESSION_NAME).unwrap().as_str(), "override");
+        assert!(app.child_ids().is_empty());
+        handle.dispose().unwrap();
+        clear_scoped_registry_for_tests();
+    }
+
+    #[test]
+    fn scoped_child_handle_disposes_its_child_service_once() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_scoped_registry_for_tests();
+        let disposed = Arc::new(AtomicBool::new(false));
+        let factory_flag = Arc::clone(&disposed);
+        register_scoped_service(
+            LifecycleScope::App,
+            APP_NAME,
+            SyncDescriptor::new(|_| Ok("app".into())),
+            InstantiationType::Eager,
+            "app",
+        );
+        register_scoped_service(
+            LifecycleScope::Session,
+            DISPOSABLE_PROBE,
+            SyncDescriptor::new(move |_| Ok(DisposableProbe(Arc::clone(&factory_flag))))
+                .disposable(),
+            InstantiationType::Eager,
+            "session",
+        );
+        let app = Scope::create_app(ScopeOptions::default());
+        let parent = app
+            .get(super::super::instantiation::INSTANTIATION_SERVICE_ID)
+            .unwrap();
+        let handle = create_scoped_child_handle(
+            &parent,
+            LifecycleScope::Session,
+            "session-one",
+            ScopeOptions::default(),
+        )
+        .unwrap();
+        handle.get(DISPOSABLE_PROBE).unwrap();
+
+        handle.dispose().unwrap();
+        handle.dispose().unwrap();
+        assert!(disposed.load(Ordering::Acquire));
+        assert!(handle.get(DISPOSABLE_PROBE).is_err());
+        assert_eq!(app.get(APP_NAME).unwrap().as_str(), "app");
+        clear_scoped_registry_for_tests();
     }
 }
