@@ -23,13 +23,17 @@ use tokio::{
 
 use crate::{
     _base::{
+        di::{
+            descriptors::SyncDescriptor,
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
         errors::errors::{Error2Options, ErrorCause},
         exec_env::buffered_readable::BufferedReadable,
     },
     os::interface::host_process::{
-        HostProcess, HostProcessError, HostProcessOptions, HostProcessService,
-        OS_PROCESS_SPAWN_FAILED, ProcessReader, ProcessShell, ProcessSignal, ProcessWriter,
-        SharedProcessReader, SharedProcessWriter,
+        HOST_PROCESS_SERVICE_ID, HostProcess, HostProcessError, HostProcessOptions,
+        HostProcessService, HostProcessServiceHandle, OS_PROCESS_SPAWN_FAILED, ProcessReader,
+        ProcessShell, ProcessSignal, ProcessWriter, SharedProcessReader, SharedProcessWriter,
     },
 };
 
@@ -122,6 +126,20 @@ impl LocalHostProcessService {
             base_environment: Some(environment),
         }
     }
+}
+
+/// Original: `hostProcessService.ts`, App-scope eager registration.
+pub fn register_local_host_process_service() {
+    register_scoped_service(
+        LifecycleScope::App,
+        HOST_PROCESS_SERVICE_ID,
+        SyncDescriptor::new(|_| {
+            let service: Arc<dyn HostProcessService> = Arc::new(LocalHostProcessService::default());
+            Ok(HostProcessServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "hostProcess",
+    );
 }
 
 #[async_trait]
@@ -395,6 +413,10 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     use super::*;
+    use crate::_base::di::{
+        lifecycle::Disposable,
+        scope::{Scope, ScopeOptions},
+    };
 
     #[cfg(windows)]
     fn test_shell(script: &str) -> (String, Vec<String>) {
@@ -407,6 +429,14 @@ mod tests {
     #[cfg(not(windows))]
     fn test_shell(script: &str) -> (String, Vec<String>) {
         ("/bin/sh".into(), vec!["-c".into(), script.into()])
+    }
+
+    #[test]
+    fn app_scope_registration_resolves_host_process_service() {
+        register_local_host_process_service();
+        let app = Scope::create_app(ScopeOptions::default());
+        app.get(HOST_PROCESS_SERVICE_ID).unwrap();
+        app.dispose().unwrap();
     }
 
     #[tokio::test]
