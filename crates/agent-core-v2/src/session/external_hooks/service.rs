@@ -402,6 +402,12 @@ mod tests {
         hooks: SessionLifecycleHooks,
     }
 
+    impl Disposable for Lifecycle {
+        fn dispose(&self) -> DisposeResult {
+            Ok(())
+        }
+    }
+
     #[async_trait]
     impl crate::app::session_lifecycle::SessionLifecycleServiceContract for Lifecycle {
         fn on_did_create_session(&self) -> Event<SessionCreatedEvent> {

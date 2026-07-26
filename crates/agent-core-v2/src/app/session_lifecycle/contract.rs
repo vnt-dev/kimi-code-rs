@@ -9,7 +9,11 @@ use serde_json::Value;
 
 use crate::{
     _base::{
-        di::{instantiation::ServiceIdentifier, scope::ScopeHandle},
+        di::{
+            instantiation::ServiceIdentifier,
+            lifecycle::{Disposable, DisposeResult},
+            scope::ScopeHandle,
+        },
         event::Event,
     },
     agent::{mcp::McpServerConfig, profile::BindAgentInput},
@@ -17,9 +21,11 @@ use crate::{
 };
 
 pub type SessionScopeHandle = ScopeHandle;
-pub type SessionLifecycleError = Box<dyn Error + Send + Sync>;
+/// Shared because concurrent `resume` calls observe the same in-flight result,
+/// matching the source's shared Promise.
+pub type SessionLifecycleError = Arc<dyn Error + Send + Sync>;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CreateSessionOptions {
     pub session_id: Option<String>,
     pub work_dir: String,
@@ -28,7 +34,7 @@ pub struct CreateSessionOptions {
     pub main_agent_binding: Option<BindAgentInput>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ForkSessionOptions {
     pub source_session_id: String,
     pub new_session_id: Option<String>,
@@ -96,7 +102,7 @@ pub struct SessionForkedEvent {
 }
 
 #[async_trait]
-pub trait SessionLifecycleServiceContract: Send + Sync {
+pub trait SessionLifecycleServiceContract: Disposable + Send + Sync {
     fn on_did_create_session(&self) -> Event<SessionCreatedEvent>;
     fn on_did_close_session(&self) -> Event<SessionClosedEvent>;
     fn on_did_archive_session(&self) -> Event<SessionArchivedEvent>;
@@ -136,6 +142,12 @@ impl Deref for SessionLifecycleServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for SessionLifecycleServiceHandle {
+    fn dispose(&self) -> DisposeResult {
+        self.0.dispose()
     }
 }
 
