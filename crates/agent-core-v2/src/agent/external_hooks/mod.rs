@@ -3,6 +3,7 @@
 pub mod config_section;
 pub mod contract;
 pub mod runner;
+pub mod service;
 pub mod types;
 pub mod user_prompt;
 
@@ -12,6 +13,9 @@ pub use config_section::{
 };
 pub use contract::*;
 pub use runner::{RunHookOptions, build_hook_spawn_options, run_hook};
+pub use service::{
+    AgentExternalHooksService, HookResultEvent, register_agent_external_hooks_service,
+};
 pub use types::{
     HOOK_EVENT_TYPES, HookAction, HookBlockDecision, HookDef, HookEventType, HookMatcherValue,
     HookResult,
