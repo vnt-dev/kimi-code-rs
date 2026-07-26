@@ -39,8 +39,9 @@ use kimi_code_agent_core_v2::{
         },
         llm_requester::{AgentLlmRequesterService, AgentLlmRequesterServiceContract},
         loop_::{
-            AgentLoopService, AgentLoopServiceContract, AgentLoopServiceHandle, LoopRunResult,
-            StepRequest, register_loop_control_config_section,
+            AgentLoopContinuationService, AgentLoopService, AgentLoopServiceContract,
+            AgentLoopServiceHandle, LoopRunResult, StepRequest,
+            register_loop_control_config_section,
         },
         permission_gate::{AgentPermissionGate, AgentPermissionGateContract},
         permission_mode::{AgentPermissionModeService, AgentPermissionModeServiceContract},
@@ -602,6 +603,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Arc::clone(&telemetry_context),
     );
     let agent_contract: Arc<dyn AgentLoopServiceContract> = agent.clone();
+    let loop_continuation = AgentLoopContinuationService::new(Arc::clone(&agent_contract))?;
     let reminders: Arc<dyn AgentSystemReminderServiceContract> =
         Arc::new(AgentSystemReminderService::new(Arc::clone(&context)));
     let injector = AgentContextInjectorService::new(
@@ -797,6 +799,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     wire.flush().await?;
+    Disposable::dispose(&loop_continuation)?;
     Disposable::dispose(agent.as_ref())?;
     Disposable::dispose(&builtin_tools)?;
     Disposable::dispose(&tool_services)?;
