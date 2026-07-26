@@ -12,6 +12,7 @@ use std::{
     sync::{Arc, Once},
 };
 
+use kimi_code_agent_core_v2::os::backends::node_local::tools::register_node_local_tools;
 use kimi_code_agent_core_v2::{
     _base::{
         di::{
@@ -172,7 +173,7 @@ use kimi_code_agent_core_v2::{
     os::{
         backends::node_local::{
             host_environment_service::LocalHostEnvironmentService, host_fs_service::HostFileSystem,
-            host_process_service::LocalHostProcessService, tools::register_bash_tool,
+            host_process_service::LocalHostProcessService,
         },
         interface::{
             host_environment::{HostEnvironment, HostEnvironmentHandle},
@@ -950,6 +951,6 @@ fn ensure_builtin_tool_contributions_registered() {
         register_task_list_tool();
         register_task_output_tool();
         register_task_stop_tool();
-        register_bash_tool();
+        register_node_local_tools();
     });
 }
