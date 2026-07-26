@@ -929,7 +929,7 @@ select:focus-visible {
   color: #8d8d98;
 }
 
-.inline-code {
+.markdown-body :not(pre) > code {
   padding: 2px 5px;
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -960,32 +960,82 @@ select:focus-visible {
   font-size: 8.5px;
 }
 
-.code-wrap > code {
+.code-wrap pre {
+  margin: 0;
+  overflow-x: auto;
+}
+
+.code-wrap pre code {
   display: block;
   padding: 14px;
-  overflow-x: auto;
   color: #c6c6ce;
+  background: transparent;
   font-family: "DM Mono", monospace;
   font-size: 10.5px;
   line-height: 1.7;
   white-space: pre;
 }
 
-.markdown-body table {
+.markdown-table-wrap {
   width: 100%;
   margin: 14px 0;
+  overflow-x: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+}
+
+.markdown-body table {
+  width: 100%;
   border-collapse: collapse;
 }
 
 .markdown-body th,
 .markdown-body td {
   padding: 8px 10px;
-  border: 1px solid var(--line-strong);
+  border-right: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
   text-align: left;
+}
+
+.markdown-body tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-body th:last-child,
+.markdown-body td:last-child {
+  border-right: 0;
 }
 
 .markdown-body th {
   background: #17171c;
+}
+
+.markdown-body strong {
+  color: #e1e1e6;
+  font-weight: 620;
+}
+
+.markdown-body hr {
+  height: 1px;
+  margin: 22px 0;
+  border: 0;
+  background: var(--line-strong);
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.markdown-body input[type="checkbox"] {
+  margin-right: 7px;
+  accent-color: var(--accent);
+}
+
+.markdown-body .contains-task-list {
+  padding-left: 3px;
+  list-style: none;
 }
 
 .typing {
@@ -1299,17 +1349,153 @@ select:focus-visible {
   gap: 6px;
 }
 
-.select-control {
+.toolbar-select {
   position: relative;
+  flex: 0 0 auto;
+}
+
+.toolbar-select-trigger {
   display: flex;
-  height: 28px;
-  padding: 0 6px 0 8px;
+  height: 29px;
+  max-width: 210px;
+  padding: 0 7px 0 8px;
   align-items: center;
   gap: 5px;
   border: 1px solid var(--line);
   border-radius: 7px;
   color: #858590;
   background: rgba(255, 255, 255, 0.022);
+  cursor: pointer;
+  transition: 140ms ease;
+}
+
+.toolbar-select-trigger:hover:not(:disabled),
+.toolbar-select.open .toolbar-select-trigger {
+  border-color: rgba(139, 124, 246, 0.27);
+  color: #b4b1bd;
+  background: rgba(139, 124, 246, 0.055);
+}
+
+.toolbar-select-trigger:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+.toolbar-select-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #aaaab4;
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-select-trigger > svg:last-child {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  color: #5f5f69;
+  transition: transform 140ms ease;
+}
+
+.toolbar-select.open .toolbar-select-trigger > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.toolbar-select-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: max(100%, 218px);
+  max-height: 280px;
+  padding: 5px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 10px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.025), transparent 45%),
+    #1b1b21;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48);
+  z-index: 12;
+  animation: select-menu-in 120ms ease-out;
+}
+
+@keyframes select-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+}
+
+.toolbar-select-menu > button {
+  display: flex;
+  width: 100%;
+  min-height: 43px;
+  padding: 7px 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-radius: 7px;
+  color: #73737e;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.toolbar-select-menu > button:hover,
+.toolbar-select-menu > button.selected {
+  color: #b8b5c2;
+  background: rgba(139, 124, 246, 0.075);
+}
+
+.toolbar-select-menu > button.danger:hover,
+.toolbar-select-menu > button.danger.selected {
+  background: rgba(222, 139, 89, 0.08);
+}
+
+.toolbar-select-menu > button > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.toolbar-select-menu strong {
+  overflow: hidden;
+  color: #c6c4cc;
+  font-size: 10px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-select-menu small {
+  overflow: hidden;
+  color: #62616b;
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-select-menu > button > svg {
+  flex: 0 0 auto;
+  color: #a397f2;
+}
+
+.model-select .toolbar-select-trigger {
+  max-width: 205px;
+}
+
+.model-select .toolbar-select-menu {
+  width: 275px;
+}
+
+.effort-select .toolbar-select-trigger {
+  max-width: 118px;
+}
+
+.permission-select .toolbar-select-trigger {
+  max-width: 112px;
 }
 
 .toolbar-icon {
@@ -1340,58 +1526,24 @@ select:focus-visible {
   animation: spin 0.8s linear infinite;
 }
 
-.select-control select {
-  max-width: 190px;
-  padding: 0 16px 0 0;
-  border: 0;
-  outline: 0;
-  color: #aaaab4;
-  background: transparent;
-  appearance: none;
-  cursor: pointer;
-  font-size: 9.5px;
-}
-
-.select-control select:disabled {
-  cursor: default;
-}
-
-.select-control > svg:last-child {
-  position: absolute;
-  right: 5px;
-  pointer-events: none;
-}
-
-.effort-select select {
-  max-width: 95px;
-}
-
-.permission-select select {
-  max-width: 88px;
-}
-
-.permission-select.full-access {
+.permission-select.full-access .toolbar-select-trigger {
   border-color: rgba(222, 139, 89, 0.28);
   color: #d39772;
   background: rgba(222, 139, 89, 0.07);
 }
 
-.permission-select.full-access select {
+.permission-select.full-access .toolbar-select-trigger > span {
   color: #d7a07d;
 }
 
-.permission-select.auto-access {
+.permission-select.auto-access .toolbar-select-trigger {
   border-color: rgba(103, 174, 153, 0.25);
   color: #72b8a3;
   background: rgba(103, 174, 153, 0.065);
 }
 
-.permission-select.auto-access select {
+.permission-select.auto-access .toolbar-select-trigger > span {
   color: #83bdac;
-}
-
-.permission-select:has(select:disabled) {
-  opacity: 0.55;
 }
 
 .context-badge {

@@ -2,6 +2,8 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
+  isValidElement,
   useEffect,
   useMemo,
   useRef,
@@ -853,30 +855,27 @@ export default function App() {
                 />
                 <div className="composer-toolbar">
                   <div className="composer-options">
-                    <label className="select-control model-select">
-                      <Bot size={15} />
-                      {modelsBusy ? (
-                        <span>同步模型中…</span>
-                      ) : (
-                        <select
-                          value={selectedModel?.id ?? ""}
-                          onChange={(event) => chooseModel(event.target.value)}
-                          disabled={!models.length}
-                        >
-                          {!models.length && (
-                            <option value="">
-                              {auth.loggedIn ? "暂无模型" : "登录后选择模型"}
-                            </option>
-                          )}
-                          {models.map((model) => (
-                            <option key={model.id} value={model.id}>
-                              {model.displayName}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                      <ChevronDown size={13} />
-                    </label>
+                    <ToolbarSelect
+                      className="model-select"
+                      ariaLabel="选择模型"
+                      icon={<Bot size={15} />}
+                      value={selectedModel?.id ?? ""}
+                      label={
+                        modelsBusy
+                          ? "同步模型中…"
+                          : selectedModel?.displayName ??
+                            (auth.loggedIn ? "暂无模型" : "登录后选择模型")
+                      }
+                      disabled={modelsBusy || !models.length}
+                      options={models.map((model) => ({
+                        value: model.id,
+                        label: model.displayName,
+                        description: `${formatContext(model.contextLength)} 上下文${
+                          model.supportsReasoning ? " · 支持深度思考" : ""
+                        }`,
+                      }))}
+                      onChange={chooseModel}
+                    />
                     {auth.loggedIn && (
                       <button
                         className="toolbar-icon"
@@ -889,56 +888,69 @@ export default function App() {
                       </button>
                     )}
                     {selectedModel?.supportsReasoning && (
-                      <label className="select-control effort-select">
-                        <BrainCircuit size={15} />
-                        <select
-                          value={effort}
-                          onChange={(event) => setEffort(event.target.value)}
-                        >
-                          {(selectedModel.supportEfforts.length
-                            ? selectedModel.supportEfforts
-                            : ["low", "medium", "high"]
-                          ).map((value) => (
-                            <option key={value} value={value}>
-                              思考 · {value}
-                            </option>
-                          ))}
-                        </select>
-                        <ChevronDown size={13} />
-                      </label>
+                      <ToolbarSelect
+                        className="effort-select"
+                        ariaLabel="选择思考强度"
+                        icon={<BrainCircuit size={15} />}
+                        value={effort}
+                        label={`思考 · ${effort}`}
+                        options={(selectedModel.supportEfforts.length
+                          ? selectedModel.supportEfforts
+                          : ["low", "medium", "high"]
+                        ).map((value) => ({
+                          value,
+                          label: `思考 · ${value}`,
+                          description:
+                            value === "low"
+                              ? "快速响应，适合简单任务"
+                              : value === "high"
+                                ? "更深入分析复杂问题"
+                                : "速度与推理深度平衡",
+                        }))}
+                        onChange={setEffort}
+                      />
                     )}
-                    <label
-                      className={`select-control permission-select ${
+                    <ToolbarSelect
+                      className={`permission-select ${
                         permissionMode === "yolo"
                           ? "full-access"
                           : permissionMode === "auto"
                             ? "auto-access"
                             : ""
                       }`}
-                      title={
+                      ariaLabel="选择权限模式"
+                      icon={<ShieldCheck size={15} />}
+                      value={permissionMode}
+                      label={
                         permissionMode === "yolo"
-                          ? "完全访问模式会跳过命令审批"
+                          ? "完全访问"
                           : permissionMode === "auto"
-                            ? "由权限策略自动判断是否允许操作"
-                            : "Agent 执行命令前需要你的批准"
+                            ? "自动选择"
+                            : "请求审批"
                       }
-                    >
-                      <ShieldCheck size={15} />
-                      <select
-                        value={permissionMode}
-                        onChange={(event) =>
-                          choosePermissionMode(
-                            event.target.value as PermissionMode,
-                          )
-                        }
-                        disabled={isStreaming}
-                      >
-                        <option value="manual">请求审批</option>
-                        <option value="auto">自动选择</option>
-                        <option value="yolo">完全访问</option>
-                      </select>
-                      <ChevronDown size={13} />
-                    </label>
+                      disabled={isStreaming}
+                      options={[
+                        {
+                          value: "manual",
+                          label: "请求审批",
+                          description: "执行命令前由你确认",
+                        },
+                        {
+                          value: "auto",
+                          label: "自动选择",
+                          description: "由权限策略判断是否允许",
+                        },
+                        {
+                          value: "yolo",
+                          label: "完全访问",
+                          description: "跳过审批并直接执行命令",
+                          danger: true,
+                        },
+                      ]}
+                      onChange={(value) =>
+                        choosePermissionMode(value as PermissionMode)
+                      }
+                    />
                     {selectedModel && (
                       <span className="context-badge">
                         {formatContext(selectedModel.contextLength)} 上下文
@@ -987,6 +999,97 @@ export default function App() {
           <button aria-label="关闭提示" onClick={() => setNotice(undefined)}>
             <X size={14} />
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ToolbarSelectOption {
+  value: string;
+  label: string;
+  description?: string;
+  danger?: boolean;
+}
+
+function ToolbarSelect({
+  className = "",
+  ariaLabel,
+  icon,
+  value,
+  label,
+  options,
+  disabled = false,
+  onChange,
+}: {
+  className?: string;
+  ariaLabel: string;
+  icon: ReactNode;
+  value: string;
+  label: string;
+  options: ToolbarSelectOption[];
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent): void => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+
+  return (
+    <div
+      className={`toolbar-select ${className} ${open ? "open" : ""}`}
+      ref={rootRef}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        className="toolbar-select-trigger"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {icon}
+        <span>{label}</span>
+        <ChevronDown size={13} />
+      </button>
+      {open && (
+        <div className="toolbar-select-menu" role="listbox" aria-label={ariaLabel}>
+          {options.map((option) => {
+            const selected = option.value === value;
+            return (
+              <button
+                type="button"
+                role="option"
+                aria-selected={selected}
+                className={`${selected ? "selected" : ""} ${
+                  option.danger ? "danger" : ""
+                }`}
+                key={option.value}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+              >
+                <span>
+                  <strong>{option.label}</strong>
+                  {option.description && <small>{option.description}</small>}
+                </span>
+                {selected && <Check size={14} />}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1150,30 +1253,7 @@ function MessageView({
         )}
         <div className="markdown-body">
           {message.content ? (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                code({ className, children, ...props }) {
-                  const block = Boolean(className);
-                  return block ? (
-                    <div className="code-wrap">
-                      <div className="code-label">
-                        <span>{className?.replace("language-", "") || "code"}</span>
-                      </div>
-                      <code className={className} {...props}>
-                        {children}
-                      </code>
-                    </div>
-                  ) : (
-                    <code className="inline-code" {...props}>
-                      {children}
-                    </code>
-                  );
-                },
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
+            <MarkdownMessage content={message.content} />
           ) : (
             <div className="typing">
               <i />
@@ -1192,6 +1272,58 @@ function MessageView({
         )}
       </div>
     </article>
+  );
+}
+
+function MarkdownCodeBlock({ children }: { children: ReactNode }) {
+  const className = isValidElement<{ className?: string }>(children)
+    ? children.props.className
+    : undefined;
+  const language = className?.match(/language-([^\s]+)/)?.[1] ?? "code";
+
+  return (
+    <div className="code-wrap">
+      <div className="code-label">
+        <span>{language}</span>
+      </div>
+      <pre>{children}</pre>
+    </div>
+  );
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        pre({ children }) {
+          return <MarkdownCodeBlock>{children}</MarkdownCodeBlock>;
+        },
+        code({ className, children, ...props }) {
+          return (
+            <code className={className} {...props}>
+              {children}
+            </code>
+          );
+        },
+        table({ children }) {
+          return (
+            <div className="markdown-table-wrap">
+              <table>{children}</table>
+            </div>
+          );
+        },
+        a({ children, ...props }) {
+          return (
+            <a {...props} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          );
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
   );
 }
 
