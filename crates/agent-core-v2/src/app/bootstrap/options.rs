@@ -161,6 +161,7 @@ fn node_platform() -> String {
     match std::env::consts::OS {
         "windows" => "win32",
         "macos" => "darwin",
+        "illumos" => "sunos",
         other => other,
     }
     .into()
@@ -171,6 +172,9 @@ fn node_arch() -> String {
         "x86_64" => "x64",
         "x86" => "ia32",
         "aarch64" => "arm64",
+        "loongarch64" => "loong64",
+        "powerpc" => "ppc",
+        "powerpc64" => "ppc64",
         other => other,
     }
     .into()
@@ -213,6 +217,31 @@ mod tests {
         );
         assert_eq!(options.cwd, Path::new("/work"));
         assert_eq!(options.client_version, "unknown");
+    }
+
+    #[test]
+    fn explicit_options_are_preserved_in_the_frozen_snapshot() {
+        let env = HashMap::from([("FOO".into(), "bar".into())]);
+        let options = resolve_bootstrap_options(BootstrapInput {
+            home_dir: Some("/home/kimi".into()),
+            config_path: Some("/config/custom.toml".into()),
+            env: Some(env.clone()),
+            os_home_dir: Some("/home/os".into()),
+            platform: Some("test-platform".into()),
+            arch: Some("test-arch".into()),
+            cwd: Some("/work".into()),
+            client_version: Some("1.2.3".into()),
+        })
+        .unwrap();
+
+        assert_eq!(options.home_dir, Path::new("/home/kimi"));
+        assert_eq!(options.config_path, Path::new("/config/custom.toml"));
+        assert_eq!(options.env, env);
+        assert_eq!(options.os_home_dir, Path::new("/home/os"));
+        assert_eq!(options.platform, "test-platform");
+        assert_eq!(options.arch, "test-arch");
+        assert_eq!(options.cwd, Path::new("/work"));
+        assert_eq!(options.client_version, "1.2.3");
     }
 
     #[test]

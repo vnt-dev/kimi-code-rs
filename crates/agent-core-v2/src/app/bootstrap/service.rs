@@ -83,11 +83,7 @@ impl BootstrapService {
         let store_dir = options.home_dir.join("store");
         let cache_dir = options.home_dir.join("cache");
         let logs_dir = options.home_dir.join("logs");
-        let config_key = options
-            .config_path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let config_key = portable_basename(&options.config_path);
         Self {
             options,
             sessions_dir,
@@ -209,7 +205,10 @@ impl BootstrapServiceContract for BootstrapService {
 fn join_scope(parts: &[&str]) -> String {
     parts
         .iter()
-        .flat_map(|part| part.split('/'))
+        // `pathe` normalizes both POSIX and Windows separators before joining.
+        // Scope keys are portable storage keys, so they must not depend on the
+        // operating system on which this crate was compiled.
+        .flat_map(|part| part.split(['/', '\\']))
         .filter(|part| !part.is_empty() && *part != ".")
         .fold(Vec::<&str>::new(), |mut output, part| {
             if part == ".." {
@@ -220,6 +219,15 @@ fn join_scope(parts: &[&str]) -> String {
             output
         })
         .join("/")
+}
+
+fn portable_basename(path: &Path) -> String {
+    path.to_string_lossy()
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 pub(crate) fn bootstrap_service_descriptor() -> SyncDescriptor<BootstrapServiceHandle> {
@@ -275,6 +283,16 @@ mod tests {
     fn maps_semantic_session_and_agent_scopes() {
         let service = service();
         assert_eq!(service.scope(PersistenceScopeName::Config), "");
+        assert_eq!(service.scope(PersistenceScopeName::Sessions), "sessions");
+        assert_eq!(service.scope(PersistenceScopeName::Blobs), "blobs");
+        assert_eq!(service.scope(PersistenceScopeName::Store), "store");
+        assert_eq!(service.scope(PersistenceScopeName::Logs), "logs");
+        assert_eq!(service.scope(PersistenceScopeName::Cache), "cache");
+        assert_eq!(
+            service.scope(PersistenceScopeName::Credentials),
+            "credentials"
+        );
+        assert_eq!(service.scope(PersistenceScopeName::Cron), "cron");
         assert_eq!(
             service.session_scope("workspace", "session"),
             "sessions/workspace/session"
@@ -286,6 +304,23 @@ mod tests {
         assert_eq!(
             service.agent_homedir("workspace", "session", "agent"),
             Path::new("/tmp/kimi-home/sessions/workspace/session/agents/agent")
+        );
+    }
+
+    #[test]
+    fn path_keys_match_pathe_on_every_host_platform() {
+        let mut options = service().options;
+        options.config_path = PathBuf::from(r"C:\kimi\config.toml");
+        let service = BootstrapService::new(options);
+
+        assert_eq!(service.config_key(), "config.toml");
+        assert_eq!(
+            service.session_scope(r"parent\workspace", r"child\session"),
+            "sessions/parent/workspace/child/session"
+        );
+        assert_eq!(
+            service.agent_scope("workspace/../workspace", "session", r"group\agent"),
+            "sessions/workspace/session/agents/group/agent"
         );
     }
 }
