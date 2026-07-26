@@ -7,6 +7,7 @@ autobins = false
 [workspace]
 members = [
     ".",
+    "apps/kimi-code/src-tauri",
     "crates/agent-core-v2", "crates/kap-server",
     "crates/minidb",
     "crates/oauth",

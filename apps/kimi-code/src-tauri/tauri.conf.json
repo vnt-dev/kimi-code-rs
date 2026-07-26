@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kimi Code",
+  "version": "0.1.0",
+  "identifier": "com.moonshot.kimicode",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Kimi Code",
+        "width": 1320,
+        "height": 860,
+        "minWidth": 940,
+        "minHeight": 640,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "backgroundColor": "#0C0C0F"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Kimi Code desktop agent",
+    "longDescription": "A polished desktop coding agent powered by Kimi Code."
+  }
+}

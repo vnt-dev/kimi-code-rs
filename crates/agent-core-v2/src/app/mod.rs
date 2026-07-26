@@ -5,6 +5,7 @@ pub mod auth_legacy;
 pub mod bootstrap;
 pub mod config;
 pub mod cron;
+pub mod desktop_client;
 pub mod edit;
 pub mod event;
 pub mod external_hooks_runner;

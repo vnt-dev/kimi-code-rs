@@ -1,2 +1,4 @@
 /target
 .idea
+/apps/kimi-code/node_modules
+/apps/kimi-code/dist
