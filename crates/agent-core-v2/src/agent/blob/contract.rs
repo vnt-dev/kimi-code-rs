@@ -1,6 +1,7 @@
 use std::{ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
+use serde_json::Value;
 
 use crate::{
     _base::di::instantiation::ServiceIdentifier, kosong::contract::message::ContentPart,
@@ -18,6 +19,11 @@ pub trait AgentBlobServiceContract: Send + Sync {
     ) -> Result<Vec<ContentPart>, StorageError>;
     async fn load_parts(&self, parts: Vec<ContentPart>) -> Vec<ContentPart>;
     fn is_blob_ref(&self, url: &str) -> bool;
+
+    /// Wire-level structural transformation. Unlike the typed public methods,
+    /// this preserves legacy and extension fields on content-part objects.
+    async fn offload_wire_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String>;
+    async fn load_wire_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String>;
 }
 
 #[derive(Clone)]

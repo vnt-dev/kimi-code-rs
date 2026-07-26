@@ -18,20 +18,32 @@ use tokio::task::JoinHandle;
 
 use crate::{
     _base::{
-        di::lifecycle::{Disposable, DisposableStore},
+        di::{
+            descriptors::SyncDescriptor,
+            instantiation::ServicesAccessorExt,
+            lifecycle::{Disposable, DisposableStore, DisposeResult},
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
         errors::{
             errors::{BugIndicatingError, Error2Options},
             unexpected_error::on_unexpected_error,
         },
     },
+    agent::{
+        blob::{AGENT_BLOB_SERVICE_ID, AgentBlobServiceHandle},
+        scope_context::AGENT_SCOPE_CONTEXT_ID,
+    },
+    app::event::event_bus::EVENT_BUS_SERVICE_ID,
     persistence::interface::{
-        append_log_store::{AppendLogError, AppendLogOptions, AppendLogStoreHandle},
+        append_log_store::{
+            APPEND_LOG_STORE_SERVICE_ID, AppendLogError, AppendLogOptions, AppendLogStoreHandle,
+        },
         storage::{STORAGE_CORRUPTED, StorageError},
     },
 };
 
 use super::{
-    contract::{CycleError, MAX_DRAIN, WireHooks},
+    contract::{CycleError, MAX_DRAIN, WIRE_SERVICE_ID, WireHooks, WireServiceHandle},
     migration::{
         MIGRATE_V1_4_TO_V1_5, MissingWireMigrationError, WIRE_PROTOCOL_VERSION, WireMigration,
         is_newer_wire_version, migrate_wire_record, resolve_wire_migrations,
@@ -482,10 +494,58 @@ impl WireService {
     }
 }
 
+impl Disposable for WireService {
+    fn dispose(&self) -> DisposeResult {
+        self.disposables.dispose()
+    }
+}
+
 impl Drop for WireService {
     fn drop(&mut self) {
-        let _ = self.disposables.dispose();
+        let _ = self.dispose();
     }
+}
+
+struct AgentBlobWireAdapter(AgentBlobServiceHandle);
+
+#[async_trait]
+impl WireBlobService for AgentBlobWireAdapter {
+    async fn offload_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+        self.0.0.offload_wire_parts(parts).await
+    }
+
+    async fn load_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+        self.0.0.load_wire_parts(parts).await
+    }
+}
+
+/// Registers the eager Agent-scoped wire aggregate.
+///
+/// Original: the module-level `registerScopedService(...)` call in
+/// `wireService.ts`.
+pub fn register_wire_service() {
+    register_scoped_service(
+        LifecycleScope::Agent,
+        WIRE_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let scope_context = accessor.get(AGENT_SCOPE_CONTEXT_ID)?;
+            let log = accessor.get(APPEND_LOG_STORE_SERVICE_ID)?;
+            let blob_service = accessor.get(AGENT_BLOB_SERVICE_ID)?;
+            let event_bus = accessor.get(EVENT_BUS_SERVICE_ID)?;
+            let wire_blob: Arc<dyn WireBlobService> =
+                Arc::new(AgentBlobWireAdapter((*blob_service).clone()));
+            let event_publisher: Arc<dyn DomainEventPublisher> = Arc::new((*event_bus).clone());
+            Ok(WireServiceHandle(Arc::new(WireService::new(
+                scope_context.scope(None),
+                (*log).clone(),
+                wire_blob,
+                event_publisher,
+            ))))
+        })
+        .disposable(),
+        InstantiationType::Eager,
+        "wire",
+    );
 }
 
 fn ensure_model(
@@ -565,9 +625,28 @@ mod tests {
 
     use super::*;
     use crate::{
-        _base::di::lifecycle::disposable_none,
+        _base::di::{
+            lifecycle::{Disposable, disposable_none},
+            scope::{
+                LifecycleScope, Scope, ScopeOptions, clear_scoped_registry_for_tests,
+                get_scoped_service_descriptors,
+            },
+            service_collection::ServiceCollection,
+        },
+        agent::{
+            blob::{AGENT_BLOB_SERVICE_ID, AgentBlobServiceContract, AgentBlobServiceHandle},
+            scope_context::{
+                AGENT_SCOPE_CONTEXT_ID, AgentScopeContextInput, make_agent_scope_context,
+            },
+        },
+        app::event::{
+            event_bus::{EVENT_BUS_SERVICE_ID, EventBusContract, EventBusHandle},
+            event_bus_service::EventBusService,
+        },
+        kosong::contract::message::ContentPart,
         persistence::interface::append_log_store::{AppendLogStoreService, AppendLogValueStream},
         wire::{
+            contract::WIRE_SERVICE_ID,
             model::{ModelOptions, define_model},
             op::DefineOpOptions,
         },
@@ -626,6 +705,34 @@ mod tests {
         }
     }
 
+    struct IdentityAgentBlobs;
+
+    #[async_trait]
+    impl AgentBlobServiceContract for IdentityAgentBlobs {
+        async fn offload_parts(
+            &self,
+            parts: Vec<ContentPart>,
+        ) -> Result<Vec<ContentPart>, StorageError> {
+            Ok(parts)
+        }
+
+        async fn load_parts(&self, parts: Vec<ContentPart>) -> Vec<ContentPart> {
+            parts
+        }
+
+        fn is_blob_ref(&self, _: &str) -> bool {
+            false
+        }
+
+        async fn offload_wire_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+            Ok(parts)
+        }
+
+        async fn load_wire_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+            Ok(parts)
+        }
+    }
+
     #[derive(Default)]
     struct Events(Mutex<Vec<Value>>);
 
@@ -642,6 +749,59 @@ mod tests {
             Arc::new(IdentityBlobs),
             Arc::new(Events::default()),
         )
+    }
+
+    #[test]
+    fn registration_resolves_the_eager_agent_scoped_wire_from_source_dependencies() {
+        clear_scoped_registry_for_tests();
+        register_wire_service();
+        let entries = get_scoped_service_descriptors(LifecycleScope::Agent);
+        assert!(entries.iter().any(|entry| {
+            entry.id.to_string() == WIRE_SERVICE_ID.to_string()
+                && !entry.descriptor.supports_delayed_instantiation
+                && entry.domain == "wire"
+        }));
+
+        let mut extra = ServiceCollection::new();
+        extra.set_instance(
+            AGENT_SCOPE_CONTEXT_ID,
+            Arc::new(make_agent_scope_context(AgentScopeContextInput {
+                agent_id: "main".into(),
+                agent_scope: "sessions/workspace/session/agents/main".into(),
+            })),
+        );
+        let log: Arc<dyn AppendLogStoreService> = Arc::new(MemoryLog::default());
+        extra.set_instance(
+            APPEND_LOG_STORE_SERVICE_ID,
+            Arc::new(AppendLogStoreHandle(log)),
+        );
+        let blobs: Arc<dyn AgentBlobServiceContract> = Arc::new(IdentityAgentBlobs);
+        extra.set_instance(
+            AGENT_BLOB_SERVICE_ID,
+            Arc::new(AgentBlobServiceHandle(blobs)),
+        );
+        let events: Arc<dyn EventBusContract> = Arc::new(EventBusService::new());
+        extra.set_instance(EVENT_BUS_SERVICE_ID, Arc::new(EventBusHandle(events)));
+
+        let app = Scope::create_app(ScopeOptions::default());
+        let session = app
+            .create_child(LifecycleScope::Session, "session", ScopeOptions::default())
+            .unwrap();
+        let agent = session
+            .create_child(
+                LifecycleScope::Agent,
+                "main",
+                ScopeOptions { id: None, extra },
+            )
+            .unwrap();
+        let wire = agent.get(WIRE_SERVICE_ID).unwrap();
+        assert_eq!(wire.scope, "sessions/workspace/session/agents/main");
+        assert_eq!(wire.restore_phase(), RestorePhase::New);
+
+        agent.dispose().unwrap();
+        session.dispose().unwrap();
+        app.dispose().unwrap();
+        clear_scoped_registry_for_tests();
     }
 
     #[tokio::test]

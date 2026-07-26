@@ -217,13 +217,8 @@ impl AgentBlobServiceContract for AgentBlobService {
     fn is_blob_ref(&self, url: &str) -> bool {
         url.starts_with(BLOBREF_PROTOCOL)
     }
-}
 
-// Wire stores content parts as JSON values. Structural traversal rather than
-// enum decoding preserves the source's behavior for legacy and extension fields.
-#[async_trait]
-impl WireBlobService for AgentBlobService {
-    async fn offload_parts(
+    async fn offload_wire_parts(
         &self,
         parts: Vec<serde_json::Value>,
     ) -> Result<Vec<serde_json::Value>, String> {
@@ -238,7 +233,7 @@ impl WireBlobService for AgentBlobService {
         Ok(output)
     }
 
-    async fn load_parts(
+    async fn load_wire_parts(
         &self,
         parts: Vec<serde_json::Value>,
     ) -> Result<Vec<serde_json::Value>, String> {
@@ -247,6 +242,25 @@ impl WireBlobService for AgentBlobService {
             output.push(self.load_wire_part(value).await);
         }
         Ok(output)
+    }
+}
+
+// Wire stores content parts as JSON values. Structural traversal rather than
+// enum decoding preserves the source's behavior for legacy and extension fields.
+#[async_trait]
+impl WireBlobService for AgentBlobService {
+    async fn offload_parts(
+        &self,
+        parts: Vec<serde_json::Value>,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        AgentBlobServiceContract::offload_wire_parts(self, parts).await
+    }
+
+    async fn load_parts(
+        &self,
+        parts: Vec<serde_json::Value>,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        AgentBlobServiceContract::load_wire_parts(self, parts).await
     }
 }
 

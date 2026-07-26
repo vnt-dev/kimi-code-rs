@@ -8,7 +8,13 @@ use std::{error::Error, fmt, ops::Deref, sync::Arc};
 use serde_json::{Map, Value};
 
 use crate::{
-    _base::{di::instantiation::ServiceIdentifier, errors::errors::Error2Options},
+    _base::{
+        di::{
+            instantiation::ServiceIdentifier,
+            lifecycle::{Disposable, DisposeResult},
+        },
+        errors::errors::Error2Options,
+    },
     hooks::OrderedHookSlot,
 };
 
@@ -23,6 +29,12 @@ impl Deref for WireServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for WireServiceHandle {
+    fn dispose(&self) -> DisposeResult {
+        self.0.dispose()
     }
 }
 
