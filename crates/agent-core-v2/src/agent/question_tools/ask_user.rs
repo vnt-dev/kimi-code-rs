@@ -370,20 +370,20 @@ async fn execute_question(
     }
     let Some((answers, method)) = normalize_question_result(result) else {
         let _ = services.telemetry.track_event(&QuestionDismissedEvent {
-            trace_id: trace.and_then(|trace| trace.trace_id),
+            trace_id: trace.and_then(|trace| trace.trace_id()),
         });
         return Ok(dismissed_question_result());
     };
     if answers.is_empty() {
         let _ = services.telemetry.track_event(&QuestionDismissedEvent {
-            trace_id: trace.and_then(|trace| trace.trace_id),
+            trace_id: trace.and_then(|trace| trace.trace_id()),
         });
         return Ok(dismissed_question_result());
     }
     let _ = services.telemetry.track_event(&QuestionAnsweredEvent {
         answered: answers.len() as u64,
         method: method.map(telemetry_method),
-        trace_id: trace.and_then(|trace| trace.trace_id),
+        trace_id: trace.and_then(|trace| trace.trace_id()),
     });
     Ok(ExecutableToolResult::success(
         json!({"answers": answers}).to_string(),

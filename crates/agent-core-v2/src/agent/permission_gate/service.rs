@@ -374,10 +374,7 @@ impl AgentPermissionGate {
                 .feedback
                 .as_ref()
                 .is_some_and(|feedback| !feedback.is_empty()),
-            trace_id: context
-                .trace
-                .as_ref()
-                .and_then(|trace| trace.trace_id.clone()),
+            trace_id: context.trace.as_ref().and_then(|trace| trace.trace_id()),
         });
 
         if let Some(resolution) = resolve_approval.and_then(|resolve| resolve(response.clone())) {
@@ -417,10 +414,7 @@ impl AgentPermissionGate {
             duration_ms: started_at.elapsed().as_millis() as u64,
             session_cache_written: false,
             has_feedback: false,
-            trace_id: context
-                .trace
-                .as_ref()
-                .and_then(|trace| trace.trace_id.clone()),
+            trace_id: context.trace.as_ref().and_then(|trace| trace.trace_id()),
         });
         let mut fields = approval_context.clone();
         fields.insert("decision".into(), Value::String("error".into()));

@@ -2,10 +2,15 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/llmRequester/llmRequesterService.ts`.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    error::Error,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, future::FutureExt};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     _base::{
@@ -43,10 +48,43 @@ use crate::{
 };
 
 use super::{
-    AGENT_LLM_REQUESTER_SERVICE_ID, AgentLlmRequestFinish, AgentLlmRequestOverrides,
-    AgentLlmRequestPartHandler, AgentLlmRequestSource, AgentLlmRequestTask,
-    AgentLlmRequesterServiceContract, AgentLlmRequesterServiceHandle, PreparedTurnRequestConfig,
+    AGENT_LLM_REQUESTER_SERVICE_ID, AgentLlmRequestError, AgentLlmRequestFinish,
+    AgentLlmRequestOverrides, AgentLlmRequestPartHandler, AgentLlmRequestSource,
+    AgentLlmRequestTask, AgentLlmRequesterServiceContract, AgentLlmRequesterServiceHandle,
+    PreparedTurnRequestConfig,
 };
+
+struct AbortSignalBridge {
+    token: CancellationToken,
+    task: Option<JoinHandle<()>>,
+}
+
+impl AbortSignalBridge {
+    fn new(signal: AbortSignal) -> Self {
+        let token = CancellationToken::new();
+        if signal.aborted() {
+            token.cancel();
+            return Self { token, task: None };
+        }
+        let linked_token = token.clone();
+        let task = tokio::spawn(async move {
+            signal.cancelled().await;
+            linked_token.cancel();
+        });
+        Self {
+            token,
+            task: Some(task),
+        }
+    }
+}
+
+impl Drop for AbortSignalBridge {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
 
 pub struct AgentLlmRequesterService {
     context: AgentContextMemoryServiceHandle,
@@ -106,7 +144,7 @@ impl AgentLlmRequesterService {
             ModelRequestParams,
             String,
         ),
-        String,
+        AgentLlmRequestError,
     > {
         if let Some(config) = self.turn_configs.lock().unwrap().get(&id).cloned() {
             return Ok(config);
@@ -114,10 +152,10 @@ impl AgentLlmRequesterService {
         let config = (
             self.profile
                 .resolve_model_context()
-                .map_err(|e| e.to_string())?,
+                .map_err(AgentLlmRequestError::from)?,
             self.profile
                 .resolve_request_params()
-                .map_err(|e| e.to_string())?,
+                .map_err(AgentLlmRequestError::from)?,
             self.profile.get_system_prompt(),
         );
         let mut configs = self.turn_configs.lock().unwrap();
@@ -152,9 +190,12 @@ impl AgentLlmRequesterService {
         overrides: AgentLlmRequestOverrides,
         on_part: Option<AgentLlmRequestPartHandler>,
         signal: Option<AbortSignal>,
-    ) -> Result<AgentLlmRequestFinish, String> {
+        trace: LlmRequestTrace,
+    ) -> Result<AgentLlmRequestFinish, AgentLlmRequestError> {
         if let Some(signal) = &signal {
-            signal.throw_if_aborted().map_err(|e| e.to_string())?;
+            signal
+                .throw_if_aborted()
+                .map_err(|error| error as AgentLlmRequestError)?;
         }
         let source_turn = match &overrides.source {
             Some(AgentLlmRequestSource::Turn { turn_id, .. }) => Some(*turn_id as i64),
@@ -165,17 +206,17 @@ impl AgentLlmRequesterService {
             None => (
                 self.profile
                     .resolve_model_context()
-                    .map_err(|e| e.to_string())?,
+                    .map_err(AgentLlmRequestError::from)?,
                 self.profile
                     .resolve_request_params()
-                    .map_err(|e| e.to_string())?,
+                    .map_err(AgentLlmRequestError::from)?,
                 self.profile.get_system_prompt(),
             ),
         };
         let requester = self
             .catalog
             .get_requester(&resolved.model_alias)
-            .map_err(|e| e.to_string())?;
+            .map_err(AgentLlmRequestError::from)?;
         let history = overrides
             .messages
             .as_ref()
@@ -199,13 +240,14 @@ impl AgentLlmRequesterService {
         let system_prompt = overrides.system_prompt.unwrap_or(prompt);
         let mut projection = 0_u8;
         loop {
+            trace.set_trace_id(None);
             let messages = match projection {
                 0 => self.projector.project(&shaped),
                 1 => self.projector.project_strict(&shaped),
                 2 => self.projector.project_media_degraded(&shaped),
                 _ => self.projector.project_media_stripped(&shaped, None),
             }
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| Arc::new(error) as AgentLlmRequestError)?;
             match self
                 .run_stream(
                     requester.clone(),
@@ -218,6 +260,7 @@ impl AgentLlmRequesterService {
                     params.clone(),
                     on_part.clone(),
                     signal.clone(),
+                    trace.clone(),
                 )
                 .await
             {
@@ -234,11 +277,14 @@ impl AgentLlmRequesterService {
                     );
                     return Ok(finish);
                 }
-                Err((error, message)) => {
+                Err(error) => {
                     if signal.as_ref().is_some_and(AbortSignal::aborted) {
-                        return Err(message);
+                        return Err(error);
                     }
-                    projection = match (&error, projection) { (ChatProviderError::ApiRequestTooLarge { .. }, 0) => 2, (ChatProviderError::ApiRequestTooLarge { .. }, 2) => 3, (_, 0) if crate::kosong::contract::errors::is_image_format_error(&error) => 3, (_, 0) if crate::kosong::contract::errors::is_recoverable_request_structure_error(&error) => 1, _ => return Err(message) };
+                    let Some(provider_error) = find_provider_error(error.as_ref()) else {
+                        return Err(error);
+                    };
+                    projection = match (provider_error, projection) { (ChatProviderError::ApiRequestTooLarge { .. }, 0) => 2, (ChatProviderError::ApiRequestTooLarge { .. }, 2) => 3, (_, 0) if crate::kosong::contract::errors::is_image_format_error(provider_error) => 3, (_, 0) if crate::kosong::contract::errors::is_recoverable_request_structure_error(provider_error) => 1, _ => return Err(error) };
                 }
             }
         }
@@ -250,8 +296,9 @@ impl AgentLlmRequesterService {
         input: ModelRequestInput,
         params: ModelRequestParams,
         on_part: Option<AgentLlmRequestPartHandler>,
-        _signal: Option<AbortSignal>,
-    ) -> Result<AgentLlmRequestFinish, (ChatProviderError, String)> {
+        signal: Option<AbortSignal>,
+        trace: LlmRequestTrace,
+    ) -> Result<AgentLlmRequestFinish, AgentLlmRequestError> {
         if let Some(fault) = self.fault.take() {
             let error = match fault {
                 FaultKind::RequestTooLarge => ChatProviderError::ApiRequestTooLarge {
@@ -263,31 +310,35 @@ impl AgentLlmRequesterService {
                     data: ApiStatusData::new(400, None, None, None),
                 },
             };
-            return Err((error.clone(), error.to_string()));
+            return Err(Arc::new(error));
         }
-        let mut stream = requester.request(input, None, Some(params));
+        let signal_bridge = signal.map(AbortSignalBridge::new);
+        let trace_for_callback = trace.clone();
+        let mut params = params;
+        params.on_trace_id = Some(Arc::new(move |trace_id| {
+            trace_for_callback.set_trace_id(trace_id.map(str::to_owned));
+        }));
+        let mut stream = requester.request(
+            input,
+            signal_bridge.as_ref().map(|bridge| bridge.token.clone()),
+            Some(params),
+        );
         let mut usage = empty_usage();
         let mut timing = None;
         let mut finish = None;
         while let Some(event) = stream.next().await {
-            match event.map_err(|error| match error {
-                crate::kosong::model::ModelRequestError::Abort(error) => {
-                    (error.clone(), error.to_string())
-                }
-                crate::kosong::model::ModelRequestError::Coded(error) => {
-                    let provider = ChatProviderError::Other {
-                        message: error.to_string(),
-                    };
-                    (provider.clone(), provider.to_string())
+            match event.map_err(|error| -> AgentLlmRequestError {
+                match error {
+                    crate::kosong::model::ModelRequestError::Abort(error) => Arc::new(error),
+                    crate::kosong::model::ModelRequestError::Coded(error) => Arc::new(error),
                 }
             })? {
                 ModelRequestEvent::Part(part) => {
                     if let Some(handler) = &on_part {
                         handler(part).await.map_err(|message| {
-                            let error = ChatProviderError::Other {
+                            Arc::new(ChatProviderError::Other {
                                 message: message.clone(),
-                            };
-                            (error, message)
+                            }) as AgentLlmRequestError
                         })?;
                     }
                 }
@@ -300,6 +351,7 @@ impl AgentLlmRequesterService {
                     id,
                     trace_id,
                 } => {
+                    trace.set_trace_id(trace_id.clone());
                     finish = Some((
                         message,
                         provider_finish_reason,
@@ -321,7 +373,7 @@ impl AgentLlmRequesterService {
             let error = ChatProviderError::Other {
                 message: "LLM request stream ended without a finish event.".into(),
             };
-            return Err((error.clone(), error.to_string()));
+            return Err(Arc::new(error));
         };
         Ok(AgentLlmRequestFinish {
             message,
@@ -353,9 +405,14 @@ impl AgentLlmRequesterServiceContract for AgentLlmRequesterService {
         overrides: Option<AgentLlmRequestOverrides>,
         on_part: Option<AgentLlmRequestPartHandler>,
         signal: Option<AbortSignal>,
-    ) -> Result<AgentLlmRequestFinish, String> {
-        self.perform(overrides.unwrap_or_default(), on_part, signal)
-            .await
+    ) -> Result<AgentLlmRequestFinish, AgentLlmRequestError> {
+        self.perform(
+            overrides.unwrap_or_default(),
+            on_part,
+            signal,
+            LlmRequestTrace::default(),
+        )
+        .await
     }
     fn start(
         &self,
@@ -364,11 +421,13 @@ impl AgentLlmRequesterServiceContract for AgentLlmRequesterService {
         signal: Option<AbortSignal>,
     ) -> AgentLlmRequestTask {
         let service = Arc::new(self.clone_for_task());
+        let trace = LlmRequestTrace::default();
+        let result_trace = trace.clone();
         AgentLlmRequestTask {
-            trace: LlmRequestTrace::default(),
+            trace,
             result: async move {
                 service
-                    .perform(overrides.unwrap_or_default(), on_part, signal)
+                    .perform(overrides.unwrap_or_default(), on_part, signal, result_trace)
                     .await
             }
             .boxed(),
@@ -389,6 +448,15 @@ impl AgentLlmRequesterService {
             self.catalog.clone(),
             self.fault.clone(),
         )
+    }
+}
+
+fn find_provider_error<'a>(mut error: &'a (dyn Error + 'static)) -> Option<&'a ChatProviderError> {
+    loop {
+        if let Some(error) = error.downcast_ref::<ChatProviderError>() {
+            return Some(error);
+        }
+        error = error.source()?;
     }
 }
 
@@ -423,4 +491,47 @@ pub fn register_agent_llm_requester_service() {
         InstantiationType::Eager,
         "llmRequester",
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::_base::{
+        errors::errors::{Error2, Error2Options, ErrorCause},
+        utils::abort::{AbortController, AbortError},
+    };
+
+    #[tokio::test]
+    async fn abort_signal_bridge_cancels_the_provider_token() {
+        let controller = AbortController::new();
+        let bridge = AbortSignalBridge::new(controller.signal());
+        assert!(!bridge.token.is_cancelled());
+
+        controller.abort(Some(AbortError::new("cancel request")));
+        tokio::time::timeout(std::time::Duration::from_secs(1), bridge.token.cancelled())
+            .await
+            .expect("provider cancellation must be propagated");
+    }
+
+    #[test]
+    fn projection_recovery_can_inspect_translated_provider_causes() {
+        let provider: Arc<dyn Error + Send + Sync> =
+            Arc::new(ChatProviderError::ApiRequestTooLarge {
+                message: "request body too large".into(),
+                data: ApiStatusData::new(413, None, None, Some("trace-413".into())),
+            });
+        let translated = Error2::with_options(
+            "provider.api_error",
+            "request body too large",
+            Error2Options {
+                cause: Some(ErrorCause::Error(provider)),
+                ..Error2Options::default()
+            },
+        );
+
+        assert!(matches!(
+            find_provider_error(&translated),
+            Some(ChatProviderError::ApiRequestTooLarge { .. })
+        ));
+    }
 }

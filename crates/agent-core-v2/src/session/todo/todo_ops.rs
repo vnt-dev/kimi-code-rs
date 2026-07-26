@@ -49,6 +49,14 @@ pub fn todo_set(todos: &[TodoItem]) -> Result<Op, serde_json::Error> {
     })
 }
 
+/// Forces the v1 store descriptor to exist before an agent wire is restored.
+///
+/// The TypeScript module registers it while loading; the Rust lazy static must
+/// be realized explicitly by the session-scoped service.
+pub fn ensure_todo_ops_registered() {
+    LazyLock::force(&TODO_SET);
+}
+
 #[cfg(test)]
 mod tests {
     use crate::wire::op::ErasedOpDescriptor;
@@ -58,6 +66,7 @@ mod tests {
 
     #[test]
     fn update_store_payload_and_reducer_preserve_v1_todo_semantics() {
+        ensure_todo_ops_registered();
         let todos = vec![TodoItem {
             title: "check".into(),
             status: TodoStatus::Pending,

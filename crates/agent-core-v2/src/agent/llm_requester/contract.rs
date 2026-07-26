@@ -2,7 +2,7 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/llmRequester/llmRequester.ts`.
 
-use std::{ops::Deref, sync::Arc};
+use std::{error::Error, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -25,6 +25,7 @@ use super::AgentLlmRequestSource;
 
 pub type AgentLlmRequestPartHandler =
     Arc<dyn Fn(StreamedMessagePart) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
+pub type AgentLlmRequestError = Arc<dyn Error + Send + Sync>;
 #[derive(Clone, Debug)]
 pub struct AgentLlmRequestFinish {
     pub message: Message,
@@ -46,7 +47,7 @@ pub struct AgentLlmRequestOverrides {
 }
 pub struct AgentLlmRequestTask {
     pub trace: LlmRequestTrace,
-    pub result: BoxFuture<'static, Result<AgentLlmRequestFinish, String>>,
+    pub result: BoxFuture<'static, Result<AgentLlmRequestFinish, AgentLlmRequestError>>,
 }
 #[derive(Clone, Debug)]
 pub struct PreparedTurnRequestConfig {
@@ -61,7 +62,7 @@ pub trait AgentLlmRequesterServiceContract: Send + Sync {
         overrides: Option<AgentLlmRequestOverrides>,
         on_part: Option<AgentLlmRequestPartHandler>,
         signal: Option<AbortSignal>,
-    ) -> Result<AgentLlmRequestFinish, String>;
+    ) -> Result<AgentLlmRequestFinish, AgentLlmRequestError>;
     fn start(
         &self,
         overrides: Option<AgentLlmRequestOverrides>,

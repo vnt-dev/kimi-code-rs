@@ -99,6 +99,17 @@ pub fn full_compaction_complete() -> Result<Op, serde_json::Error> {
     FULL_COMPACTION_COMPLETE.create(EmptyCompactionPayload {})
 }
 
+/// Forces the wire descriptors to exist before replay begins.
+///
+/// TypeScript registers these descriptors as a module side effect. Rust uses
+/// lazy statics, so the agent-scoped service explicitly realizes the same
+/// registrations during construction.
+pub fn ensure_full_compaction_ops_registered() {
+    LazyLock::force(&FULL_COMPACTION_BEGIN);
+    LazyLock::force(&FULL_COMPACTION_CANCEL);
+    LazyLock::force(&FULL_COMPACTION_COMPLETE);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,6 +120,7 @@ mod tests {
 
     #[test]
     fn model_and_wire_payloads_match_source() {
+        ensure_full_compaction_ops_registered();
         assert_eq!(COMPACTION_MODEL.name(), "fullCompaction");
         assert_eq!(COMPACTION_MODEL.initial(), CompactionState::default());
         assert_eq!(FULL_COMPACTION_BEGIN.op_type(), "full_compaction.begin");

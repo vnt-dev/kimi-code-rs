@@ -311,7 +311,7 @@ impl AgentToolDedupeService {
                 ToolCallDupType::CrossStep => TelemetryDupType::CrossStep,
             },
             args_hash: args_hash(input.args),
-            trace_id: input.trace.and_then(|value| value.trace_id.clone()),
+            trace_id: input.trace.and_then(|value| value.trace_id()),
         });
     }
 
@@ -389,7 +389,7 @@ impl AgentToolDedupeService {
                 tool_name: tool_name.into(),
                 repeat_count: streak,
                 action,
-                trace_id: trace.and_then(|value| value.trace_id.clone()),
+                trace_id: trace.and_then(|value| value.trace_id()),
             });
         }
         let senders = self

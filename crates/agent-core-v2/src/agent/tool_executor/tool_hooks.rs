@@ -156,9 +156,7 @@ mod tests {
         ToolExecutionHookContext {
             turn_id: 7,
             signal: AbortController::new().signal(),
-            trace: Some(LlmRequestTrace {
-                trace_id: Some("trace-7".into()),
-            }),
+            trace: Some(LlmRequestTrace::new(Some("trace-7".into()))),
             tool_call: ToolCall {
                 call_type: ToolCallType::Function,
                 id: "call-1".into(),

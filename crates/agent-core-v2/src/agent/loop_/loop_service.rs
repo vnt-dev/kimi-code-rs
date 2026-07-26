@@ -540,7 +540,7 @@ impl AgentLoopService {
                 _ => state
                     .active_request_trace
                     .as_ref()
-                    .and_then(|trace| trace.trace_id.clone()),
+                    .and_then(LlmRequestTrace::trace_id),
             }
         };
         let error = match &result {
@@ -1065,8 +1065,8 @@ impl AgentLoopService {
             Some(signal.clone()),
         );
         self.state.lock().unwrap().active_request_trace = Some(request.trace.clone());
-        let response = request.result.await.map_err(string_error)?;
-        self.state.lock().unwrap().last_request_trace_id = request.trace.trace_id.clone();
+        let response = request.result.await.map_err(LoopValue::Error)?;
+        self.state.lock().unwrap().last_request_trace_id = request.trace.trace_id();
         self.append_response_content(turn_id, current_step, &step_uuid, &response)?;
         let finish_reason = self
             .execute_step_tools(
@@ -1526,7 +1526,7 @@ impl AgentLoopServiceContract for AgentLoopService {
             active_trace_id: state
                 .active_request_trace
                 .as_ref()
-                .and_then(|trace| trace.trace_id.clone()),
+                .and_then(LlmRequestTrace::trace_id),
         }
     }
 

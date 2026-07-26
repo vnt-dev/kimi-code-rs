@@ -663,10 +663,7 @@ impl ExecutorRunner {
             duration_ms,
             dup_type,
             error_type,
-            trace_id: options
-                .trace
-                .as_ref()
-                .and_then(|trace| trace.trace_id.clone()),
+            trace_id: options.trace.as_ref().and_then(|trace| trace.trace_id()),
         });
     }
 }
