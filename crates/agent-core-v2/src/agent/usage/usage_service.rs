@@ -221,6 +221,12 @@ mod tests {
     #[derive(Default)]
     struct CaptureEvents(Mutex<Vec<DomainEvent>>);
 
+    impl Disposable for CaptureEvents {
+        fn dispose(&self) -> DisposeResult {
+            Ok(())
+        }
+    }
+
     impl EventBusContract for CaptureEvents {
         fn publish(&self, event: DomainEvent) {
             self.0.lock().unwrap().push(event);

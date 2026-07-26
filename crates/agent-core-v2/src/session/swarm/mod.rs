@@ -3,14 +3,20 @@
 //! Original: `session/swarm/sessionSwarm.ts`.
 
 pub mod agent_run_batch;
+pub mod service;
 pub use agent_run_batch::*;
+pub use service::*;
 
-use std::{future::Future, ops::Deref, pin::Pin, sync::Arc, time::Duration};
+use std::{ops::Deref, sync::Arc, time::Duration};
 
+use futures_util::future::BoxFuture;
 use serde_json::Value;
 
 use crate::{
-    _base::{di::instantiation::ServiceIdentifier, utils::abort::AbortSignal},
+    _base::{
+        di::instantiation::ServiceIdentifier, lifecycle::lifecycle_machine::BoxError,
+        utils::abort::AbortSignal,
+    },
     kosong::contract::usage::TokenUsage,
 };
 
@@ -76,13 +82,13 @@ pub struct SessionSwarmRunResult<T> {
 }
 
 pub type SessionSwarmFuture =
-    Pin<Box<dyn Future<Output = Vec<SessionSwarmRunResult<Value>>> + Send>>;
+    BoxFuture<'static, Result<Vec<SessionSwarmRunResult<Value>>, BoxError>>;
 pub trait SessionSwarmServiceContract: Send + Sync {
     fn get_swarm_item(
         &self,
         caller_agent_id: &str,
         agent_id: &str,
-    ) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>>;
+    ) -> BoxFuture<'static, Result<Option<String>, BoxError>>;
     fn run(&self, args: SessionSwarmRunArgs<Value>) -> SessionSwarmFuture;
     fn cancel(&self, caller_agent_id: &str);
 }

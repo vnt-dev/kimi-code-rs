@@ -2,6 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/btw/btw.ts`.
 
+pub mod contract;
+pub mod service;
+
+pub use contract::*;
+pub use service::*;
+
 pub const TOOL_CALL_DISABLED_MESSAGE: &str =
     "Tool calls are disabled for side questions. Answer with text only.";
 

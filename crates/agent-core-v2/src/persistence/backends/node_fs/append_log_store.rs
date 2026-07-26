@@ -17,18 +17,23 @@ use serde_json::Value;
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 use crate::_base::{
-    di::lifecycle::{DisposableHandle, to_disposable},
+    di::{
+        descriptors::SyncDescriptor,
+        instantiation::ServicesAccessorExt,
+        lifecycle::{DisposableHandle, to_disposable},
+        scope::{InstantiationType, LifecycleScope, register_scoped_service},
+    },
     errors::errors::{Error2Options, ErrorCause},
 };
 
 use crate::persistence::interface::{
     append_log_store::{
-        AppendLogCorruptedError, AppendLogError, AppendLogOptions, AppendLogStoreService,
-        AppendLogValueStream,
+        APPEND_LOG_STORE_SERVICE_ID, AppendLogCorruptedError, AppendLogError, AppendLogOptions,
+        AppendLogStoreHandle, AppendLogStoreService, AppendLogValueStream,
     },
     storage::{
-        FileSystemStorageService, STORAGE_DECODE_FAILED, STORAGE_IO_FAILED, StorageAppendOptions,
-        StorageError, StorageWriteOptions,
+        FILE_SYSTEM_STORAGE_SERVICE_ID, FileSystemStorageService, STORAGE_DECODE_FAILED,
+        STORAGE_IO_FAILED, StorageAppendOptions, StorageError, StorageWriteOptions,
     },
 };
 
@@ -236,6 +241,25 @@ impl AppendLogStore {
             logs.shift_remove(&id);
         }
     }
+}
+
+/// Registers the App-scoped ordered append-log backend.
+///
+/// Original: the module-level `registerScopedService(...)` call in
+/// `appendLogStore.ts`.
+pub fn register_append_log_store() {
+    register_scoped_service(
+        LifecycleScope::App,
+        APPEND_LOG_STORE_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let storage = accessor.get(FILE_SYSTEM_STORAGE_SERVICE_ID)?;
+            let service: Arc<dyn AppendLogStoreService> =
+                Arc::new(AppendLogStore::new(Arc::clone(&storage.0)));
+            Ok(AppendLogStoreHandle(service))
+        }),
+        InstantiationType::Eager,
+        "storage",
+    );
 }
 
 #[async_trait]

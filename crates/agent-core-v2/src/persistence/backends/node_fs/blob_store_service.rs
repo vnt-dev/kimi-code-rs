@@ -6,9 +6,20 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::_base::di::{
+    descriptors::SyncDescriptor,
+    instantiation::ServicesAccessorExt,
+    scope::{InstantiationType, LifecycleScope, register_scoped_service},
+};
 use crate::persistence::interface::{
-    blob_store::{BlobReadRange, BlobStoreService as BlobStoreServiceContract},
-    storage::{FileSystemStorageService, StorageByteStream, StorageError, StorageWriteOptions},
+    blob_store::{
+        BLOB_STORE_SERVICE_ID, BlobReadRange, BlobStoreHandle,
+        BlobStoreService as BlobStoreServiceContract,
+    },
+    storage::{
+        FILE_SYSTEM_STORAGE_SERVICE_ID, FileSystemStorageService, StorageByteStream, StorageError,
+        StorageWriteOptions,
+    },
 };
 
 pub struct BlobStoreService {
@@ -60,6 +71,22 @@ impl BlobStoreServiceContract for BlobStoreService {
     async fn list(&self, scope: &str, prefix: Option<&str>) -> Result<Vec<String>, StorageError> {
         self.storage.list(scope, prefix).await
     }
+}
+
+/// Registers the App-scoped blob-store facade.
+pub fn register_blob_store_service() {
+    register_scoped_service(
+        LifecycleScope::App,
+        BLOB_STORE_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let storage = accessor.get(FILE_SYSTEM_STORAGE_SERVICE_ID)?;
+            let service: Arc<dyn BlobStoreServiceContract> =
+                Arc::new(BlobStoreService::new(Arc::clone(&storage.0)));
+            Ok(BlobStoreHandle(service))
+        }),
+        InstantiationType::Eager,
+        "blobStore",
+    );
 }
 
 #[cfg(test)]

@@ -29,9 +29,20 @@ use kimi_code_minidb::{
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::persistence::interface::query_store::{
-    Checkpoint, IndexDef, Page, QueryBuilderService, QueryFilter, QueryStoreError,
-    QueryStoreService, SortDir, WriteOp,
+use crate::{
+    _base::{
+        di::{
+            descriptors::SyncDescriptor,
+            instantiation::ServicesAccessorExt,
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
+        log::{LOG_SERVICE_ID, LogPayload},
+    },
+    app::bootstrap::BOOTSTRAP_SERVICE_ID,
+    persistence::interface::query_store::{
+        Checkpoint, IndexDef, Page, QUERY_STORE_SERVICE_ID, QueryBuilderService, QueryFilter,
+        QueryStoreError, QueryStoreHandle, QueryStoreService, SortDir, WriteOp,
+    },
 };
 
 const SEPARATOR: char = '\0';
@@ -155,6 +166,41 @@ impl MiniDbQueryStore {
             Err(error) => Err(QueryStoreError::backend(error)),
         }
     }
+}
+
+/// Registers the App-scoped MiniDB derived query store.
+///
+/// The rebuild callback preserves the TypeScript service's structured warning
+/// through the injected application logger.
+pub fn register_mini_db_query_store() {
+    register_scoped_service(
+        LifecycleScope::App,
+        QUERY_STORE_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let bootstrap = accessor.get(BOOTSTRAP_SERVICE_ID)?;
+            let log = accessor.get(LOG_SERVICE_ID)?;
+            let log = log.clone();
+            let logger: RebuildLogger = Arc::new(move |directory, error| {
+                log.0.warn(
+                    "minidb query-store rebuilt after corruption",
+                    Some(LogPayload::Context(serde_json::Map::from_iter([
+                        (
+                            "dir".into(),
+                            Value::String(directory.to_string_lossy().into_owned()),
+                        ),
+                        ("error".into(), Value::String(error.into())),
+                    ]))),
+                );
+            });
+            let service: Arc<dyn QueryStoreService> = Arc::new(
+                MiniDbQueryStore::new_with_rebuild_logger(bootstrap.cache_dir(), Some(logger)),
+            );
+            Ok(QueryStoreHandle(service))
+        })
+        .disposable(),
+        InstantiationType::Eager,
+        "storage",
+    );
 }
 
 #[async_trait]

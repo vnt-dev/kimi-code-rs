@@ -8,11 +8,17 @@ use std::{
 };
 
 use crate::_base::{
-    di::lifecycle::{Disposable, DisposableHandle, DisposeResult},
+    di::{
+        descriptors::SyncDescriptor,
+        lifecycle::{Disposable, DisposableHandle, DisposeResult},
+        scope::{InstantiationType, LifecycleScope, register_scoped_service},
+    },
     event::Emitter,
 };
 
-use super::event_bus::{DomainEvent, DomainEventHandler, EventBusContract};
+use super::event_bus::{
+    DomainEvent, DomainEventHandler, EVENT_BUS_SERVICE_ID, EventBusContract, EventBusHandle,
+};
 
 pub struct EventBusService {
     all: Arc<Emitter<DomainEvent>>,
@@ -79,6 +85,21 @@ impl Drop for EventBusService {
     fn drop(&mut self) {
         let _ = self.dispose();
     }
+}
+
+/// Registers the eager Agent-scoped domain event bus.
+pub fn register_event_bus_service() {
+    register_scoped_service(
+        LifecycleScope::Agent,
+        EVENT_BUS_SERVICE_ID,
+        SyncDescriptor::new(|_| {
+            let service: Arc<dyn EventBusContract> = Arc::new(EventBusService::new());
+            Ok(EventBusHandle(service))
+        })
+        .disposable(),
+        InstantiationType::Eager,
+        "event",
+    );
 }
 
 #[cfg(test)]

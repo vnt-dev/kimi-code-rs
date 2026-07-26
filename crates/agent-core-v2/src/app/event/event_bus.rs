@@ -7,7 +7,10 @@ use std::{fmt, ops::Deref, sync::Arc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::_base::di::{instantiation::ServiceIdentifier, lifecycle::DisposableHandle};
+use crate::_base::di::{
+    instantiation::ServiceIdentifier,
+    lifecycle::{Disposable, DisposableHandle, DisposeResult},
+};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct DomainEvent {
@@ -52,7 +55,7 @@ impl std::error::Error for DomainEventError {}
 
 pub type DomainEventHandler = std::sync::Arc<dyn Fn(&DomainEvent) + Send + Sync>;
 
-pub trait EventBusContract: Send + Sync {
+pub trait EventBusContract: Disposable + Send + Sync {
     fn publish(&self, event: DomainEvent);
     fn subscribe(&self, handler: DomainEventHandler) -> DisposableHandle;
     fn subscribe_type(&self, event_type: &str, handler: DomainEventHandler) -> DisposableHandle;
@@ -66,6 +69,12 @@ impl Deref for EventBusHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for EventBusHandle {
+    fn dispose(&self) -> DisposeResult {
+        self.0.dispose()
     }
 }
 

@@ -13,14 +13,19 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    _base::utils::abort::{AbortError, AbortSignal},
+    _base::{
+        di::instantiation::ServicesAccessorExt,
+        utils::abort::{AbortError, AbortSignal},
+    },
     agent::{
         question_tools::{QuestionBackgroundTask, QuestionTaskRun},
-        scope_context::AgentScopeContext,
-        task::{AgentTaskServiceHandle, RegisterAgentTaskOptions},
+        scope_context::{AGENT_SCOPE_CONTEXT_ID, AgentScopeContext},
+        task::{AGENT_TASK_SERVICE_ID, AgentTaskServiceHandle, RegisterAgentTaskOptions},
+        tool_registry::{ToolContributionOptions, register_tool},
     },
     app::telemetry::{
-        QuestionAnsweredEvent, QuestionDismissedEvent, TelemetryServiceHandle,
+        QuestionAnsweredEvent, QuestionDismissedEvent, TELEMETRY_SERVICE_ID,
+        TelemetryServiceHandle,
         event_payloads::{
             QuestionAnswerMethod as TelemetryQuestionAnswerMethod, TelemetryServiceEventExt,
         },
@@ -28,7 +33,8 @@ use crate::{
     kosong::contract::{request_trace::LlmRequestTrace, tool::Tool},
     session::question::{
         QuestionAnswerMethod, QuestionItem, QuestionOption, QuestionRequest,
-        QuestionRequestOptions, QuestionResult, SessionQuestionService,
+        QuestionRequestOptions, QuestionResult, SESSION_QUESTION_SERVICE_ID,
+        SessionQuestionService,
     },
     tool::{
         ExecutableTool, ExecutableToolContext, ExecutableToolResult, RunnableToolExecution,
@@ -222,6 +228,25 @@ impl AskUserQuestionTool {
             },
         }
     }
+}
+
+// Original: registerTool(AskUserQuestionTool).
+pub fn register_ask_user_question_tool() {
+    register_tool(
+        Arc::new(|accessor| {
+            let questions = accessor.get(SESSION_QUESTION_SERVICE_ID)?;
+            let telemetry = accessor.get(TELEMETRY_SERVICE_ID)?;
+            let tasks = accessor.get(AGENT_TASK_SERVICE_ID)?;
+            let scope = accessor.get(AGENT_SCOPE_CONTEXT_ID)?;
+            Ok(Arc::new(AskUserQuestionTool::new(
+                Arc::clone(&questions.0),
+                (*telemetry).clone(),
+                (*tasks).clone(),
+                (*scope).clone(),
+            )))
+        }),
+        ToolContributionOptions::default(),
+    );
 }
 
 #[async_trait]

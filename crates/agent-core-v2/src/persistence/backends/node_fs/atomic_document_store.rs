@@ -8,14 +8,25 @@ use async_trait::async_trait;
 use serde_json::{Map, Value};
 
 use crate::_base::{
-    di::lifecycle::{DisposableHandle, disposable_none},
+    di::{
+        descriptors::SyncDescriptor,
+        instantiation::ServicesAccessorExt,
+        lifecycle::{DisposableHandle, disposable_none},
+        scope::{InstantiationType, LifecycleScope, register_scoped_service},
+    },
     errors::errors::{Error2Options, ErrorCause},
     event::Event,
 };
 
 use crate::persistence::interface::{
-    atomic_document_store::{AtomicDocumentStoreService, DocumentCodec},
-    storage::{FileSystemStorageService, STORAGE_DECODE_FAILED, StorageError, StorageWriteOptions},
+    atomic_document_store::{
+        ATOMIC_DOCUMENT_STORE_SERVICE_ID, ATOMIC_TOML_DOCUMENT_STORE_SERVICE_ID,
+        AtomicDocumentStoreHandle, AtomicDocumentStoreService, DocumentCodec,
+    },
+    storage::{
+        FILE_SYSTEM_STORAGE_SERVICE_ID, FileSystemStorageService, STORAGE_DECODE_FAILED,
+        StorageError, StorageWriteOptions,
+    },
 };
 
 #[derive(Debug, Default)]
@@ -180,6 +191,37 @@ impl TomlAtomicDocumentStore {
             Arc::new(TomlDocumentCodec),
         )))
     }
+}
+
+/// Registers both App-scoped atomic document formats.
+///
+/// Original: the adjacent JSON and TOML `registerScopedService(...)` calls in
+/// `atomicDocumentStore.ts`.
+pub fn register_atomic_document_stores() {
+    register_scoped_service(
+        LifecycleScope::App,
+        ATOMIC_DOCUMENT_STORE_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let storage = accessor.get(FILE_SYSTEM_STORAGE_SERVICE_ID)?;
+            let service: Arc<dyn AtomicDocumentStoreService> =
+                Arc::new(JsonAtomicDocumentStore::new(Arc::clone(&storage.0)));
+            Ok(AtomicDocumentStoreHandle(service))
+        }),
+        InstantiationType::Eager,
+        "storage",
+    );
+    register_scoped_service(
+        LifecycleScope::App,
+        ATOMIC_TOML_DOCUMENT_STORE_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let storage = accessor.get(FILE_SYSTEM_STORAGE_SERVICE_ID)?;
+            let service: Arc<dyn AtomicDocumentStoreService> =
+                Arc::new(TomlAtomicDocumentStore::new(Arc::clone(&storage.0)));
+            Ok(AtomicDocumentStoreHandle(service))
+        }),
+        InstantiationType::Eager,
+        "storage",
+    );
 }
 
 #[async_trait]

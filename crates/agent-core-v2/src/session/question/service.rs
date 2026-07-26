@@ -10,13 +10,23 @@ use std::{
 use serde_json::Value;
 
 use crate::{
-    _base::utils::abort::AbortSignal,
+    _base::{
+        di::{
+            descriptors::SyncDescriptor,
+            instantiation::ServicesAccessorExt,
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
+        utils::abort::AbortSignal,
+    },
     session::interaction::{
-        InteractionKind, InteractionOrigin, InteractionRequest, SessionInteractionService,
+        InteractionKind, InteractionOrigin, InteractionRequest, SESSION_INTERACTION_SERVICE_ID,
+        SessionInteractionService,
     },
 };
 
-use super::{QuestionRequest, QuestionResult};
+use super::{
+    QuestionRequest, QuestionResult, SESSION_QUESTION_SERVICE_ID, SessionQuestionServiceHandle,
+};
 
 #[derive(Clone, Default)]
 pub struct QuestionRequestOptions {
@@ -120,6 +130,23 @@ impl SessionQuestionService {
     }
 }
 
+// Original: registerScopedService(..., SessionQuestionService, Eager,
+// "question").
+pub fn register_session_question_service() {
+    register_scoped_service(
+        LifecycleScope::Session,
+        SESSION_QUESTION_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let interaction = accessor.get(SESSION_INTERACTION_SERVICE_ID)?;
+            Ok(SessionQuestionServiceHandle(Arc::new(
+                SessionQuestionService::new(Arc::clone(&interaction.0)),
+            )))
+        }),
+        InstantiationType::Eager,
+        "question",
+    );
+}
+
 fn request_id(request: &QuestionRequest) -> String {
     request
         .id
@@ -147,7 +174,17 @@ fn question_result_to_value(result: &QuestionResult) -> Value {
 mod tests {
     use super::*;
     use crate::{
-        _base::utils::abort::AbortController,
+        _base::{
+            di::{
+                lifecycle::Disposable,
+                scope::{
+                    LifecycleScope, Scope, ScopeOptions, clear_scoped_registry_for_tests,
+                    get_scoped_service_descriptors,
+                },
+            },
+            utils::abort::AbortController,
+        },
+        session::interaction::register_session_interaction_service,
         session::question::{
             QuestionAnswer, QuestionAnswerMethod, QuestionItem, QuestionOption, QuestionResponse,
         },
@@ -177,6 +214,27 @@ mod tests {
                 other_description: None,
             }],
         }
+    }
+
+    #[test]
+    fn registration_matches_the_eager_session_scoped_source_binding() {
+        clear_scoped_registry_for_tests();
+        register_session_interaction_service();
+        register_session_question_service();
+        let entries = get_scoped_service_descriptors(LifecycleScope::Session);
+        assert!(entries.iter().any(|entry| {
+            entry.id.to_string() == SESSION_QUESTION_SERVICE_ID.to_string()
+                && !entry.descriptor.supports_delayed_instantiation
+                && entry.domain == "question"
+        }));
+        let app = Scope::create_app(ScopeOptions::default());
+        let session = app
+            .create_child(LifecycleScope::Session, "session", ScopeOptions::default())
+            .unwrap();
+        session.get(SESSION_QUESTION_SERVICE_ID).unwrap();
+        session.dispose().unwrap();
+        app.dispose().unwrap();
+        clear_scoped_registry_for_tests();
     }
 
     fn answer(label: &str) -> QuestionResult {

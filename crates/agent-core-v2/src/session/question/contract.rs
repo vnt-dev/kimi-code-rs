@@ -2,9 +2,13 @@
 //!
 //! Original: `session/question/question.ts`.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+
+use crate::_base::di::instantiation::ServiceIdentifier;
+
+use super::service::SessionQuestionService;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,4 +107,31 @@ pub struct QuestionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     pub questions: Vec<QuestionItem>,
+}
+
+#[derive(Clone)]
+pub struct SessionQuestionServiceHandle(pub Arc<SessionQuestionService>);
+
+impl Deref for SessionQuestionServiceHandle {
+    type Target = SessionQuestionService;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const SESSION_QUESTION_SERVICE_ID: ServiceIdentifier<SessionQuestionServiceHandle> =
+    ServiceIdentifier::new("sessionQuestionService");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_identifier_matches_the_source_decorator() {
+        assert_eq!(
+            SESSION_QUESTION_SERVICE_ID.to_string(),
+            "sessionQuestionService"
+        );
+    }
 }

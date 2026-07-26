@@ -11,7 +11,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
-use crate::_base::di::instantiation::ServiceIdentifier;
+use crate::_base::di::{
+    instantiation::ServiceIdentifier,
+    lifecycle::{Disposable, DisposeResult},
+};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -202,6 +205,18 @@ pub trait QueryStoreService: Send + Sync {
 
 #[derive(Clone)]
 pub struct QueryStoreHandle(pub Arc<dyn QueryStoreService>);
+
+impl Disposable for QueryStoreHandle {
+    fn dispose(&self) -> DisposeResult {
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let store = Arc::clone(&self.0);
+            runtime.spawn(async move {
+                let _ = store.close().await;
+            });
+        }
+        Ok(())
+    }
+}
 
 impl QueryStoreHandle {
     pub async fn put<T: Serialize>(
