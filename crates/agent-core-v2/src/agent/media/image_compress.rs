@@ -400,56 +400,77 @@ pub fn crop_image_for_model(
     region: ImageCropRegion,
     options: &CropImageOptions,
 ) -> CropImageOutcome {
-    let fail = |error| CropImageOutcome::Failure(CropImageFailure { error });
+    let started_at = Instant::now();
+    let fail = |error_kind, error| {
+        report_crop_event(
+            options.compress.telemetry.as_ref(),
+            false,
+            Some(error_kind),
+            started_at,
+            None,
+        );
+        CropImageOutcome::Failure(CropImageFailure { error })
+    };
     let normalized = normalize_image_mime(mime_type);
     if bytes.is_empty() {
-        return fail("The image is empty.".into());
+        return fail("empty", "The image is empty.".into());
     }
     if !matches!(
         normalized.as_str(),
         "image/png" | "image/jpeg" | "image/webp"
     ) {
-        return fail(format!(
-            "Cropping is only supported for PNG, JPEG, and WebP images; got {mime_type}."
-        ));
+        return fail(
+            "unsupported_format",
+            format!("Cropping is only supported for PNG, JPEG, and WebP images; got {mime_type}."),
+        );
     }
     if normalized == "image/webp" && is_animated_webp(bytes) {
-        return fail("Cropping is not supported for animated WebP images.".into());
+        return fail(
+            "unsupported_format",
+            "Cropping is not supported for animated WebP images.".into(),
+        );
     }
     if ![region.x, region.y, region.width, region.height]
         .iter()
         .all(|value| value.is_finite())
     {
-        return fail(format!(
-            "Region coordinates must be finite numbers; got x={}, y={}, width={}, height={}.",
-            js_number(region.x),
-            js_number(region.y),
-            js_number(region.width),
-            js_number(region.height)
-        ));
+        return fail(
+            "region_invalid",
+            format!(
+                "Region coordinates must be finite numbers; got x={}, y={}, width={}, height={}.",
+                js_number(region.x),
+                js_number(region.y),
+                js_number(region.width),
+                js_number(region.height)
+            ),
+        );
+    }
+    if let Some(dimensions) = super::sniff_image_dimensions(bytes)
+        && (dimensions.width as u64).saturating_mul(dimensions.height as u64) > MAX_DECODE_PIXELS
+    {
+        return fail(
+            "too_large",
+            format!(
+                "The image ({}x{} pixels) is too large to decode for cropping.",
+                dimensions.width, dimensions.height
+            ),
+        );
     }
     let max_decode = options
         .compress
         .max_decode_bytes
         .unwrap_or(MAX_IMAGE_DECODE_BYTES);
     if bytes.len() > max_decode {
-        return fail("The image is too large to decode for cropping.".into());
-    }
-    if let Some(dimensions) = super::sniff_image_dimensions(bytes)
-        && (dimensions.width <= 0
-            || dimensions.height <= 0
-            || (dimensions.width as u64).saturating_mul(dimensions.height as u64)
-                > MAX_DECODE_PIXELS)
-    {
-        return fail(format!(
-            "The image ({}x{} pixels) is too large to decode for cropping.",
-            dimensions.width, dimensions.height
-        ));
+        return fail(
+            "too_large",
+            "The image is too large to decode for cropping.".into(),
+        );
     }
     let Ok(image) =
         ImageReader::with_format(Cursor::new(bytes), format_for_mime(&normalized)).decode()
     else {
         return fail(
+            "decode_failed",
             "Failed to decode the image for cropping: unsupported or corrupt image data.".into(),
         );
     };
@@ -462,15 +483,18 @@ pub fn crop_image_for_model(
         || region.width < 1.0
         || region.height < 1.0
     {
-        return fail(format!(
-            "Region (x={}, y={}, width={}, height={}) lies outside the {}x{} image.",
-            js_number(region.x),
-            js_number(region.y),
-            js_number(region.width),
-            js_number(region.height),
-            original_width,
-            original_height
-        ));
+        return fail(
+            "out_of_bounds",
+            format!(
+                "Region (x={}, y={}, width={}, height={}) lies outside the {}x{} image.",
+                js_number(region.x),
+                js_number(region.y),
+                js_number(region.width),
+                js_number(region.height),
+                original_width,
+                original_height
+            ),
+        );
     }
     let (x, y) = (x as u32, y as u32);
     let (w, h) = (
@@ -507,18 +531,24 @@ pub fn crop_image_for_model(
         })
     };
     let Some((data, output_mime, width, height)) = encoded else {
-        return fail("Failed to decode the image for cropping: image encoding failed.".into());
+        return fail(
+            "decode_failed",
+            "Failed to decode the image for cropping: image encoding failed.".into(),
+        );
     };
     if options.skip_resize && data.len() > budget {
-        return fail(format!(
-            "The cropped region encodes to {} bytes ({}), over the {}-byte ({}) per-image limit. Choose a smaller region, or allow downscaling.",
-            data.len(),
-            format_byte_size(data.len() as f64),
-            budget,
-            format_byte_size(budget as f64),
-        ));
+        return fail(
+            "budget",
+            format!(
+                "The cropped region encodes to {} bytes ({}), over the {}-byte ({}) per-image limit. Choose a smaller region, or allow downscaling.",
+                data.len(),
+                format_byte_size(data.len() as f64),
+                budget,
+                format_byte_size(budget as f64),
+            ),
+        );
     }
-    CropImageOutcome::Success(CropImageSuccess {
+    let result = CropImageSuccess {
         final_byte_length: data.len(),
         data,
         mime_type: output_mime.into(),
@@ -529,7 +559,68 @@ pub fn crop_image_for_model(
         region: applied,
         resized: width != w || height != h,
         original_byte_length: bytes.len(),
-    })
+    };
+    report_crop_event(
+        options.compress.telemetry.as_ref(),
+        true,
+        None,
+        started_at,
+        Some(&result),
+    );
+    CropImageOutcome::Success(result)
+}
+
+fn report_crop_event(
+    telemetry: Option<&ImageCompressionTelemetry>,
+    ok: bool,
+    error_kind: Option<&str>,
+    started_at: Instant,
+    result: Option<&CropImageSuccess>,
+) {
+    let Some(telemetry) = telemetry else {
+        return;
+    };
+    let original_pixels = result
+        .map(|value| value.original_width.saturating_mul(value.original_height))
+        .unwrap_or_default();
+    let region_area_ratio = result
+        .filter(|_| original_pixels != 0)
+        .map(|value| value.region.width * value.region.height / original_pixels as f64);
+    let properties = TelemetryProperties::from([
+        ("source".into(), Some(serde_json::json!(telemetry.source))),
+        ("ok".into(), Some(serde_json::json!(ok))),
+        (
+            "error_kind".into(),
+            error_kind.map(|value| serde_json::json!(value)),
+        ),
+        (
+            "resized".into(),
+            result.map(|value| serde_json::json!(value.resized)),
+        ),
+        (
+            "original_width".into(),
+            result.map(|value| serde_json::json!(value.original_width)),
+        ),
+        (
+            "original_height".into(),
+            result.map(|value| serde_json::json!(value.original_height)),
+        ),
+        (
+            "region_area_ratio".into(),
+            region_area_ratio.map(|value| serde_json::json!(value)),
+        ),
+        (
+            "final_bytes".into(),
+            result.map(|value| serde_json::json!(value.final_byte_length)),
+        ),
+        (
+            "duration_ms".into(),
+            Some(serde_json::json!(started_at.elapsed().as_millis())),
+        ),
+    ]);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        telemetry.client.track("image_crop", Some(&properties));
+    }));
 }
 
 fn encode_skip_resize(
@@ -1184,6 +1275,78 @@ mod tests {
         );
         assert!(
             matches!(invalid, CropImageOutcome::Failure(CropImageFailure { error }) if error.contains("finite numbers"))
+        );
+    }
+
+    #[test]
+    fn crop_reports_success_and_failure_telemetry_like_the_source() {
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let telemetry = Arc::new(TelemetryService::new());
+        telemetry.set_appender(Arc::new(RecordingAppender(Arc::clone(&records))));
+        let telemetry = Some(ImageCompressionTelemetry {
+            client: TelemetryServiceHandle(telemetry),
+            source: "read_media".into(),
+        });
+        let bitmap = DynamicImage::new_rgb8(4, 2);
+        let mut encoded = Cursor::new(Vec::new());
+        bitmap.write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let bytes = encoded.into_inner();
+
+        let success = crop_image_for_model(
+            &bytes,
+            "image/png",
+            ImageCropRegion {
+                x: 1.0,
+                y: 0.0,
+                width: 2.0,
+                height: 2.0,
+            },
+            &CropImageOptions {
+                compress: CompressImageOptions {
+                    telemetry: telemetry.clone(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        assert!(matches!(success, CropImageOutcome::Success(_)));
+
+        let failure = crop_image_for_model(
+            &bytes,
+            "image/png",
+            ImageCropRegion {
+                x: -1.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            &CropImageOptions {
+                compress: CompressImageOptions {
+                    telemetry,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        assert!(matches!(failure, CropImageOutcome::Failure(_)));
+
+        let records = records.lock().unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].0, "image_crop");
+        assert_eq!(
+            records[0].1["source"],
+            Some(serde_json::json!("read_media"))
+        );
+        assert_eq!(records[0].1["ok"], Some(serde_json::json!(true)));
+        assert_eq!(
+            records[0].1["region_area_ratio"],
+            Some(serde_json::json!(0.5))
+        );
+        assert_eq!(records[1].0, "image_crop");
+        assert_eq!(records[1].1["ok"], Some(serde_json::json!(false)));
+        assert_eq!(
+            records[1].1["error_kind"],
+            Some(serde_json::json!("out_of_bounds"))
         );
     }
 }
