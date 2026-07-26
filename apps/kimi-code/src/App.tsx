@@ -58,6 +58,7 @@ import {
 } from "./store";
 import type {
   AgentCompactionEvent,
+  AgentContextUsageEvent,
   AgentInteraction,
   AgentInteractionsEvent,
   ApprovalPayload,
@@ -65,6 +66,7 @@ import type {
   ChatMessage,
   ChatStreamEvent,
   CompactionEvent,
+  ContextUsage,
   DesktopState,
   DeviceCode,
   Model,
@@ -103,6 +105,10 @@ function formatContext(value: number): string {
   return `${value}`;
 }
 
+function formatTokenCount(value: number): string {
+  return Math.max(0, Math.round(value)).toLocaleString("en-US");
+}
+
 function conciseError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/^Error:\s*/i, "");
@@ -132,6 +138,9 @@ export default function App() {
   const [compactions, setCompactions] = useState<
     Record<string, CompactionEvent>
   >({});
+  const [contextUsages, setContextUsages] = useState<
+    Record<string, ContextUsage>
+  >({});
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -153,6 +162,9 @@ export default function App() {
     : undefined;
   const activeCompaction = activeConversation
     ? compactions[activeConversation.id]
+    : undefined;
+  const activeContextUsage = activeConversation
+    ? contextUsages[activeConversation.id]
     : undefined;
 
   const updateDesktop = (
@@ -266,14 +278,46 @@ export default function App() {
         }));
       },
     );
+    const unlistenContextUsage = listen<AgentContextUsageEvent>(
+      "agent-context-usage",
+      (event) => {
+        setContextUsages((current) => ({
+          ...current,
+          [event.payload.conversationId]: event.payload.usage,
+        }));
+      },
+    );
     return () => {
       void unlistenDevice.then((unlisten) => unlisten());
       void unlistenBrowserError.then((unlisten) => unlisten());
       void unlistenStream.then((unlisten) => unlisten());
       void unlistenInteractions.then((unlisten) => unlisten());
       void unlistenCompaction.then((unlisten) => unlisten());
+      void unlistenContextUsage.then((unlisten) => unlisten());
     };
   }, []);
+
+  useEffect(() => {
+    const conversationId = activeConversation?.id;
+    if (!conversationId || !auth.loggedIn) return;
+    let active = true;
+    invoke<ContextUsage | null>("conversation_context_usage", {
+      conversationId,
+    })
+      .then((usage) => {
+        if (!active || !usage) return;
+        setContextUsages((current) => ({
+          ...current,
+          [conversationId]: usage,
+        }));
+      })
+      .catch(() => {
+        // A new conversation does not have an agent session until its first prompt.
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeConversation?.id, auth.loggedIn]);
 
   useEffect(() => {
     const scroll = scrollRef.current;
@@ -429,6 +473,7 @@ export default function App() {
       const status = await invoke<AuthStatus>("logout");
       setAuth(status);
       setModels([]);
+      setContextUsages({});
       setProfileOpen(false);
       showNotice("已退出登录");
     } catch (error) {
@@ -980,9 +1025,10 @@ export default function App() {
                       }
                     />
                     {selectedModel && (
-                      <span className="context-badge">
-                        {formatContext(selectedModel.contextLength)} 上下文
-                      </span>
+                      <ContextUsageIndicator
+                        usage={activeContextUsage}
+                        maxContextTokens={selectedModel.contextLength}
+                      />
                     )}
                   </div>
                   <div className="send-zone">
@@ -1038,6 +1084,68 @@ interface ToolbarSelectOption {
   label: string;
   description?: string;
   danger?: boolean;
+}
+
+function ContextUsageIndicator({
+  usage,
+  maxContextTokens,
+}: {
+  usage?: ContextUsage;
+  maxContextTokens: number;
+}) {
+  const contextTokens = Math.max(0, usage?.contextTokens ?? 0);
+  const effectiveMax =
+    maxContextTokens > 0 ? maxContextTokens : (usage?.maxContextTokens ?? 0);
+  const ratio = effectiveMax > 0 ? contextTokens / effectiveMax : 0;
+  const progress = Math.min(1, Math.max(0, ratio));
+  const percent = effectiveMax > 0 ? Math.round(ratio * 100) : undefined;
+  const level = ratio >= 0.85 ? "critical" : ratio >= 0.7 ? "warning" : "";
+  const measuredTokens = Math.max(0, usage?.measuredTokens ?? 0);
+  const estimatedTokens = Math.max(0, usage?.estimatedTokens ?? contextTokens);
+
+  return (
+    <div
+      className={`context-usage ${level}`}
+      tabIndex={0}
+      aria-label={
+        percent === undefined
+          ? "上下文窗口上限未知"
+          : `上下文窗口已用 ${percent}%`
+      }
+    >
+      <span className="context-usage-meter" aria-hidden="true">
+        <svg viewBox="0 0 20 20">
+          <circle className="context-usage-track" cx="10" cy="10" r="7.5" />
+          <circle
+            className="context-usage-progress"
+            cx="10"
+            cy="10"
+            r="7.5"
+            pathLength="100"
+            strokeDasharray="100"
+            strokeDashoffset={100 - progress * 100}
+          />
+        </svg>
+      </span>
+      <span className="context-usage-percent">
+        {percent === undefined ? "—" : `${percent}%`}
+      </span>
+      <div className="context-usage-tooltip" role="tooltip">
+        <strong>上下文窗口</strong>
+        <span className="context-usage-summary">
+          {percent === undefined ? "使用量未知" : `${percent}% 已用`}
+        </span>
+        <span>
+          已用 {formatTokenCount(contextTokens)} tokens，共{" "}
+          {effectiveMax > 0 ? formatTokenCount(effectiveMax) : "未知"}
+        </span>
+        <small>
+          实测 {formatTokenCount(measuredTokens)} · 估算{" "}
+          {formatTokenCount(estimatedTokens)}
+        </small>
+      </div>
+    </div>
+  );
 }
 
 function CompactionNotice({ event }: { event: CompactionEvent }) {

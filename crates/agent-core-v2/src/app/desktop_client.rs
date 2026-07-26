@@ -28,10 +28,11 @@ use crate::{
     _base::di::scope::Scope,
     agent::{
         context_memory::{ContextMessage, PromptOrigin},
+        context_size::{AGENT_CONTEXT_SIZE_SERVICE_ID, AgentContextSizeServiceHandle, ContextSize},
         loop_::LoopRunResult,
         permission_mode::AGENT_PERMISSION_MODE_SERVICE_ID,
         permission_policy::PermissionMode,
-        profile::{AGENT_PROFILE_SERVICE_ID, BindAgentInput},
+        profile::{AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle, BindAgentInput},
         prompt::{AGENT_PROMPT_SERVICE_ID, PromptCompletionState, PromptInput},
     },
     app::{
@@ -145,6 +146,16 @@ pub struct DesktopCompactionEvent {
     pub compacted_count: Option<f64>,
     pub tokens_before: Option<f64>,
     pub tokens_after: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopContextUsage {
+    pub context_tokens: f64,
+    pub measured_tokens: f64,
+    pub estimated_tokens: f64,
+    pub max_context_tokens: u64,
+    pub usage_ratio: f64,
 }
 
 struct CallbackObserver {
@@ -265,6 +276,7 @@ impl KimiCodeDesktopClient {
         on_delta: Arc<dyn Fn(DesktopChatDelta) + Send + Sync>,
         on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
         on_compaction: Arc<dyn Fn(DesktopCompactionEvent) + Send + Sync>,
+        on_context_usage: Arc<dyn Fn(DesktopContextUsage) + Send + Sync>,
     ) -> Result<DesktopChatResult, String> {
         if request.model.trim().is_empty() {
             return Err("A model must be selected.".to_owned());
@@ -367,11 +379,31 @@ impl KimiCodeDesktopClient {
             .set_mode(permission_mode)
             .map_err(|error| error.to_string())?;
 
+        let context_size = agent
+            .get(AGENT_CONTEXT_SIZE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        emit_context_usage(&context_size, &profile, &on_context_usage);
+
         let content = Arc::new(Mutex::new(String::new()));
         let streamed_content = Arc::clone(&content);
         let event_bus = agent
             .get(EVENT_BUS_SERVICE_ID)
             .map_err(|error| error.to_string())?;
+        let context_size_for_updates = context_size.clone();
+        let profile_for_updates = profile.clone();
+        let on_context_usage_for_updates = Arc::clone(&on_context_usage);
+        let _context_usage_updates = event_bus.subscribe(Arc::new(move |event| {
+            if matches!(
+                event.event_type.as_str(),
+                "agent.status.updated" | "context.spliced"
+            ) {
+                emit_context_usage(
+                    &context_size_for_updates,
+                    &profile_for_updates,
+                    &on_context_usage_for_updates,
+                );
+            }
+        }));
         let _compaction_updates = event_bus.subscribe(Arc::new(move |event| {
             if let Some(event) = map_desktop_compaction_event(event) {
                 on_compaction(event);
@@ -422,6 +454,7 @@ impl KimiCodeDesktopClient {
             .flush()
             .await
             .map_err(|error| error.to_string())?;
+        emit_context_usage(&context_size, &profile, &on_context_usage);
 
         let finish_reason = match completion.result {
             Some(LoopRunResult::Completed { steps, truncated }) => {
@@ -446,6 +479,43 @@ impl KimiCodeDesktopClient {
             thinking: String::new(),
             finish_reason,
         })
+    }
+
+    pub async fn context_usage(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<DesktopContextUsage>, String> {
+        self.ensure_models_configured().await?;
+        let sessions = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let session_id = desktop_session_id(conversation_id);
+        let session = if let Some(session) = sessions.get(&session_id) {
+            session
+        } else {
+            let Some(session) = sessions
+                .resume(&session_id)
+                .await
+                .map_err(|error| error.to_string())?
+            else {
+                return Ok(None);
+            };
+            session
+        };
+        let agents = session
+            .get(AGENT_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let agent = agents
+            .get(MAIN_AGENT_ID)
+            .ok_or_else(|| "the session did not create its main agent".to_owned())?;
+        let context_size = agent
+            .get(AGENT_CONTEXT_SIZE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let profile = agent
+            .get(AGENT_PROFILE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        context_usage_snapshot(&context_size, &profile).map(Some)
     }
 
     pub async fn respond_interaction(
@@ -574,6 +644,43 @@ fn map_desktop_model(model: ManagedKimiCodeModelInfo) -> DesktopModel {
     }
 }
 
+fn context_usage_snapshot(
+    context_size: &AgentContextSizeServiceHandle,
+    profile: &AgentProfileServiceHandle,
+) -> Result<DesktopContextUsage, String> {
+    let context = context_size.get(None, None);
+    let max_context_tokens = profile
+        .get_model_capabilities()
+        .map_err(|error| error.to_string())?
+        .max_context_tokens;
+    Ok(context_usage_from_size(context, max_context_tokens))
+}
+
+fn context_usage_from_size(context: ContextSize, max_context_tokens: u64) -> DesktopContextUsage {
+    let usage_ratio = if max_context_tokens == 0 {
+        0.0
+    } else {
+        context.size / max_context_tokens as f64
+    };
+    DesktopContextUsage {
+        context_tokens: context.size,
+        measured_tokens: context.measured,
+        estimated_tokens: context.estimated,
+        max_context_tokens,
+        usage_ratio,
+    }
+}
+
+fn emit_context_usage(
+    context_size: &AgentContextSizeServiceHandle,
+    profile: &AgentProfileServiceHandle,
+    callback: &Arc<dyn Fn(DesktopContextUsage) + Send + Sync>,
+) {
+    if let Ok(usage) = context_usage_snapshot(context_size, profile) {
+        callback(usage);
+    }
+}
+
 fn map_desktop_interactions(interactions: Vec<Interaction>) -> Vec<DesktopInteraction> {
     interactions
         .into_iter()
@@ -657,8 +764,11 @@ fn desktop_session_id(conversation_id: &str) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{desktop_session_id, managed_model_alias, map_desktop_compaction_event};
-    use crate::app::event::event_bus::DomainEvent;
+    use super::{
+        context_usage_from_size, desktop_session_id, managed_model_alias,
+        map_desktop_compaction_event,
+    };
+    use crate::{agent::context_size::ContextSize, app::event::event_bus::DomainEvent};
 
     #[test]
     fn qualifies_managed_model_ids_once() {
@@ -675,6 +785,24 @@ mod tests {
             desktop_session_id("chat_1234/abcd"),
             "desktop-chat-1234-abcd"
         );
+    }
+
+    #[test]
+    fn computes_desktop_context_usage_from_measured_and_estimated_tokens() {
+        let usage = context_usage_from_size(
+            ContextSize {
+                size: 64_000.0,
+                measured: 60_000.0,
+                estimated: 4_000.0,
+            },
+            128_000,
+        );
+
+        assert_eq!(usage.context_tokens, 64_000.0);
+        assert_eq!(usage.measured_tokens, 60_000.0);
+        assert_eq!(usage.estimated_tokens, 4_000.0);
+        assert_eq!(usage.max_context_tokens, 128_000);
+        assert_eq!(usage.usage_ratio, 0.5);
     }
 
     #[test]

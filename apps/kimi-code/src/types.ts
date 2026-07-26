@@ -109,3 +109,16 @@ export interface AgentCompactionEvent {
   conversationId: string;
   event: CompactionEvent;
 }
+
+export interface ContextUsage {
+  contextTokens: number;
+  measuredTokens: number;
+  estimatedTokens: number;
+  maxContextTokens: number;
+  usageRatio: number;
+}
+
+export interface AgentContextUsageEvent {
+  conversationId: string;
+  usage: ContextUsage;
+}

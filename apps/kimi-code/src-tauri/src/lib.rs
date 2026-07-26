@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use kimi_code_agent_core_v2::app::desktop_client::{
     DesktopAuthStatus, DesktopChatDelta, DesktopChatRequest, DesktopChatResult,
-    DesktopCompactionEvent, DesktopDeviceCode, DesktopInteraction, DesktopModel,
-    KimiCodeDesktopClient,
+    DesktopCompactionEvent, DesktopContextUsage, DesktopDeviceCode, DesktopInteraction,
+    DesktopModel, KimiCodeDesktopClient,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -56,6 +56,13 @@ struct AgentCompactionEvent {
     event: DesktopCompactionEvent,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentContextUsageEvent {
+    conversation_id: String,
+    usage: DesktopContextUsage,
+}
+
 #[tauri::command]
 async fn auth_status(state: State<'_, AppState>) -> Result<DesktopAuthStatus, String> {
     state.client.auth_status().await
@@ -94,6 +101,14 @@ async fn list_models(state: State<'_, AppState>) -> Result<Vec<DesktopModel>, St
 }
 
 #[tauri::command]
+async fn conversation_context_usage(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Option<DesktopContextUsage>, String> {
+    state.client.context_usage(&conversation_id).await
+}
+
+#[tauri::command]
 async fn send_message(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -106,6 +121,8 @@ async fn send_message(
     let conversation_for_interactions = conversation_id.clone();
     let app_for_compaction = app.clone();
     let conversation_for_compaction = conversation_id.clone();
+    let app_for_context_usage = app.clone();
+    let conversation_for_context_usage = conversation_id.clone();
     state
         .client
         .chat(
@@ -136,6 +153,15 @@ async fn send_message(
                     AgentCompactionEvent {
                         conversation_id: conversation_for_compaction.clone(),
                         event,
+                    },
+                );
+            }),
+            Arc::new(move |usage| {
+                let _ = app_for_context_usage.emit(
+                    "agent-context-usage",
+                    AgentContextUsageEvent {
+                        conversation_id: conversation_for_context_usage.clone(),
+                        usage,
                     },
                 );
             }),
@@ -174,6 +200,7 @@ pub fn run() {
             login,
             logout,
             list_models,
+            conversation_context_usage,
             send_message,
             respond_interaction
         ])
