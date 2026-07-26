@@ -36,10 +36,6 @@ use crate::{
         utils::abort::abort_error,
     },
     agent::{
-        blob::{
-            AGENT_BLOB_SERVICE_ID, AgentBlobService, AgentBlobServiceContract,
-            AgentBlobServiceHandle,
-        },
         context_memory::AGENT_CONTEXT_MEMORY_SERVICE_ID,
         full_compaction::AGENT_FULL_COMPACTION_SERVICE_ID,
         loop_::{AGENT_LOOP_SERVICE_ID, LoopValue},
@@ -60,19 +56,13 @@ use crate::{
         event::event_bus::EVENT_BUS_SERVICE_ID,
         telemetry::{TELEMETRY_SERVICE_ID, TelemetryContextPatch, TelemetryServiceHandle},
     },
-    persistence::interface::{
-        append_log_store::APPEND_LOG_STORE_SERVICE_ID, blob_store::BLOB_STORE_SERVICE_ID,
-    },
     session::{
         interaction::{SESSION_INTERACTION_SERVICE_ID, SessionInteractionServiceHandle},
         mcp::{SESSION_MCP_SERVICE_ID, SessionMcpServiceHandle},
         session_context::{SESSION_CONTEXT_ID, SessionContext},
         session_metadata::{AgentMeta, AgentMetaType, SESSION_METADATA_ID, SessionMetadataHandle},
     },
-    wire::{
-        contract::{WIRE_SERVICE_ID, WireServiceHandle},
-        wire_service::{DomainEventPublisher, WireBlobService, WireService},
-    },
+    wire::contract::WIRE_SERVICE_ID,
 };
 
 use super::{
@@ -293,33 +283,8 @@ impl AgentLifecycleService {
                 .agent_scope(&context.workspace_id, &context.session_id, &agent_id);
         let scope_context = make_agent_scope_context(AgentScopeContextInput {
             agent_id: agent_id.clone(),
-            agent_scope: agent_scope.clone(),
-        });
-
-        let blobs = self
-            .inner
-            .instantiation
-            .get(BLOB_STORE_SERVICE_ID)
-            .map_err(|error| LifecycleError::new(error.to_string()))?;
-        let log = self
-            .inner
-            .instantiation
-            .get(APPEND_LOG_STORE_SERVICE_ID)
-            .map_err(|error| LifecycleError::new(error.to_string()))?;
-        let events = self
-            .inner
-            .instantiation
-            .get(EVENT_BUS_SERVICE_ID)
-            .map_err(|error| LifecycleError::new(error.to_string()))?;
-        let blob = Arc::new(AgentBlobService::new((*blobs).clone(), &scope_context));
-        let wire_blob: Arc<dyn WireBlobService> = blob.clone();
-        let event_publisher: Arc<dyn DomainEventPublisher> = Arc::new((*events).clone());
-        let wire = Arc::new(WireService::new(
             agent_scope,
-            (*log).clone(),
-            wire_blob,
-            event_publisher,
-        ));
+        });
 
         let mut extra = ServiceCollection::new();
         extra.set_instance(AGENT_SCOPE_CONTEXT_ID, Arc::new(scope_context));
@@ -331,15 +296,6 @@ impl AgentLifecycleService {
                 Some(Value::String(agent_id.clone())),
             )]));
         extra.set_instance(TELEMETRY_SERVICE_ID, Arc::new(telemetry));
-        let blob_contract: Arc<dyn AgentBlobServiceContract> = blob;
-        extra.set_instance(
-            AGENT_BLOB_SERVICE_ID,
-            Arc::new(AgentBlobServiceHandle(blob_contract)),
-        );
-        extra.set_instance(
-            WIRE_SERVICE_ID,
-            Arc::new(WireServiceHandle(Arc::clone(&wire))),
-        );
 
         let handle = create_scoped_child_handle(
             &self.inner.instantiation,
@@ -356,6 +312,9 @@ impl AgentLifecycleService {
             .insert(agent_id.clone(), handle.clone());
 
         let startup = async {
+            let wire = handle
+                .get(WIRE_SERVICE_ID)
+                .map_err(|error| LifecycleError::new(error.to_string()))?;
             wire.seal()
                 .await
                 .map_err(|error| LifecycleError::new(error.to_string()))?;
