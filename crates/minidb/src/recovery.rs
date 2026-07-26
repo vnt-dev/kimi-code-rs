@@ -213,7 +213,7 @@ fn scan_file(
     };
     let metadata = file.metadata()?;
     let size = metadata.len();
-    let anchor = metadata_anchor(&metadata);
+    let anchor = metadata_anchor(path, &metadata)?;
     let scan = scan_frame_refs(&mut file, mode, 0)?;
     let mut operations = Vec::new();
     for frame in &scan.frames {
@@ -323,13 +323,14 @@ pub fn catch_up_wal(
     anchor: WalAnchor,
     mut apply: impl FnMut(&FrameRef, &mut File) -> Result<(), RecoveryError>,
 ) -> Result<Option<CatchUpResult>, RecoveryError> {
+    let wal_path = wal_path.as_ref();
     let mut file = match OpenOptions::new().read(true).open(wal_path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     let metadata = file.metadata()?;
-    if metadata_anchor(&metadata) != anchor || offset > metadata.len() {
+    if metadata_anchor(wal_path, &metadata)? != anchor || offset > metadata.len() {
         return Ok(None);
     }
     let scan = scan_frame_refs(&mut file, CorruptionMode::Strict, offset)?;
@@ -353,20 +354,35 @@ pub fn catch_up_wal(
 }
 
 #[cfg(unix)]
-fn metadata_anchor(metadata: &std::fs::Metadata) -> WalAnchor {
+fn metadata_anchor(_path: &Path, metadata: &std::fs::Metadata) -> io::Result<WalAnchor> {
     use std::os::unix::fs::MetadataExt;
-    WalAnchor {
+
+    Ok(WalAnchor {
         device: metadata.dev(),
         inode: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn metadata_anchor(path: &Path, _metadata: &std::fs::Metadata) -> io::Result<WalAnchor> {
+    match file_id::get_low_res_file_id(path)? {
+        file_id::FileId::LowRes {
+            volume_serial_number,
+            file_index,
+        } => Ok(WalAnchor {
+            device: u64::from(volume_serial_number),
+            inode: file_index,
+        }),
+        _ => Err(io::Error::other("unexpected Windows file ID variant")),
     }
 }
 
-#[cfg(not(unix))]
-fn metadata_anchor(_metadata: &std::fs::Metadata) -> WalAnchor {
-    WalAnchor {
+#[cfg(not(any(unix, windows)))]
+fn metadata_anchor(_path: &Path, _metadata: &std::fs::Metadata) -> io::Result<WalAnchor> {
+    Ok(WalAnchor {
         device: 0,
         inode: 0,
-    }
+    })
 }
 
 #[cfg(test)]

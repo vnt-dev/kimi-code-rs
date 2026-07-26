@@ -16,5 +16,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 
+[target.'cfg(windows)'.dependencies]
+file-id = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
