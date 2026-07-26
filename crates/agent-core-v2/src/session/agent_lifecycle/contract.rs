@@ -36,6 +36,7 @@ pub struct ForkAgentBinding {
     pub profile: Option<String>,
     pub model: Option<String>,
     pub thinking: Option<String>,
+    pub strict_thinking: Option<bool>,
     pub cwd: Option<String>,
 }
 
@@ -50,7 +51,7 @@ pub struct AgentListFilter {
     pub prefix: Option<String>,
 }
 
-pub trait AgentLifecycleServiceContract: Send + Sync {
+pub trait AgentLifecycleServiceContract: Disposable + Send + Sync {
     fn on_did_create(&self) -> Event<AgentScopeHandle>;
     fn on_did_dispose(&self) -> Event<String>;
     fn create(
@@ -64,7 +65,7 @@ pub trait AgentLifecycleServiceContract: Send + Sync {
     ) -> BoxFuture<'static, Result<AgentScopeHandle, BoxError>>;
     fn get(&self, agent_id: &str) -> Option<AgentScopeHandle>;
     fn list(&self, filter: Option<&AgentListFilter>) -> Vec<AgentScopeHandle>;
-    fn broadcast_permission_mode(&self, mode: PermissionMode);
+    fn broadcast_permission_mode(&self, mode: PermissionMode) -> Result<(), BoxError>;
     fn remove(&self, agent_id: String) -> BoxFuture<'static, Result<(), BoxError>>;
 }
 
@@ -81,7 +82,7 @@ impl Deref for AgentLifecycleServiceHandle {
 
 impl Disposable for AgentLifecycleServiceHandle {
     fn dispose(&self) -> DisposeResult {
-        Ok(())
+        self.0.dispose()
     }
 }
 
@@ -109,6 +110,19 @@ mod tests {
             .labels
             .unwrap()["swarmItem"],
             "work"
+        );
+        assert_eq!(
+            ForkAgentOptions {
+                binding: Some(ForkAgentBinding {
+                    strict_thinking: Some(true),
+                    ..ForkAgentBinding::default()
+                }),
+                ..ForkAgentOptions::default()
+            }
+            .binding
+            .unwrap()
+            .strict_thinking,
+            Some(true)
         );
     }
 }

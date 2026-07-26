@@ -196,25 +196,45 @@ impl AgentLifecycleService {
             Some(agent_id) => agent_id,
             None => self.next_available_agent_id().await?,
         };
-        let creation = {
+        let (creation, should_drive) = {
             let mut state = self.inner.state.lock().unwrap();
             if let Some(creation) = state.creating.get(&agent_id) {
-                creation.clone()
+                (creation.clone(), false)
             } else if let Some(handle) = state.handles.get(&agent_id) {
                 return Ok(handle.clone());
             } else {
                 let lifecycle = self.clone();
+                let cleanup = self.clone();
                 let id = agent_id.clone();
-                let creation = async move { lifecycle.do_create(id, options).await }
-                    .boxed()
-                    .shared();
+                let cleanup_id = agent_id.clone();
+                let creation = async move {
+                    let result = lifecycle.do_create(id, options).await;
+                    cleanup
+                        .inner
+                        .state
+                        .lock()
+                        .unwrap()
+                        .creating
+                        .remove(&cleanup_id);
+                    result
+                }
+                .boxed()
+                .shared();
                 state.creating.insert(agent_id.clone(), creation.clone());
-                creation
+                (creation, true)
             }
         };
-        let result = creation.await;
-        self.inner.state.lock().unwrap().creating.remove(&agent_id);
-        result
+        // A JavaScript Promise starts immediately and keeps running even when
+        // its first caller stops awaiting it. Drive the shared Rust future in
+        // the background to preserve that single-flight/bootstrap behavior
+        // and guarantee the creating entry is eventually removed.
+        if should_drive {
+            let driver = creation.clone();
+            tokio::spawn(async move {
+                let _ = driver.await;
+            });
+        }
+        creation.await
     }
 
     async fn next_available_agent_id(&self) -> Result<String, LifecycleError> {
@@ -441,10 +461,13 @@ impl AgentLifecycleService {
         use crate::agent::{
             activity_view::AGENT_ACTIVITY_VIEW_ID,
             context_injector::AGENT_CONTEXT_INJECTOR_SERVICE_ID,
+            external_hooks::AGENT_EXTERNAL_HOOKS_SERVICE_ID,
+            goal::AGENT_GOAL_SERVICE_ID,
             loop_::AGENT_LOOP_CONTINUATION_SERVICE_ID,
             mcp::AGENT_MCP_SERVICE_ID,
             media::{AGENT_MEDIA_TOOLS_REGISTRAR_ID, IMAGE_CONFIG_BRIDGE_ID},
             plan::AGENT_PLAN_SERVICE_ID,
+            plugin::AGENT_PLUGIN_SERVICE_ID,
             step_retry::AGENT_STEP_RETRY_SERVICE_ID,
             tool_dedupe::AGENT_TOOL_DEDUPE_SERVICE_ID,
             tool_registry::AGENT_BUILTIN_TOOLS_REGISTRAR_ID,
@@ -458,13 +481,16 @@ impl AgentLifecycleService {
         handle.get(AGENT_MEDIA_TOOLS_REGISTRAR_ID)?;
         handle.get(IMAGE_CONFIG_BRIDGE_ID)?;
         handle.get(AGENT_TOOL_DEDUPE_SERVICE_ID)?;
+        handle.get(AGENT_EXTERNAL_HOOKS_SERVICE_ID)?;
         handle.get(AGENT_MCP_SERVICE_ID)?;
+        handle.get(AGENT_PLUGIN_SERVICE_ID)?;
         handle.get(AGENT_TOOL_SELECT_SERVICE_ID)?;
         handle.get(AGENT_TOOL_SELECT_ANNOUNCEMENTS_SERVICE_ID)?;
         handle.get(AGENT_STEP_RETRY_SERVICE_ID)?;
         handle.get(AGENT_LOOP_CONTINUATION_SERVICE_ID)?;
         handle.get(AGENT_CONTEXT_MEMORY_SERVICE_ID)?;
         handle.get(AGENT_CONTEXT_INJECTOR_SERVICE_ID)?;
+        handle.get(AGENT_GOAL_SERVICE_ID)?;
         handle.get(AGENT_PLAN_SERVICE_ID)?;
         handle.get(AGENT_TASK_SERVICE_ID)?;
         handle.get(AGENT_USER_TOOL_SERVICE_ID)?;
@@ -714,12 +740,15 @@ impl AgentLifecycleServiceContract for AgentLifecycleService {
             .collect()
     }
 
-    fn broadcast_permission_mode(&self, mode: PermissionMode) {
+    fn broadcast_permission_mode(&self, mode: PermissionMode) -> Result<(), BoxError> {
         for handle in self.list(None) {
-            if let Ok(service) = handle.get(AGENT_PERMISSION_MODE_SERVICE_ID) {
-                let _ = service.set_mode(mode);
-            }
+            handle
+                .get(AGENT_PERMISSION_MODE_SERVICE_ID)
+                .map_err(|error| Box::new(error) as BoxError)?
+                .set_mode(mode)
+                .map_err(|error| Box::new(error) as BoxError)?;
         }
+        Ok(())
     }
 
     fn remove(&self, agent_id: String) -> BoxFuture<'static, Result<(), BoxError>> {
@@ -740,7 +769,8 @@ impl Disposable for AgentLifecycleService {
         for disposable in subscriptions.into_values() {
             disposable.dispose()?;
         }
-        Ok(())
+        self.inner.did_dispose.dispose()?;
+        self.inner.did_create.dispose()
     }
 }
 
@@ -781,4 +811,31 @@ fn agent_suffix(agent_id: &str) -> Option<u64> {
         .strip_prefix("agent-")
         .filter(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
         .and_then(|suffix| suffix.parse().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_id_suffix_parser_matches_source_pattern() {
+        assert_eq!(agent_suffix("agent-0"), Some(0));
+        assert_eq!(agent_suffix("agent-0042"), Some(42));
+        assert_eq!(agent_suffix("main"), None);
+        assert_eq!(agent_suffix("agent-"), None);
+        assert_eq!(agent_suffix("agent--1"), None);
+        assert_eq!(agent_suffix("agent-1-child"), None);
+    }
+
+    #[test]
+    fn registration_is_eager_session_scoped_in_lifecycle_domain() {
+        register_agent_lifecycle_service();
+        let descriptor =
+            crate::_base::di::scope::get_scoped_service_descriptors(LifecycleScope::Session)
+                .into_iter()
+                .find(|entry| entry.id.to_string() == AGENT_LIFECYCLE_SERVICE_ID.to_string())
+                .expect("agent lifecycle service is registered");
+        assert!(!descriptor.descriptor.supports_delayed_instantiation);
+        assert_eq!(descriptor.domain, "agentLifecycle");
+    }
 }

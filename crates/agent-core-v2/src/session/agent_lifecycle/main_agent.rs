@@ -27,13 +27,17 @@ pub async fn ensure_main_agent(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
 
     use futures_util::{FutureExt, future::BoxFuture};
 
     use crate::{
         _base::{
             di::{
+                lifecycle::{Disposable, DisposeResult},
                 scope::{Scope, ScopeOptions},
                 service_collection::ServiceCollection,
             },
@@ -51,6 +55,14 @@ mod tests {
     struct Lifecycle {
         returned: AgentScopeHandle,
         options: Mutex<Vec<CreateAgentOptions>>,
+        disposed: AtomicBool,
+    }
+
+    impl Disposable for Lifecycle {
+        fn dispose(&self) -> DisposeResult {
+            self.disposed.store(true, Ordering::Release);
+            Ok(())
+        }
     }
 
     impl AgentLifecycleServiceContract for Lifecycle {
@@ -86,7 +98,9 @@ mod tests {
             Vec::new()
         }
 
-        fn broadcast_permission_mode(&self, _: PermissionMode) {}
+        fn broadcast_permission_mode(&self, _: PermissionMode) -> Result<(), BoxError> {
+            Ok(())
+        }
 
         fn remove(&self, _: String) -> BoxFuture<'static, Result<(), BoxError>> {
             futures_util::future::ready(Ok(())).boxed()
@@ -103,6 +117,7 @@ mod tests {
         let lifecycle = Arc::new(Lifecycle {
             returned: returned.clone(),
             options: Mutex::new(Vec::new()),
+            disposed: AtomicBool::new(false),
         });
         let mut services = ServiceCollection::new();
         let handle: Arc<dyn AgentLifecycleServiceContract> = lifecycle.clone();
@@ -127,5 +142,12 @@ mod tests {
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].agent_id.as_deref(), Some(MAIN_AGENT_ID));
         assert_eq!(seen[0].forked_from.as_deref(), Some("source"));
+        drop(seen);
+        session
+            .get(AGENT_LIFECYCLE_SERVICE_ID)
+            .unwrap()
+            .dispose()
+            .unwrap();
+        assert!(lifecycle.disposed.load(Ordering::Acquire));
     }
 }
