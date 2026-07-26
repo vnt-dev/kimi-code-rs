@@ -774,6 +774,87 @@ select:focus-visible {
   margin-bottom: 34px;
 }
 
+.compaction-notice {
+  display: grid;
+  width: min(560px, calc(100% - 56px));
+  min-height: 50px;
+  margin: 2px auto 32px;
+  padding: 9px 12px;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(139, 124, 246, 0.15);
+  border-radius: 11px;
+  color: #8c849e;
+  background:
+    linear-gradient(135deg, rgba(139, 124, 246, 0.045), transparent 55%),
+    rgba(20, 20, 25, 0.78);
+}
+
+.compaction-glyph {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(139, 124, 246, 0.18);
+  border-radius: 8px;
+  color: #a99df3;
+  background: rgba(139, 124, 246, 0.075);
+}
+
+.compaction-notice > span:nth-child(2) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.compaction-notice strong {
+  color: #c3bfcc;
+  font-size: 9.5px;
+  font-weight: 570;
+}
+
+.compaction-notice small {
+  overflow: hidden;
+  color: #67636f;
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compaction-notice > i {
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid rgba(139, 124, 246, 0.22);
+  border-top-color: #9c8ff0;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.compaction-notice.completed {
+  border-color: rgba(74, 194, 143, 0.16);
+  background:
+    linear-gradient(135deg, rgba(74, 194, 143, 0.04), transparent 55%),
+    rgba(20, 20, 25, 0.78);
+}
+
+.compaction-notice.completed .compaction-glyph {
+  border-color: rgba(74, 194, 143, 0.2);
+  color: #6fcba5;
+  background: rgba(74, 194, 143, 0.07);
+}
+
+.compaction-notice.cancelled {
+  border-color: rgba(212, 120, 120, 0.15);
+}
+
+.compaction-notice.cancelled .compaction-glyph {
+  border-color: rgba(212, 120, 120, 0.18);
+  color: #c78383;
+  background: rgba(212, 120, 120, 0.065);
+}
+
 .message-meta {
   display: flex;
   margin-bottom: 8px;

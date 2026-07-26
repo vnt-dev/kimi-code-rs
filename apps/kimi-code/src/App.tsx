@@ -31,6 +31,7 @@ import {
   LogOut,
   Menu,
   MessageSquareText,
+  Minimize2,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
@@ -56,12 +57,14 @@ import {
   persistState,
 } from "./store";
 import type {
+  AgentCompactionEvent,
   AgentInteraction,
   AgentInteractionsEvent,
   ApprovalPayload,
   AuthStatus,
   ChatMessage,
   ChatStreamEvent,
+  CompactionEvent,
   DesktopState,
   DeviceCode,
   Model,
@@ -126,6 +129,9 @@ export default function App() {
     Record<string, AgentInteraction[]>
   >({});
   const [resolvingInteraction, setResolvingInteraction] = useState<string>();
+  const [compactions, setCompactions] = useState<
+    Record<string, CompactionEvent>
+  >({});
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -144,6 +150,9 @@ export default function App() {
     ? interactions[activeConversation.id]?.find(
         (interaction) => interaction.kind === "approval",
       )
+    : undefined;
+  const activeCompaction = activeConversation
+    ? compactions[activeConversation.id]
     : undefined;
 
   const updateDesktop = (
@@ -248,18 +257,28 @@ export default function App() {
         }));
       },
     );
+    const unlistenCompaction = listen<AgentCompactionEvent>(
+      "agent-compaction",
+      (event) => {
+        setCompactions((current) => ({
+          ...current,
+          [event.payload.conversationId]: event.payload.event,
+        }));
+      },
+    );
     return () => {
       void unlistenDevice.then((unlisten) => unlisten());
       void unlistenBrowserError.then((unlisten) => unlisten());
       void unlistenStream.then((unlisten) => unlisten());
       void unlistenInteractions.then((unlisten) => unlisten());
+      void unlistenCompaction.then((unlisten) => unlisten());
     };
   }, []);
 
   useEffect(() => {
     const scroll = scrollRef.current;
     if (scroll) scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
-  }, [activeConversation?.messages]);
+  }, [activeConversation?.messages, activeCompaction?.phase]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -488,6 +507,12 @@ export default function App() {
         ? text.replace(/\s+/g, " ").slice(0, 28)
         : activeConversation.title;
 
+    setCompactions((current) => {
+      if (!(activeConversation.id in current)) return current;
+      const next = { ...current };
+      delete next[activeConversation.id];
+      return next;
+    });
     updateDesktop((current) => ({
       ...current,
       projects: current.projects.map((project) =>
@@ -819,6 +844,9 @@ export default function App() {
                       onCopy={() => void copyMessage(message)}
                     />
                   ))}
+                  {activeCompaction && (
+                    <CompactionNotice event={activeCompaction} />
+                  )}
                 </div>
               )}
             </div>
@@ -1010,6 +1038,51 @@ interface ToolbarSelectOption {
   label: string;
   description?: string;
   danger?: boolean;
+}
+
+function CompactionNotice({ event }: { event: CompactionEvent }) {
+  const completed = event.phase === "completed";
+  const cancelled = event.phase === "cancelled";
+  const detail = completed
+    ? event.tokensBefore !== undefined && event.tokensAfter !== undefined
+      ? `${formatContext(Math.round(event.tokensBefore))} → ${formatContext(
+          Math.round(event.tokensAfter),
+        )} tokens${
+          event.compactedCount !== undefined
+            ? ` · 整理 ${Math.round(event.compactedCount)} 条上下文`
+            : ""
+        }`
+      : "较早的对话已整理为上下文摘要"
+    : cancelled
+      ? "本次上下文整理未完成，对话内容保持不变"
+      : `${
+          event.trigger === "auto" ? "自动触发" : "手动触发"
+        } · 正在将较早的对话整理为摘要`;
+
+  return (
+    <div className={`compaction-notice ${event.phase}`} role="status">
+      <span className="compaction-glyph">
+        {completed ? (
+          <Check size={14} />
+        ) : cancelled ? (
+          <X size={14} />
+        ) : (
+          <Minimize2 size={14} />
+        )}
+      </span>
+      <span>
+        <strong>
+          {completed
+            ? "上下文压缩完成"
+            : cancelled
+              ? "上下文压缩已取消"
+              : "正在压缩上下文"}
+        </strong>
+        <small>{detail}</small>
+      </span>
+      {event.phase === "started" && <i />}
+    </div>
+  );
 }
 
 function ToolbarSelect({

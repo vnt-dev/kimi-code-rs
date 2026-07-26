@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use kimi_code_agent_core_v2::app::desktop_client::{
-    DesktopAuthStatus, DesktopChatDelta, DesktopChatRequest, DesktopChatResult, DesktopDeviceCode,
-    DesktopInteraction, DesktopModel, KimiCodeDesktopClient,
+    DesktopAuthStatus, DesktopChatDelta, DesktopChatRequest, DesktopChatResult,
+    DesktopCompactionEvent, DesktopDeviceCode, DesktopInteraction, DesktopModel,
+    KimiCodeDesktopClient,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -46,6 +47,13 @@ struct ChatStreamEvent {
 struct AgentInteractionsEvent {
     conversation_id: String,
     interactions: Vec<DesktopInteraction>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentCompactionEvent {
+    conversation_id: String,
+    event: DesktopCompactionEvent,
 }
 
 #[tauri::command]
@@ -96,6 +104,8 @@ async fn send_message(
     let conversation_for_event = conversation_id.clone();
     let app_for_interactions = app.clone();
     let conversation_for_interactions = conversation_id.clone();
+    let app_for_compaction = app.clone();
+    let conversation_for_compaction = conversation_id.clone();
     state
         .client
         .chat(
@@ -117,6 +127,15 @@ async fn send_message(
                     AgentInteractionsEvent {
                         conversation_id: conversation_for_interactions.clone(),
                         interactions,
+                    },
+                );
+            }),
+            Arc::new(move |event| {
+                let _ = app_for_compaction.emit(
+                    "agent-compaction",
+                    AgentCompactionEvent {
+                        conversation_id: conversation_for_compaction.clone(),
+                        event,
                     },
                 );
             }),

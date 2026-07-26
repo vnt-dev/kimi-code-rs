@@ -39,7 +39,7 @@ use crate::{
         auth::{OAuthToolkitContract, OAuthToolkitService},
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         config::{CONFIG_SERVICE_ID, ConfigTarget},
-        event::event_bus::EVENT_BUS_SERVICE_ID,
+        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID},
         session_lifecycle::{CreateSessionOptions, SESSION_LIFECYCLE_SERVICE_ID},
     },
     kosong::contract::message::{ContentPart, Message, Role},
@@ -135,6 +135,16 @@ pub struct DesktopInteraction {
     pub kind: String,
     pub payload: Value,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopCompactionEvent {
+    pub phase: String,
+    pub trigger: Option<String>,
+    pub compacted_count: Option<f64>,
+    pub tokens_before: Option<f64>,
+    pub tokens_after: Option<f64>,
 }
 
 struct CallbackObserver {
@@ -254,6 +264,7 @@ impl KimiCodeDesktopClient {
         request: DesktopChatRequest,
         on_delta: Arc<dyn Fn(DesktopChatDelta) + Send + Sync>,
         on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
+        on_compaction: Arc<dyn Fn(DesktopCompactionEvent) + Send + Sync>,
     ) -> Result<DesktopChatResult, String> {
         if request.model.trim().is_empty() {
             return Err("A model must be selected.".to_owned());
@@ -361,6 +372,11 @@ impl KimiCodeDesktopClient {
         let event_bus = agent
             .get(EVENT_BUS_SERVICE_ID)
             .map_err(|error| error.to_string())?;
+        let _compaction_updates = event_bus.subscribe(Arc::new(move |event| {
+            if let Some(event) = map_desktop_compaction_event(event) {
+                on_compaction(event);
+            }
+        }));
         let _assistant_output = event_bus.subscribe_type(
             "assistant.delta",
             Arc::new(move |event| {
@@ -575,6 +591,46 @@ fn map_desktop_interactions(interactions: Vec<Interaction>) -> Vec<DesktopIntera
         .collect()
 }
 
+fn map_desktop_compaction_event(event: &DomainEvent) -> Option<DesktopCompactionEvent> {
+    match event.event_type.as_str() {
+        "compaction.started" => Some(DesktopCompactionEvent {
+            phase: "started".to_owned(),
+            trigger: event
+                .fields
+                .get("trigger")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            compacted_count: None,
+            tokens_before: None,
+            tokens_after: None,
+        }),
+        "compaction.completed" => {
+            let result = event.fields.get("result").and_then(Value::as_object);
+            Some(DesktopCompactionEvent {
+                phase: "completed".to_owned(),
+                trigger: None,
+                compacted_count: result
+                    .and_then(|result| result.get("compactedCount"))
+                    .and_then(Value::as_f64),
+                tokens_before: result
+                    .and_then(|result| result.get("tokensBefore"))
+                    .and_then(Value::as_f64),
+                tokens_after: result
+                    .and_then(|result| result.get("tokensAfter"))
+                    .and_then(Value::as_f64),
+            })
+        }
+        "compaction.cancelled" => Some(DesktopCompactionEvent {
+            phase: "cancelled".to_owned(),
+            trigger: None,
+            compacted_count: None,
+            tokens_before: None,
+            tokens_after: None,
+        }),
+        _ => None,
+    }
+}
+
 fn managed_model_alias(model: &str) -> String {
     if model.contains('/') {
         model.to_owned()
@@ -599,7 +655,10 @@ fn desktop_session_id(conversation_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{desktop_session_id, managed_model_alias};
+    use serde_json::json;
+
+    use super::{desktop_session_id, managed_model_alias, map_desktop_compaction_event};
+    use crate::app::event::event_bus::DomainEvent;
 
     #[test]
     fn qualifies_managed_model_ids_once() {
@@ -616,5 +675,35 @@ mod tests {
             desktop_session_id("chat_1234/abcd"),
             "desktop-chat-1234-abcd"
         );
+    }
+
+    #[test]
+    fn maps_compaction_lifecycle_events_for_desktop_hosts() {
+        let started = DomainEvent::try_from(json!({
+            "type": "compaction.started",
+            "trigger": "auto"
+        }))
+        .unwrap();
+        let started = map_desktop_compaction_event(&started).unwrap();
+        assert_eq!(started.phase, "started");
+        assert_eq!(started.trigger.as_deref(), Some("auto"));
+
+        let completed = DomainEvent::try_from(json!({
+            "type": "compaction.completed",
+            "result": {
+                "compactedCount": 12,
+                "tokensBefore": 64000,
+                "tokensAfter": 9000
+            }
+        }))
+        .unwrap();
+        let completed = map_desktop_compaction_event(&completed).unwrap();
+        assert_eq!(completed.phase, "completed");
+        assert_eq!(completed.compacted_count, Some(12.0));
+        assert_eq!(completed.tokens_before, Some(64_000.0));
+        assert_eq!(completed.tokens_after, Some(9_000.0));
+
+        let unrelated = DomainEvent::try_from(json!({"type": "assistant.delta"})).unwrap();
+        assert!(map_desktop_compaction_event(&unrelated).is_none());
     }
 }

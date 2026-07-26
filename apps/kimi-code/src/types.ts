@@ -96,3 +96,16 @@ export interface AgentInteractionsEvent {
   conversationId: string;
   interactions: AgentInteraction[];
 }
+
+export interface CompactionEvent {
+  phase: "started" | "completed" | "cancelled";
+  trigger?: "manual" | "auto";
+  compactedCount?: number;
+  tokensBefore?: number;
+  tokensAfter?: number;
+}
+
+export interface AgentCompactionEvent {
+  conversationId: string;
+  event: CompactionEvent;
+}
