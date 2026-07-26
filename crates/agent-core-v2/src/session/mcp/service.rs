@@ -3,7 +3,7 @@
 //! Original: `session/mcp/sessionMcp.ts` and
 //! `session/mcp/sessionMcpService.ts`.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -11,13 +11,27 @@ use serde_json::{Map, Value};
 use tokio::sync::{Mutex, watch};
 
 use crate::{
-    _base::log::contract::{LogPayload, Logger},
-    agent::mcp::{
-        McpConnectionManager, McpConnectionManagerOptions, McpOAuthService, McpServerConfig,
-        ResolveSessionMcpConfigInput, SessionMcpConfig, merge_caller_mcp_servers,
-        resolve_session_mcp_config,
+    _base::{
+        di::{
+            descriptors::SyncDescriptor,
+            instantiation::{ServiceIdentifier, ServicesAccessorExt},
+            lifecycle::{Disposable, DisposeResult},
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
+        log::{LOG_SERVICE_ID, LogContext, LogPayload, LogServiceHandle, Logger},
     },
-    app::telemetry::contract::{TelemetryProperties, TelemetryServiceHandle},
+    agent::mcp::{
+        McpConnectionManager, McpConnectionManagerOptions, McpOAuthService, McpOAuthServiceOptions,
+        McpServerConfig, ResolveSessionMcpConfigInput, SessionMcpConfig, merge_caller_mcp_servers,
+        oauth::store::AtomicMcpOAuthStore, resolve_session_mcp_config,
+    },
+    app::{
+        bootstrap::{BOOTSTRAP_SERVICE_ID, BootstrapServiceHandle},
+        plugin::{PLUGIN_SERVICE_ID, PluginServiceHandle},
+        telemetry::{TELEMETRY_SERVICE_ID, TelemetryProperties, TelemetryServiceHandle},
+    },
+    persistence::interface::atomic_document_store::ATOMIC_DOCUMENT_STORE_SERVICE_ID,
+    session::workspace_context::SESSION_WORKSPACE_CONTEXT_ID,
 };
 
 pub type McpPluginServersResult =
@@ -68,6 +82,61 @@ pub struct SessionMcpService {
     oauth_service: Option<Arc<McpOAuthService>>,
     options: SessionMcpServiceOptions,
     initial_load: Mutex<InitialLoad>,
+}
+
+#[derive(Clone)]
+pub struct SessionMcpServiceHandle(pub Arc<SessionMcpService>);
+
+impl Deref for SessionMcpServiceHandle {
+    type Target = SessionMcpService;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl Disposable for SessionMcpServiceHandle {
+    fn dispose(&self) -> DisposeResult {
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let service = Arc::clone(&self.0);
+            runtime.spawn(async move {
+                service.shutdown().await;
+            });
+        }
+        Ok(())
+    }
+}
+
+pub const SESSION_MCP_SERVICE_ID: ServiceIdentifier<SessionMcpServiceHandle> =
+    ServiceIdentifier::new("sessionMcpService");
+
+struct PluginServerSource(PluginServiceHandle);
+
+#[async_trait]
+impl McpPluginServerSource for PluginServerSource {
+    async fn enabled_mcp_servers(&self) -> McpPluginServersResult {
+        self.0.enabled_mcp_servers().await
+    }
+}
+
+struct SessionMcpLogger(LogServiceHandle);
+
+impl Logger for SessionMcpLogger {
+    fn error(&self, message: &str, payload: Option<LogPayload>) {
+        self.0.0.error(message, payload);
+    }
+    fn warn(&self, message: &str, payload: Option<LogPayload>) {
+        self.0.0.warn(message, payload);
+    }
+    fn info(&self, message: &str, payload: Option<LogPayload>) {
+        self.0.0.info(message, payload);
+    }
+    fn debug(&self, message: &str, payload: Option<LogPayload>) {
+        self.0.0.debug(message, payload);
+    }
+    fn child(&self, context: LogContext) -> Arc<dyn Logger> {
+        self.0.0.child(context)
+    }
 }
 
 impl SessionMcpService {
@@ -211,6 +280,39 @@ impl SessionMcpService {
             );
         }
     }
+}
+
+pub fn register_session_mcp_service() {
+    register_scoped_service(
+        LifecycleScope::Session,
+        SESSION_MCP_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let bootstrap: Arc<BootstrapServiceHandle> = accessor.get(BOOTSTRAP_SERVICE_ID)?;
+            let workspace = accessor.get(SESSION_WORKSPACE_CONTEXT_ID)?;
+            let plugins = accessor.get(PLUGIN_SERVICE_ID)?;
+            let documents = accessor.get(ATOMIC_DOCUMENT_STORE_SERVICE_ID)?;
+            let log = accessor.get(LOG_SERVICE_ID)?;
+            let telemetry = accessor.get(TELEMETRY_SERVICE_ID)?;
+            let oauth_service = Arc::new(McpOAuthService::new(McpOAuthServiceOptions {
+                store: Arc::new(AtomicMcpOAuthStore::new((*documents).clone())),
+                client_label: None,
+            }));
+            Ok(SessionMcpServiceHandle(SessionMcpService::new(
+                SessionMcpServiceOptions {
+                    work_dir: workspace.work_dir(),
+                    home_dir: bootstrap.home_dir().to_path_buf(),
+                    plugin_servers: Arc::new(PluginServerSource((*plugins).clone())),
+                    log: Arc::new(SessionMcpLogger((*log).clone())),
+                    telemetry: (*telemetry).clone(),
+                    config_loader: None,
+                    oauth_service: Some(oauth_service),
+                },
+            )))
+        })
+        .disposable(),
+        InstantiationType::Eager,
+        "sessionMcp",
+    );
 }
 
 #[cfg(test)]

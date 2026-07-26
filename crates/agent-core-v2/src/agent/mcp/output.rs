@@ -8,10 +8,11 @@ use futures_util::future::BoxFuture;
 
 use crate::{
     agent::media::{
-        CompressAnnotateOptions, CompressImageContentPartsOptions, PersistOriginalImageOptions,
-        build_unsupported_image_notice, compress_image_content_parts, is_model_accepted_image_mime,
-        persist_original_image,
+        CompressAnnotateOptions, CompressImageContentPartsOptions, ImageCompressionTelemetry,
+        PersistOriginalImageOptions, build_unsupported_image_notice, compress_image_content_parts,
+        is_model_accepted_image_mime, persist_original_image,
     },
+    app::telemetry::TelemetryServiceHandle,
     kosong::contract::message::{ContentPart, MediaUrl},
     tool::ExecutableToolOutput,
 };
@@ -23,9 +24,10 @@ const MCP_OUTPUT_TRUNCATED_TEXT: &str = "\n\n[Output truncated: exceeded 100000 
 pub const MCP_MAX_BINARY_PART_BYTES: usize = 10 * 1024 * 1024;
 const MCP_MAX_BINARY_PART_CHARS: usize = (MCP_MAX_BINARY_PART_BYTES * 4).div_ceil(3);
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct McpOutputOptions {
     pub originals_dir: Option<PathBuf>,
+    pub telemetry: Option<TelemetryServiceHandle>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -163,10 +165,19 @@ pub async fn mcp_result_to_executable_output(
     let compressed = compress_image_content_parts(
         &budgeted.parts,
         &CompressImageContentPartsOptions {
+            compress: crate::agent::media::CompressImageOptions {
+                telemetry: options
+                    .telemetry
+                    .clone()
+                    .map(|client| ImageCompressionTelemetry {
+                        client,
+                        source: "mcp_tool_result".into(),
+                    }),
+                ..crate::agent::media::CompressImageOptions::default()
+            },
             annotate: Some(CompressAnnotateOptions {
                 persist_original: Some(persist_original),
             }),
-            ..CompressImageContentPartsOptions::default()
         },
     )
     .await;

@@ -9,6 +9,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
 use crate::{
+    app::telemetry::TelemetryServiceHandle,
     kosong::contract::tool::Tool,
     tool::{
         ExecutableTool, ExecutableToolContext, ExecutableToolResult, RunnableToolExecution,
@@ -18,9 +19,10 @@ use crate::{
 
 use super::super::{McpClient, McpOutputOptions, mcp_result_to_executable_output};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct McpToolOptions {
     pub originals_dir: Option<PathBuf>,
+    pub telemetry: Option<TelemetryServiceHandle>,
 }
 
 pub struct McpTool {
@@ -67,6 +69,7 @@ impl ExecutableTool for McpTool {
         let client = Arc::clone(&self.client);
         let output_options = McpOutputOptions {
             originals_dir: self.options.originals_dir.clone(),
+            telemetry: self.options.telemetry.clone(),
         };
         let arguments = args.as_object().cloned().unwrap_or_else(Map::new);
         let approval_rule = qualified_name.clone();

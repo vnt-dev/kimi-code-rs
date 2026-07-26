@@ -65,6 +65,17 @@ impl DomainEventPublisher for crate::app::event::event_bus_service::EventBusServ
     }
 }
 
+impl DomainEventPublisher for crate::app::event::event_bus::EventBusHandle {
+    fn publish(&self, event: Value) {
+        use crate::app::event::event_bus::DomainEvent;
+
+        match DomainEvent::try_from(event) {
+            Ok(event) => self.0.publish(event),
+            Err(error) => on_unexpected_error(&error),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RestorePhase {
     New,

@@ -47,6 +47,7 @@ pub struct McpServerEntry {
     pub transport: String,
     pub status: McpServerStatus,
     pub tool_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 

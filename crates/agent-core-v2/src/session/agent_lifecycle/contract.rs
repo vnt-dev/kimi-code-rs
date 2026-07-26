@@ -8,7 +8,11 @@ use futures_util::future::BoxFuture;
 
 use crate::{
     _base::{
-        di::{instantiation::ServiceIdentifier, scope::ScopeHandle},
+        di::{
+            instantiation::ServiceIdentifier,
+            lifecycle::{Disposable, DisposeResult},
+            scope::ScopeHandle,
+        },
         event::Event,
         lifecycle::lifecycle_machine::BoxError,
     },
@@ -72,6 +76,12 @@ impl Deref for AgentLifecycleServiceHandle {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl Disposable for AgentLifecycleServiceHandle {
+    fn dispose(&self) -> DisposeResult {
+        Ok(())
     }
 }
 

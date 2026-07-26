@@ -5,8 +5,10 @@
 //! integration, and crop path are translated here.
 
 use std::{
+    fmt,
     io::Cursor,
     sync::{Arc, Mutex, OnceLock},
+    time::Instant,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -15,7 +17,10 @@ use image::{
     DynamicImage, ImageFormat, ImageReader, codecs::jpeg::JpegEncoder, imageops::FilterType,
 };
 
-use crate::kosong::contract::message::{ContentPart, MediaUrl};
+use crate::{
+    app::telemetry::{TelemetryProperties, TelemetryServiceHandle},
+    kosong::contract::message::{ContentPart, MediaUrl},
+};
 
 use super::{
     build_malformed_image_notice, build_unsupported_image_notice, decode_base64_prefix,
@@ -66,11 +71,33 @@ pub fn resolve_read_image_byte_budget() -> usize {
         .unwrap_or(READ_IMAGE_BYTE_BUDGET)
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
+pub struct ImageCompressionTelemetry {
+    pub client: TelemetryServiceHandle,
+    pub source: String,
+}
+
+#[derive(Clone, Default)]
 pub struct CompressImageOptions {
     pub max_edge: Option<u32>,
     pub byte_budget: Option<usize>,
     pub max_decode_bytes: Option<usize>,
+    pub telemetry: Option<ImageCompressionTelemetry>,
+}
+
+impl fmt::Debug for CompressImageOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompressImageOptions")
+            .field("max_edge", &self.max_edge)
+            .field("byte_budget", &self.byte_budget)
+            .field("max_decode_bytes", &self.max_decode_bytes)
+            .field(
+                "telemetry",
+                &self.telemetry.as_ref().map(|_| "<configured>"),
+            )
+            .finish()
+    }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompressImageResult {
@@ -103,6 +130,7 @@ pub fn compress_image_for_model(
     mime_type: &str,
     options: &CompressImageOptions,
 ) -> CompressImageResult {
+    let started_at = Instant::now();
     let normalized = normalize_image_mime(mime_type);
     let dims = super::sniff_image_dimensions(bytes);
     let passthrough = || CompressImageResult {
@@ -116,6 +144,18 @@ pub fn compress_image_for_model(
         original_byte_length: bytes.len(),
         final_byte_length: bytes.len(),
     };
+    let finish = |outcome: &str, result: CompressImageResult| {
+        report_compress_event(
+            options.telemetry.as_ref(),
+            outcome,
+            started_at,
+            &normalized,
+            dims.as_ref()
+                .is_some_and(|dimensions| dimensions.transposed),
+            &result,
+        );
+        result
+    };
     if bytes.is_empty()
         || !matches!(
             normalized.as_str(),
@@ -123,28 +163,26 @@ pub fn compress_image_for_model(
         )
         || is_animated_webp(bytes)
     {
-        return passthrough();
+        return finish("passthrough_unsupported", passthrough());
     }
     let max_edge = options.max_edge.unwrap_or_else(resolve_max_image_edge_px);
     let budget = options.byte_budget.unwrap_or(IMAGE_BYTE_BUDGET);
     let max_decode = options.max_decode_bytes.unwrap_or(MAX_IMAGE_DECODE_BYTES);
     let longest = dims.as_ref().map_or(0, |d| d.width.max(d.height));
     if bytes.len() <= budget && (longest == 0 || longest <= max_edge as i64) {
-        return passthrough();
+        return finish("passthrough_fast", passthrough());
     }
     if bytes.len() > max_decode
-        || dims.as_ref().is_some_and(|d| {
-            d.width <= 0
-                || d.height <= 0
-                || (d.width as u64).saturating_mul(d.height as u64) > MAX_DECODE_PIXELS
-        })
+        || dims
+            .as_ref()
+            .is_some_and(|d| (d.width as u64).saturating_mul(d.height as u64) > MAX_DECODE_PIXELS)
     {
-        return passthrough();
+        return finish("passthrough_guard", passthrough());
     }
     let Ok(image) =
         ImageReader::with_format(Cursor::new(bytes), format_for_mime(&normalized)).decode()
     else {
-        return passthrough();
+        return finish("passthrough_error", passthrough());
     };
     let (ow, oh) = (image.width(), image.height());
     let mut image = image;
@@ -155,22 +193,79 @@ pub fn compress_image_for_model(
         budget,
         &FALLBACK_EDGES_PX,
     ) else {
-        return passthrough();
+        return finish("passthrough_error", passthrough());
     };
     if encoded.data.len() >= bytes.len() && encoded.width == ow && encoded.height == oh {
-        return passthrough();
+        return finish("passthrough_unhelpful", passthrough());
     }
-    CompressImageResult {
-        final_byte_length: encoded.data.len(),
-        data: encoded.data,
-        mime_type: encoded.mime_type.into(),
-        width: encoded.width as i64,
-        height: encoded.height as i64,
-        original_width: ow as i64,
-        original_height: oh as i64,
-        changed: true,
-        original_byte_length: bytes.len(),
-    }
+    finish(
+        "compressed",
+        CompressImageResult {
+            final_byte_length: encoded.data.len(),
+            data: encoded.data,
+            mime_type: encoded.mime_type.into(),
+            width: encoded.width as i64,
+            height: encoded.height as i64,
+            original_width: ow as i64,
+            original_height: oh as i64,
+            changed: true,
+            original_byte_length: bytes.len(),
+        },
+    )
+}
+
+fn report_compress_event(
+    telemetry: Option<&ImageCompressionTelemetry>,
+    outcome: &str,
+    started_at: Instant,
+    input_mime: &str,
+    exif_transposed: bool,
+    result: &CompressImageResult,
+) {
+    let Some(telemetry) = telemetry else {
+        return;
+    };
+    let properties = TelemetryProperties::from([
+        ("source".into(), Some(serde_json::json!(telemetry.source))),
+        ("outcome".into(), Some(serde_json::json!(outcome))),
+        ("input_mime".into(), Some(serde_json::json!(input_mime))),
+        (
+            "output_mime".into(),
+            Some(serde_json::json!(normalize_image_mime(&result.mime_type))),
+        ),
+        (
+            "original_bytes".into(),
+            Some(serde_json::json!(result.original_byte_length)),
+        ),
+        (
+            "final_bytes".into(),
+            Some(serde_json::json!(result.final_byte_length)),
+        ),
+        (
+            "original_width".into(),
+            Some(serde_json::json!(result.original_width)),
+        ),
+        (
+            "original_height".into(),
+            Some(serde_json::json!(result.original_height)),
+        ),
+        ("final_width".into(), Some(serde_json::json!(result.width))),
+        (
+            "final_height".into(),
+            Some(serde_json::json!(result.height)),
+        ),
+        (
+            "exif_transposed".into(),
+            Some(serde_json::json!(exif_transposed)),
+        ),
+        (
+            "duration_ms".into(),
+            Some(serde_json::json!(started_at.elapsed().as_millis())),
+        ),
+    ]);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        telemetry.client.track("image_compress", Some(&properties));
+    }));
 }
 
 // Original: compressBase64ForModel().
@@ -179,10 +274,11 @@ pub fn compress_base64_for_model(
     mime_type: &str,
     options: &CompressImageOptions,
 ) -> CompressBase64Result {
+    let started_at = Instant::now();
     let approx = base64.len().saturating_mul(3) / 4;
     let max = options.max_decode_bytes.unwrap_or(MAX_IMAGE_DECODE_BYTES);
     if approx > max {
-        return CompressBase64Result {
+        let result = CompressBase64Result {
             base64: base64.into(),
             mime_type: mime_type.into(),
             width: 0,
@@ -193,9 +289,18 @@ pub fn compress_base64_for_model(
             original_byte_length: approx,
             final_byte_length: approx,
         };
+        report_compress_event(
+            options.telemetry.as_ref(),
+            "passthrough_guard",
+            started_at,
+            &normalize_image_mime(mime_type),
+            false,
+            &compress_result_view(&result),
+        );
+        return result;
     }
     let Ok(bytes) = STANDARD.decode(base64) else {
-        return CompressBase64Result {
+        let result = CompressBase64Result {
             base64: base64.into(),
             mime_type: mime_type.into(),
             width: 0,
@@ -206,6 +311,15 @@ pub fn compress_base64_for_model(
             original_byte_length: 0,
             final_byte_length: 0,
         };
+        report_compress_event(
+            options.telemetry.as_ref(),
+            "passthrough_error",
+            started_at,
+            &normalize_image_mime(mime_type),
+            false,
+            &compress_result_view(&result),
+        );
+        return result;
     };
     let result = compress_image_for_model(&bytes, mime_type, options);
     CompressBase64Result {
@@ -219,6 +333,20 @@ pub fn compress_base64_for_model(
         } else {
             mime_type.into()
         },
+        width: result.width,
+        height: result.height,
+        original_width: result.original_width,
+        original_height: result.original_height,
+        changed: result.changed,
+        original_byte_length: result.original_byte_length,
+        final_byte_length: result.final_byte_length,
+    }
+}
+
+fn compress_result_view(result: &CompressBase64Result) -> CompressImageResult {
+    CompressImageResult {
+        data: Vec::new(),
+        mime_type: result.mime_type.clone(),
         width: result.width,
         height: result.height,
         original_width: result.original_width,
@@ -815,7 +943,23 @@ fn js_number(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::app::telemetry::{TelemetryAppender, TelemetryService, TelemetryServiceContract};
+
     use super::*;
+
+    struct RecordingAppender(Arc<Mutex<Vec<(String, TelemetryProperties)>>>);
+
+    impl TelemetryAppender for RecordingAppender {
+        fn track(&self, event: &str, properties: Option<&TelemetryProperties>) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((event.into(), properties.cloned().unwrap_or_default()));
+        }
+    }
+
     fn image(url: &str) -> ContentPart {
         ContentPart::ImageUrl {
             image_url: MediaUrl {
@@ -885,6 +1029,42 @@ mod tests {
         assert!(compressed.changed);
         assert_eq!((compressed.width, compressed.height), (2, 1));
         assert_eq!(compressed.original_byte_length, bytes.len());
+    }
+
+    #[test]
+    fn compression_reports_the_source_telemetry_payload() {
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let telemetry = Arc::new(TelemetryService::new());
+        telemetry.set_appender(Arc::new(RecordingAppender(Arc::clone(&records))));
+        let bitmap = DynamicImage::new_rgb8(4, 2);
+        let mut encoded = Cursor::new(Vec::new());
+        bitmap.write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let result = compress_image_for_model(
+            &encoded.into_inner(),
+            "image/png",
+            &CompressImageOptions {
+                max_edge: Some(2),
+                telemetry: Some(ImageCompressionTelemetry {
+                    client: TelemetryServiceHandle(telemetry),
+                    source: "mcp_tool_result".into(),
+                }),
+                ..Default::default()
+            },
+        );
+        assert!(result.changed);
+        let records = records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].0, "image_compress");
+        assert_eq!(
+            records[0].1["source"],
+            Some(serde_json::json!("mcp_tool_result"))
+        );
+        assert_eq!(
+            records[0].1["outcome"],
+            Some(serde_json::json!("compressed"))
+        );
+        assert_eq!(records[0].1["original_width"], Some(serde_json::json!(4)));
+        assert_eq!(records[0].1["final_width"], Some(serde_json::json!(2)));
     }
 
     #[test]

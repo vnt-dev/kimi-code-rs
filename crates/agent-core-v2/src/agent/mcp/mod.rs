@@ -8,6 +8,7 @@ pub mod client_stdio;
 pub mod config_loader;
 pub mod config_schema;
 pub mod connection_manager;
+pub mod contract;
 pub mod errors;
 pub mod mcp_discovery_ops;
 pub mod oauth;
@@ -30,6 +31,7 @@ pub use config_schema::{
     parse_mcp_server_config,
 };
 pub use connection_manager::*;
+pub use contract::*;
 pub use errors::*;
 pub use mcp_discovery_ops::*;
 pub use oauth::*;

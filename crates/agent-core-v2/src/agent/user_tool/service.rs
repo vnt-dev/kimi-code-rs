@@ -2,7 +2,7 @@
 //!
 //! Original: `agent/userTool/userToolService.ts`, `AgentUserToolService`.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -10,20 +10,32 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::{
-    _base::{di::lifecycle::DisposableHandle, utils::abort::abortable},
+    _base::{
+        di::{
+            descriptors::SyncDescriptor,
+            instantiation::{ServiceIdentifier, ServicesAccessorExt},
+            lifecycle::{Disposable, DisposableHandle, DisposeResult},
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
+        utils::abort::abortable,
+    },
     agent::{
         profile::contract::AgentProfileServiceHandle,
         tool_registry::contract::{AgentToolRegistryServiceHandle, ToolRegistrationOptions},
     },
     kosong::contract::{message::ContentPart, tool::Tool},
     session::interaction::{
-        InteractionKind, InteractionOrigin, InteractionRequest, SessionInteractionService,
+        InteractionKind, InteractionOrigin, InteractionRequest, SESSION_INTERACTION_SERVICE_ID,
+        SessionInteractionService, SessionInteractionServiceHandle,
     },
     tool::{
         ExecutableTool, ExecutableToolContext, ExecutableToolOutput, ExecutableToolResult,
         RunnableToolExecution, ToolExecution, ToolSource,
     },
-    wire::wire_service::WireService,
+    wire::{
+        contract::{WIRE_SERVICE_ID, WireServiceHandle},
+        wire_service::WireService,
+    },
 };
 
 use super::{USER_TOOL_MODEL, UserToolRegistration, register_user_tool, unregister_user_tool};
@@ -214,6 +226,52 @@ impl Drop for AgentUserToolService {
     fn drop(&mut self) {
         let _ = self.restore_subscription.dispose();
     }
+}
+
+#[derive(Clone)]
+pub struct AgentUserToolServiceHandle(pub Arc<AgentUserToolService>);
+
+impl Deref for AgentUserToolServiceHandle {
+    type Target = AgentUserToolService;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl Disposable for AgentUserToolServiceHandle {
+    fn dispose(&self) -> DisposeResult {
+        self.0.restore_subscription.dispose()
+    }
+}
+
+pub const AGENT_USER_TOOL_SERVICE_ID: ServiceIdentifier<AgentUserToolServiceHandle> =
+    ServiceIdentifier::new("agentUserToolService");
+
+pub fn register_agent_user_tool_service() {
+    register_scoped_service(
+        LifecycleScope::Agent,
+        AGENT_USER_TOOL_SERVICE_ID,
+        SyncDescriptor::new(|accessor| {
+            let registry = (*accessor
+                .get(crate::agent::tool_registry::contract::AGENT_TOOL_REGISTRY_SERVICE_ID)?)
+            .clone();
+            let profile =
+                (*accessor.get(crate::agent::profile::contract::AGENT_PROFILE_SERVICE_ID)?).clone();
+            let SessionInteractionServiceHandle(interaction) =
+                (*accessor.get(SESSION_INTERACTION_SERVICE_ID)?).clone();
+            let WireServiceHandle(wire) = (*accessor.get(WIRE_SERVICE_ID)?).clone();
+            Ok(AgentUserToolServiceHandle(AgentUserToolService::new(
+                registry,
+                profile,
+                interaction,
+                wire,
+            )))
+        })
+        .disposable(),
+        InstantiationType::Eager,
+        "agentUserTool",
+    );
 }
 
 fn executable_result_from_value(response: Value) -> ExecutableToolResult {
