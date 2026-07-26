@@ -1366,6 +1366,34 @@ select:focus-visible {
   max-width: 95px;
 }
 
+.permission-select select {
+  max-width: 88px;
+}
+
+.permission-select.full-access {
+  border-color: rgba(222, 139, 89, 0.28);
+  color: #d39772;
+  background: rgba(222, 139, 89, 0.07);
+}
+
+.permission-select.full-access select {
+  color: #d7a07d;
+}
+
+.permission-select.auto-access {
+  border-color: rgba(103, 174, 153, 0.25);
+  color: #72b8a3;
+  background: rgba(103, 174, 153, 0.065);
+}
+
+.permission-select.auto-access select {
+  color: #83bdac;
+}
+
+.permission-select:has(select:disabled) {
+  opacity: 0.55;
+}
+
 .context-badge {
   color: #5d5d67;
   font-family: "DM Mono", monospace;

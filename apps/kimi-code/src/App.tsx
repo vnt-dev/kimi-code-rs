@@ -35,6 +35,7 @@ import {
   Plus,
   RefreshCw,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   SquarePen,
   TerminalSquare,
@@ -62,6 +63,7 @@ import type {
   DesktopState,
   DeviceCode,
   Model,
+  PermissionMode,
   Project,
 } from "./types";
 
@@ -132,6 +134,7 @@ export default function App() {
   );
   const selectedModel =
     models.find((model) => model.id === activeConversation?.modelId) ?? models[0];
+  const permissionMode = activeConversation?.permissionMode ?? "manual";
   const isStreaming = activeConversation?.messages.some(
     (message) => message.status === "streaming",
   );
@@ -362,6 +365,25 @@ export default function App() {
     if (model?.defaultEffort) setEffort(model.defaultEffort);
   };
 
+  const choosePermissionMode = (mode: PermissionMode): void => {
+    if (!activeConversation || !activeProject) return;
+    updateDesktop((current) => ({
+      ...current,
+      projects: current.projects.map((project) =>
+        project.id !== activeProject.id
+          ? project
+          : {
+              ...project,
+              conversations: project.conversations.map((conversation) =>
+                conversation.id === activeConversation.id
+                  ? { ...conversation, permissionMode: mode }
+                  : conversation,
+              ),
+            },
+      ),
+    }));
+  };
+
   const startLogin = async (): Promise<void> => {
     setLoginOpen(true);
     setLoginBusy(true);
@@ -498,6 +520,7 @@ export default function App() {
           model: selectedModel.id,
           protocol: selectedModel.protocol,
           effort,
+          permissionMode,
           projectPath: activeProject.path,
           messages: history,
         },
@@ -884,6 +907,38 @@ export default function App() {
                         <ChevronDown size={13} />
                       </label>
                     )}
+                    <label
+                      className={`select-control permission-select ${
+                        permissionMode === "yolo"
+                          ? "full-access"
+                          : permissionMode === "auto"
+                            ? "auto-access"
+                            : ""
+                      }`}
+                      title={
+                        permissionMode === "yolo"
+                          ? "完全访问模式会跳过命令审批"
+                          : permissionMode === "auto"
+                            ? "由权限策略自动判断是否允许操作"
+                            : "Agent 执行命令前需要你的批准"
+                      }
+                    >
+                      <ShieldCheck size={15} />
+                      <select
+                        value={permissionMode}
+                        onChange={(event) =>
+                          choosePermissionMode(
+                            event.target.value as PermissionMode,
+                          )
+                        }
+                        disabled={isStreaming}
+                      >
+                        <option value="manual">请求审批</option>
+                        <option value="auto">自动选择</option>
+                        <option value="yolo">完全访问</option>
+                      </select>
+                      <ChevronDown size={13} />
+                    </label>
                     {selectedModel && (
                       <span className="context-badge">
                         {formatContext(selectedModel.contextLength)} 上下文

@@ -29,6 +29,8 @@ use crate::{
     agent::{
         context_memory::{ContextMessage, PromptOrigin},
         loop_::LoopRunResult,
+        permission_mode::AGENT_PERMISSION_MODE_SERVICE_ID,
+        permission_policy::PermissionMode,
         profile::{AGENT_PROFILE_SERVICE_ID, BindAgentInput},
         prompt::{AGENT_PROMPT_SERVICE_ID, PromptCompletionState, PromptInput},
     },
@@ -103,6 +105,8 @@ pub struct DesktopChatRequest {
     pub protocol: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<String>,
     #[serde(default)]
     pub project_path: Option<String>,
     #[serde(default)]
@@ -341,6 +345,16 @@ impl KimiCodeDesktopClient {
                 .set_thinking(effort)
                 .map_err(|error| error.to_string())?;
         }
+        let permission_mode = match request.permission_mode.as_deref() {
+            Some("yolo" | "full_access") => PermissionMode::Yolo,
+            Some("auto") => PermissionMode::Auto,
+            _ => PermissionMode::Manual,
+        };
+        agent
+            .get(AGENT_PERMISSION_MODE_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .set_mode(permission_mode)
+            .map_err(|error| error.to_string())?;
 
         let content = Arc::new(Mutex::new(String::new()));
         let streamed_content = Arc::clone(&content);

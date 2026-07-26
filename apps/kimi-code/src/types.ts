@@ -1,4 +1,5 @@
 export type Role = "user" | "assistant";
+export type PermissionMode = "manual" | "auto" | "yolo";
 
 export interface ChatMessage {
   id: string;
@@ -15,6 +16,7 @@ export interface Conversation {
   createdAt: number;
   updatedAt: number;
   modelId?: string;
+  permissionMode?: PermissionMode;
   messages: ChatMessage[];
 }
 
