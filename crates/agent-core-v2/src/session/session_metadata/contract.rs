@@ -50,7 +50,7 @@ pub struct SessionMeta {
     pub updated_at: i64,
     #[serde(default)]
     pub archived: bool,
-    #[serde(default, alias = "workDir", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<String>,

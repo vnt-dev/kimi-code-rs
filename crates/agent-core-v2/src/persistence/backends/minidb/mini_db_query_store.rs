@@ -173,6 +173,7 @@ impl MiniDbQueryStore {
 /// The rebuild callback preserves the TypeScript service's structured warning
 /// through the injected application logger.
 pub fn register_mini_db_query_store() {
+    super::flag::register_persistence_minidb_read_model_flag();
     register_scoped_service(
         LifecycleScope::App,
         QUERY_STORE_SERVICE_ID,
