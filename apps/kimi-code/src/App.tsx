@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -595,6 +596,7 @@ export default function App() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [deviceCode, setDeviceCode] = useState<DeviceCode>();
   const [profileOpen, setProfileOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState<string>();
   const [accountUsage, setAccountUsage] = useState<AccountUsage>();
   const [accountUsageBusy, setAccountUsageBusy] = useState(false);
   const [accountUsageError, setAccountUsageError] = useState<string>();
@@ -838,6 +840,19 @@ export default function App() {
       .catch(() => {
         // Vite's browser preview has no Tauri bridge; the actual desktop app does.
       });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    void getVersion()
+      .then((version) => {
+        if (active) setAppVersion(version);
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
     };
@@ -1994,6 +2009,7 @@ export default function App() {
               </div>
               {profileOpen && (
                 <AccountUsagePopover
+                  appVersion={appVersion}
                   usage={accountUsage}
                   busy={accountUsageBusy}
                   error={accountUsageError}
@@ -2357,12 +2373,14 @@ export default function App() {
 }
 
 function AccountUsagePopover({
+  appVersion,
   usage,
   busy,
   error,
   onRefresh,
   onSignOut,
 }: {
+  appVersion?: string;
   usage?: AccountUsage;
   busy: boolean;
   error?: string;
@@ -2385,8 +2403,11 @@ function AccountUsagePopover({
           <span className="profile-identity-mark">
             <Sparkles size={14} />
           </span>
-          <span>
-            <strong>Kimi Code</strong>
+          <span className="profile-identity-copy">
+            <span className="profile-identity-title">
+              <strong>Kimi Code</strong>
+              {appVersion && <small>v{appVersion}</small>}
+            </span>
             <small>OAuth 账号</small>
           </span>
         </div>

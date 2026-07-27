@@ -124,13 +124,11 @@ fn parse_prefixed_integer(value: &str) -> Option<i128> {
         .or_else(|| unsigned.strip_prefix("0B"))
     {
         (2, digits)
-    } else if let Some(digits) = unsigned
-        .strip_prefix("0o")
-        .or_else(|| unsigned.strip_prefix("0O"))
-    {
-        (8, digits)
     } else {
-        return None;
+        let digits = unsigned
+            .strip_prefix("0o")
+            .or_else(|| unsigned.strip_prefix("0O"))?;
+        (8, digits)
     };
 
     i128::from_str_radix(digits, radix).ok().and_then(|number| {
