@@ -1715,49 +1715,42 @@ export default function App() {
       <WindowTitleBar
         projectName={activeProject?.name}
         conversationTitle={activeConversation?.title}
-        sidebarCollapsed={sidebarCollapsed}
       />
 
       <div className="app-body">
         <aside className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
         <div className="brand-row">
-          {!sidebarCollapsed && (
-            <>
-              <div className="sidebar-heading-copy">
-                <strong>工作区</strong>
-                <span>Projects &amp; sessions</span>
-              </div>
-              <button
-                className="icon-button quiet"
-                onClick={() => setSidebarCollapsed(true)}
-                title="收起侧栏"
-              >
-                <PanelLeftClose size={17} />
-              </button>
-            </>
-          )}
-          {sidebarCollapsed && (
-            <button
-              className="icon-button quiet"
-              onClick={() => setSidebarCollapsed(false)}
-              title="展开侧栏"
-            >
+          <div className="sidebar-heading-copy" aria-hidden={sidebarCollapsed}>
+            <strong>工作区</strong>
+            <span>Projects &amp; sessions</span>
+          </div>
+          <button
+            className="icon-button quiet"
+            onClick={() => {
+              setSidebarCollapsed((value) => !value);
+              setProfileOpen(false);
+            }}
+            title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+          >
+            {sidebarCollapsed ? (
               <PanelLeftOpen size={17} />
-            </button>
-          )}
+            ) : (
+              <PanelLeftClose size={17} />
+            )}
+          </button>
         </div>
 
         <div className="sidebar-primary">
           <button className="new-project-button" onClick={() => void addProject()}>
             <Plus size={17} />
-            {!sidebarCollapsed && <span>打开项目</span>}
+            <span className="sidebar-control-label" aria-hidden={sidebarCollapsed}>
+              打开项目
+            </span>
           </button>
 
-          {!sidebarCollapsed && (
-            <div className="sidebar-section-heading">
-              <span>项目</span>
-            </div>
-          )}
+          <div className="sidebar-section-heading" aria-hidden={sidebarCollapsed}>
+            <span>项目</span>
+          </div>
 
           <nav className="project-list" aria-label="项目和对话">
             {desktop.projects.map((project) => {
@@ -1782,52 +1775,60 @@ export default function App() {
                     >
                       <FolderGit2 size={16} />
                     </span>
-                    {!sidebarCollapsed && (
-                      <>
-                        <span className="project-name">{project.name}</span>
-                        <span className="project-actions">
-                          <button
-                            className="icon-button tiny"
-                            type="button"
-                            onClick={(event) =>
-                              void createConversation(project, event)
-                            }
-                            title="新建对话"
-                            aria-label={`在 ${project.name} 中新建对话`}
-                          >
-                            <Plus size={14} />
-                          </button>
-                          <button
-                            className="icon-button tiny project-remove-button"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setRemovalTarget({
-                                kind: "project",
-                                projectId: project.id,
-                                name: project.name,
-                                path: project.path,
-                                conversationIds: project.conversations.map(
-                                  (conversation) => conversation.id,
-                                ),
-                              });
-                            }}
-                            title="移除项目"
-                            aria-label={`移除项目 ${project.name}`}
-                          >
-                            <FolderMinus size={13} />
-                          </button>
-                          {project.expanded ? (
-                            <ChevronDown size={14} />
-                          ) : (
-                            <ChevronRight size={14} />
-                          )}
-                        </span>
-                      </>
-                    )}
+                    <span className="project-name" aria-hidden={sidebarCollapsed}>
+                      {project.name}
+                    </span>
+                    <span className="project-actions" aria-hidden={sidebarCollapsed}>
+                      <button
+                        className="icon-button tiny"
+                        type="button"
+                        tabIndex={sidebarCollapsed ? -1 : 0}
+                        onClick={(event) =>
+                          void createConversation(project, event)
+                        }
+                        title="新建对话"
+                        aria-label={`在 ${project.name} 中新建对话`}
+                      >
+                        <Plus size={14} />
+                      </button>
+                      <button
+                        className="icon-button tiny project-remove-button"
+                        type="button"
+                        tabIndex={sidebarCollapsed ? -1 : 0}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setRemovalTarget({
+                            kind: "project",
+                            projectId: project.id,
+                            name: project.name,
+                            path: project.path,
+                            conversationIds: project.conversations.map(
+                              (conversation) => conversation.id,
+                            ),
+                          });
+                        }}
+                        title="移除项目"
+                        aria-label={`移除项目 ${project.name}`}
+                      >
+                        <FolderMinus size={13} />
+                      </button>
+                      <ChevronRight
+                        className={`project-chevron ${
+                          project.expanded ? "expanded" : ""
+                        }`}
+                        size={14}
+                      />
+                    </span>
                   </div>
-                  {!sidebarCollapsed && project.expanded && (
-                    <div className="conversation-list">
+                  <div
+                    className={`conversation-list-collapse ${
+                      !sidebarCollapsed && project.expanded ? "expanded" : ""
+                    }`}
+                    aria-hidden={sidebarCollapsed || !project.expanded}
+                    inert={sidebarCollapsed || !project.expanded}
+                  >
+                    <div className="conversation-list-clip">
+                      <div className="conversation-list">
                       {project.conversations.map((conversation) => (
                         <div
                           className={`conversation-row ${
@@ -1849,17 +1850,16 @@ export default function App() {
                             <span className="conversation-title">
                               {conversation.title}
                             </span>
-                            <span className="conversation-meta">
-                              {isTurnRunning(inFlightTurns[conversation.id]) && (
+                            {isTurnRunning(inFlightTurns[conversation.id]) && (
+                              <span className="conversation-meta">
                                 <span
                                   className="conversation-running-indicator"
                                   role="status"
                                   aria-label="对话进行中"
                                   title="对话进行中"
                                 />
-                              )}
-                              <time>{formatTime(conversation.updatedAt)}</time>
-                            </span>
+                              </span>
+                            )}
                           </button>
                           <button
                             className="conversation-archive-button"
@@ -1880,15 +1880,16 @@ export default function App() {
                           </button>
                         </div>
                       ))}
+                      </div>
                     </div>
-                  )}
+                  </div>
                 </div>
               );
             })}
           </nav>
 
-          {!sidebarCollapsed && desktop.projects.length === 0 && (
-            <div className="sidebar-empty">
+          {desktop.projects.length === 0 && (
+            <div className="sidebar-empty" aria-hidden={sidebarCollapsed}>
               <Folder size={22} />
               <p>打开一个本地目录，开始和 Kimi 一起写代码。</p>
             </div>
@@ -1900,22 +1901,38 @@ export default function App() {
             <div className="profile-wrap">
               <button
                 className="account-button"
+                tabIndex={sidebarCollapsed ? -1 : 0}
                 onClick={() => setProfileOpen((value) => !value)}
               >
                 <span className="avatar">
                   <Sparkles size={15} />
                   <i />
                 </span>
-                {!sidebarCollapsed && (
-                  <>
-                    <span className="account-copy">
-                      <strong>Kimi Code</strong>
-                      <small>已连接</small>
-                    </span>
-                    <MoreHorizontal size={16} />
-                  </>
-                )}
+                <span className="account-copy" aria-hidden={sidebarCollapsed}>
+                  <strong>Kimi Code</strong>
+                  <small>已连接</small>
+                </span>
+                <MoreHorizontal
+                  className="account-trailing-icon"
+                  size={16}
+                  aria-hidden={sidebarCollapsed}
+                />
               </button>
+              <div
+                className="account-compact-actions"
+                aria-hidden={!sidebarCollapsed}
+                inert={!sidebarCollapsed}
+              >
+                <button
+                  className="account-compact-kimi"
+                  type="button"
+                  title="Kimi Code 账号"
+                  aria-label="打开 Kimi Code 账号菜单"
+                  onClick={() => setProfileOpen((value) => !value)}
+                >
+                  <Sparkles size={14} />
+                </button>
+              </div>
               {profileOpen && (
                 <div className="profile-popover">
                   <div>
@@ -1934,15 +1951,15 @@ export default function App() {
               <span className="avatar signed-out">
                 <CircleUserRound size={18} />
               </span>
-              {!sidebarCollapsed && (
-                <>
-                  <span className="account-copy">
-                    <strong>登录 Kimi</strong>
-                    <small>同步模型与额度</small>
-                  </span>
-                  <LogIn size={16} />
-                </>
-              )}
+              <span className="account-copy" aria-hidden={sidebarCollapsed}>
+                <strong>登录 Kimi</strong>
+                <small>同步模型与额度</small>
+              </span>
+              <LogIn
+                className="account-trailing-icon"
+                size={16}
+                aria-hidden={sidebarCollapsed}
+              />
             </button>
           )}
         </div>
@@ -2293,11 +2310,9 @@ interface ToolbarSelectOption {
 function WindowTitleBar({
   projectName,
   conversationTitle,
-  sidebarCollapsed,
 }: {
   projectName?: string;
   conversationTitle?: string;
-  sidebarCollapsed: boolean;
 }) {
   const [maximized, setMaximized] = useState(false);
   const appWindow = useMemo(
@@ -2362,12 +2377,10 @@ function WindowTitleBar({
           <span data-tauri-drag-region />
           <span data-tauri-drag-region />
         </div>
-        {!sidebarCollapsed && (
-          <div className="titlebar-brand-copy" data-tauri-drag-region>
-            <strong data-tauri-drag-region>Kimi Code</strong>
-            <span data-tauri-drag-region>Agent Desktop</span>
-          </div>
-        )}
+        <div className="titlebar-brand-copy" data-tauri-drag-region>
+          <strong data-tauri-drag-region>Kimi Code</strong>
+          <span data-tauri-drag-region>Agent Desktop</span>
+        </div>
       </div>
 
       <div className="window-titlebar-context" data-tauri-drag-region>

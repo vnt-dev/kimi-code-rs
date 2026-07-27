@@ -114,6 +114,7 @@ select:focus-visible {
   gap: 9px;
   border-right: 1px solid var(--line);
   background: rgba(16, 16, 20, 0.78);
+  transition: padding 180ms ease;
 }
 
 .brand-mark.compact {
@@ -130,9 +131,17 @@ select:focus-visible {
 .titlebar-brand-copy {
   display: flex;
   min-width: 0;
+  max-width: 180px;
   align-items: baseline;
   gap: 8px;
+  overflow: hidden;
+  opacity: 1;
   white-space: nowrap;
+  transform: translateX(0);
+  transition:
+    max-width 160ms ease,
+    opacity 120ms ease,
+    transform 160ms ease;
 }
 
 .titlebar-brand-copy strong {
@@ -150,8 +159,13 @@ select:focus-visible {
 }
 
 .sidebar-is-collapsed .window-titlebar-brand {
-  padding: 0;
-  justify-content: center;
+  padding: 0 24px;
+}
+
+.sidebar-is-collapsed .titlebar-brand-copy {
+  max-width: 0;
+  opacity: 0;
+  transform: translateX(-5px);
 }
 
 .window-titlebar-context {
@@ -267,6 +281,7 @@ select:focus-visible {
   padding: 0 14px 0 17px;
   gap: 11px;
   flex: 0 0 auto;
+  transition: padding 180ms ease, gap 180ms ease;
 }
 
 .brand-mark {
@@ -295,8 +310,24 @@ select:focus-visible {
 .sidebar-heading-copy {
   min-width: 0;
   display: flex;
+  max-width: 190px;
+  flex: 1;
   flex-direction: column;
+  overflow: hidden;
+  opacity: 1;
   line-height: 1.1;
+  transform: translateX(0);
+  transition:
+    max-width 160ms ease,
+    opacity 120ms ease,
+    transform 160ms ease;
+}
+
+.collapsed .sidebar-heading-copy {
+  max-width: 0;
+  flex: 0;
+  opacity: 0;
+  transform: translateX(-5px);
 }
 
 .sidebar-heading-copy strong {
@@ -378,6 +409,14 @@ select:focus-visible {
   transition: 150ms ease;
 }
 
+.sidebar-control-label {
+  max-width: 90px;
+  overflow: hidden;
+  opacity: 1;
+  white-space: nowrap;
+  transition: max-width 160ms ease, opacity 120ms ease;
+}
+
 .new-project-button:hover {
   transform: translateY(-1px);
   border-color: rgba(139, 124, 246, 0.45);
@@ -387,6 +426,12 @@ select:focus-visible {
 .collapsed .new-project-button {
   width: 40px;
   margin: 0 auto;
+  gap: 0;
+}
+
+.collapsed .sidebar-control-label {
+  max-width: 0;
+  opacity: 0;
 }
 
 .sidebar-section-heading {
@@ -400,7 +445,19 @@ select:focus-visible {
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.11em;
+  overflow: hidden;
+  opacity: 1;
   text-transform: uppercase;
+  transition:
+    height 160ms ease,
+    margin 160ms ease,
+    opacity 100ms ease;
+}
+
+.collapsed .sidebar-section-heading {
+  height: 0;
+  margin-top: 0;
+  opacity: 0;
 }
 
 .project-list {
@@ -423,6 +480,7 @@ select:focus-visible {
   color: #aaaab4;
   cursor: pointer;
   gap: 8px;
+  transition: gap 180ms ease, padding 180ms ease;
 }
 
 .project-row:hover,
@@ -440,6 +498,7 @@ select:focus-visible {
   color: var(--project-accent);
   background: color-mix(in srgb, var(--project-accent) 12%, transparent);
   flex: 0 0 auto;
+  transition: width 180ms ease, height 180ms ease;
 }
 
 .collapsed .project-glyph {
@@ -449,9 +508,16 @@ select:focus-visible {
 
 .project-name {
   min-width: 0;
+  max-width: 170px;
   flex: 1;
   overflow: hidden;
+  opacity: 1;
   text-overflow: ellipsis;
+  transform: translateX(0);
+  transition:
+    max-width 160ms ease,
+    opacity 110ms ease,
+    transform 160ms ease;
   white-space: nowrap;
   font-size: 12px;
   font-weight: 520;
@@ -459,8 +525,39 @@ select:focus-visible {
 
 .project-actions {
   display: flex;
+  max-width: 80px;
   align-items: center;
   color: #676772;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    max-width 160ms ease,
+    opacity 110ms ease,
+    transform 160ms ease;
+}
+
+.collapsed .project-row {
+  padding: 0 4px;
+  gap: 0;
+}
+
+.collapsed .project-name,
+.collapsed .project-actions {
+  max-width: 0;
+  flex: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-5px);
+}
+
+.project-chevron {
+  flex: 0 0 auto;
+  transition: transform 160ms ease;
+}
+
+.project-chevron.expanded {
+  transform: rotate(90deg);
 }
 
 .project-actions .icon-button {
@@ -474,6 +571,30 @@ select:focus-visible {
 .project-actions .project-remove-button:hover {
   color: #e7a3a9;
   background: rgba(218, 92, 105, 0.1);
+}
+
+.conversation-list-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    grid-template-rows 180ms ease,
+    opacity 130ms ease,
+    transform 180ms ease;
+}
+
+.conversation-list-collapse.expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.conversation-list-clip {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .conversation-list {
@@ -553,7 +674,6 @@ select:focus-visible {
 .conversation-meta {
   display: flex;
   align-items: center;
-  gap: 5px;
 }
 
 .conversation-running-indicator {
@@ -565,12 +685,6 @@ select:focus-visible {
   border-top-color: #9587ee;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
-}
-
-.conversation-select time {
-  color: #50505a;
-  font-family: "DM Mono", monospace;
-  font-size: 8.5px;
 }
 
 .conversation-archive-button {
@@ -600,13 +714,30 @@ select:focus-visible {
 
 .sidebar-empty {
   display: grid;
+  max-height: 180px;
   margin: 18px 10px;
   padding: 22px 15px;
   place-items: center;
+  overflow: hidden;
   border: 1px dashed var(--line-strong);
   border-radius: 10px;
   color: #50505a;
+  opacity: 1;
   text-align: center;
+  transition:
+    max-height 170ms ease,
+    margin 170ms ease,
+    padding 170ms ease,
+    border-color 120ms ease,
+    opacity 100ms ease;
+}
+
+.collapsed .sidebar-empty {
+  max-height: 0;
+  margin: 0 10px;
+  padding: 0 15px;
+  border-color: transparent;
+  opacity: 0;
 }
 
 .sidebar-empty p {
@@ -640,10 +771,51 @@ select:focus-visible {
   background: transparent;
   text-align: left;
   cursor: pointer;
+  transition:
+    gap 180ms ease,
+    padding 180ms ease,
+    opacity 120ms ease,
+    transform 160ms ease;
 }
 
 .account-button:hover {
   background: rgba(255, 255, 255, 0.035);
+}
+
+.account-compact-actions {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.92);
+  transition: opacity 120ms ease, transform 160ms ease;
+}
+
+.account-compact-kimi {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid rgba(139, 124, 246, 0.24);
+  border-radius: 9px;
+  color: #b8affb;
+  background: rgba(139, 124, 246, 0.08);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.account-compact-kimi:hover {
+  border-color: rgba(139, 124, 246, 0.42);
+  color: #d2ccff;
+  background: rgba(139, 124, 246, 0.14);
 }
 
 .avatar {
@@ -679,8 +851,16 @@ select:focus-visible {
 .account-copy {
   display: flex;
   min-width: 0;
+  max-width: 170px;
   flex: 1;
   flex-direction: column;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    max-width 160ms ease,
+    opacity 110ms ease,
+    transform 160ms ease;
 }
 
 .account-copy strong {
@@ -695,9 +875,44 @@ select:focus-visible {
   font-size: 9.5px;
 }
 
+.account-trailing-icon {
+  max-width: 16px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  opacity: 1;
+  transition: max-width 160ms ease, opacity 100ms ease;
+}
+
 .collapsed .account-button {
-  justify-content: center;
-  padding: 0;
+  padding: 0 8px;
+  gap: 0;
+}
+
+.collapsed .profile-wrap > .account-button {
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.94);
+}
+
+.collapsed .account-compact-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+.collapsed .profile-popover {
+  right: auto;
+  bottom: 0;
+  left: calc(100% + 8px);
+  width: 190px;
+}
+
+.collapsed .account-copy,
+.collapsed .account-trailing-icon {
+  max-width: 0;
+  flex: 0;
+  opacity: 0;
+  transform: translateX(-5px);
 }
 
 .profile-popover {
