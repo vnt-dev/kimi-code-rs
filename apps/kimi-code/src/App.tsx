@@ -2359,8 +2359,6 @@ function ContextUsageIndicator({
   const progress = Math.min(1, Math.max(0, ratio));
   const percent = effectiveMax > 0 ? Math.round(ratio * 100) : undefined;
   const level = ratio >= 0.85 ? "critical" : ratio >= 0.7 ? "warning" : "";
-  const measuredTokens = Math.max(0, usage?.measuredTokens ?? 0);
-  const estimatedTokens = Math.max(0, usage?.estimatedTokens ?? contextTokens);
 
   return (
     <div
@@ -2386,9 +2384,6 @@ function ContextUsageIndicator({
           />
         </svg>
       </span>
-      <span className="context-usage-percent">
-        {percent === undefined ? "—" : `${percent}%`}
-      </span>
       <div className="context-usage-tooltip" role="tooltip">
         <strong>上下文窗口</strong>
         <span className="context-usage-summary">
@@ -2398,10 +2393,6 @@ function ContextUsageIndicator({
           已用 {formatTokenCount(contextTokens)} tokens，共{" "}
           {effectiveMax > 0 ? formatTokenCount(effectiveMax) : "未知"}
         </span>
-        <small>
-          实测 {formatTokenCount(measuredTokens)} · 估算{" "}
-          {formatTokenCount(estimatedTokens)}
-        </small>
       </div>
     </div>
   );

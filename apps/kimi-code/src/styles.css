@@ -2744,9 +2744,8 @@ select:focus-visible {
   position: relative;
   display: flex;
   height: 28px;
-  padding: 0 5px 0 3px;
+  padding: 0 3px;
   align-items: center;
-  gap: 2px;
   border: 1px solid transparent;
   border-radius: 7px;
   color: #74747f;
@@ -2797,23 +2796,6 @@ select:focus-visible {
 
 .context-usage.critical .context-usage-progress {
   stroke: #d97c68;
-}
-
-.context-usage-percent {
-  min-width: 25px;
-  color: #777783;
-  font-family: "DM Mono", monospace;
-  font-size: 8.5px;
-  text-align: right;
-  white-space: nowrap;
-}
-
-.context-usage.warning .context-usage-percent {
-  color: #b9955d;
-}
-
-.context-usage.critical .context-usage-percent {
-  color: #c77c6d;
 }
 
 .context-usage-tooltip {
@@ -2874,13 +2856,6 @@ select:focus-visible {
   color: #d1ced9;
   font-size: 13px;
   font-weight: 600;
-}
-
-.context-usage-tooltip small {
-  color: #696872;
-  font-family: "DM Mono", monospace;
-  font-size: 8.5px;
-  white-space: nowrap;
 }
 
 .send-zone > span {
