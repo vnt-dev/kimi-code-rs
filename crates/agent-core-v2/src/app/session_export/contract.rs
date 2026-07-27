@@ -16,7 +16,8 @@ pub struct ShellEnvironment {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportSessionPayload {
     pub session_id: String,
     pub output_path: Option<String>,
@@ -58,7 +59,8 @@ pub struct ExportSessionManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell_env: Option<ShellEnvironment>,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportSessionResult {
     pub zip_path: String,
     pub entries: Vec<String>,

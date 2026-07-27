@@ -57,7 +57,7 @@ use super::{
 
 pub type PlanFilePath = Option<String>;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct PlanData {
     pub id: String,
     pub content: String,

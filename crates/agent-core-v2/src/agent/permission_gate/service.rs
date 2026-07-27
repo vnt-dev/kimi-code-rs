@@ -62,7 +62,7 @@ use crate::{
     tool::ToolInputDisplay,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct PermissionData {
     pub mode: PermissionMode,
     pub rules: Vec<PermissionRule>,

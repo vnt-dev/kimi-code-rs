@@ -7,11 +7,14 @@ use std::{
     sync::{Arc, LazyLock, RwLock},
 };
 
+use serde::{Deserialize, Serialize};
+
 use crate::_base::di::{instantiation::ServiceIdentifier, lifecycle::DisposableHandle};
 
 pub type FlagId = String;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum FlagSurface {
     Core,
     Tui,

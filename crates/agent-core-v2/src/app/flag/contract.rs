@@ -8,6 +8,7 @@ use std::{
 };
 
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -76,7 +77,8 @@ pub fn register_experimental_config_section() {
     );
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ExperimentalFlagSource {
     MasterEnv,
     Env,
@@ -84,7 +86,8 @@ pub enum ExperimentalFlagSource {
     Default,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExperimentalFeatureState {
     pub id: FlagId,
     pub title: String,
