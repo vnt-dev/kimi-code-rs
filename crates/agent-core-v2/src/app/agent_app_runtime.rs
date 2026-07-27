@@ -170,6 +170,7 @@ fn register_agent_app_services_once() {
             external_hooks_runner::register_external_hooks_runner_service,
             file::register_file_service,
             flag::{register_flag_registry_service, register_flag_service},
+            message_legacy::register_message_legacy_service,
             plugin::register_plugin_service,
             session_index::register_session_index_service,
             session_lifecycle::register_session_lifecycle_service,
@@ -277,6 +278,7 @@ fn register_agent_app_services_once() {
     register_file_service();
     register_web_fetch_service();
     register_session_lifecycle_service();
+    register_message_legacy_service();
 
     register_session_interaction_service();
     register_session_approval_service();
