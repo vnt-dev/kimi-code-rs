@@ -9,11 +9,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  Archive,
   ArrowUp,
   Bot,
   BrainCircuit,
@@ -28,10 +30,12 @@ import {
   FileCode2,
   Folder,
   FolderGit2,
+  FolderMinus,
   LogIn,
   LogOut,
   Menu,
   MessageSquareText,
+  Minus,
   Minimize2,
   MoreHorizontal,
   PanelLeftClose,
@@ -41,6 +45,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Square,
   SquarePen,
   TerminalSquare,
   Trash2,
@@ -51,9 +56,12 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import {
+  archiveSession,
   createAgentClient,
   createOrTouchWorkspace,
+  listWorkspaceSessions,
   prepareSession,
+  removeWorkspace,
   subscribeAgentEvents,
   unsubscribeAgentEvents,
 } from "./agentRpc";
@@ -102,6 +110,21 @@ interface ConversationHistory {
   loadingMore: boolean;
   error?: string;
 }
+
+type RemovalTarget =
+  | {
+      kind: "project";
+      projectId: string;
+      name: string;
+      path: string;
+      conversationIds: string[];
+    }
+  | {
+      kind: "conversation";
+      projectId: string;
+      conversationId: string;
+      title: string;
+    };
 
 type LiveTurnStatus =
   | "queued"
@@ -487,6 +510,20 @@ function mergeHistoryToolResults(
   return { messages: mergedMessages, results };
 }
 
+function omitSessionKeys<T>(
+  current: Record<string, T>,
+  sessionIds: ReadonlySet<string>,
+): Record<string, T> {
+  let changed = false;
+  const next = { ...current };
+  for (const sessionId of sessionIds) {
+    if (!(sessionId in next)) continue;
+    delete next[sessionId];
+    changed = true;
+  }
+  return changed ? next : current;
+}
+
 export default function App() {
   const [desktop, setDesktop] = useState<DesktopState>({ projects: [] });
   const [auth, setAuth] = useState<AuthStatus>({
@@ -516,6 +553,8 @@ export default function App() {
   >({});
   const [plans, setPlans] = useState<Record<string, PlanData | null>>({});
   const [modeBusy, setModeBusy] = useState(false);
+  const [removalTarget, setRemovalTarget] = useState<RemovalTarget>();
+  const [removalBusy, setRemovalBusy] = useState(false);
   const [history, setHistory] = useState<ConversationHistory>();
   const [inFlightTurns, setInFlightTurns] = useState<
     Record<string, InFlightTurn>
@@ -909,6 +948,94 @@ export default function App() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
   }, [prompt]);
 
+  const forgetSessionState = (sessionIds: string[]): void => {
+    const ids = new Set(sessionIds);
+    if (ids.size === 0) return;
+    for (const sessionId of ids) delete historyRequests.current[sessionId];
+    setInteractions((current) => omitSessionKeys(current, ids));
+    setCompactions((current) => omitSessionKeys(current, ids));
+    setContextUsages((current) => omitSessionKeys(current, ids));
+    setPlans((current) => omitSessionKeys(current, ids));
+    setInFlightTurns((current) => omitSessionKeys(current, ids));
+    setHistory((current) =>
+      current && ids.has(current.conversationId) ? undefined : current,
+    );
+    if (activeConversation && ids.has(activeConversation.id)) {
+      setPrompt("");
+      setResolvingInteraction(undefined);
+    }
+  };
+
+  const confirmRemoval = async (): Promise<void> => {
+    const target = removalTarget;
+    if (!target || removalBusy) return;
+    setRemovalBusy(true);
+    try {
+      if (target.kind === "project") {
+        await removeWorkspace(target.projectId);
+        forgetSessionState(target.conversationIds);
+        updateDesktop((current) => {
+          const removedIndex = current.projects.findIndex(
+            (project) => project.id === target.projectId,
+          );
+          if (removedIndex < 0) return current;
+          const projects = current.projects.filter(
+            (project) => project.id !== target.projectId,
+          );
+          if (current.activeProjectId !== target.projectId) {
+            return { ...current, projects };
+          }
+          const fallback =
+            projects[Math.min(removedIndex, projects.length - 1)];
+          return {
+            projects,
+            activeProjectId: fallback?.id,
+            activeConversationId: fallback?.conversations[0]?.id,
+          };
+        });
+        showNotice(`已从列表移除项目“${target.name}”`);
+      } else {
+        await archiveSession(target.conversationId);
+        forgetSessionState([target.conversationId]);
+        updateDesktop((current) => {
+          const project = current.projects.find(
+            (item) => item.id === target.projectId,
+          );
+          if (!project) return current;
+          const removedIndex = project.conversations.findIndex(
+            (conversation) => conversation.id === target.conversationId,
+          );
+          if (removedIndex < 0) return current;
+          const conversations = project.conversations.filter(
+            (conversation) => conversation.id !== target.conversationId,
+          );
+          const projects = current.projects.map((item) =>
+            item.id === target.projectId
+              ? { ...item, conversations }
+              : item,
+          );
+          if (current.activeConversationId !== target.conversationId) {
+            return { ...current, projects };
+          }
+          const fallback =
+            conversations[Math.min(removedIndex, conversations.length - 1)];
+          return {
+            ...current,
+            projects,
+            activeProjectId: target.projectId,
+            activeConversationId: fallback?.id,
+          };
+        });
+        showNotice(`已归档对话“${target.title}”`);
+      }
+      setRemovalTarget(undefined);
+    } catch (error) {
+      showNotice(conciseError(error));
+    } finally {
+      setRemovalBusy(false);
+    }
+  };
+
   const addProject = async (): Promise<void> => {
     try {
       const selection = await open({
@@ -933,7 +1060,12 @@ export default function App() {
         }));
         return;
       }
-      const project = projectFromWorkspace(workspace, desktop.projects.length);
+      const sessions = await listWorkspaceSessions(workspace.id);
+      const project = projectFromWorkspace(
+        workspace,
+        desktop.projects.length,
+        sessions,
+      );
       updateDesktop((current) => ({
         projects: [...current.projects, project],
         activeProjectId: project.id,
@@ -1417,18 +1549,25 @@ export default function App() {
     });
 
   return (
-    <div className="app-shell">
-      <aside className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
+    <div
+      className={`app-shell ${
+        sidebarCollapsed ? "sidebar-is-collapsed" : ""
+      }`}
+    >
+      <WindowTitleBar
+        projectName={activeProject?.name}
+        conversationTitle={activeConversation?.title}
+        sidebarCollapsed={sidebarCollapsed}
+      />
+
+      <div className="app-body">
+        <aside className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
         <div className="brand-row">
-          <div className="brand-mark" aria-label="Kimi Code">
-            <span />
-            <span />
-          </div>
           {!sidebarCollapsed && (
             <>
-              <div className="brand-copy">
-                <strong>Kimi Code</strong>
-                <span>Agent Desktop</span>
+              <div className="sidebar-heading-copy">
+                <strong>工作区</strong>
+                <span>Projects &amp; sessions</span>
               </div>
               <button
                 className="icon-button quiet"
@@ -1491,12 +1630,34 @@ export default function App() {
                         <span className="project-actions">
                           <button
                             className="icon-button tiny"
+                            type="button"
                             onClick={(event) =>
                               void createConversation(project, event)
                             }
                             title="新建对话"
+                            aria-label={`在 ${project.name} 中新建对话`}
                           >
                             <Plus size={14} />
+                          </button>
+                          <button
+                            className="icon-button tiny project-remove-button"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setRemovalTarget({
+                                kind: "project",
+                                projectId: project.id,
+                                name: project.name,
+                                path: project.path,
+                                conversationIds: project.conversations.map(
+                                  (conversation) => conversation.id,
+                                ),
+                              });
+                            }}
+                            title="移除项目"
+                            aria-label={`移除项目 ${project.name}`}
+                          >
+                            <FolderMinus size={13} />
                           </button>
                           {project.expanded ? (
                             <ChevronDown size={14} />
@@ -1510,21 +1671,44 @@ export default function App() {
                   {!sidebarCollapsed && project.expanded && (
                     <div className="conversation-list">
                       {project.conversations.map((conversation) => (
-                        <button
+                        <div
                           className={`conversation-row ${
                             conversation.id === activeConversation?.id
                               ? "selected"
                               : ""
                           }`}
                           key={conversation.id}
-                          onClick={() =>
-                            selectConversation(project.id, conversation.id)
-                          }
                         >
-                          <MessageSquareText size={14} />
-                          <span>{conversation.title}</span>
-                          <time>{formatTime(conversation.updatedAt)}</time>
-                        </button>
+                          <button
+                            className="conversation-select"
+                            type="button"
+                            onClick={() =>
+                              selectConversation(project.id, conversation.id)
+                            }
+                            title={conversation.title}
+                          >
+                            <MessageSquareText size={14} />
+                            <span>{conversation.title}</span>
+                            <time>{formatTime(conversation.updatedAt)}</time>
+                          </button>
+                          <button
+                            className="conversation-archive-button"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setRemovalTarget({
+                                kind: "conversation",
+                                projectId: project.id,
+                                conversationId: conversation.id,
+                                title: conversation.title,
+                              });
+                            }}
+                            title="归档对话"
+                            aria-label={`归档对话 ${conversation.title}`}
+                          >
+                            <Archive size={12} />
+                          </button>
+                        </div>
                       ))}
                     </div>
                   )}
@@ -1592,9 +1776,9 @@ export default function App() {
             </button>
           )}
         </div>
-      </aside>
+        </aside>
 
-      <main className="workspace">
+        <main className="workspace">
         {activeProject && activeConversation ? (
           <>
             <header className="chat-header">
@@ -1893,7 +2077,8 @@ export default function App() {
             onAddProject={() => void addProject()}
           />
         )}
-      </main>
+        </main>
+      </div>
 
       {loginOpen && (
         <LoginDialog
@@ -1901,6 +2086,15 @@ export default function App() {
           code={deviceCode}
           onClose={() => !loginBusy && setLoginOpen(false)}
           onStart={() => void startLogin()}
+        />
+      )}
+
+      {removalTarget && (
+        <RemovalDialog
+          target={removalTarget}
+          busy={removalBusy}
+          onClose={() => !removalBusy && setRemovalTarget(undefined)}
+          onConfirm={() => void confirmRemoval()}
         />
       )}
 
@@ -1921,6 +2115,134 @@ interface ToolbarSelectOption {
   label: string;
   description?: string;
   danger?: boolean;
+}
+
+function WindowTitleBar({
+  projectName,
+  conversationTitle,
+  sidebarCollapsed,
+}: {
+  projectName?: string;
+  conversationTitle?: string;
+  sidebarCollapsed: boolean;
+}) {
+  const [maximized, setMaximized] = useState(false);
+  const appWindow = useMemo(
+    () => (isTauri() ? getCurrentWindow() : undefined),
+    [],
+  );
+
+  useEffect(() => {
+    if (!appWindow) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const syncMaximized = (): void => {
+      void appWindow
+        .isMaximized()
+        .then((value) => {
+          if (!disposed) setMaximized(value);
+        })
+        .catch(() => undefined);
+    };
+
+    syncMaximized();
+    void appWindow
+      .onResized(syncMaximized)
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [appWindow]);
+
+  const runWindowAction = (action: "minimize" | "close"): void => {
+    if (!appWindow) return;
+    void appWindow[action]().catch(() => undefined);
+  };
+
+  const toggleMaximize = (): void => {
+    if (!appWindow) return;
+    void appWindow
+      .toggleMaximize()
+      .then(() => appWindow.isMaximized())
+      .then(setMaximized)
+      .catch(() => undefined);
+  };
+
+  const contextTitle =
+    conversationTitle ?? projectName ?? "准备开始新的编码任务";
+
+  return (
+    <header className="window-titlebar" data-tauri-drag-region>
+      <div
+        className="window-titlebar-brand"
+        data-tauri-drag-region
+        aria-label="Kimi Code"
+      >
+        <div className="brand-mark compact" data-tauri-drag-region>
+          <span data-tauri-drag-region />
+          <span data-tauri-drag-region />
+        </div>
+        {!sidebarCollapsed && (
+          <div className="titlebar-brand-copy" data-tauri-drag-region>
+            <strong data-tauri-drag-region>Kimi Code</strong>
+            <span data-tauri-drag-region>Agent Desktop</span>
+          </div>
+        )}
+      </div>
+
+      <div className="window-titlebar-context" data-tauri-drag-region>
+        <span className="window-context-project" data-tauri-drag-region>
+          <i data-tauri-drag-region />
+          <span data-tauri-drag-region>{projectName ?? "Local workspace"}</span>
+        </span>
+        <span className="window-context-divider" data-tauri-drag-region />
+        <strong data-tauri-drag-region title={contextTitle}>
+          {contextTitle}
+        </strong>
+      </div>
+
+      <div className="window-controls">
+        <button
+          className="window-control"
+          type="button"
+          title="最小化"
+          aria-label="最小化窗口"
+          onClick={() => runWindowAction("minimize")}
+        >
+          <Minus size={15} strokeWidth={1.7} />
+        </button>
+        <button
+          className="window-control"
+          type="button"
+          title={maximized ? "还原" : "最大化"}
+          aria-label={maximized ? "还原窗口" : "最大化窗口"}
+          onClick={toggleMaximize}
+        >
+          {maximized ? (
+            <Copy className="restore-icon" size={12} strokeWidth={1.5} />
+          ) : (
+            <Square size={11} strokeWidth={1.5} />
+          )}
+        </button>
+        <button
+          className="window-control close"
+          type="button"
+          title="关闭"
+          aria-label="关闭窗口"
+          onClick={() => runWindowAction("close")}
+        >
+          <X size={15} strokeWidth={1.7} />
+        </button>
+      </div>
+    </header>
+  );
 }
 
 function ContextUsageIndicator({
@@ -3159,6 +3481,103 @@ function ProjectLanding({
         <span>提示</span>
         你也可以把项目文件夹拖到窗口中
       </div>
+    </div>
+  );
+}
+
+function RemovalDialog({
+  target,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  target: RemovalTarget;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const isProject = target.kind === "project";
+
+  useEffect(() => {
+    const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [busy, onClose]);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <section
+        className="operation-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="removal-dialog-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button
+          className="dialog-close"
+          type="button"
+          aria-label="关闭确认窗口"
+          onClick={onClose}
+          disabled={busy}
+        >
+          <X size={17} />
+        </button>
+        <div
+          className={`operation-dialog-icon ${
+            isProject ? "project" : "conversation"
+          }`}
+        >
+          {isProject ? <FolderMinus size={23} /> : <Archive size={22} />}
+        </div>
+        <p className="eyebrow">
+          {isProject ? "WORKSPACE CATALOG" : "CONVERSATION ARCHIVE"}
+        </p>
+        <h2 id="removal-dialog-title">
+          {isProject ? "移除这个项目？" : "归档这个对话？"}
+        </h2>
+        <p className="dialog-copy">
+          {isProject
+            ? `“${target.name}”只会从项目列表中移除，本地目录和历史对话都不会被删除。重新打开该目录即可恢复。`
+            : `“${target.title}”将移入归档并从当前列表隐藏，对话内容不会从磁盘永久删除。`}
+        </p>
+        {isProject && <div className="operation-target">{target.path}</div>}
+        <div className="operation-dialog-actions">
+          <button
+            className="dialog-secondary"
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            autoFocus
+          >
+            取消
+          </button>
+          <button
+            className="dialog-danger"
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? (
+              <>
+                <span className="spinner light" />
+                正在处理…
+              </>
+            ) : isProject ? (
+              <>
+                <FolderMinus size={15} />
+                移除项目
+              </>
+            ) : (
+              <>
+                <Archive size={15} />
+                归档对话
+              </>
+            )}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

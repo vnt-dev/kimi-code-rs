@@ -121,11 +121,21 @@ async fn create_or_touch_workspace(
 }
 
 #[tauri::command]
+async fn remove_workspace(state: State<'_, AppState>, workspace_id: String) -> Result<(), String> {
+    state.client.remove_workspace(&workspace_id).await
+}
+
+#[tauri::command]
 async fn list_workspace_sessions(
     state: State<'_, AppState>,
     workspace_id: String,
 ) -> Result<Vec<SessionSummary>, String> {
     state.client.list_workspace_sessions(&workspace_id).await
+}
+
+#[tauri::command]
+async fn archive_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    state.client.archive_session(&session_id).await
 }
 
 #[tauri::command]
@@ -266,7 +276,9 @@ pub fn run() {
             list_models,
             list_workspaces,
             create_or_touch_workspace,
+            remove_workspace,
             list_workspace_sessions,
+            archive_session,
             prepare_session,
             conversation_context_usage,
             list_conversation_messages,

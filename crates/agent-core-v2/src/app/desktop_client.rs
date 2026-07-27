@@ -496,6 +496,21 @@ impl KimiCodeDesktopClient {
             .map_err(|error| error.to_string())
     }
 
+    pub async fn remove_workspace(&self, workspace_id: &str) -> Result<(), String> {
+        let workspace_id = workspace_id.trim();
+        if workspace_id.is_empty() {
+            return Err("A workspace id is required.".to_owned());
+        }
+        let registry = self
+            .app
+            .get(WORKSPACE_REGISTRY_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        registry
+            .delete(workspace_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
     pub async fn list_workspace_sessions(
         &self,
         workspace_id: &str,
@@ -506,6 +521,29 @@ impl KimiCodeDesktopClient {
             .map_err(|error| error.to_string())?;
         query
             .list_recent_sessions(workspace_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn archive_session(&self, session_id: &str) -> Result<(), String> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Err("A session id is required.".to_owned());
+        }
+        let sessions = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        if sessions
+            .resume(session_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            return Err(format!("Session `{session_id}` was not found."));
+        }
+        sessions
+            .archive(session_id)
             .await
             .map_err(|error| error.to_string())
     }

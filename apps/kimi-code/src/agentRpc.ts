@@ -117,10 +117,18 @@ export function createOrTouchWorkspace(root: string): Promise<Workspace> {
   return invoke<Workspace>("create_or_touch_workspace", { root });
 }
 
+export function removeWorkspace(workspaceId: string): Promise<void> {
+  return invoke<void>("remove_workspace", { workspaceId });
+}
+
 export function listWorkspaceSessions(
   workspaceId: string,
 ): Promise<SessionSummary[]> {
   return invoke<SessionSummary[]>("list_workspace_sessions", { workspaceId });
+}
+
+export function archiveSession(sessionId: string): Promise<void> {
+  return invoke<void>("archive_session", { sessionId });
 }
 
 export function prepareSession(input: {

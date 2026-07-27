@@ -52,8 +52,9 @@ export async function loadDesktopState(): Promise<DesktopState> {
 export function projectFromWorkspace(
   workspace: Workspace,
   index: number,
+  sessions: SessionSummary[] = [],
 ): Project {
-  return toProject(workspace, [], index);
+  return toProject(workspace, sessions, index);
 }
 
 export function conversationFromSession(
