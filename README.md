@@ -123,8 +123,9 @@ cargo test -p kimi-code-transcript
 
 ## Local Data and Credentials
 
-The desktop shell stores its project list, conversation list, and visible
-message history in the WebView's local storage. Kimi Code credentials are
+The desktop shell stores project and conversation metadata in the WebView's
+local storage. Message history is owned by agent-core and loaded from its
+persisted transcript when a conversation is opened. Kimi Code credentials are
 stored under `~/.kimi-code/credentials` by default. Do not commit credentials,
 access tokens, refresh tokens, or exported conversation data.
 

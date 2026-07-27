@@ -1,13 +1,50 @@
-export type Role = "user" | "assistant";
+export type Role = "user" | "assistant" | "tool" | "system";
 export type PermissionMode = "manual" | "auto" | "yolo";
 
-export interface ChatMessage {
+export type MessageMediaSource =
+  | { kind: "url"; url: string }
+  | { kind: "base64"; media_type: string; data: string }
+  | { kind: "file"; file_id: string };
+
+export type MessageContent =
+  | { type: "text"; text: string }
+  | {
+      type: "tool_use";
+      tool_call_id: string;
+      tool_name: string;
+      input: unknown;
+    }
+  | {
+      type: "tool_result";
+      tool_call_id: string;
+      output: unknown;
+      is_error?: boolean;
+    }
+  | { type: "image"; source: MessageMediaSource }
+  | { type: "video"; source: MessageMediaSource }
+  | {
+      type: "file";
+      file_id: string;
+      name: string;
+      media_type: string;
+      size: number;
+    }
+  | { type: "thinking"; thinking: string; signature?: string };
+
+export interface ProtocolMessage {
   id: string;
   role: Role;
-  content: string;
-  thinking?: string;
-  createdAt: number;
-  status?: "streaming" | "done" | "error";
+  session_id: string;
+  content: MessageContent[];
+  created_at: string;
+  prompt_id?: string;
+  parent_message_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MessagePage {
+  items: ProtocolMessage[];
+  has_more: boolean;
 }
 
 export interface Conversation {
@@ -17,7 +54,6 @@ export interface Conversation {
   updatedAt: number;
   modelId?: string;
   permissionMode?: PermissionMode;
-  messages: ChatMessage[];
 }
 
 export interface Project {

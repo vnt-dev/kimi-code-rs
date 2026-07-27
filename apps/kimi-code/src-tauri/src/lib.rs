@@ -3,7 +3,7 @@ use std::sync::Arc;
 use kimi_code_agent_core_v2::app::desktop_client::{
     DesktopAuthStatus, DesktopChatDelta, DesktopChatRequest, DesktopChatResult,
     DesktopCompactionEvent, DesktopContextUsage, DesktopDeviceCode, DesktopInteraction,
-    DesktopModel, KimiCodeDesktopClient,
+    DesktopMessagePage, DesktopModel, KimiCodeDesktopClient,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -109,6 +109,19 @@ async fn conversation_context_usage(
 }
 
 #[tauri::command]
+async fn list_conversation_messages(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    before_id: Option<String>,
+    page_size: Option<usize>,
+) -> Result<DesktopMessagePage, String> {
+    state
+        .client
+        .list_messages(&conversation_id, before_id, page_size)
+        .await
+}
+
+#[tauri::command]
 async fn send_message(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -201,6 +214,7 @@ pub fn run() {
             logout,
             list_models,
             conversation_context_usage,
+            list_conversation_messages,
             send_message,
             respond_interaction
         ])

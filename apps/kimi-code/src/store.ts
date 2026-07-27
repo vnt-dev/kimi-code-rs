@@ -1,6 +1,6 @@
 import type { Conversation, DesktopState, Project } from "./types";
 
-const STORAGE_KEY = "kimi-code.desktop.workspace.v1";
+const STORAGE_KEY = "kimi-code.desktop.workspace.v2";
 const ACCENTS = ["#8b7cf6", "#5aa9ff", "#47c7a2", "#f0a45d", "#df719d"];
 
 export function createId(prefix: string): string {
@@ -29,7 +29,6 @@ export function newConversation(): Conversation {
     title: "新对话",
     createdAt: now,
     updatedAt: now,
-    messages: [],
   };
 }
 

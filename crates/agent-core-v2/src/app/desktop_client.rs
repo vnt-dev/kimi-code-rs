@@ -25,9 +25,12 @@ use serde_json::{Map, Value};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::{
-    _base::di::{lifecycle::DisposableStore, scope::Scope},
+    _base::{
+        di::{lifecycle::DisposableStore, scope::Scope},
+        errors::errors::Error2,
+    },
     agent::{
-        context_memory::{ContextMessage, PromptOrigin},
+        context_memory::{ContextMessage, PromptOrigin, protocol_message::ProtocolMessage},
         context_size::{AGENT_CONTEXT_SIZE_SERVICE_ID, AgentContextSizeServiceHandle, ContextSize},
         loop_::{AssistantDeltaEvent, LoopRunResult},
         permission_mode::AGENT_PERMISSION_MODE_SERVICE_ID,
@@ -41,6 +44,9 @@ use crate::{
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         config::{CONFIG_SERVICE_ID, ConfigTarget},
         event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, TypedEventBusExt},
+        message_legacy::{
+            MESSAGE_LEGACY_SERVICE_ID, MessageListQuery, PageResponse as MessagePageResponse,
+        },
         session_lifecycle::{CreateSessionOptions, SESSION_LIFECYCLE_SERVICE_ID},
     },
     kosong::contract::message::{ContentPart, Message, Role},
@@ -92,15 +98,9 @@ pub struct DesktopModel {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopChatMessage {
-    pub role: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DesktopChatRequest {
+    pub prompt: String,
     pub model: String,
     #[serde(default)]
     pub protocol: Option<String>,
@@ -110,8 +110,6 @@ pub struct DesktopChatRequest {
     pub permission_mode: Option<String>,
     #[serde(default)]
     pub project_path: Option<String>,
-    #[serde(default)]
-    pub messages: Vec<DesktopChatMessage>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -127,6 +125,12 @@ pub struct DesktopChatResult {
     pub content: String,
     pub thinking: String,
     pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DesktopMessagePage {
+    pub items: Vec<ProtocolMessage>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -287,15 +291,11 @@ impl KimiCodeDesktopClient {
             .filter(|path| !path.trim().is_empty())
             .ok_or_else(|| "A project directory is required.".to_owned())?
             .to_owned();
-        let prompt = request
-            .messages
-            .iter()
-            .rev()
-            .find(|message| message.role == "user")
-            .map(|message| message.content.trim())
-            .filter(|message| !message.is_empty())
-            .ok_or_else(|| "A user message is required.".to_owned())?
-            .to_owned();
+        let prompt = request.prompt.trim();
+        if prompt.is_empty() {
+            return Err("A user message is required.".to_owned());
+        }
+        let prompt = prompt.to_owned();
 
         self.ensure_models_configured().await?;
 
@@ -477,6 +477,46 @@ impl KimiCodeDesktopClient {
             thinking: String::new(),
             finish_reason,
         })
+    }
+
+    pub async fn list_messages(
+        &self,
+        conversation_id: &str,
+        before_id: Option<String>,
+        page_size: Option<usize>,
+    ) -> Result<DesktopMessagePage, String> {
+        let messages = self
+            .app
+            .get(MESSAGE_LEGACY_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let session_id = desktop_session_id(conversation_id);
+        let page = messages
+            .list(
+                &session_id,
+                MessageListQuery {
+                    before_id,
+                    page_size,
+                    ..MessageListQuery::default()
+                },
+            )
+            .await;
+
+        match page {
+            Ok(MessagePageResponse { items, has_more }) => {
+                Ok(DesktopMessagePage { items, has_more })
+            }
+            Err(error)
+                if error
+                    .downcast_ref::<Error2>()
+                    .is_some_and(|error| error.code == "session.not_found") =>
+            {
+                Ok(DesktopMessagePage {
+                    items: Vec::new(),
+                    has_more: false,
+                })
+            }
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     pub async fn context_usage(
@@ -763,7 +803,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        context_usage_from_size, desktop_session_id, managed_model_alias,
+        DesktopChatRequest, context_usage_from_size, desktop_session_id, managed_model_alias,
         map_desktop_compaction_event,
     };
     use crate::{agent::context_size::ContextSize, app::event::event_bus::DomainEvent};
@@ -782,6 +822,26 @@ mod tests {
         assert_eq!(
             desktop_session_id("chat_1234/abcd"),
             "desktop-chat-1234-abcd"
+        );
+    }
+
+    #[test]
+    fn desktop_chat_requests_accept_only_a_direct_prompt() {
+        let request: DesktopChatRequest = serde_json::from_value(json!({
+            "prompt": " explain this crate ",
+            "model": "kimi-k2",
+            "projectPath": "/repo"
+        }))
+        .unwrap();
+        assert_eq!(request.prompt, " explain this crate ");
+
+        assert!(
+            serde_json::from_value::<DesktopChatRequest>(json!({
+                "model": "kimi-k2",
+                "projectPath": "/repo",
+                "messages": [{"role": "user", "content": "legacy"}]
+            }))
+            .is_err()
         );
     }
 

@@ -63,16 +63,39 @@ import type {
   AgentInteractionsEvent,
   ApprovalPayload,
   AuthStatus,
-  ChatMessage,
   ChatStreamEvent,
   CompactionEvent,
   ContextUsage,
   DesktopState,
   DeviceCode,
+  MessageContent,
+  MessagePage,
   Model,
   PermissionMode,
   Project,
+  ProtocolMessage,
 } from "./types";
+
+const HISTORY_PAGE_SIZE = 50;
+
+type RenderMessage = ProtocolMessage & {
+  status?: "streaming" | "done" | "error";
+};
+
+interface ConversationHistory {
+  conversationId: string;
+  items: ProtocolMessage[];
+  hasMore: boolean;
+  loading: boolean;
+  loadingMore: boolean;
+  error?: string;
+}
+
+interface InFlightTurn {
+  user: RenderMessage;
+  assistant: RenderMessage;
+  historyBoundaryId?: string;
+}
 
 const PROMPT_SUGGESTIONS = [
   {
@@ -92,11 +115,11 @@ const PROMPT_SUGGESTIONS = [
   },
 ];
 
-function formatTime(timestamp: number): string {
+function formatTime(timestamp: string | number): string {
   return new Intl.DateTimeFormat("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
-  }).format(timestamp);
+  }).format(new Date(timestamp));
 }
 
 function formatContext(value: number): string {
@@ -112,6 +135,95 @@ function formatTokenCount(value: number): string {
 function conciseError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/^Error:\s*/i, "");
+}
+
+function fetchMessagePage(
+  conversationId: string,
+  beforeId?: string,
+): Promise<MessagePage> {
+  return invoke<MessagePage>("list_conversation_messages", {
+    conversationId,
+    beforeId,
+    pageSize: HISTORY_PAGE_SIZE,
+  });
+}
+
+function pendingMessage(
+  conversationId: string,
+  role: "user" | "assistant",
+  text: string,
+  status: RenderMessage["status"],
+): RenderMessage {
+  return {
+    id: createId("pending"),
+    session_id: conversationId,
+    role,
+    content: [{ type: "text", text }],
+    created_at: new Date().toISOString(),
+    status,
+  };
+}
+
+function appendStreamDelta(
+  message: RenderMessage,
+  delta: ChatStreamEvent,
+): RenderMessage {
+  const targetType = delta.kind === "thinking" ? "thinking" : "text";
+  const content = [...message.content];
+  let index = content.length - 1;
+  while (index >= 0 && content[index].type !== targetType) {
+    index -= 1;
+  }
+  if (index < 0) {
+    content.push(
+      targetType === "thinking"
+        ? { type: "thinking", thinking: delta.content }
+        : { type: "text", text: delta.content },
+    );
+  } else {
+    const part = content[index];
+    content[index] =
+      part.type === "thinking"
+        ? { ...part, thinking: part.thinking + delta.content }
+        : part.type === "text"
+          ? { ...part, text: part.text + delta.content }
+          : part;
+  }
+  return { ...message, content };
+}
+
+function messageOriginKind(message: ProtocolMessage): string | undefined {
+  const origin = message.metadata?.origin;
+  return origin && typeof origin === "object" && "kind" in origin
+    ? String(origin.kind)
+    : undefined;
+}
+
+function isVisibleHistoryMessage(message: ProtocolMessage): boolean {
+  return !["injection", "system_trigger", "task", "cron"].includes(
+    messageOriginKind(message) ?? "",
+  );
+}
+
+function historyBeforeInFlightTurn(
+  items: ProtocolMessage[],
+  turn: InFlightTurn,
+): ProtocolMessage[] {
+  if (turn.historyBoundaryId) {
+    const boundary = items.findIndex(
+      (message) => message.id === turn.historyBoundaryId,
+    );
+    if (boundary >= 0) return items.slice(0, boundary + 1);
+  }
+
+  const prompt = messageText(turn.user);
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const message = items[index];
+    if (message.role === "user" && messageText(message) === prompt) {
+      return items.slice(0, index);
+    }
+  }
+  return items;
 }
 
 export default function App() {
@@ -141,9 +253,14 @@ export default function App() {
   const [contextUsages, setContextUsages] = useState<
     Record<string, ContextUsage>
   >({});
+  const [history, setHistory] = useState<ConversationHistory>();
+  const [inFlightTurns, setInFlightTurns] = useState<
+    Record<string, InFlightTurn>
+  >({});
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
+  const historyRequests = useRef<Record<string, number>>({});
 
   const { project: activeProject, conversation: activeConversation } = useMemo(
     () => getActive(desktop),
@@ -152,9 +269,27 @@ export default function App() {
   const selectedModel =
     models.find((model) => model.id === activeConversation?.modelId) ?? models[0];
   const permissionMode = activeConversation?.permissionMode ?? "manual";
-  const isStreaming = activeConversation?.messages.some(
-    (message) => message.status === "streaming",
+  const activeTurn = activeConversation
+    ? inFlightTurns[activeConversation.id]
+    : undefined;
+  const activeHistory =
+    history?.conversationId === activeConversation?.id ? history : undefined;
+  const visibleMessages = useMemo(
+    () => [
+      ...((activeHistory
+        ? activeTurn
+          ? historyBeforeInFlightTurn(activeHistory.items, activeTurn)
+          : activeHistory.items
+        : []
+      ).filter(isVisibleHistoryMessage)),
+      ...(activeTurn ? [activeTurn.user, activeTurn.assistant] : []),
+    ],
+    [activeHistory?.items, activeTurn],
   );
+  const isStreaming = activeTurn?.assistant.status === "streaming";
+  const isHistoryLoading =
+    activeConversation !== undefined &&
+    (activeHistory === undefined || activeHistory.loading);
   const activeApproval = activeConversation
     ? interactions[activeConversation.id]?.find(
         (interaction) => interaction.kind === "approval",
@@ -225,40 +360,17 @@ export default function App() {
     );
     const unlistenStream = listen<ChatStreamEvent>("chat-stream", (event) => {
       const delta = event.payload;
-      updateDesktop((current) => ({
-        ...current,
-        projects: current.projects.map((project) => ({
-          ...project,
-          conversations: project.conversations.map((conversation) => {
-            if (conversation.id !== delta.conversationId) return conversation;
-            const messages = [...conversation.messages];
-            let index = messages.length - 1;
-            while (
-              index >= 0 &&
-              !(
-                messages[index].role === "assistant" &&
-                messages[index].status === "streaming"
-              )
-            ) {
-              index -= 1;
-            }
-            if (index < 0) return conversation;
-            const message = messages[index];
-            messages[index] = {
-              ...message,
-              content:
-                delta.kind === "text"
-                  ? message.content + delta.content
-                  : message.content,
-              thinking:
-                delta.kind === "thinking"
-                  ? (message.thinking ?? "") + delta.content
-                  : message.thinking,
-            };
-            return { ...conversation, messages, updatedAt: Date.now() };
-          }),
-        })),
-      }));
+      setInFlightTurns((current) => {
+        const turn = current[delta.conversationId];
+        if (!turn) return current;
+        return {
+          ...current,
+          [delta.conversationId]: {
+            ...turn,
+            assistant: appendStreamDelta(turn.assistant, delta),
+          },
+        };
+      });
     });
     const unlistenInteractions = listen<AgentInteractionsEvent>(
       "agent-interactions",
@@ -299,6 +411,68 @@ export default function App() {
 
   useEffect(() => {
     const conversationId = activeConversation?.id;
+    if (!conversationId) {
+      setHistory(undefined);
+      return;
+    }
+
+    let active = true;
+    const request = (historyRequests.current[conversationId] ?? 0) + 1;
+    historyRequests.current[conversationId] = request;
+    setHistory({
+      conversationId,
+      items: [],
+      hasMore: false,
+      loading: true,
+      loadingMore: false,
+    });
+    void fetchMessagePage(conversationId)
+      .then((page) => {
+        if (
+          !active ||
+          request !== historyRequests.current[conversationId]
+        ) {
+          return;
+        }
+        setHistory({
+          conversationId,
+          items: [...page.items].reverse(),
+          hasMore: page.has_more,
+          loading: false,
+          loadingMore: false,
+        });
+        setInFlightTurns((current) => {
+          const turn = current[conversationId];
+          if (!turn || turn.assistant.status === "streaming") return current;
+          const next = { ...current };
+          delete next[conversationId];
+          return next;
+        });
+      })
+      .catch((error) => {
+        if (
+          !active ||
+          request !== historyRequests.current[conversationId]
+        ) {
+          return;
+        }
+        setHistory({
+          conversationId,
+          items: [],
+          hasMore: false,
+          loading: false,
+          loadingMore: false,
+          error: conciseError(error),
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [activeConversation?.id]);
+
+  useEffect(() => {
+    const conversationId = activeConversation?.id;
     if (!conversationId || !auth.loggedIn) return;
     let active = true;
     invoke<ContextUsage | null>("conversation_context_usage", {
@@ -322,7 +496,12 @@ export default function App() {
   useEffect(() => {
     const scroll = scrollRef.current;
     if (scroll) scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
-  }, [activeConversation?.messages, activeCompaction?.phase]);
+  }, [
+    activeConversation?.id,
+    activeHistory?.loading,
+    activeTurn?.assistant.content,
+    activeCompaction?.phase,
+  ]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -481,13 +660,90 @@ export default function App() {
     }
   };
 
-  const setConversationResult = (
-    projectId: string,
-    conversationId: string,
-    assistantId: string,
-    status: "done" | "error",
-    fallback?: string,
-  ): void => {
+  const refreshHistory = async (conversationId: string): Promise<boolean> => {
+    const request = (historyRequests.current[conversationId] ?? 0) + 1;
+    historyRequests.current[conversationId] = request;
+    try {
+      const page = await fetchMessagePage(conversationId);
+      if (request !== historyRequests.current[conversationId]) return false;
+      setHistory((current) =>
+        current?.conversationId === conversationId
+          ? {
+              conversationId,
+              items: [...page.items].reverse(),
+              hasMore: page.has_more,
+              loading: false,
+              loadingMore: false,
+            }
+          : current,
+      );
+      return true;
+    } catch (error) {
+      if (request !== historyRequests.current[conversationId]) return false;
+      const message = conciseError(error);
+      setHistory((current) =>
+        current?.conversationId === conversationId
+          ? { ...current, loading: false, loadingMore: false, error: message }
+          : current,
+      );
+      showNotice(message);
+      return false;
+    }
+  };
+
+  const sendPrompt = async (override?: string): Promise<void> => {
+    const text = (override ?? prompt).trim();
+    if (
+      !text ||
+      !activeProject ||
+      !activeConversation ||
+      isStreaming ||
+      isHistoryLoading
+    ) {
+      return;
+    }
+    if (!auth.loggedIn) {
+      void startLogin();
+      return;
+    }
+    if (!selectedModel) {
+      showNotice("请先同步并选择一个模型");
+      return;
+    }
+
+    const conversationId = activeConversation.id;
+    const projectId = activeProject.id;
+    const userMessage = pendingMessage(
+      conversationId,
+      "user",
+      text,
+      "done",
+    );
+    const assistantMessage = pendingMessage(
+      conversationId,
+      "assistant",
+      "",
+      "streaming",
+    );
+    const title =
+      activeConversation.title === "新对话"
+        ? text.replace(/\s+/g, " ").slice(0, 28)
+        : activeConversation.title;
+
+    setCompactions((current) => {
+      if (!(conversationId in current)) return current;
+      const next = { ...current };
+      delete next[conversationId];
+      return next;
+    });
+    setInFlightTurns((current) => ({
+      ...current,
+      [conversationId]: {
+        user: userMessage,
+        assistant: assistantMessage,
+        historyBoundaryId: activeHistory?.items.at(-1)?.id,
+      },
+    }));
     updateDesktop((current) => ({
       ...current,
       projects: current.projects.map((project) =>
@@ -500,84 +756,9 @@ export default function App() {
                   ? conversation
                   : {
                       ...conversation,
-                      updatedAt: Date.now(),
-                      messages: conversation.messages.map((message) =>
-                        message.id !== assistantId
-                          ? message
-                          : {
-                              ...message,
-                              content: message.content || fallback || "",
-                              status,
-                            },
-                      ),
-                    },
-              ),
-            },
-      ),
-    }));
-  };
-
-  const sendPrompt = async (override?: string): Promise<void> => {
-    const text = (override ?? prompt).trim();
-    if (!text || !activeProject || !activeConversation || isStreaming) return;
-    if (!auth.loggedIn) {
-      void startLogin();
-      return;
-    }
-    if (!selectedModel) {
-      showNotice("请先同步并选择一个模型");
-      return;
-    }
-
-    const userMessage: ChatMessage = {
-      id: createId("message"),
-      role: "user",
-      content: text,
-      createdAt: Date.now(),
-      status: "done",
-    };
-    const assistantMessage: ChatMessage = {
-      id: createId("message"),
-      role: "assistant",
-      content: "",
-      thinking: "",
-      createdAt: Date.now(),
-      status: "streaming",
-    };
-    const history = [...activeConversation.messages, userMessage].map(
-      ({ role, content }) => ({ role, content }),
-    );
-    const title =
-      activeConversation.messages.length === 0
-        ? text.replace(/\s+/g, " ").slice(0, 28)
-        : activeConversation.title;
-
-    setCompactions((current) => {
-      if (!(activeConversation.id in current)) return current;
-      const next = { ...current };
-      delete next[activeConversation.id];
-      return next;
-    });
-    updateDesktop((current) => ({
-      ...current,
-      projects: current.projects.map((project) =>
-        project.id !== activeProject.id
-          ? project
-          : {
-              ...project,
-              conversations: project.conversations.map((conversation) =>
-                conversation.id !== activeConversation.id
-                  ? conversation
-                  : {
-                      ...conversation,
                       title,
                       modelId: selectedModel.id,
                       updatedAt: Date.now(),
-                      messages: [
-                        ...conversation.messages,
-                        userMessage,
-                        assistantMessage,
-                      ],
                     },
               ),
             },
@@ -587,32 +768,125 @@ export default function App() {
 
     try {
       const result = await invoke<{ content: string }>("send_message", {
-        conversationId: activeConversation.id,
+        conversationId,
         request: {
+          prompt: text,
           model: selectedModel.id,
           protocol: selectedModel.protocol,
           effort,
           permissionMode,
           projectPath: activeProject.path,
-          messages: history,
         },
       });
-      setConversationResult(
-        activeProject.id,
-        activeConversation.id,
-        assistantMessage.id,
-        "done",
-        result.content,
-      );
+      setInFlightTurns((current) => {
+        const turn = current[conversationId];
+        if (!turn) return current;
+        const hasStreamedText = turn.assistant.content.some(
+          (part) => part.type === "text" && part.text.length > 0,
+        );
+        return {
+          ...current,
+          [conversationId]: {
+            ...turn,
+            assistant: {
+              ...turn.assistant,
+              content: hasStreamedText
+                ? turn.assistant.content
+                : [{ type: "text", text: result.content }],
+              status: "done",
+            },
+          },
+        };
+      });
     } catch (error) {
       const message = conciseError(error);
-      setConversationResult(
-        activeProject.id,
-        activeConversation.id,
-        assistantMessage.id,
-        "error",
-        `请求失败：${message}`,
+      setInFlightTurns((current) => {
+        const turn = current[conversationId];
+        if (!turn) return current;
+        const hasContent = turn.assistant.content.some(
+          (part) => part.type === "text" && part.text.length > 0,
+        );
+        return {
+          ...current,
+          [conversationId]: {
+            ...turn,
+            assistant: {
+              ...turn.assistant,
+              content: hasContent
+                ? turn.assistant.content
+                : [{ type: "text", text: `请求失败：${message}` }],
+              status: "error",
+            },
+          },
+        };
+      });
+      showNotice(message);
+    }
+
+    if (await refreshHistory(conversationId)) {
+      setInFlightTurns((current) => {
+        if (!(conversationId in current)) return current;
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
+    }
+  };
+
+  const loadOlderMessages = async (): Promise<void> => {
+    if (
+      !activeHistory ||
+      activeHistory.loading ||
+      activeHistory.loadingMore ||
+      !activeHistory.hasMore ||
+      activeHistory.items.length === 0
+    ) {
+      return;
+    }
+
+    const conversationId = activeHistory.conversationId;
+    const beforeId = activeHistory.items[0].id;
+    const request = (historyRequests.current[conversationId] ?? 0) + 1;
+    historyRequests.current[conversationId] = request;
+    const scroll = scrollRef.current;
+    const previousHeight = scroll?.scrollHeight ?? 0;
+    setHistory((current) =>
+      current?.conversationId === conversationId
+        ? { ...current, loadingMore: true, error: undefined }
+        : current,
+    );
+
+    try {
+      const page = await fetchMessagePage(conversationId, beforeId);
+      if (request !== historyRequests.current[conversationId]) return;
+      const older = [...page.items].reverse();
+      setHistory((current) => {
+        if (current?.conversationId !== conversationId) return current;
+        const loadedIds = new Set(current.items.map((message) => message.id));
+        return {
+          ...current,
+          items: [
+            ...older.filter((message) => !loadedIds.has(message.id)),
+            ...current.items,
+          ],
+          hasMore: page.has_more,
+          loadingMore: false,
+        };
+      });
+      window.requestAnimationFrame(() => {
+        if (scroll) {
+          scroll.scrollTop += scroll.scrollHeight - previousHeight;
+        }
+      });
+    } catch (error) {
+      if (request !== historyRequests.current[conversationId]) return;
+      const message = conciseError(error);
+      setHistory((current) =>
+        current?.conversationId === conversationId
+          ? { ...current, loadingMore: false, error: message }
+          : current,
       );
+      showNotice(message);
     }
   };
 
@@ -630,8 +904,8 @@ export default function App() {
     }
   };
 
-  const copyMessage = async (message: ChatMessage): Promise<void> => {
-    await navigator.clipboard.writeText(message.content);
+  const copyMessage = async (message: ProtocolMessage): Promise<void> => {
+    await navigator.clipboard.writeText(messageCopyText(message));
     setCopiedMessage(message.id);
     window.setTimeout(() => setCopiedMessage(undefined), 1400);
   };
@@ -874,14 +1148,43 @@ export default function App() {
             </header>
 
             <div className="chat-scroll" ref={scrollRef}>
-              {activeConversation.messages.length === 0 ? (
+              {activeHistory?.loading ? (
+                <div className="history-loading">
+                  <span className="spinner" />
+                  正在读取会话历史…
+                </div>
+              ) : activeHistory?.error && visibleMessages.length === 0 ? (
+                <div className="history-loading error">
+                  {activeHistory.error}
+                </div>
+              ) : visibleMessages.length === 0 ? (
                 <Welcome
                   project={activeProject}
                   onSuggestion={(value) => void sendPrompt(value)}
                 />
               ) : (
                 <div className="message-stack">
-                  {activeConversation.messages.map((message) => (
+                  {activeHistory?.hasMore && (
+                    <button
+                      type="button"
+                      className="history-load-more"
+                      disabled={activeHistory.loadingMore}
+                      onClick={() => void loadOlderMessages()}
+                    >
+                      {activeHistory.loadingMore ? (
+                        <>
+                          <span className="spinner" />
+                          正在加载…
+                        </>
+                      ) : (
+                        "加载更早消息"
+                      )}
+                    </button>
+                  )}
+                  {activeHistory?.error && (
+                    <div className="history-error">{activeHistory.error}</div>
+                  )}
+                  {visibleMessages.map((message) => (
                     <MessageView
                       key={message.id}
                       message={message}
@@ -1036,7 +1339,7 @@ export default function App() {
                     <button
                       className="send-button"
                       type="submit"
-                      disabled={!prompt.trim() || isStreaming}
+                      disabled={!prompt.trim() || isStreaming || isHistoryLoading}
                       title="发送"
                     >
                       {isStreaming ? <span className="send-loader" /> : <ArrowUp size={18} />}
@@ -1393,66 +1696,235 @@ function MessageView({
   copied,
   onCopy,
 }: {
-  message: ChatMessage;
+  message: RenderMessage;
   copied: boolean;
   onCopy: () => void;
 }) {
   const [thinkingOpen, setThinkingOpen] = useState(false);
+  const text = messageText(message);
+  const thinking = messageThinking(message);
+  const structured = message.content.filter(
+    (part) => part.type !== "text" && part.type !== "thinking",
+  );
+  const origin = message.metadata?.origin;
+  const originKind =
+    origin && typeof origin === "object" && "kind" in origin
+      ? String(origin.kind)
+      : undefined;
+
+  if (originKind === "compaction_summary") {
+    return (
+      <details className="history-summary">
+        <summary>
+          <BrainCircuit size={14} />
+          上下文已压缩
+        </summary>
+        <div className="markdown-body">
+          <MarkdownMessage content={text} />
+        </div>
+      </details>
+    );
+  }
+
   if (message.role === "user") {
     return (
       <article className="message user-message">
         <div className="message-meta">
           <span>你</span>
-          <time>{formatTime(message.createdAt)}</time>
+          <time>{formatTime(message.created_at)}</time>
         </div>
-        <div className="user-bubble">{message.content}</div>
+        <div className="user-bubble">
+          {text}
+          <StructuredMessageContent parts={structured} />
+        </div>
       </article>
     );
   }
+
+  const author =
+    message.role === "tool"
+      ? "工具"
+      : message.role === "system"
+        ? "系统"
+        : "Kimi";
   return (
     <article className={`message assistant-message ${message.status ?? ""}`}>
       <div className="assistant-rail">
         <span className="assistant-avatar">
-          <Sparkles size={15} />
+          {message.role === "assistant" ? (
+            <Sparkles size={15} />
+          ) : (
+            <TerminalSquare size={15} />
+          )}
         </span>
         <i />
       </div>
       <div className="assistant-body">
         <div className="message-meta">
-          <span>Kimi</span>
-          <time>{formatTime(message.createdAt)}</time>
+          <span>{author}</span>
+          <time>{formatTime(message.created_at)}</time>
         </div>
-        {message.thinking && (
+        {thinking && (
           <div className="thinking-block">
             <button onClick={() => setThinkingOpen((value) => !value)}>
               <BrainCircuit size={14} />
               <span>思考过程</span>
               {thinkingOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             </button>
-            {thinkingOpen && <p>{message.thinking}</p>}
+            {thinkingOpen && <p>{thinking}</p>}
           </div>
         )}
         <div className="markdown-body">
-          {message.content ? (
-            <MarkdownMessage content={message.content} />
-          ) : (
+          {text ? (
+            <MarkdownMessage content={text} />
+          ) : structured.length > 0 ? null : (
             <div className="typing">
               <i />
               <i />
               <i />
             </div>
           )}
+          <StructuredMessageContent parts={structured} />
         </div>
-        {message.status !== "streaming" && message.content && (
-          <div className="message-actions">
-            <button onClick={onCopy}>
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? "已复制" : "复制"}
-            </button>
-          </div>
-        )}
+        {message.status !== "streaming" &&
+          messageCopyText(message).length > 0 && (
+            <div className="message-actions">
+              <button onClick={onCopy}>
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+                {copied ? "已复制" : "复制"}
+              </button>
+            </div>
+          )}
       </div>
     </article>
+  );
+}
+
+function messageText(message: ProtocolMessage): string {
+  return message.content
+    .filter(
+      (part): part is Extract<MessageContent, { type: "text" }> =>
+        part.type === "text",
+    )
+    .map((part) => part.text)
+    .join("");
+}
+
+function messageThinking(message: ProtocolMessage): string {
+  return message.content
+    .filter(
+      (part): part is Extract<MessageContent, { type: "thinking" }> =>
+        part.type === "thinking",
+    )
+    .map((part) => part.thinking)
+    .join("");
+}
+
+function structuredValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function messageCopyText(message: ProtocolMessage): string {
+  return message.content
+    .map((part) => {
+      switch (part.type) {
+        case "text":
+          return part.text;
+        case "thinking":
+          return part.thinking;
+        case "tool_use":
+          return `${part.tool_name}\n${structuredValue(part.input)}`;
+        case "tool_result":
+          return structuredValue(part.output);
+        case "image":
+        case "video":
+          return part.source.kind === "url" ? part.source.url : "";
+        case "file":
+          return part.name;
+      }
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function mediaSourceUrl(
+  source: Extract<MessageContent, { type: "image" | "video" }>["source"],
+): string | undefined {
+  if (source.kind === "url") return source.url;
+  if (source.kind === "base64") {
+    return `data:${source.media_type};base64,${source.data}`;
+  }
+  return undefined;
+}
+
+function StructuredMessageContent({ parts }: { parts: MessageContent[] }) {
+  if (parts.length === 0) return null;
+  return (
+    <div className="structured-content">
+      {parts.map((part, index) => {
+        switch (part.type) {
+          case "tool_use":
+            return (
+              <details className="history-tool-card" key={`${part.tool_call_id}-${index}`}>
+                <summary>
+                  <Wrench size={13} />
+                  {part.tool_name}
+                </summary>
+                <pre>{structuredValue(part.input)}</pre>
+              </details>
+            );
+          case "tool_result":
+            return (
+              <details
+                className={`history-tool-card result ${part.is_error ? "error" : ""}`}
+                key={`${part.tool_call_id}-${index}`}
+              >
+                <summary>
+                  <TerminalSquare size={13} />
+                  {part.is_error ? "工具执行失败" : "工具执行结果"}
+                </summary>
+                <pre>{structuredValue(part.output)}</pre>
+              </details>
+            );
+          case "image": {
+            const url = mediaSourceUrl(part.source);
+            return url ? (
+              <img className="history-media" src={url} alt="会话图片" key={index} />
+            ) : (
+              <div className="history-file" key={index}>
+                图片文件：{part.source.kind === "file" ? part.source.file_id : ""}
+              </div>
+            );
+          }
+          case "video": {
+            const url = mediaSourceUrl(part.source);
+            return url ? (
+              <video className="history-media" src={url} controls key={index} />
+            ) : (
+              <div className="history-file" key={index}>
+                视频文件：{part.source.kind === "file" ? part.source.file_id : ""}
+              </div>
+            );
+          }
+          case "file":
+            return (
+              <div className="history-file" key={`${part.file_id}-${index}`}>
+                <FileCode2 size={13} />
+                <span>{part.name || part.file_id}</span>
+                <small>{part.media_type}</small>
+              </div>
+            );
+          case "text":
+          case "thinking":
+            return null;
+        }
+      })}
+    </div>
   );
 }
 
