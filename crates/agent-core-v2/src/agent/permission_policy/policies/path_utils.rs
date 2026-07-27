@@ -8,7 +8,7 @@ use crate::{
     agent::tool_executor::ResolvedToolExecutionHookContext,
     tool::{
         ToolFileAccess, ToolFileAccessOperation, ToolResourceAccess,
-        path_access::{PathClass, is_within_directory},
+        path_access::{PathClass, canonicalize_path, is_within_directory},
     },
 };
 
@@ -51,7 +51,34 @@ pub fn writes_only_plan_file(
     plan_file_path: &str,
 ) -> bool {
     let accesses = write_file_accesses(context);
-    !accesses.is_empty() && accesses.iter().all(|access| access.path == plan_file_path)
+    !accesses.is_empty()
+        && accesses
+            .iter()
+            .all(|access| paths_equal(&access.path, plan_file_path))
+}
+
+fn paths_equal(left: &str, right: &str) -> bool {
+    let path_class = default_path_class();
+    let comparison_cwd = if path_class == PathClass::Win32 {
+        "C:/"
+    } else {
+        "/"
+    };
+    let normalize = |path: &str| {
+        canonicalize_path(path, comparison_cwd, path_class)
+            .ok()
+            .map(|path| {
+                if path_class == PathClass::Win32 {
+                    path.to_ascii_lowercase()
+                } else {
+                    path
+                }
+            })
+    };
+    matches!(
+        (normalize(left), normalize(right)),
+        (Some(left), Some(right)) if left == right
+    )
 }
 
 pub fn has_git_path_component(target_path: &str, cwd: &str, path_class: PathClass) -> bool {
@@ -185,5 +212,20 @@ mod tests {
             "/work/repo",
             PathClass::Posix
         ));
+    }
+
+    #[test]
+    fn compares_plan_paths_lexically_on_the_host_platform() {
+        if cfg!(windows) {
+            assert!(paths_equal(
+                r"C:\Users\Tester\.kimi-code\sessions\session\agents\main\plans\plan.md",
+                "c:/users/tester/.kimi-code/sessions/session/agents/main/plans/plan.md"
+            ));
+        } else {
+            assert!(paths_equal(
+                "/home/tester/session/agents/main/plans/../plans/plan.md",
+                "/home/tester/session/agents/main/plans/plan.md"
+            ));
+        }
     }
 }

@@ -225,13 +225,18 @@ impl AgentPlanService {
 
     // Original: AgentPlanService.planFilePathFor().
     fn plan_file_path_for(&self, id: &str) -> String {
-        PathBuf::from(&self.session_context.session_dir)
+        let path = PathBuf::from(&self.session_context.session_dir)
             .join("agents")
             .join(&self.agent_context.agent_id)
             .join("plans")
             .join(format!("{id}.md"))
             .to_string_lossy()
-            .into_owned()
+            .into_owned();
+        if cfg!(windows) {
+            path.replace('\\', "/")
+        } else {
+            path
+        }
     }
 
     // Original: AgentPlanService.writeEmptyPlanFile().
@@ -583,6 +588,12 @@ mod tests {
                     .join("plan-1.md")
             )
         );
+        if cfg!(windows) {
+            assert!(
+                !status.path.contains('\\'),
+                "plan paths must use the same normalized separators as tool paths"
+            );
+        }
         host_fs
             .write_text(Path::new(&status.path), "draft")
             .await

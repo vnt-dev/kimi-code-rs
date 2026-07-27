@@ -39,10 +39,16 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
     use crate::{
         agent::{
             external_hooks::register_hooks_config_section,
-            loop_::register_loop_control_config_section, media::register_image_config_section,
+            loop_::register_loop_control_config_section,
+            media::register_image_config_section,
             permission_mode::register_default_permission_mode_config_section,
             permission_rules::register_permission_config_section,
-            plan::register_default_plan_mode_config_section, task::register_task_config_sections,
+            plan::{
+                register_default_plan_mode_config_section, register_enter_plan_mode_tool,
+                register_exit_plan_mode_tool, register_plan_agent_profile,
+            },
+            question_tools::register_ask_user_question_tool,
+            task::register_task_config_sections,
             tool_policy::register_tools_config_section,
         },
         app::{
@@ -94,6 +100,7 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
     register_cron_config_section();
     register_subagent_config_section();
     register_builtin_agent_lifecycle_profiles();
+    register_plan_agent_profile();
 
     ensure_provider_definitions_registered().map_err(|error| error.to_string())?;
     ensure_openai_legacy_base_registered().map_err(|error| error.to_string())?;
@@ -106,6 +113,9 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
     crate::agent::task::tools::register_task_list_tool();
     crate::agent::task::tools::register_task_output_tool();
     crate::agent::task::tools::register_task_stop_tool();
+    register_enter_plan_mode_tool();
+    register_exit_plan_mode_tool();
+    register_ask_user_question_tool();
     crate::os::backends::node_local::tools::register_node_local_tools();
     Ok(())
 }
