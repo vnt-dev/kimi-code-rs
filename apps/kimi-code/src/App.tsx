@@ -173,6 +173,16 @@ interface InFlightTurn {
   historyBoundaryId?: string;
 }
 
+interface AgentSubscription {
+  agentId: string;
+  subscriptionId: string;
+}
+
+interface PendingAgentSubscription {
+  agentId: string;
+  promise: Promise<string>;
+}
+
 type ToolResultContent = Extract<MessageContent, { type: "tool_result" }>;
 
 interface HistoryToolPresentation {
@@ -250,6 +260,10 @@ function newInFlightTurn(
     steps: [],
     historyBoundaryId,
   };
+}
+
+function isTurnRunning(turn?: InFlightTurn): boolean {
+  return turn?.status === "queued" || turn?.status === "running";
 }
 
 function withCurrentStep(
@@ -567,6 +581,10 @@ export default function App() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
   const historyRequests = useRef<Record<string, number>>({});
+  const agentSubscriptions = useRef<Map<string, AgentSubscription>>(new Map());
+  const pendingAgentSubscriptions = useRef<
+    Map<string, PendingAgentSubscription>
+  >(new Map());
 
   const { project: activeProject, conversation: activeConversation } = useMemo(
     () => getActive(desktop),
@@ -600,8 +618,7 @@ export default function App() {
   );
   const hasVisibleMessages =
     historyToolPresentation.messages.length > 0 || activeTurn !== undefined;
-  const isStreaming =
-    activeTurn?.status === "queued" || activeTurn?.status === "running";
+  const isStreaming = isTurnRunning(activeTurn);
   const isHistoryLoading =
     activeConversation !== undefined &&
     (activeHistory === undefined || activeHistory.loading);
@@ -646,6 +663,74 @@ export default function App() {
     const agent = createAgentClient(scope);
     const plan = await agent.getPlan();
     setPlans((current) => ({ ...current, [scope.sessionId]: plan }));
+  };
+
+  const releaseAgentSubscription = (sessionId: string): void => {
+    const subscription = agentSubscriptions.current.get(sessionId);
+    agentSubscriptions.current.delete(sessionId);
+    pendingAgentSubscriptions.current.delete(sessionId);
+    if (subscription) {
+      void unsubscribeAgentEvents(subscription.subscriptionId);
+    }
+  };
+
+  const releaseAllAgentSubscriptions = (): void => {
+    for (const subscription of agentSubscriptions.current.values()) {
+      void unsubscribeAgentEvents(subscription.subscriptionId);
+    }
+    agentSubscriptions.current.clear();
+    pendingAgentSubscriptions.current.clear();
+  };
+
+  const ensureAgentSubscription = async (scope: {
+    sessionId: string;
+    agentId: string;
+  }): Promise<void> => {
+    const existing = agentSubscriptions.current.get(scope.sessionId);
+    if (existing?.agentId === scope.agentId) return;
+    if (existing) releaseAgentSubscription(scope.sessionId);
+
+    const pending = pendingAgentSubscriptions.current.get(scope.sessionId);
+    if (pending?.agentId === scope.agentId) {
+      await pending.promise;
+      if (
+        agentSubscriptions.current.get(scope.sessionId)?.agentId ===
+        scope.agentId
+      ) {
+        return;
+      }
+      return ensureAgentSubscription(scope);
+    }
+    if (pending) pendingAgentSubscriptions.current.delete(scope.sessionId);
+
+    const promise = subscribeAgentEvents(scope);
+    pendingAgentSubscriptions.current.set(scope.sessionId, {
+      agentId: scope.agentId,
+      promise,
+    });
+
+    let subscriptionId: string;
+    try {
+      subscriptionId = await promise;
+    } catch (error) {
+      if (
+        pendingAgentSubscriptions.current.get(scope.sessionId)?.promise ===
+        promise
+      ) {
+        pendingAgentSubscriptions.current.delete(scope.sessionId);
+      }
+      throw error;
+    }
+    const current = pendingAgentSubscriptions.current.get(scope.sessionId);
+    if (current?.promise !== promise) {
+      await unsubscribeAgentEvents(subscriptionId);
+      return;
+    }
+    pendingAgentSubscriptions.current.delete(scope.sessionId);
+    agentSubscriptions.current.set(scope.sessionId, {
+      agentId: scope.agentId,
+      subscriptionId,
+    });
   };
 
   const loadModels = async (): Promise<void> => {
@@ -695,7 +780,6 @@ export default function App() {
       return;
     }
     let disposed = false;
-    let subscriptionId: string | undefined;
     void prepareSession({
       sessionId: activeConversation.id,
       workDir: activeProject.path,
@@ -704,14 +788,10 @@ export default function App() {
       permission: permissionMode,
     })
       .then(async (scope) => {
+        await ensureAgentSubscription(scope);
         if (disposed) return;
-        subscriptionId = await subscribeAgentEvents(scope);
-        if (disposed && subscriptionId) {
-          await unsubscribeAgentEvents(subscriptionId);
-        } else {
-          setActiveAgentScope(scope);
-          await refreshModeState(scope);
-        }
+        setActiveAgentScope(scope);
+        await refreshModeState(scope);
       })
       .catch((error) => {
         if (!disposed) showNotice(conciseError(error));
@@ -719,7 +799,6 @@ export default function App() {
     return () => {
       disposed = true;
       setActiveAgentScope(undefined);
-      if (subscriptionId) void unsubscribeAgentEvents(subscriptionId);
     };
   }, [
     activeConversation?.id,
@@ -727,6 +806,11 @@ export default function App() {
     auth.loggedIn,
     models.length,
   ]);
+
+  useEffect(
+    () => () => releaseAllAgentSubscriptions(),
+    [],
+  );
 
   useEffect(() => {
     const unlistenDevice = listen<DeviceCode>("auth-device-code", (event) => {
@@ -951,7 +1035,10 @@ export default function App() {
   const forgetSessionState = (sessionIds: string[]): void => {
     const ids = new Set(sessionIds);
     if (ids.size === 0) return;
-    for (const sessionId of ids) delete historyRequests.current[sessionId];
+    for (const sessionId of ids) {
+      delete historyRequests.current[sessionId];
+      releaseAgentSubscription(sessionId);
+    }
     setInteractions((current) => omitSessionKeys(current, ids));
     setCompactions((current) => omitSessionKeys(current, ids));
     setContextUsages((current) => omitSessionKeys(current, ids));
@@ -1265,6 +1352,7 @@ export default function App() {
     try {
       const status = await invoke<AuthStatus>("logout");
       setAuth(status);
+      releaseAllAgentSubscriptions();
       setModels([]);
       setContextUsages({});
       setProfileOpen(false);
@@ -1688,8 +1776,20 @@ export default function App() {
                             title={conversation.title}
                           >
                             <MessageSquareText size={14} />
-                            <span>{conversation.title}</span>
-                            <time>{formatTime(conversation.updatedAt)}</time>
+                            <span className="conversation-title">
+                              {conversation.title}
+                            </span>
+                            <span className="conversation-meta">
+                              {isTurnRunning(inFlightTurns[conversation.id]) && (
+                                <span
+                                  className="conversation-running-indicator"
+                                  role="status"
+                                  aria-label="对话进行中"
+                                  title="对话进行中"
+                                />
+                              )}
+                              <time>{formatTime(conversation.updatedAt)}</time>
+                            </span>
                           </button>
                           <button
                             className="conversation-archive-button"

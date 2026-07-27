@@ -543,11 +543,28 @@ select:focus-visible {
   cursor: pointer;
 }
 
-.conversation-select span {
+.conversation-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11.5px;
+}
+
+.conversation-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.conversation-running-indicator {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border: 1.5px solid #3b3b48;
+  border-top-color: #9587ee;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .conversation-select time {
