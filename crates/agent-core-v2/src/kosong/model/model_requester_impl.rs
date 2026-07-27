@@ -222,9 +222,10 @@ impl ModelRequesterImpl {
         callbacks: GenerateCallbacks,
         options: GenerateOptions,
     ) -> Result<GenerateResult, RequestExecutionError> {
+        let input = Arc::new(input);
         self.run_with_auth_refresh(move |auth| {
             let provider = Arc::clone(&provider);
-            let input = input.clone();
+            let input = Arc::clone(&input);
             let callbacks = callbacks.clone();
             let mut options = options.clone();
             options.auth = auth;
@@ -527,8 +528,9 @@ mod tests {
         contract::{
             capability::{ModelCapability, UNKNOWN_CAPABILITY},
             errors::ApiStatusData,
-            message::{ContentPart, StreamedMessagePart},
+            message::{ContentPart, Message, Role, StreamedMessagePart},
             provider::{FinishReason, StreamedMessage, TraceId},
+            tokens::estimate_tokens_for_message,
             usage::TokenUsage,
         },
         protocol::{
@@ -578,6 +580,7 @@ mod tests {
     struct FakeProvider {
         attempts: AtomicUsize,
         reject_first_attempt: bool,
+        observed_token_estimates: Mutex<Vec<usize>>,
     }
 
     #[async_trait]
@@ -607,6 +610,12 @@ mod tests {
         ) -> Result<Box<dyn StreamedMessage>, ProviderError> {
             if let Some(callback) = options.and_then(|options| options.on_request_sent.as_ref()) {
                 callback();
+            }
+            if let Some(message) = _history.first() {
+                self.observed_token_estimates
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(estimate_tokens_for_message(message));
             }
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
             if self.reject_first_attempt && attempt == 0 {
@@ -744,6 +753,26 @@ mod tests {
         }
     }
 
+    fn request_input_with_cached_message(token_estimate: usize) -> ModelRequestInput {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Text {
+                text: "hello".to_owned(),
+            }],
+            Vec::new(),
+        );
+        assert_eq!(
+            message.token_estimate_or_init(|| token_estimate),
+            token_estimate
+        );
+        ModelRequestInput {
+            system_prompt: "system".to_owned(),
+            tools: Vec::new(),
+            messages: vec![message],
+            response_format: None,
+        }
+    }
+
     #[test]
     fn timing_clamps_sent_timestamp_and_decode_metrics_like_the_source() {
         let started = Instant::now();
@@ -792,6 +821,7 @@ mod tests {
         let provider = Arc::new(FakeProvider {
             attempts: AtomicUsize::new(0),
             reject_first_attempt: false,
+            observed_token_estimates: Mutex::new(Vec::new()),
         });
         let registry = Arc::new(FakeRegistry {
             provider,
@@ -852,6 +882,7 @@ mod tests {
         let provider = Arc::new(FakeProvider {
             attempts: AtomicUsize::new(0),
             reject_first_attempt: true,
+            observed_token_estimates: Mutex::new(Vec::new()),
         });
         let registry = Arc::new(FakeRegistry {
             provider: provider.clone(),
@@ -861,12 +892,19 @@ mod tests {
         let requester = ModelRequesterImpl::new(test_model(auth.clone()), registry);
 
         let events = requester
-            .request(request_input(), None, None)
+            .request(request_input_with_cached_message(123_456), None, None)
             .collect::<Vec<_>>()
             .await;
 
         assert!(events.iter().all(Result::is_ok));
         assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *provider
+                .observed_token_estimates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            vec![123_456, 123_456]
+        );
         assert_eq!(
             *auth
                 .requests
@@ -884,6 +922,7 @@ mod tests {
         let provider = Arc::new(FakeProvider {
             attempts: AtomicUsize::new(0),
             reject_first_attempt: false,
+            observed_token_estimates: Mutex::new(Vec::new()),
         });
         let registry = Arc::new(FakeRegistry {
             provider,
