@@ -21,6 +21,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleUserRound,
+  ClipboardList,
   Code2,
   Copy,
   ExternalLink,
@@ -42,6 +43,7 @@ import {
   Sparkles,
   SquarePen,
   TerminalSquare,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -77,8 +79,12 @@ import type {
   MessagePage,
   Model,
   PermissionMode,
+  PlanData,
+  PlanReviewDisplay,
   Project,
   ProtocolMessage,
+  QuestionPayload,
+  QuestionResponse,
   ToolUpdate,
 } from "./types";
 
@@ -508,6 +514,8 @@ export default function App() {
   const [contextUsages, setContextUsages] = useState<
     Record<string, ContextUsage>
   >({});
+  const [plans, setPlans] = useState<Record<string, PlanData | null>>({});
+  const [modeBusy, setModeBusy] = useState(false);
   const [history, setHistory] = useState<ConversationHistory>();
   const [inFlightTurns, setInFlightTurns] = useState<
     Record<string, InFlightTurn>
@@ -563,11 +571,21 @@ export default function App() {
         (interaction) => interaction.kind === "approval",
       )
     : undefined;
+  const activeQuestion = activeConversation
+    ? interactions[activeConversation.id]?.find(
+        (interaction) => interaction.kind === "question",
+      )
+    : undefined;
+  const hasBlockingInteraction =
+    activeApproval !== undefined || activeQuestion !== undefined;
   const activeCompaction = activeConversation
     ? compactions[activeConversation.id]
     : undefined;
   const activeContextUsage = activeConversation
     ? contextUsages[activeConversation.id]
+    : undefined;
+  const activePlan = activeConversation
+    ? plans[activeConversation.id]
     : undefined;
 
   const updateDesktop = (
@@ -580,6 +598,15 @@ export default function App() {
     setNotice(message);
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     noticeTimer.current = window.setTimeout(() => setNotice(undefined), 3600);
+  };
+
+  const refreshModeState = async (scope: {
+    sessionId: string;
+    agentId: string;
+  }): Promise<void> => {
+    const agent = createAgentClient(scope);
+    const plan = await agent.getPlan();
+    setPlans((current) => ({ ...current, [scope.sessionId]: plan }));
   };
 
   const loadModels = async (): Promise<void> => {
@@ -644,6 +671,7 @@ export default function App() {
           await unsubscribeAgentEvents(subscriptionId);
         } else {
           setActiveAgentScope(scope);
+          await refreshModeState(scope);
         }
       })
       .catch((error) => {
@@ -723,6 +751,23 @@ export default function App() {
               },
             }));
           }
+        }
+        if (
+          payload.event.type === "agent.status.updated" &&
+          typeof payload.event.planMode === "boolean"
+        ) {
+          void createAgentClient({
+            sessionId: payload.sessionId,
+            agentId: payload.agentId,
+          })
+            .getPlan()
+            .then((plan) => {
+              setPlans((current) => ({
+                ...current,
+                [payload.sessionId]: plan,
+              }));
+            })
+            .catch((error) => showNotice(conciseError(error)));
         }
         if (
           payload.event.type === "agent.status.updated" ||
@@ -1034,6 +1079,37 @@ export default function App() {
     }
   };
 
+  const togglePlanMode = async (): Promise<void> => {
+    if (!activeAgentScope || modeBusy || isStreaming) return;
+    setModeBusy(true);
+    try {
+      const agent = createAgentClient(activeAgentScope);
+      if (activePlan) {
+        await agent.cancelPlan(activePlan.id);
+      } else {
+        await agent.enterPlan();
+      }
+      await refreshModeState(activeAgentScope);
+    } catch (error) {
+      showNotice(conciseError(error));
+    } finally {
+      setModeBusy(false);
+    }
+  };
+
+  const clearActivePlan = async (): Promise<void> => {
+    if (!activeAgentScope || !activePlan || modeBusy) return;
+    setModeBusy(true);
+    try {
+      await createAgentClient(activeAgentScope).clearPlan();
+      await refreshModeState(activeAgentScope);
+    } catch (error) {
+      showNotice(conciseError(error));
+    } finally {
+      setModeBusy(false);
+    }
+  };
+
   const startLogin = async (): Promise<void> => {
     setLoginOpen(true);
     setLoginBusy(true);
@@ -1305,10 +1381,9 @@ export default function App() {
     window.setTimeout(() => setCopiedMessage(undefined), 1400);
   };
 
-  const resolveApproval = async (
+  const respondToInteraction = async (
     interaction: AgentInteraction,
-    decision: "approved" | "rejected",
-    session = false,
+    response: unknown,
   ): Promise<void> => {
     if (!activeConversation || resolvingInteraction) return;
     setResolvingInteraction(interaction.id);
@@ -1316,16 +1391,7 @@ export default function App() {
       await invoke("respond_interaction", {
         sessionId: activeConversation.id,
         interactionId: interaction.id,
-        response: {
-          decision,
-          ...(session ? { scope: "session" } : {}),
-          selectedLabel:
-            decision === "rejected"
-              ? "Reject"
-              : session
-                ? "Approve for this session"
-                : "Approve once",
-        },
+        response,
       });
     } catch (error) {
       showNotice(conciseError(error));
@@ -1333,6 +1399,22 @@ export default function App() {
       setResolvingInteraction(undefined);
     }
   };
+
+  const resolveApproval = (
+    interaction: AgentInteraction,
+    decision: "approved" | "rejected",
+    session = false,
+  ): Promise<void> =>
+    respondToInteraction(interaction, {
+      decision,
+      ...(session ? { scope: "session" } : {}),
+      selectedLabel:
+        decision === "rejected"
+          ? "Reject"
+          : session
+            ? "Approve for this session"
+            : "Approve once",
+    });
 
   return (
     <div className="app-shell">
@@ -1599,7 +1681,35 @@ export default function App() {
             </div>
 
             <div className="composer-dock">
-              {activeApproval && (
+              {activePlan && (
+                <AgentModeStatus
+                  plan={activePlan ?? null}
+                  busy={modeBusy}
+                  planLocked={isStreaming}
+                  onExitPlan={() => void togglePlanMode()}
+                  onClearPlan={() => void clearActivePlan()}
+                />
+              )}
+              {activeQuestion && (
+                <QuestionCard
+                  key={activeQuestion.id}
+                  interaction={activeQuestion}
+                  busy={resolvingInteraction === activeQuestion.id}
+                  onRespond={(response) =>
+                    void respondToInteraction(activeQuestion, response)
+                  }
+                />
+              )}
+              {activeApproval && isPlanReviewInteraction(activeApproval) ? (
+                <PlanReviewCard
+                  key={activeApproval.id}
+                  interaction={activeApproval}
+                  busy={resolvingInteraction === activeApproval.id}
+                  onRespond={(response) =>
+                    void respondToInteraction(activeApproval, response)
+                  }
+                />
+              ) : activeApproval ? (
                 <ApprovalCard
                   interaction={activeApproval}
                   busy={resolvingInteraction === activeApproval.id}
@@ -1613,7 +1723,7 @@ export default function App() {
                     void resolveApproval(activeApproval, "approved", true)
                   }
                 />
-              )}
+              ) : null}
               <form className="composer" onSubmit={handleSubmit}>
                 <textarea
                   ref={textareaRef}
@@ -1621,12 +1731,14 @@ export default function App() {
                   onChange={(event) => setPrompt(event.target.value)}
                   onKeyDown={handlePromptKeyDown}
                   placeholder={
-                    auth.loggedIn
+                    activePlan
+                      ? "计划模式：描述需要分析和规划的任务…"
+                      : auth.loggedIn
                       ? "告诉 Kimi 你想完成什么…"
                       : "登录后开始与 Kimi Code 对话…"
                   }
                   rows={1}
-                  disabled={isStreaming}
+                  disabled={isStreaming || hasBlockingInteraction}
                 />
                 <div className="composer-toolbar">
                   <div className="composer-options">
@@ -1726,6 +1838,19 @@ export default function App() {
                         choosePermissionMode(value as PermissionMode)
                       }
                     />
+                    <button
+                      className={`mode-toolbar-button plan-mode ${
+                        activePlan ? "active" : ""
+                      }`}
+                      type="button"
+                      disabled={!activeAgentScope || modeBusy || isStreaming}
+                      onClick={() => void togglePlanMode()}
+                      title={activePlan ? "退出计划模式" : "进入计划模式"}
+                      aria-pressed={Boolean(activePlan)}
+                    >
+                      <ClipboardList size={14} />
+                      <span>{activePlan ? "计划中" : "计划"}</span>
+                    </button>
                     {selectedModel && (
                       <ContextUsageIndicator
                         usage={activeContextUsage}
@@ -1744,7 +1869,8 @@ export default function App() {
                       disabled={
                         isStreaming
                           ? !activeAgentScope
-                          : !prompt.trim() ||
+                          : hasBlockingInteraction ||
+                            !prompt.trim() ||
                             isHistoryLoading ||
                             !activeAgentScope
                       }
@@ -1856,6 +1982,64 @@ function ContextUsageIndicator({
         </small>
       </div>
     </div>
+  );
+}
+
+function AgentModeStatus({
+  plan,
+  busy,
+  planLocked,
+  onExitPlan,
+  onClearPlan,
+}: {
+  plan: PlanData | null;
+  busy: boolean;
+  planLocked: boolean;
+  onExitPlan: () => void;
+  onClearPlan: () => void;
+}) {
+  const planPreview =
+    plan?.content
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^#+\s*/, "").trim())
+      .find(Boolean) ?? "先分析和制定方案，不直接修改代码";
+
+  return (
+    <section className="mode-status-stack" aria-label="Agent 工作模式">
+      {plan && (
+        <article className="mode-status-card plan">
+          <span className="mode-status-icon">
+            <ClipboardList size={15} />
+          </span>
+          <span className="mode-status-copy">
+            <span className="mode-status-heading">
+              <strong>计划模式</strong>
+              <small>只规划，不执行</small>
+            </span>
+            <span className="mode-status-detail">{planPreview}</span>
+          </span>
+          <span className="mode-status-actions">
+            <button
+              type="button"
+              onClick={onClearPlan}
+              disabled={busy || planLocked}
+              title="清空计划内容"
+            >
+              <Trash2 size={13} />
+            </button>
+            <button
+              type="button"
+              onClick={onExitPlan}
+              disabled={busy || planLocked}
+              title="退出计划模式"
+            >
+              <X size={13} />
+              <span>退出</span>
+            </button>
+          </span>
+        </article>
+      )}
+    </section>
   );
 }
 
@@ -1985,6 +2169,262 @@ function ToolbarSelect({
         </div>
       )}
     </div>
+  );
+}
+
+function isPlanReviewInteraction(interaction: AgentInteraction): boolean {
+  const payload = interaction.payload as Partial<ApprovalPayload>;
+  return payload.display?.kind === "plan_review";
+}
+
+function QuestionCard({
+  interaction,
+  busy,
+  onRespond,
+}: {
+  interaction: AgentInteraction;
+  busy: boolean;
+  onRespond: (response: QuestionResponse | null) => void;
+}) {
+  const payload = interaction.payload as QuestionPayload;
+  const questions = Array.isArray(payload.questions) ? payload.questions : [];
+  const [selections, setSelections] = useState<Record<number, string[]>>({});
+  const [otherAnswers, setOtherAnswers] = useState<Record<number, string>>({});
+
+  const toggleOption = (
+    questionIndex: number,
+    label: string,
+    multiSelect: boolean,
+  ): void => {
+    setSelections((current) => {
+      const selected = current[questionIndex] ?? [];
+      const next = multiSelect
+        ? selected.includes(label)
+          ? selected.filter((value) => value !== label)
+          : [...selected, label]
+        : [label];
+      return { ...current, [questionIndex]: next };
+    });
+    if (!multiSelect) {
+      setOtherAnswers((current) => ({ ...current, [questionIndex]: "" }));
+    }
+  };
+
+  const updateOtherAnswer = (
+    questionIndex: number,
+    value: string,
+    multiSelect: boolean,
+  ): void => {
+    setOtherAnswers((current) => ({ ...current, [questionIndex]: value }));
+    if (!multiSelect && value.trim()) {
+      setSelections((current) => ({ ...current, [questionIndex]: [] }));
+    }
+  };
+
+  const answers = questions.map((question, questionIndex) => {
+    const selected = selections[questionIndex] ?? [];
+    const other = otherAnswers[questionIndex]?.trim();
+    return other ? [...selected, other] : selected;
+  });
+  const canSubmit =
+    questions.length > 0 && answers.every((answer) => answer.length > 0);
+
+  const submit = (): void => {
+    if (!canSubmit || busy) return;
+    const responseAnswers: Record<string, string> = {};
+    questions.forEach((question, questionIndex) => {
+      responseAnswers[question.question] = answers[questionIndex]?.join(", ") ?? "";
+    });
+    onRespond({ answers: responseAnswers, method: "enter" });
+  };
+
+  return (
+    <section className="interaction-card question-card" aria-live="polite">
+      <div className="interaction-card-heading">
+        <span className="interaction-card-icon">
+          <MessageSquareText size={18} />
+        </span>
+        <div>
+          <small>Kimi 需要你补充信息</small>
+          <strong>回答后将继续制定计划</strong>
+        </div>
+      </div>
+      <div className="question-list">
+        {questions.map((question, questionIndex) => {
+          const selected = selections[questionIndex] ?? [];
+          const multiSelect = question.multiSelect === true;
+          return (
+            <fieldset className="question-item" key={`${question.question}-${questionIndex}`}>
+              <legend>
+                {question.header && <span>{question.header}</span>}
+                <strong>{question.question}</strong>
+                {question.body && <small>{question.body}</small>}
+              </legend>
+              <div className="question-options">
+                {question.options.map((option) => {
+                  const checked = selected.includes(option.label);
+                  return (
+                    <button
+                      type="button"
+                      className={checked ? "selected" : ""}
+                      key={option.label}
+                      disabled={busy}
+                      aria-pressed={checked}
+                      onClick={() =>
+                        toggleOption(questionIndex, option.label, multiSelect)
+                      }
+                    >
+                      <span className={multiSelect ? "option-check" : "option-radio"}>
+                        {checked && <Check size={12} />}
+                      </span>
+                      <span>
+                        <strong>{option.label}</strong>
+                        {option.description && <small>{option.description}</small>}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <label className="question-other">
+                <span>{question.otherLabel || "其他"}</span>
+                <input
+                  value={otherAnswers[questionIndex] ?? ""}
+                  disabled={busy}
+                  placeholder={question.otherDescription || "输入其他答案"}
+                  onChange={(event) =>
+                    updateOtherAnswer(questionIndex, event.target.value, multiSelect)
+                  }
+                />
+              </label>
+            </fieldset>
+          );
+        })}
+      </div>
+      <div className="interaction-card-actions">
+        <button
+          type="button"
+          className="interaction-secondary"
+          disabled={busy}
+          onClick={() => onRespond(null)}
+        >
+          跳过
+        </button>
+        <button
+          type="button"
+          className="interaction-primary"
+          disabled={busy || !canSubmit}
+          onClick={submit}
+        >
+          {busy ? <span className="spinner light" /> : <Check size={14} />}
+          提交回答
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function PlanReviewCard({
+  interaction,
+  busy,
+  onRespond,
+}: {
+  interaction: AgentInteraction;
+  busy: boolean;
+  onRespond: (response: Record<string, unknown>) => void;
+}) {
+  const payload = interaction.payload as ApprovalPayload;
+  const display = payload.display as PlanReviewDisplay;
+  const [feedback, setFeedback] = useState("");
+  const options =
+    display.options && display.options.length >= 2 ? display.options : [];
+
+  return (
+    <section className="interaction-card plan-review-card" aria-live="polite">
+      <div className="interaction-card-heading">
+        <span className="interaction-card-icon">
+          <ClipboardList size={18} />
+        </span>
+        <div>
+          <small>计划已完成</small>
+          <strong>审核计划并选择下一步</strong>
+        </div>
+        <span className="approval-tool">{payload.toolName}</span>
+      </div>
+      <div className="plan-review-content">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{display.plan}</ReactMarkdown>
+      </div>
+      {display.path && <code className="plan-review-path">{display.path}</code>}
+      {options.length > 0 && (
+        <div className="plan-review-options">
+          <span>选择实施方案</span>
+          {options.map((option) => (
+            <button
+              type="button"
+              key={option.label}
+              disabled={busy}
+              onClick={() =>
+                onRespond({
+                  decision: "approved",
+                  selectedLabel: option.label,
+                })
+              }
+            >
+              <strong>{option.label}</strong>
+              {option.description && <small>{option.description}</small>}
+            </button>
+          ))}
+        </div>
+      )}
+      <label className="plan-review-feedback">
+        <span>需要调整？写下修改意见</span>
+        <textarea
+          rows={2}
+          value={feedback}
+          disabled={busy}
+          placeholder="告诉 Kimi 需要修改计划的哪些部分"
+          onChange={(event) => setFeedback(event.target.value)}
+        />
+      </label>
+      <div className="interaction-card-actions plan-review-actions">
+        <button
+          type="button"
+          className="interaction-danger"
+          disabled={busy}
+          onClick={() =>
+            onRespond({ decision: "rejected", selectedLabel: "Reject" })
+          }
+        >
+          拒绝
+        </button>
+        <button
+          type="button"
+          className="interaction-secondary"
+          disabled={busy || !feedback.trim()}
+          onClick={() =>
+            onRespond({
+              decision: "rejected",
+              selectedLabel: "Revise",
+              feedback: feedback.trim(),
+            })
+          }
+        >
+          退回修改
+        </button>
+        {options.length === 0 && (
+          <button
+            type="button"
+            className="interaction-primary"
+            disabled={busy}
+            onClick={() =>
+              onRespond({ decision: "approved", selectedLabel: "Approve" })
+            }
+          >
+            {busy ? <span className="spinner light" /> : <Check size={14} />}
+            批准并继续
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 

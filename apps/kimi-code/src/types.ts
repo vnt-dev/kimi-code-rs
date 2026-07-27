@@ -96,6 +96,12 @@ export interface PreparedSession {
   agentId: string;
 }
 
+export interface PlanData {
+  id: string;
+  content: string;
+  path: string;
+}
+
 export interface AuthStatus {
   loggedIn: boolean;
   provider: string;
@@ -231,16 +237,55 @@ export interface GenericToolDisplay {
   [key: string]: unknown;
 }
 
+export interface PlanReviewOption {
+  label: string;
+  description: string;
+}
+
+export interface PlanReviewDisplay {
+  kind: "plan_review";
+  plan: string;
+  path?: string;
+  options?: PlanReviewOption[];
+}
+
 export interface ApprovalPayload {
   toolName: string;
   action: string;
-  display: CommandDisplay | GenericToolDisplay;
+  display: CommandDisplay | PlanReviewDisplay | GenericToolDisplay;
+}
+
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface QuestionItem {
+  question: string;
+  header?: string;
+  body?: string;
+  options: QuestionOption[];
+  multiSelect?: boolean;
+  otherLabel?: string;
+  otherDescription?: string;
+}
+
+export interface QuestionPayload {
+  id?: string;
+  turnId?: number;
+  toolCallId?: string;
+  questions: QuestionItem[];
+}
+
+export interface QuestionResponse {
+  answers: Record<string, string>;
+  method?: "enter" | "space" | "number_key";
 }
 
 export interface AgentInteraction {
   id: string;
   kind: "approval" | "question" | "user_tool";
-  payload: ApprovalPayload | Record<string, unknown>;
+  payload: ApprovalPayload | QuestionPayload | Record<string, unknown>;
   createdAt: number;
 }
 

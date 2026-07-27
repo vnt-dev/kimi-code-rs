@@ -1563,6 +1563,457 @@ select:focus-visible {
   z-index: 3;
 }
 
+.mode-status-stack {
+  display: grid;
+  width: min(850px, 100%);
+  margin: 0 auto 9px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 7px;
+}
+
+.mode-status-card {
+  display: grid;
+  min-width: 0;
+  min-height: 54px;
+  padding: 8px 9px;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid rgba(139, 124, 246, 0.18);
+  border-radius: 11px;
+  background:
+    linear-gradient(135deg, rgba(139, 124, 246, 0.055), transparent 58%),
+    rgba(20, 20, 25, 0.96);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+
+.mode-status-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgba(139, 124, 246, 0.2);
+  border-radius: 8px;
+  color: #a99df3;
+  background: rgba(139, 124, 246, 0.075);
+}
+
+.mode-status-copy,
+.mode-status-heading {
+  display: flex;
+  min-width: 0;
+}
+
+.mode-status-copy {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mode-status-heading {
+  align-items: center;
+  gap: 7px;
+}
+
+.mode-status-heading strong {
+  color: #c9c6d0;
+  font-size: 9.5px;
+  font-weight: 590;
+}
+
+.mode-status-heading small {
+  color: #65626d;
+  font-size: 8px;
+}
+
+.mode-status-detail {
+  overflow: hidden;
+  color: #797681;
+  font-size: 8.8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mode-status-actions button {
+  display: flex;
+  height: 27px;
+  padding: 0 7px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 7px;
+  color: #77747f;
+  background: rgba(255, 255, 255, 0.018);
+  cursor: pointer;
+  font-size: 8.5px;
+}
+
+.mode-status-actions button:hover:not(:disabled) {
+  border-color: rgba(139, 124, 246, 0.2);
+  color: #b2accc;
+  background: rgba(139, 124, 246, 0.055);
+}
+
+.mode-status-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.interaction-card {
+  width: min(850px, 100%);
+  margin: 0 auto 10px;
+  padding: 14px;
+  border: 1px solid rgba(139, 124, 246, 0.24);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 0 0, rgba(139, 124, 246, 0.09), transparent 34%),
+    #19191e;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.34);
+  animation: approval-in 180ms ease-out;
+}
+
+.interaction-card-heading {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+}
+
+.interaction-card-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(139, 124, 246, 0.24);
+  border-radius: 10px;
+  color: #b6aaf5;
+  background: rgba(139, 124, 246, 0.09);
+}
+
+.interaction-card-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.interaction-card-heading small,
+.interaction-card-heading strong {
+  display: block;
+}
+
+.interaction-card-heading small {
+  color: #777183;
+  font-size: 8.5px;
+}
+
+.interaction-card-heading strong {
+  color: #dad6e2;
+  font-size: 11.5px;
+  font-weight: 570;
+}
+
+.question-list {
+  display: grid;
+  max-height: min(390px, 48vh);
+  margin-top: 13px;
+  padding-right: 3px;
+  overflow: auto;
+  gap: 13px;
+}
+
+.question-item {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.question-item legend {
+  display: flex;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.question-item legend > span {
+  color: #8f83cf;
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.question-item legend > strong {
+  color: #cbc8d0;
+  font-size: 10.5px;
+  font-weight: 560;
+}
+
+.question-item legend > small {
+  color: #77747d;
+  font-size: 8.5px;
+  line-height: 1.5;
+}
+
+.question-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 6px;
+}
+
+.question-options > button {
+  display: grid;
+  min-width: 0;
+  min-height: 42px;
+  padding: 7px 9px;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  color: #aaa6b0;
+  background: rgba(255, 255, 255, 0.022);
+  text-align: left;
+  cursor: pointer;
+}
+
+.question-options > button:hover:not(:disabled),
+.question-options > button.selected {
+  border-color: rgba(139, 124, 246, 0.3);
+  background: rgba(139, 124, 246, 0.075);
+}
+
+.question-options > button.selected {
+  color: #d1c9f7;
+}
+
+.option-radio,
+.option-check {
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border: 1px solid #5f5a6b;
+  color: #cfc5ff;
+}
+
+.option-radio {
+  border-radius: 50%;
+}
+
+.option-check {
+  border-radius: 4px;
+}
+
+.question-options button.selected .option-radio,
+.question-options button.selected .option-check {
+  border-color: #9d8eea;
+  background: rgba(139, 124, 246, 0.18);
+}
+
+.question-options button > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.question-options button strong {
+  font-size: 9.5px;
+  font-weight: 560;
+}
+
+.question-options button small {
+  overflow: hidden;
+  color: #77737e;
+  font-size: 8px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.question-other,
+.plan-review-feedback {
+  display: flex;
+  margin-top: 7px;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.question-other > span,
+.plan-review-feedback > span,
+.plan-review-options > span {
+  color: #77727f;
+  font-size: 8px;
+}
+
+.question-other input,
+.plan-review-feedback textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  outline: none;
+  color: #c9c5cf;
+  background: #121217;
+  font: inherit;
+  font-size: 9.5px;
+}
+
+.question-other input {
+  height: 32px;
+  padding: 0 9px;
+}
+
+.plan-review-feedback textarea {
+  padding: 8px 9px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.question-other input:focus,
+.plan-review-feedback textarea:focus {
+  border-color: rgba(139, 124, 246, 0.34);
+}
+
+.interaction-card-actions {
+  display: flex;
+  margin-top: 12px;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.interaction-card-actions button,
+.plan-review-options button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.interaction-card-actions button {
+  display: flex;
+  min-height: 30px;
+  padding: 0 11px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #9b979f;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 9px;
+}
+
+.interaction-card-actions button:hover:not(:disabled) {
+  color: #d5d1db;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.interaction-card-actions .interaction-primary {
+  border-color: rgba(139, 124, 246, 0.34);
+  color: #f1eefc;
+  background: linear-gradient(145deg, #8e7ce5, #6f60bd);
+  font-weight: 600;
+}
+
+.interaction-card-actions .interaction-danger:hover:not(:disabled) {
+  border-color: rgba(206, 105, 105, 0.25);
+  color: #dd9999;
+  background: rgba(206, 105, 105, 0.07);
+}
+
+.interaction-card-actions button:disabled,
+.plan-review-options button:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.plan-review-content {
+  max-height: min(340px, 42vh);
+  margin-top: 12px;
+  padding: 11px 12px;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 9px;
+  color: #bcb8c2;
+  background: #121217;
+  font-size: 9.5px;
+  line-height: 1.62;
+}
+
+.plan-review-content > :first-child {
+  margin-top: 0;
+}
+
+.plan-review-content > :last-child {
+  margin-bottom: 0;
+}
+
+.plan-review-content h1,
+.plan-review-content h2,
+.plan-review-content h3 {
+  color: #d6d1df;
+}
+
+.plan-review-content code {
+  color: #c7bdf5;
+  font-family: "DM Mono", monospace;
+}
+
+.plan-review-path {
+  display: block;
+  margin-top: 7px;
+  overflow: hidden;
+  color: #66616f;
+  font-family: "DM Mono", monospace;
+  font-size: 7.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-review-options {
+  display: grid;
+  margin-top: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 6px;
+}
+
+.plan-review-options > span {
+  grid-column: 1 / -1;
+}
+
+.plan-review-options button {
+  display: flex;
+  min-height: 44px;
+  padding: 7px 9px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  color: #aaa4b6;
+  background: rgba(139, 124, 246, 0.045);
+  text-align: left;
+}
+
+.plan-review-options button:hover:not(:disabled) {
+  border-color: rgba(139, 124, 246, 0.32);
+  color: #d4cafc;
+  background: rgba(139, 124, 246, 0.09);
+}
+
+.plan-review-options button strong {
+  font-size: 9.5px;
+}
+
+.plan-review-options button small {
+  color: #77717f;
+  font-size: 8px;
+}
+
 .approval-card {
   display: grid;
   width: min(850px, 100%);
@@ -1991,6 +2442,42 @@ select:focus-visible {
 
 .toolbar-icon:disabled svg {
   animation: spin 0.8s linear infinite;
+}
+
+.mode-toolbar-button {
+  display: flex;
+  height: 29px;
+  padding: 0 8px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: #777781;
+  background: rgba(255, 255, 255, 0.018);
+  cursor: pointer;
+  transition: 140ms ease;
+}
+
+.mode-toolbar-button span {
+  font-size: 9px;
+}
+
+.mode-toolbar-button:hover:not(:disabled) {
+  border-color: rgba(139, 124, 246, 0.24);
+  color: #aaa3d0;
+  background: rgba(139, 124, 246, 0.05);
+}
+
+.mode-toolbar-button.active.plan-mode {
+  border-color: rgba(139, 124, 246, 0.3);
+  color: #b1a5fa;
+  background: rgba(139, 124, 246, 0.09);
+  box-shadow: inset 0 0 0 1px rgba(139, 124, 246, 0.035);
+}
+
+.mode-toolbar-button:disabled {
+  cursor: default;
+  opacity: 0.43;
 }
 
 .permission-select.full-access .toolbar-select-trigger {
@@ -2572,6 +3059,20 @@ select:focus-visible {
   .composer-dock {
     padding-right: 14px;
     padding-left: 14px;
+  }
+
+  .mode-status-stack {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-toolbar-button span {
+    display: none;
+  }
+
+  .mode-toolbar-button {
+    width: 29px;
+    padding: 0;
+    justify-content: center;
   }
 
   .approval-footer {

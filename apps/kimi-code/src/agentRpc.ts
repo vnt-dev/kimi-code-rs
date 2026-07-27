@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   PermissionMode,
+  PlanData,
   PreparedSession,
   SessionSummary,
   Workspace,
@@ -92,6 +93,18 @@ export function createAgentClient(scope: AgentScope) {
     },
     setPermission(mode: PermissionMode) {
       return callAgentRpc<void>(scope, "setPermission", { mode });
+    },
+    enterPlan() {
+      return callAgentRpc<void>(scope, "enterPlan");
+    },
+    cancelPlan(id?: string) {
+      return callAgentRpc<void>(scope, "cancelPlan", { id });
+    },
+    clearPlan() {
+      return callAgentRpc<void>(scope, "clearPlan");
+    },
+    getPlan() {
+      return callAgentRpc<PlanData | null>(scope, "getPlan");
     },
   };
 }
