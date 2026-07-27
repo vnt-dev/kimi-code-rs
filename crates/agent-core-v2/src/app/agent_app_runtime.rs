@@ -140,6 +140,9 @@ fn register_agent_app_services_once() {
             plugin::register_agent_plugin_service,
             profile::register_agent_profile_service,
             prompt::register_agent_prompt_service,
+            rpc::register_agent_rpc_service,
+            shell_command::register_agent_shell_command_service,
+            skill::register_agent_skill_service,
             step_retry::register_agent_step_retry_service,
             swarm::register_agent_swarm_service,
             system_reminder::register_agent_system_reminder_service,
@@ -214,6 +217,7 @@ fn register_agent_app_services_once() {
                 register_project_file_agent_source, register_session_agent_profile_catalog,
             },
             approval::register_session_approval_service,
+            btw::register_session_btw_service,
             cron::register_session_cron_service,
             external_hooks::register_session_external_hooks_service,
             interaction::register_session_interaction_service,
@@ -304,6 +308,7 @@ fn register_agent_app_services_once() {
     register_session_process_runner();
     register_session_terminal_service();
     register_agent_lifecycle_service();
+    register_session_btw_service();
     register_session_subagent_service();
     register_session_swarm_service();
     register_session_todo_service();
@@ -332,6 +337,9 @@ fn register_agent_app_services_once() {
     register_agent_swarm_service();
     register_agent_loop_service();
     register_agent_prompt_service();
+    register_agent_shell_command_service();
+    register_agent_skill_service();
+    register_agent_rpc_service();
     register_agent_tool_select_service();
     register_agent_tool_select_announcements_service();
     register_agent_step_retry_service();

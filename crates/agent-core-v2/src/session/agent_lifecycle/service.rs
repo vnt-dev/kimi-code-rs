@@ -422,6 +422,9 @@ impl AgentLifecycleService {
             media::{AGENT_MEDIA_TOOLS_REGISTRAR_ID, IMAGE_CONFIG_BRIDGE_ID},
             plan::AGENT_PLAN_SERVICE_ID,
             plugin::AGENT_PLUGIN_SERVICE_ID,
+            rpc::AGENT_RPC_SERVICE_ID,
+            shell_command::AGENT_SHELL_COMMAND_SERVICE_ID,
+            skill::AGENT_SKILL_SERVICE_ID,
             step_retry::AGENT_STEP_RETRY_SERVICE_ID,
             tool_dedupe::AGENT_TOOL_DEDUPE_SERVICE_ID,
             tool_registry::AGENT_BUILTIN_TOOLS_REGISTRAR_ID,
@@ -438,6 +441,9 @@ impl AgentLifecycleService {
         handle.get(AGENT_EXTERNAL_HOOKS_SERVICE_ID)?;
         handle.get(AGENT_MCP_SERVICE_ID)?;
         handle.get(AGENT_PLUGIN_SERVICE_ID)?;
+        handle.get(AGENT_SHELL_COMMAND_SERVICE_ID)?;
+        handle.get(AGENT_SKILL_SERVICE_ID)?;
+        handle.get(AGENT_RPC_SERVICE_ID)?;
         handle.get(AGENT_TOOL_SELECT_SERVICE_ID)?;
         handle.get(AGENT_TOOL_SELECT_ANNOUNCEMENTS_SERVICE_ID)?;
         handle.get(AGENT_STEP_RETRY_SERVICE_ID)?;

@@ -23,6 +23,7 @@ pub mod prompt;
 pub mod question_tools;
 pub mod rpc;
 pub mod scope_context;
+pub mod shell_command;
 pub mod skill;
 pub mod step_retry;
 pub mod swarm;

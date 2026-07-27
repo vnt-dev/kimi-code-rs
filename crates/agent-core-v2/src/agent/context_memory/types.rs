@@ -186,7 +186,7 @@ pub struct SystemReminderRecord {
 #[serde(rename_all = "camelCase")]
 pub struct AgentContextData {
     pub history: Vec<ContextMessage>,
-    pub token_count: u64,
+    pub token_count: f64,
 }
 
 #[cfg(test)]

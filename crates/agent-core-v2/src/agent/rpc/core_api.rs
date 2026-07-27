@@ -273,7 +273,7 @@ pub struct SteerPayload {
 #[serde(rename_all = "camelCase")]
 pub struct CancelPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<u64>,
+    pub turn_id: Option<i64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -316,9 +316,9 @@ pub struct BeginCompactionPayload {
     pub instruction: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct UndoHistoryPayload {
-    pub count: u64,
+    pub count: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -352,21 +352,21 @@ pub struct DetachTaskPayload {
     pub task_id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetTaskOutputPayload {
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tail: Option<u64>,
+    pub tail: Option<f64>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetTasksPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_only: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u64>,
+    pub limit: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -532,7 +532,7 @@ pub struct RemoveKimiProviderPayload {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PromptLaunchResult {
-    pub turn_id: u64,
+    pub turn_id: i64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
