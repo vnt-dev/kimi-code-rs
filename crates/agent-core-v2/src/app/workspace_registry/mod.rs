@@ -4,6 +4,8 @@ pub mod contract;
 pub mod errors;
 pub mod file_persistence;
 pub mod persistence;
+pub mod query_contract;
+pub mod query_service;
 pub mod service;
 
 pub use contract::{
@@ -17,4 +19,9 @@ pub use persistence::{
     WorkspaceCatalog, WorkspacePersistenceContract, WorkspacePersistenceHandle,
     WorkspacePersistenceResult,
 };
+pub use query_contract::{
+    RECENT_SESSIONS_LIMIT, WORKSPACE_QUERY_SERVICE_ID, WorkspaceQueryContract, WorkspaceQueryError,
+    WorkspaceQueryHandle, WorkspaceQueryResult,
+};
+pub use query_service::{WorkspaceQueryService, register_workspace_query_service};
 pub use service::{WorkspaceRegistryService, register_workspace_registry_service};

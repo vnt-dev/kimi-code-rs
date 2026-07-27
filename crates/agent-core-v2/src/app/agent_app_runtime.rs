@@ -181,7 +181,8 @@ fn register_agent_app_services_once() {
             telemetry::{register_agent_telemetry_context_service, register_telemetry_service},
             web::register_web_fetch_service,
             workspace_registry::{
-                register_workspace_persistence, register_workspace_registry_service,
+                register_workspace_persistence, register_workspace_query_service,
+                register_workspace_registry_service,
             },
         },
         kosong::{
@@ -273,6 +274,7 @@ fn register_agent_app_services_once() {
     register_workspace_persistence();
     register_workspace_registry_service();
     register_session_index_service();
+    register_workspace_query_service();
     register_cron_task_persistence_service();
     register_external_hooks_runner_service();
     register_file_service();
