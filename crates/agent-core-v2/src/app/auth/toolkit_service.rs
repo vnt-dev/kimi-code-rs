@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use kimi_code_oauth::{
-    BearerTokenProvider, KimiOAuthLoginOptions, KimiOAuthLoginResult, KimiOAuthLogoutResult,
-    KimiOAuthTokenRef, KimiOAuthToolkit, KimiOAuthToolkitOptions,
+    AuthManagedUsageResult, AuthenticatedServiceOptions, BearerTokenProvider,
+    KimiOAuthLoginOptions, KimiOAuthLoginResult, KimiOAuthLogoutResult, KimiOAuthTokenRef,
+    KimiOAuthToolkit, KimiOAuthToolkitOptions,
 };
 
 use crate::{
@@ -39,6 +40,14 @@ impl OAuthToolkitService {
         })
         .map_err(toolkit_error)?;
         Ok(Self { inner })
+    }
+
+    pub async fn get_managed_usage(
+        &self,
+        provider_name: Option<&str>,
+        options: AuthenticatedServiceOptions<'_>,
+    ) -> AuthManagedUsageResult {
+        self.inner.get_managed_usage(provider_name, options).await
     }
 }
 

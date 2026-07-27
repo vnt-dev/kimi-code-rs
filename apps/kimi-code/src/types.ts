@@ -107,6 +107,28 @@ export interface AuthStatus {
   provider: string;
 }
 
+export interface ManagedUsageRow {
+  label: string;
+  used: number;
+  limit: number;
+  resetHint?: string;
+}
+
+export interface BoosterWalletInfo {
+  balanceCents: number;
+  totalCents: number;
+  monthlyChargeLimitEnabled: boolean;
+  monthlyChargeLimitCents: number;
+  monthlyUsedCents: number;
+  currency: string;
+}
+
+export interface AccountUsage {
+  summary: ManagedUsageRow | null;
+  limits: ManagedUsageRow[];
+  extraUsage: BoosterWalletInfo | null;
+}
+
 export interface DeviceCode {
   userCode: string;
   verificationUri: string;

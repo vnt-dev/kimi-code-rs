@@ -15,9 +15,10 @@ use std::{
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use kimi_code_oauth::{
-    CredentialKind, DeviceAuthorization, DeviceCodeObserver, KIMI_CODE_PROVIDER_NAME,
-    KimiHostIdentity, KimiIdentityOptions, KimiOAuthLoginOptions, ManagedKimiCodeApplyOptions,
-    ManagedKimiCodeModelInfo, OAuthManagerError, apply_managed_kimi_code_config,
+    AuthManagedUsageResult, AuthenticatedServiceOptions, BoosterWalletInfo, CredentialKind,
+    DeviceAuthorization, DeviceCodeObserver, KIMI_CODE_PROVIDER_NAME, KimiHostIdentity,
+    KimiIdentityOptions, KimiOAuthLoginOptions, ManagedKimiCodeApplyOptions,
+    ManagedKimiCodeModelInfo, OAuthManagerError, UsageRow, apply_managed_kimi_code_config,
     create_kimi_default_headers, fetch_managed_kimi_code_models,
     managed_usage::DEFAULT_KIMI_CODE_BASE_URL,
 };
@@ -93,6 +94,58 @@ pub struct KimiCodeDesktopClient {
 pub struct DesktopAuthStatus {
     pub logged_in: bool,
     pub provider: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopManagedUsage {
+    pub summary: Option<DesktopManagedUsageRow>,
+    pub limits: Vec<DesktopManagedUsageRow>,
+    pub extra_usage: Option<DesktopBoosterWalletInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopManagedUsageRow {
+    pub label: String,
+    pub used: f64,
+    pub limit: f64,
+    pub reset_hint: Option<String>,
+}
+
+impl From<UsageRow> for DesktopManagedUsageRow {
+    fn from(value: UsageRow) -> Self {
+        Self {
+            label: value.label,
+            used: value.used,
+            limit: value.limit,
+            reset_hint: value.reset_hint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopBoosterWalletInfo {
+    pub balance_cents: f64,
+    pub total_cents: f64,
+    pub monthly_charge_limit_enabled: bool,
+    pub monthly_charge_limit_cents: f64,
+    pub monthly_used_cents: f64,
+    pub currency: String,
+}
+
+impl From<BoosterWalletInfo> for DesktopBoosterWalletInfo {
+    fn from(value: BoosterWalletInfo) -> Self {
+        Self {
+            balance_cents: value.balance_cents,
+            total_cents: value.total_cents,
+            monthly_charge_limit_enabled: value.monthly_charge_limit_enabled,
+            monthly_charge_limit_cents: value.monthly_charge_limit_cents,
+            monthly_used_cents: value.monthly_used_cents,
+            currency: value.currency,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -420,6 +473,28 @@ impl KimiCodeDesktopClient {
             logged_in: token.is_some(),
             provider: KIMI_CODE_PROVIDER_NAME.to_owned(),
         })
+    }
+
+    pub async fn managed_usage(&self) -> Result<DesktopManagedUsage, String> {
+        match self
+            .oauth
+            .get_managed_usage(
+                Some(KIMI_CODE_PROVIDER_NAME),
+                AuthenticatedServiceOptions::default(),
+            )
+            .await
+        {
+            AuthManagedUsageResult::Ok {
+                summary,
+                limits,
+                extra_usage,
+            } => Ok(DesktopManagedUsage {
+                summary: summary.map(Into::into),
+                limits: limits.into_iter().map(Into::into).collect(),
+                extra_usage: extra_usage.map(Into::into),
+            }),
+            AuthManagedUsageResult::Error { message, .. } => Err(message),
+        }
     }
 
     pub async fn login(

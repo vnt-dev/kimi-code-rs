@@ -73,6 +73,7 @@ import {
   projectFromWorkspace,
 } from "./store";
 import type {
+  AccountUsage,
   AgentChatEvent,
   AgentChatEventEnvelope,
   AgentContentPart,
@@ -86,6 +87,7 @@ import type {
   DeviceCode,
   MessageContent,
   MessagePage,
+  ManagedUsageRow,
   Model,
   PermissionMode,
   PlanData,
@@ -593,6 +595,9 @@ export default function App() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [deviceCode, setDeviceCode] = useState<DeviceCode>();
   const [profileOpen, setProfileOpen] = useState(false);
+  const [accountUsage, setAccountUsage] = useState<AccountUsage>();
+  const [accountUsageBusy, setAccountUsageBusy] = useState(false);
+  const [accountUsageError, setAccountUsageError] = useState<string>();
   const [modelsBusy, setModelsBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [copiedMessage, setCopiedMessage] = useState<string>();
@@ -623,7 +628,9 @@ export default function App() {
   }>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const profileRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
+  const accountUsageRequest = useRef(0);
   const historyRequests = useRef<Record<string, number>>({});
   const agentSubscriptions = useRef<Map<string, AgentSubscription>>(new Map());
   const pendingAgentSubscriptions = useRef<
@@ -790,6 +797,29 @@ export default function App() {
     }
   };
 
+  const loadAccountUsage = async (): Promise<void> => {
+    const request = accountUsageRequest.current + 1;
+    accountUsageRequest.current = request;
+    setAccountUsageBusy(true);
+    setAccountUsageError(undefined);
+    try {
+      const usage = await invoke<AccountUsage>("account_usage");
+      if (request === accountUsageRequest.current) setAccountUsage(usage);
+    } catch (error) {
+      if (request === accountUsageRequest.current) {
+        setAccountUsageError(conciseError(error));
+      }
+    } finally {
+      if (request === accountUsageRequest.current) setAccountUsageBusy(false);
+    }
+  };
+
+  const toggleProfile = (): void => {
+    const opening = !profileOpen;
+    setProfileOpen(opening);
+    if (opening) void loadAccountUsage();
+  };
+
   useEffect(() => {
     let active = true;
     loadDesktopState()
@@ -812,6 +842,27 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const closeProfile = (event: PointerEvent): void => {
+      if (
+        event.target instanceof Node &&
+        !profileRef.current?.contains(event.target)
+      ) {
+        setProfileOpen(false);
+      }
+    };
+    const closeProfileOnEscape = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") setProfileOpen(false);
+    };
+    document.addEventListener("pointerdown", closeProfile);
+    document.addEventListener("keydown", closeProfileOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeProfile);
+      document.removeEventListener("keydown", closeProfileOnEscape);
+    };
+  }, [profileOpen]);
 
   useEffect(() => {
     setActiveAgentScope(undefined);
@@ -1400,6 +1451,10 @@ export default function App() {
       setAuth(status);
       releaseAllAgentSubscriptions();
       setModels([]);
+      accountUsageRequest.current += 1;
+      setAccountUsage(undefined);
+      setAccountUsageBusy(false);
+      setAccountUsageError(undefined);
       setContextUsages({});
       setMessageDurations({});
       setProfileOpen(false);
@@ -1898,11 +1953,13 @@ export default function App() {
 
         <div className="account-area">
           {auth.loggedIn ? (
-            <div className="profile-wrap">
+            <div className="profile-wrap" ref={profileRef}>
               <button
                 className="account-button"
                 tabIndex={sidebarCollapsed ? -1 : 0}
-                onClick={() => setProfileOpen((value) => !value)}
+                aria-expanded={profileOpen}
+                aria-controls="account-usage-popover"
+                onClick={toggleProfile}
               >
                 <span className="avatar">
                   <Sparkles size={15} />
@@ -1928,22 +1985,21 @@ export default function App() {
                   type="button"
                   title="Kimi Code 账号"
                   aria-label="打开 Kimi Code 账号菜单"
-                  onClick={() => setProfileOpen((value) => !value)}
+                  aria-expanded={profileOpen}
+                  aria-controls="account-usage-popover"
+                  onClick={toggleProfile}
                 >
                   <Sparkles size={14} />
                 </button>
               </div>
               {profileOpen && (
-                <div className="profile-popover">
-                  <div>
-                    <strong>Kimi Code</strong>
-                    <span>OAuth 账号</span>
-                  </div>
-                  <button onClick={() => void signOut()}>
-                    <LogOut size={15} />
-                    退出登录
-                  </button>
-                </div>
+                <AccountUsagePopover
+                  usage={accountUsage}
+                  busy={accountUsageBusy}
+                  error={accountUsageError}
+                  onRefresh={() => void loadAccountUsage()}
+                  onSignOut={() => void signOut()}
+                />
               )}
             </div>
           ) : (
@@ -2298,6 +2354,222 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function AccountUsagePopover({
+  usage,
+  busy,
+  error,
+  onRefresh,
+  onSignOut,
+}: {
+  usage?: AccountUsage;
+  busy: boolean;
+  error?: string;
+  onRefresh: () => void;
+  onSignOut: () => void;
+}) {
+  const rows = usage
+    ? [...(usage.summary ? [usage.summary] : []), ...usage.limits]
+    : [];
+
+  return (
+    <div
+      id="account-usage-popover"
+      className="profile-popover"
+      role="dialog"
+      aria-label="Kimi Code 账号用量"
+    >
+      <div className="profile-popover-header">
+        <div className="profile-identity">
+          <span className="profile-identity-mark">
+            <Sparkles size={14} />
+          </span>
+          <span>
+            <strong>Kimi Code</strong>
+            <small>OAuth 账号</small>
+          </span>
+        </div>
+        <button
+          className="profile-refresh"
+          type="button"
+          title="刷新账号用量"
+          aria-label="刷新账号用量"
+          disabled={busy}
+          onClick={onRefresh}
+        >
+          <RefreshCw className={busy ? "spinning" : ""} size={13} />
+        </button>
+      </div>
+
+      <div className="account-usage-content" aria-live="polite">
+        <div className="account-usage-heading">
+          <span>套餐用量</span>
+          {busy && usage && <small>正在更新</small>}
+        </div>
+
+        {busy && !usage ? (
+          <div className="account-usage-skeleton" aria-label="正在加载账号用量">
+            <i />
+            <i />
+          </div>
+        ) : rows.length > 0 ? (
+          <div className="account-usage-list">
+            {rows.map((row, index) => (
+              <ManagedUsageProgress
+                key={`${row.label}-${String(index)}`}
+                row={row}
+                primary={index === 0 && usage?.summary !== null}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="account-usage-empty">
+            {error ? "额度暂时无法加载" : "当前账号未返回套餐额度"}
+          </div>
+        )}
+
+        {error && (
+          <div className="account-usage-error">
+            <span>{error}</span>
+            <button type="button" disabled={busy} onClick={onRefresh}>
+              重试
+            </button>
+          </div>
+        )}
+
+        {usage?.extraUsage && (
+          <BoosterWalletSummary wallet={usage.extraUsage} />
+        )}
+      </div>
+
+      <div className="profile-popover-footer">
+        <button className="profile-signout" type="button" onClick={onSignOut}>
+          <LogOut size={14} />
+          退出登录
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ManagedUsageProgress({
+  row,
+  primary,
+}: {
+  row: ManagedUsageRow;
+  primary: boolean;
+}) {
+  const used = Math.max(0, row.used);
+  const limit = Math.max(0, row.limit);
+  const ratio = limit > 0 ? Math.min(1, used / limit) : 0;
+  const percentage = Math.round(ratio * 100);
+  const level = ratio >= 0.9 ? "danger" : ratio >= 0.72 ? "warning" : "";
+
+  return (
+    <div className={`managed-usage-row ${primary ? "primary" : ""}`}>
+      <div className="managed-usage-label">
+        <strong>{formatUsageLabel(row.label)}</strong>
+        <span>{percentage}%</span>
+      </div>
+      <div
+        className="managed-usage-track"
+        role="progressbar"
+        aria-label={row.label}
+        aria-valuemin={0}
+        aria-valuemax={limit}
+        aria-valuenow={Math.min(used, limit)}
+      >
+        <i
+          className={level}
+          style={{ width: `${String(ratio * 100)}%` }}
+        />
+      </div>
+      <div className="managed-usage-meta">
+        <span>
+          {formatUsageValue(used)} / {formatUsageValue(limit)}
+        </span>
+        {row.resetHint && <span>{formatResetHint(row.resetHint)}</span>}
+      </div>
+    </div>
+  );
+}
+
+function BoosterWalletSummary({
+  wallet,
+}: {
+  wallet: NonNullable<AccountUsage["extraUsage"]>;
+}) {
+  const hasMonthlyLimit =
+    wallet.monthlyChargeLimitEnabled && wallet.monthlyChargeLimitCents > 0;
+  const monthlyRatio = hasMonthlyLimit
+    ? Math.min(1, wallet.monthlyUsedCents / wallet.monthlyChargeLimitCents)
+    : 0;
+
+  return (
+    <div className="booster-wallet">
+      <div className="account-usage-heading">
+        <span>额外用量</span>
+        <small>Booster</small>
+      </div>
+      <div className="booster-balance">
+        <span>可用余额</span>
+        <strong>{formatCurrency(wallet.balanceCents, wallet.currency)}</strong>
+      </div>
+      <div className="booster-details">
+        <span>
+          本月已用 {formatCurrency(wallet.monthlyUsedCents, wallet.currency)}
+        </span>
+        <span>
+          {hasMonthlyLimit
+            ? `上限 ${formatCurrency(wallet.monthlyChargeLimitCents, wallet.currency)}`
+            : "月度上限：不限"}
+        </span>
+      </div>
+      {hasMonthlyLimit && (
+        <div className="managed-usage-track compact" aria-hidden="true">
+          <i
+            className={monthlyRatio >= 0.9 ? "danger" : monthlyRatio >= 0.72 ? "warning" : ""}
+            style={{ width: `${String(monthlyRatio * 100)}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatUsageLabel(label: string): string {
+  const normalized = label.trim().toLowerCase();
+  if (normalized === "weekly limit") return "每周额度";
+  return label
+    .replace(/^(\d+)h limit$/i, "$1 小时额度")
+    .replace(/^(\d+)d limit$/i, "$1 天额度")
+    .replace(/^(\d+)m limit$/i, "$1 分钟额度");
+}
+
+function formatResetHint(hint: string): string {
+  if (hint === "reset") return "已重置";
+  if (hint.startsWith("resets in ")) return `${hint.slice(10)} 后重置`;
+  if (hint.startsWith("resets at ")) return `${hint.slice(10)} 重置`;
+  return hint;
+}
+
+function formatUsageValue(value: number): string {
+  return new Intl.NumberFormat("zh-CN", {
+    maximumFractionDigits: Number.isInteger(value) ? 0 : 1,
+  }).format(value);
+}
+
+function formatCurrency(cents: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("zh-CN", {
+      style: "currency",
+      currency: currency || "USD",
+      currencyDisplay: "narrowSymbol",
+    }).format(cents / 100);
+  } catch {
+    return `${(cents / 100).toFixed(2)} ${currency}`;
+  }
 }
 
 interface ToolbarSelectOption {
