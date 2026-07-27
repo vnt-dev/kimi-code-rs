@@ -5,6 +5,7 @@ import {
   type ReactNode,
   isValidElement,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1015,15 +1016,16 @@ export default function App() {
     };
   }, [activeConversation?.id, auth.loggedIn]);
 
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+  }, [activeConversation?.id, activeHistory?.loading]);
+
   useEffect(() => {
     const scroll = scrollRef.current;
-    if (scroll) scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
-  }, [
-    activeConversation?.id,
-    activeHistory?.loading,
-    activeTurn?.steps,
-    activeCompaction?.phase,
-  ]);
+    if (!scroll || activeHistory?.loading) return;
+    scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
+  }, [activeTurn?.steps, activeCompaction?.phase]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
