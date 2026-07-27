@@ -5,13 +5,23 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
+use serde_json::{Map, Value};
 
 use crate::{
-    agent::media::extract_image_compression_captions, kosong::contract::message::ContentPart,
+    agent::media::extract_image_compression_captions,
+    app::event::{EventServiceContract, GlobalDomainEvent},
+    kosong::contract::message::ContentPart,
+    session::session_metadata::{SessionMetaPatch, SessionMetadataContract, SessionMetadataError},
 };
 
 pub const MAX_TITLE_LENGTH: usize = 200;
 pub const MAX_LAST_PROMPT_LENGTH: usize = 4000;
+
+pub struct PromptMetadataUpdateTarget<'a> {
+    pub metadata: &'a dyn SessionMetadataContract,
+    pub event_service: &'a dyn EventServiceContract,
+    pub session_id: &'a str,
+}
 
 static PRIVATE_KEY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?is)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----")
@@ -66,6 +76,55 @@ pub fn prompt_metadata_text_from_plugin_command(
         MAX_LAST_PROMPT_LENGTH,
     )
 }
+
+// Original: applyPromptMetadataUpdate(). Metadata persistence completes
+// before the live event is published; a failed update therefore emits
+// nothing and remains visible to the caller.
+pub async fn apply_prompt_metadata_update(
+    target: PromptMetadataUpdateTarget<'_>,
+    text: Option<&str>,
+) -> Result<(), SessionMetadataError> {
+    let Some(text) = text else {
+        return Ok(());
+    };
+    let current = target.metadata.read().await?;
+    let auto_title = (current.is_custom_title != Some(true)
+        && is_untitled(current.title.as_deref()))
+    .then(|| title_from_prompt_metadata_text(text));
+    let is_custom_title = auto_title.as_ref().map(|_| false);
+
+    target
+        .metadata
+        .update(SessionMetaPatch {
+            title: auto_title.clone(),
+            is_custom_title,
+            last_prompt: Some(text.into()),
+            ..SessionMetaPatch::default()
+        })
+        .await?;
+
+    let mut patch = Map::from_iter([("lastPrompt".into(), Value::String(text.into()))]);
+    if let Some(title) = &auto_title {
+        patch.insert("title".into(), Value::String(title.clone()));
+    }
+    if let Some(is_custom_title) = is_custom_title {
+        patch.insert("isCustomTitle".into(), Value::Bool(is_custom_title));
+    }
+    let mut payload = Map::from_iter([
+        ("agentId".into(), Value::String("main".into())),
+        ("sessionId".into(), Value::String(target.session_id.into())),
+        ("patch".into(), Value::Object(patch)),
+    ]);
+    if let Some(title) = auto_title {
+        payload.insert("title".into(), Value::String(title));
+    }
+    target.event_service.publish(GlobalDomainEvent {
+        event_type: "session.meta.updated".into(),
+        payload: Value::Object(payload),
+    });
+    Ok(())
+}
+
 fn prompt_part_text(part: &ContentPart) -> Option<String> {
     match part {
         ContentPart::Text { text } => {
@@ -91,7 +150,105 @@ pub fn sanitize_and_truncate_prompt_text(text: &str, max_length: usize) -> Optio
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    use crate::{
+        _base::event::Event,
+        app::event::EventService,
+        session::session_metadata::{AgentMeta, SessionMeta, SessionMetadataChangedEvent},
+    };
+
     use super::*;
+
+    struct StubMetadata {
+        data: Mutex<SessionMeta>,
+        patches: Mutex<Vec<SessionMetaPatch>>,
+        fail_update: AtomicBool,
+    }
+
+    impl StubMetadata {
+        fn new(title: Option<&str>, is_custom_title: Option<bool>) -> Self {
+            Self {
+                data: Mutex::new(SessionMeta {
+                    id: "s1".into(),
+                    version: Some(2),
+                    title: title.map(str::to_owned),
+                    is_custom_title,
+                    last_prompt: None,
+                    created_at: 1,
+                    updated_at: 1,
+                    archived: false,
+                    cwd: Some("/repo".into()),
+                    forked_from: None,
+                    agents: None,
+                    custom: None,
+                }),
+                patches: Mutex::new(Vec::new()),
+                fail_update: AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("metadata update failed")]
+    struct MetadataUpdateFailed;
+
+    #[async_trait]
+    impl SessionMetadataContract for StubMetadata {
+        async fn ready(&self) -> Result<(), SessionMetadataError> {
+            Ok(())
+        }
+
+        fn on_did_change_metadata(&self) -> Event<SessionMetadataChangedEvent> {
+            Event::none()
+        }
+
+        async fn read(&self) -> Result<SessionMeta, SessionMetadataError> {
+            Ok(self.data.lock().unwrap().clone())
+        }
+
+        async fn update(&self, patch: SessionMetaPatch) -> Result<(), SessionMetadataError> {
+            if self.fail_update.load(Ordering::Acquire) {
+                return Err(Box::new(MetadataUpdateFailed));
+            }
+            let mut data = self.data.lock().unwrap();
+            if let Some(title) = &patch.title {
+                data.title = Some(title.clone());
+            }
+            if let Some(is_custom_title) = patch.is_custom_title {
+                data.is_custom_title = Some(is_custom_title);
+            }
+            if let Some(last_prompt) = &patch.last_prompt {
+                data.last_prompt = Some(last_prompt.clone());
+            }
+            drop(data);
+            self.patches.lock().unwrap().push(patch);
+            Ok(())
+        }
+
+        async fn set_title(&self, _title: String) -> Result<(), SessionMetadataError> {
+            Ok(())
+        }
+
+        async fn set_archived(&self, _archived: bool) -> Result<(), SessionMetadataError> {
+            Ok(())
+        }
+
+        async fn register_agent(
+            &self,
+            _agent_id: String,
+            _meta: AgentMeta,
+        ) -> Result<(), SessionMetadataError> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn extracts_redacts_and_truncates_prompt_metadata() {
         assert_eq!(
@@ -124,5 +281,128 @@ mod tests {
             Some("hello [image]")
         );
         assert!(is_untitled(Some("New Session")));
+    }
+
+    #[tokio::test]
+    async fn metadata_update_sets_an_automatic_title_and_publishes_the_source_event() {
+        let metadata = StubMetadata::new(None, None);
+        let event_service = EventService::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        let _subscription = event_service.subscribe(Arc::new(move |event| {
+            captured.lock().unwrap().push(event.clone());
+        }));
+
+        apply_prompt_metadata_update(
+            PromptMetadataUpdateTarget {
+                metadata: &metadata,
+                event_service: &event_service,
+                session_id: "s1",
+            },
+            Some("first prompt"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            metadata.patches.lock().unwrap().as_slice(),
+            [SessionMetaPatch {
+                title: Some("first prompt".into()),
+                is_custom_title: Some(false),
+                last_prompt: Some("first prompt".into()),
+                ..SessionMetaPatch::default()
+            }]
+        );
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            [GlobalDomainEvent {
+                event_type: "session.meta.updated".into(),
+                payload: json!({
+                    "agentId": "main",
+                    "sessionId": "s1",
+                    "title": "first prompt",
+                    "patch": {
+                        "title": "first prompt",
+                        "isCustomTitle": false,
+                        "lastPrompt": "first prompt"
+                    }
+                }),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_update_preserves_custom_titles_and_omits_undefined_event_fields() {
+        let metadata = StubMetadata::new(Some("Custom"), Some(true));
+        let event_service = EventService::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        let _subscription = event_service.subscribe(Arc::new(move |event| {
+            captured.lock().unwrap().push(event.clone());
+        }));
+
+        apply_prompt_metadata_update(
+            PromptMetadataUpdateTarget {
+                metadata: &metadata,
+                event_service: &event_service,
+                session_id: "s1",
+            },
+            Some("another prompt"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            metadata.patches.lock().unwrap().as_slice(),
+            [SessionMetaPatch {
+                last_prompt: Some("another prompt".into()),
+                ..SessionMetaPatch::default()
+            }]
+        );
+        assert_eq!(
+            events.lock().unwrap()[0].payload,
+            json!({
+                "agentId": "main",
+                "sessionId": "s1",
+                "patch": {"lastPrompt": "another prompt"}
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn absent_text_is_a_no_op_and_update_failures_do_not_publish() {
+        let metadata = StubMetadata::new(None, None);
+        let event_service = EventService::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        let _subscription = event_service.subscribe(Arc::new(move |event| {
+            captured.lock().unwrap().push(event.clone());
+        }));
+
+        apply_prompt_metadata_update(
+            PromptMetadataUpdateTarget {
+                metadata: &metadata,
+                event_service: &event_service,
+                session_id: "s1",
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(metadata.patches.lock().unwrap().is_empty());
+
+        metadata.fail_update.store(true, Ordering::Release);
+        let error = apply_prompt_metadata_update(
+            PromptMetadataUpdateTarget {
+                metadata: &metadata,
+                event_service: &event_service,
+                session_id: "s1",
+            },
+            Some("will fail"),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.downcast_ref::<MetadataUpdateFailed>().is_some());
+        assert!(events.lock().unwrap().is_empty());
     }
 }

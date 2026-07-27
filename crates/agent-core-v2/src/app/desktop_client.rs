@@ -42,6 +42,10 @@ use crate::{
         permission_policy::PermissionMode,
         profile::{AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle, BindAgentInput},
         prompt::{AGENT_PROMPT_SERVICE_ID, PromptCompletionState, PromptInput},
+        rpc::{
+            PromptMetadataUpdateTarget, apply_prompt_metadata_update,
+            prompt_metadata_text_from_content_parts,
+        },
         tool_executor::{ToolCallStartedEvent, ToolProgressEvent, ToolResultEvent},
     },
     app::{
@@ -49,7 +53,10 @@ use crate::{
         auth::{OAuthToolkitContract, OAuthToolkitService},
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         config::{CONFIG_SERVICE_ID, ConfigTarget},
-        event::event_bus::{DomainEvent, DomainEventPayload, EVENT_BUS_SERVICE_ID},
+        event::{
+            EVENT_SERVICE_ID,
+            event_bus::{DomainEvent, DomainEventPayload, EVENT_BUS_SERVICE_ID},
+        },
         message_legacy::{
             MESSAGE_LEGACY_SERVICE_ID, MessageListQuery, PageResponse as MessagePageResponse,
         },
@@ -59,6 +66,7 @@ use crate::{
     session::{
         agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID},
         interaction::{Interaction, InteractionKind, SESSION_INTERACTION_SERVICE_ID},
+        session_metadata::SESSION_METADATA_ID,
     },
     wire::contract::WIRE_SERVICE_ID,
 };
@@ -460,7 +468,7 @@ impl KimiCodeDesktopClient {
         } else {
             sessions
                 .create(CreateSessionOptions {
-                    session_id: Some(session_id),
+                    session_id: Some(session_id.clone()),
                     work_dir: work_dir.clone(),
                     main_agent_binding: Some(BindAgentInput {
                         profile: "agent".into(),
@@ -566,6 +574,26 @@ impl KimiCodeDesktopClient {
             }
         })));
 
+        let metadata = session
+            .get(SESSION_METADATA_ID)
+            .map_err(|error| error.to_string())?;
+        let event_service = self
+            .app
+            .get(EVENT_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let prompt_content = vec![ContentPart::Text { text: prompt }];
+        let prompt_metadata = prompt_metadata_text_from_content_parts(&prompt_content);
+        apply_prompt_metadata_update(
+            PromptMetadataUpdateTarget {
+                metadata: metadata.0.as_ref(),
+                event_service: event_service.0.as_ref(),
+                session_id: &session_id,
+            },
+            prompt_metadata.as_deref(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
         let prompt_service = agent
             .get(AGENT_PROMPT_SERVICE_ID)
             .map_err(|error| error.to_string())?;
@@ -573,11 +601,7 @@ impl KimiCodeDesktopClient {
             .enqueue(PromptInput {
                 id: None,
                 message: ContextMessage {
-                    message: Message::new(
-                        Role::User,
-                        vec![ContentPart::Text { text: prompt }],
-                        Vec::new(),
-                    ),
+                    message: Message::new(Role::User, prompt_content, Vec::new()),
                     id: None,
                     provider_message_id: None,
                     origin: Some(PromptOrigin::User),
