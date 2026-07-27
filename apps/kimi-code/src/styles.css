@@ -1768,6 +1768,52 @@ select:focus-visible {
   35% { opacity: 1; transform: translateY(-3px); }
 }
 
+.assistant-response-status {
+  display: flex;
+  min-height: 16px;
+  margin-top: 7px;
+  align-items: center;
+  gap: 5px;
+  color: #5f5f69;
+  font-family: "DM Mono", monospace;
+  font-size: 8.5px;
+}
+
+.live-turn .assistant-response-status {
+  margin-top: 12px;
+}
+
+.assistant-response-status.thinking {
+  color: #8279bd;
+}
+
+.assistant-thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.assistant-thinking-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: assistant-thinking 1.2s infinite ease-in-out;
+}
+
+.assistant-thinking-dots i:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.assistant-thinking-dots i:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+@keyframes assistant-thinking {
+  0%, 70%, 100% { opacity: 0.25; transform: translateY(0); }
+  35% { opacity: 1; transform: translateY(-2px); }
+}
+
 .message-actions {
   display: flex;
   margin-top: 12px;

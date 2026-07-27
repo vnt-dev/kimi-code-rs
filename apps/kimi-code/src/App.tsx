@@ -169,6 +169,7 @@ interface InFlightTurn {
   createdAt: string;
   turnId?: number;
   status: LiveTurnStatus;
+  durationMs?: number;
   steps: LiveStep[];
   error?: string;
   historyBoundaryId?: string;
@@ -352,6 +353,9 @@ function reduceAgentChatEvent(
       return {
         ...next,
         status: event.reason,
+        durationMs:
+          event.durationMs ??
+          Math.max(0, Date.now() - Date.parse(next.createdAt)),
         error:
           event.reason === "failed" && event.error !== undefined
             ? conciseError(
@@ -503,6 +507,42 @@ function historyBeforeInFlightTurn(
   return items;
 }
 
+function completedTurnMessageId(
+  items: ProtocolMessage[],
+  turn: InFlightTurn,
+): string | undefined {
+  let startIndex = 0;
+  if (turn.historyBoundaryId) {
+    const boundary = items.findIndex(
+      (message) => message.id === turn.historyBoundaryId,
+    );
+    if (boundary >= 0) startIndex = boundary + 1;
+  } else {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const message = items[index];
+      if (message.role === "user" && messageText(message) === turn.prompt) {
+        startIndex = index + 1;
+        break;
+      }
+    }
+  }
+
+  for (let index = items.length - 1; index >= startIndex; index -= 1) {
+    if (items[index].role === "assistant") return items[index].id;
+  }
+  return undefined;
+}
+
+function formatElapsedDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, durationMs) / 1000;
+  if (totalSeconds < 10) return `${totalSeconds.toFixed(1)} 秒`;
+  const roundedSeconds = Math.round(totalSeconds);
+  if (roundedSeconds < 60) return `${roundedSeconds} 秒`;
+  const minutes = Math.floor(roundedSeconds / 60);
+  const seconds = roundedSeconds % 60;
+  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+}
+
 function mergeHistoryToolResults(
   messages: ProtocolMessage[],
 ): HistoryToolPresentation {
@@ -565,6 +605,9 @@ export default function App() {
   >({});
   const [contextUsages, setContextUsages] = useState<
     Record<string, ContextUsage>
+  >({});
+  const [messageDurations, setMessageDurations] = useState<
+    Record<string, Record<string, number>>
   >({});
   const [plans, setPlans] = useState<Record<string, PlanData | null>>({});
   const [modeBusy, setModeBusy] = useState(false);
@@ -1044,6 +1087,7 @@ export default function App() {
     setInteractions((current) => omitSessionKeys(current, ids));
     setCompactions((current) => omitSessionKeys(current, ids));
     setContextUsages((current) => omitSessionKeys(current, ids));
+    setMessageDurations((current) => omitSessionKeys(current, ids));
     setPlans((current) => omitSessionKeys(current, ids));
     setInFlightTurns((current) => omitSessionKeys(current, ids));
     setHistory((current) =>
@@ -1357,6 +1401,7 @@ export default function App() {
       releaseAllAgentSubscriptions();
       setModels([]);
       setContextUsages({});
+      setMessageDurations({});
       setProfileOpen(false);
       showNotice("已退出登录");
     } catch (error) {
@@ -1364,17 +1409,34 @@ export default function App() {
     }
   };
 
-  const refreshHistory = async (conversationId: string): Promise<boolean> => {
+  const refreshHistory = async (
+    conversationId: string,
+    completedTurn?: InFlightTurn,
+  ): Promise<boolean> => {
     const request = (historyRequests.current[conversationId] ?? 0) + 1;
     historyRequests.current[conversationId] = request;
     try {
       const page = await fetchMessagePage(conversationId);
       if (request !== historyRequests.current[conversationId]) return false;
+      const items = [...page.items].reverse();
+      const durationMs = completedTurn?.durationMs;
+      if (completedTurn && durationMs !== undefined) {
+        const messageId = completedTurnMessageId(items, completedTurn);
+        if (messageId) {
+          setMessageDurations((current) => ({
+            ...current,
+            [conversationId]: {
+              ...current[conversationId],
+              [messageId]: durationMs,
+            },
+          }));
+        }
+      }
       setHistory((current) =>
         current?.conversationId === conversationId
           ? {
               conversationId,
-              items: [...page.items].reverse(),
+              items,
               hasMore: page.has_more,
               loading: false,
               loadingMore: false,
@@ -1464,13 +1526,18 @@ export default function App() {
     try {
       const launched = await createAgentClient(activeAgentScope).prompt(text);
       if (!launched) {
-        setInFlightTurns((current) => ({
-          ...current,
-          [conversationId]: {
-            ...current[conversationId],
-            status: "blocked",
-          },
-        }));
+        setInFlightTurns((current) => {
+          const turn = current[conversationId];
+          if (!turn) return current;
+          return {
+            ...current,
+            [conversationId]: {
+              ...turn,
+              status: "blocked",
+              durationMs: Math.max(0, Date.now() - Date.parse(turn.createdAt)),
+            },
+          };
+        });
       }
     } catch (error) {
       const message = conciseError(error);
@@ -1482,6 +1549,7 @@ export default function App() {
           [conversationId]: {
             ...turn,
             status: "failed",
+            durationMs: Math.max(0, Date.now() - Date.parse(turn.createdAt)),
             error: message,
           },
         };
@@ -1503,7 +1571,7 @@ export default function App() {
       return;
     }
     let active = true;
-    void refreshHistory(conversationId).then((refreshed) => {
+    void refreshHistory(conversationId, activeTurn).then((refreshed) => {
       if (!active || !refreshed) return;
       setInFlightTurns((current) => {
         if (!(conversationId in current)) return current;
@@ -1954,6 +2022,9 @@ export default function App() {
                       key={message.id}
                       message={message}
                       toolResults={historyToolPresentation.results}
+                      durationMs={
+                        messageDurations[activeConversation.id]?.[message.id]
+                      }
                       copied={copiedMessage === message.id}
                       onCopy={() => void copyMessage(message)}
                     />
@@ -3023,9 +3094,42 @@ function LiveTurnView({ turn }: { turn: InFlightTurn }) {
               </div>
             )}
           {turn.error && <div className="live-turn-error">{turn.error}</div>}
+          <AssistantResponseStatus
+            running={isTurnRunning(turn)}
+            durationMs={turn.durationMs}
+          />
         </div>
       </article>
     </>
+  );
+}
+
+function AssistantResponseStatus({
+  running,
+  durationMs,
+}: {
+  running: boolean;
+  durationMs?: number;
+}) {
+  if (!running && durationMs === undefined) return null;
+  return (
+    <div
+      className={`assistant-response-status ${running ? "thinking" : "elapsed"}`}
+      aria-live="polite"
+    >
+      {running ? (
+        <>
+          <span>正在思考</span>
+          <span className="assistant-thinking-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+        </>
+      ) : (
+        <span>用时 {formatElapsedDuration(durationMs ?? 0)}</span>
+      )}
+    </div>
   );
 }
 
@@ -3214,11 +3318,13 @@ function ToolStatusIcon({
 function MessageView({
   message,
   toolResults,
+  durationMs,
   copied,
   onCopy,
 }: {
   message: RenderMessage;
   toolResults: Map<string, ToolResultContent>;
+  durationMs?: number;
   copied: boolean;
   onCopy: () => void;
 }) {
@@ -3323,6 +3429,9 @@ function MessageView({
               </button>
             </div>
           )}
+        {message.role === "assistant" && durationMs !== undefined && (
+          <AssistantResponseStatus running={false} durationMs={durationMs} />
+        )}
       </div>
     </article>
   );
