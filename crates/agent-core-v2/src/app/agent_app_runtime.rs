@@ -53,7 +53,8 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
         },
         app::{
             agent_file_catalog::register_agent_file_catalog_config_sections,
-            auth::register_services_config_section, cron::register_cron_config_section,
+            auth::{register_services_config_section, register_web_search_tool},
+            cron::register_cron_config_section,
             flag::register_experimental_config_section,
             skill_catalog::register_skill_catalog_config_sections,
         },
@@ -110,6 +111,7 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
 
     crate::agent::tool_select::register_select_tools_tool();
     crate::app::web::register_fetch_url_tool();
+    register_web_search_tool();
     crate::agent::task::tools::register_task_list_tool();
     crate::agent::task::tools::register_task_output_tool();
     crate::agent::task::tools::register_task_stop_tool();
@@ -176,7 +178,10 @@ fn register_agent_app_services_once() {
                 register_agent_catalog_runtime_options, register_user_file_agent_source,
             },
             agent_profile_catalog::register_agent_profile_catalog_service,
-            auth::{register_oauth_service, register_oauth_toolkit_service},
+            auth::{
+                register_oauth_service, register_oauth_toolkit_service,
+                register_web_search_provider_service,
+            },
             config::{register_config_registry, register_config_service},
             cron::register_cron_task_persistence_service,
             event::{register_event_bus_service, register_event_service},
@@ -293,6 +298,7 @@ fn register_agent_app_services_once() {
     register_external_hooks_runner_service();
     register_file_service();
     register_web_fetch_service();
+    register_web_search_provider_service();
     register_session_lifecycle_service();
     register_message_legacy_service();
 
