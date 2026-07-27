@@ -14,6 +14,8 @@ use crate::{
     session::session_metadata::{SessionMetaPatch, SessionMetadataContract, SessionMetadataError},
 };
 
+use super::core_api::{ActivatePluginCommandPayload, ActivateSkillPayload, PromptPayload};
+
 pub const MAX_TITLE_LENGTH: usize = 200;
 pub const MAX_LAST_PROMPT_LENGTH: usize = 4000;
 
@@ -41,13 +43,16 @@ static LONG_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
 static CONTROL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\p{Cc}+").expect("valid control pattern"));
 static WHITESPACE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s+").expect("valid whitespace pattern"));
+    LazyLock::new(|| Regex::new(r"[\s\u{FEFF}]+").expect("valid whitespace pattern"));
 
 pub fn title_from_prompt_metadata_text(text: &str) -> String {
-    text.chars().take(MAX_TITLE_LENGTH).collect()
+    truncate_utf16(text, MAX_TITLE_LENGTH)
 }
 pub fn is_untitled(title: Option<&str>) -> bool {
-    title.is_none_or(|title| title.trim().is_empty() || title == "New Session")
+    title.is_none_or(|title| trim_js_whitespace(title).is_empty() || title == "New Session")
+}
+pub fn prompt_metadata_text_from_payload(payload: &PromptPayload) -> Option<String> {
+    prompt_metadata_text_from_content_parts(&payload.input)
 }
 pub fn prompt_metadata_text_from_content_parts(parts: &[ContentPart]) -> Option<String> {
     let text = parts
@@ -57,20 +62,29 @@ pub fn prompt_metadata_text_from_content_parts(parts: &[ContentPart]) -> Option<
         .join("\n");
     sanitize_and_truncate_prompt_text(&text, MAX_LAST_PROMPT_LENGTH)
 }
-pub fn prompt_metadata_text_from_skill(name: &str, args: Option<&str>) -> Option<String> {
-    let args = args.map(str::trim).filter(|args| !args.is_empty());
+pub fn prompt_metadata_text_from_skill(payload: &ActivateSkillPayload) -> Option<String> {
+    let args = payload
+        .args
+        .as_deref()
+        .map(trim_js_whitespace)
+        .filter(|args| !args.is_empty());
     sanitize_and_truncate_prompt_text(
-        &args.map_or_else(|| format!("/{name}"), |args| format!("/{name} {args}")),
+        &args.map_or_else(
+            || format!("/{}", payload.name),
+            |args| format!("/{} {args}", payload.name),
+        ),
         MAX_LAST_PROMPT_LENGTH,
     )
 }
 pub fn prompt_metadata_text_from_plugin_command(
-    plugin_id: &str,
-    command_name: &str,
-    args: Option<&str>,
+    payload: &ActivatePluginCommandPayload,
 ) -> Option<String> {
-    let command = format!("/{plugin_id}:{command_name}");
-    let args = args.map(str::trim).filter(|args| !args.is_empty());
+    let command = format!("/{}:{}", payload.plugin_id, payload.command_name);
+    let args = payload
+        .args
+        .as_deref()
+        .map(trim_js_whitespace)
+        .filter(|args| !args.is_empty());
     sanitize_and_truncate_prompt_text(
         &args.map_or(command.clone(), |args| format!("{command} {args}")),
         MAX_LAST_PROMPT_LENGTH,
@@ -129,7 +143,7 @@ fn prompt_part_text(part: &ContentPart) -> Option<String> {
     match part {
         ContentPart::Text { text } => {
             let text = extract_image_compression_captions(text).text;
-            (!text.trim().is_empty()).then_some(text)
+            (!trim_js_whitespace(&text).is_empty()).then_some(text)
         }
         ContentPart::ImageUrl { .. } => Some("[image]".into()),
         ContentPart::AudioUrl { .. } => Some("[audio]".into()),
@@ -144,15 +158,61 @@ pub fn sanitize_and_truncate_prompt_text(text: &str, max_length: usize) -> Optio
     let text = OPENAI_KEY.replace_all(&text, "[redacted]");
     let text = LONG_TOKEN.replace_all(&text, "[redacted]");
     let text = CONTROL.replace_all(&text, " ");
-    let text = WHITESPACE.replace_all(&text, " ").trim().to_owned();
-    (!text.is_empty()).then(|| text.chars().take(max_length).collect())
+    let text = WHITESPACE
+        .replace_all(&text, " ")
+        .trim_matches(' ')
+        .to_owned();
+    (!text.is_empty()).then(|| truncate_utf16(&text, max_length))
+}
+
+// JavaScript String.length and slice() count UTF-16 code units. Rust strings
+// cannot contain the unpaired surrogate that slice() can produce at a split
+// boundary, so the Rust adaptation stops before splitting a scalar value.
+fn truncate_utf16(text: &str, max_length: usize) -> String {
+    let mut code_units = 0;
+    text.chars()
+        .take_while(|character| {
+            let next = code_units + character.len_utf16();
+            if next > max_length {
+                return false;
+            }
+            code_units = next;
+            true
+        })
+        .collect()
+}
+
+fn trim_js_whitespace(text: &str) -> &str {
+    text.trim_matches(is_js_whitespace)
+}
+
+fn is_js_whitespace(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0009}'
+            | '\u{000A}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{1680}'
+            | '\u{2000}'
+            ..='\u{200A}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202F}'
+                | '\u{205F}'
+                | '\u{3000}'
+                | '\u{FEFF}'
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     use async_trait::async_trait;
@@ -169,6 +229,8 @@ mod tests {
     struct StubMetadata {
         data: Mutex<SessionMeta>,
         patches: Mutex<Vec<SessionMetaPatch>>,
+        reads: AtomicUsize,
+        fail_read: AtomicBool,
         fail_update: AtomicBool,
     }
 
@@ -190,6 +252,8 @@ mod tests {
                     custom: None,
                 }),
                 patches: Mutex::new(Vec::new()),
+                reads: AtomicUsize::new(0),
+                fail_read: AtomicBool::new(false),
                 fail_update: AtomicBool::new(false),
             }
         }
@@ -198,6 +262,10 @@ mod tests {
     #[derive(Debug, thiserror::Error)]
     #[error("metadata update failed")]
     struct MetadataUpdateFailed;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("metadata read failed")]
+    struct MetadataReadFailed;
 
     #[async_trait]
     impl SessionMetadataContract for StubMetadata {
@@ -210,6 +278,10 @@ mod tests {
         }
 
         async fn read(&self) -> Result<SessionMeta, SessionMetadataError> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            if self.fail_read.load(Ordering::Acquire) {
+                return Err(Box::new(MetadataReadFailed));
+            }
             Ok(self.data.lock().unwrap().clone())
         }
 
@@ -250,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_redacts_and_truncates_prompt_metadata() {
+    fn truncates_with_javascript_utf16_length_without_splitting_rust_strings() {
         assert_eq!(
             title_from_prompt_metadata_text(&"x".repeat(201))
                 .chars()
@@ -258,29 +330,138 @@ mod tests {
             200
         );
         assert_eq!(
-            sanitize_and_truncate_prompt_text(
-                "Authorization: Bearer secret-value\npassword=hello",
-                4000
-            )
-            .as_deref(),
-            Some("Authorization: Bearer [redacted] password=[redacted]")
+            title_from_prompt_metadata_text(&format!("{}😀tail", "x".repeat(199))),
+            "x".repeat(199)
         );
         assert_eq!(
-            prompt_metadata_text_from_content_parts(&[
+            sanitize_and_truncate_prompt_text("😀😀😀", 4).as_deref(),
+            Some("😀😀")
+        );
+        assert_eq!(
+            sanitize_and_truncate_prompt_text("abcdef", 3).as_deref(),
+            Some("abc")
+        );
+    }
+
+    #[test]
+    fn redacts_every_source_secret_pattern_then_normalizes_whitespace() {
+        let long_token = "A".repeat(40);
+        let input = format!(
+            "before
+-----begin rsa private key-----
+private material
+-----end rsa private key-----
+Authorization : bearer secret-value
+api-key: \"quoted secret\"
+sk-abcdefghijkl
+{long_token}\u{0000}\u{FEFF}after"
+        );
+
+        assert_eq!(
+            sanitize_and_truncate_prompt_text(&input, MAX_LAST_PROMPT_LENGTH).as_deref(),
+            Some(
+                "before [redacted] Authorization: Bearer [redacted] api-key=[redacted] \
+                 [redacted] [redacted] after"
+            )
+        );
+        assert_eq!(sanitize_and_truncate_prompt_text("\u{FEFF}\n", 10), None);
+    }
+
+    #[test]
+    fn payload_and_content_parts_preserve_source_projection_order() {
+        let payload = PromptPayload {
+            input: vec![
+                ContentPart::Think {
+                    think: "private reasoning".into(),
+                    encrypted: None,
+                },
                 ContentPart::Text {
-                    text: " hello ".into()
+                    text: concat!(
+                        " hello ",
+                        "<system>Image compressed to fit model limits: caption</system>",
+                        " world "
+                    )
+                    .into(),
                 },
                 ContentPart::ImageUrl {
                     image_url: crate::kosong::contract::message::MediaUrl {
-                        url: "x".into(),
-                        id: None
-                    }
-                }
-            ])
-            .as_deref(),
-            Some("hello [image]")
+                        url: "image".into(),
+                        id: None,
+                    },
+                },
+                ContentPart::AudioUrl {
+                    audio_url: crate::kosong::contract::message::MediaUrl {
+                        url: "audio".into(),
+                        id: None,
+                    },
+                },
+                ContentPart::VideoUrl {
+                    video_url: crate::kosong::contract::message::MediaUrl {
+                        url: "video".into(),
+                        id: None,
+                    },
+                },
+            ],
+            disabled_tools: Some(vec!["WriteFile".into()]),
+        };
+
+        assert_eq!(
+            prompt_metadata_text_from_payload(&payload).as_deref(),
+            Some("hello world [image] [audio] [video]")
         );
+        assert_eq!(
+            prompt_metadata_text_from_content_parts(&payload.input),
+            prompt_metadata_text_from_payload(&payload)
+        );
+        assert_eq!(prompt_metadata_text_from_content_parts(&[]), None);
+    }
+
+    #[test]
+    fn skill_and_plugin_command_helpers_accept_source_payloads() {
+        assert_eq!(
+            prompt_metadata_text_from_skill(&ActivateSkillPayload {
+                name: "review".into(),
+                args: None,
+            })
+            .as_deref(),
+            Some("/review")
+        );
+        assert_eq!(
+            prompt_metadata_text_from_skill(&ActivateSkillPayload {
+                name: "review".into(),
+                args: Some(" api_key='secret value' ".into()),
+            })
+            .as_deref(),
+            Some("/review api_key=[redacted]")
+        );
+        assert_eq!(
+            prompt_metadata_text_from_skill(&ActivateSkillPayload {
+                name: "review".into(),
+                args: Some("\u{FEFF}".into()),
+            })
+            .as_deref(),
+            Some("/review")
+        );
+        assert_eq!(
+            prompt_metadata_text_from_plugin_command(&ActivatePluginCommandPayload {
+                plugin_id: "git".into(),
+                command_name: "status".into(),
+                args: Some(" --short ".into()),
+            })
+            .as_deref(),
+            Some("/git:status --short")
+        );
+    }
+
+    #[test]
+    fn untitled_detection_matches_source_cases() {
+        assert!(is_untitled(None));
+        assert!(is_untitled(Some(" \t\n")));
+        assert!(is_untitled(Some("\u{FEFF}")));
         assert!(is_untitled(Some("New Session")));
+        assert!(!is_untitled(Some("\u{0085}")));
+        assert!(!is_untitled(Some("new session")));
+        assert!(!is_untitled(Some("Existing")));
     }
 
     #[tokio::test]
@@ -390,6 +571,7 @@ mod tests {
         .await
         .unwrap();
         assert!(metadata.patches.lock().unwrap().is_empty());
+        assert_eq!(metadata.reads.load(Ordering::Relaxed), 0);
 
         metadata.fail_update.store(true, Ordering::Release);
         let error = apply_prompt_metadata_update(
@@ -403,6 +585,33 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.downcast_ref::<MetadataUpdateFailed>().is_some());
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn metadata_read_failures_do_not_update_or_publish() {
+        let metadata = StubMetadata::new(None, None);
+        metadata.fail_read.store(true, Ordering::Release);
+        let event_service = EventService::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        let _subscription = event_service.subscribe(Arc::new(move |event| {
+            captured.lock().unwrap().push(event.clone());
+        }));
+
+        let error = apply_prompt_metadata_update(
+            PromptMetadataUpdateTarget {
+                metadata: &metadata,
+                event_service: &event_service,
+                session_id: "s1",
+            },
+            Some("will fail"),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.downcast_ref::<MetadataReadFailed>().is_some());
+        assert!(metadata.patches.lock().unwrap().is_empty());
         assert!(events.lock().unwrap().is_empty());
     }
 }
