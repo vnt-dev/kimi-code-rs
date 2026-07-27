@@ -71,6 +71,31 @@ export interface DesktopState {
   activeConversationId?: string;
 }
 
+export interface Workspace {
+  id: string;
+  root: string;
+  name: string;
+  createdAt: number;
+  lastOpenedAt: number;
+}
+
+export interface SessionSummary {
+  id: string;
+  workspaceId: string;
+  cwd?: string;
+  title?: string;
+  lastPrompt?: string;
+  createdAt: number;
+  updatedAt: number;
+  archived: boolean;
+  custom?: Record<string, unknown>;
+}
+
+export interface PreparedSession {
+  sessionId: string;
+  agentId: string;
+}
+
 export interface AuthStatus {
   loggedIn: boolean;
   provider: string;
@@ -113,26 +138,26 @@ export type AgentContentPart =
 
 export type AgentChatEvent =
   | {
-      type: "turn_started";
+      type: "turn.started";
       turnId: number;
       origin: unknown;
       prompt?: string;
     }
   | {
-      type: "turn_ended";
+      type: "turn.ended";
       turnId: number;
       reason: "completed" | "cancelled" | "failed" | "blocked";
       error?: unknown;
       durationMs?: number;
     }
   | {
-      type: "step_started";
+      type: "turn.step.started";
       turnId: number;
       step: number;
       stepId?: string;
     }
   | {
-      type: "step_completed";
+      type: "turn.step.completed";
       turnId: number;
       step: number;
       stepId?: string;
@@ -142,29 +167,29 @@ export type AgentChatEvent =
       rawFinishReason?: string;
     }
   | {
-      type: "step_interrupted";
+      type: "turn.step.interrupted";
       turnId: number;
       step: number;
       stepId?: string;
       reason: string;
       message?: string;
     }
-  | { type: "assistant_delta"; turnId: number; delta: string }
+  | { type: "assistant.delta"; turnId: number; delta: string }
   | {
-      type: "assistant_content";
+      type: "assistant.content";
       turnId: number;
       content: AgentContentPart;
     }
-  | { type: "thinking_delta"; turnId: number; delta: string }
+  | { type: "thinking.delta"; turnId: number; delta: string }
   | {
-      type: "tool_call_delta";
+      type: "tool.call.delta";
       turnId: number;
       toolCallId: string;
       name?: string;
       argumentsPart?: string;
     }
   | {
-      type: "tool_call_started";
+      type: "tool.call.started";
       turnId: number;
       toolCallId: string;
       name: string;
@@ -173,13 +198,13 @@ export type AgentChatEvent =
       display?: unknown;
     }
   | {
-      type: "tool_progress";
+      type: "tool.progress";
       turnId: number;
       toolCallId: string;
       update: ToolUpdate;
     }
   | {
-      type: "tool_result";
+      type: "tool.result";
       turnId: number;
       toolCallId: string;
       output: unknown;
@@ -188,8 +213,9 @@ export type AgentChatEvent =
     };
 
 export interface AgentChatEventEnvelope {
-  conversationId: string;
-  event: AgentChatEvent;
+  sessionId: string;
+  agentId: string;
+  event: { type: string; [key: string]: unknown };
 }
 
 export interface CommandDisplay {
@@ -219,7 +245,7 @@ export interface AgentInteraction {
 }
 
 export interface AgentInteractionsEvent {
-  conversationId: string;
+  sessionId: string;
   interactions: AgentInteraction[];
 }
 

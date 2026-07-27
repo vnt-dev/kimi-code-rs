@@ -49,18 +49,22 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import {
+  createAgentClient,
+  createOrTouchWorkspace,
+  prepareSession,
+  subscribeAgentEvents,
+  unsubscribeAgentEvents,
+} from "./agentRpc";
+import {
+  conversationFromSession,
   getActive,
-  loadState,
-  newConversation,
-  newProject,
-  persistState,
+  loadDesktopState,
+  projectFromWorkspace,
 } from "./store";
 import type {
   AgentChatEvent,
   AgentChatEventEnvelope,
   AgentContentPart,
-  AgentCompactionEvent,
-  AgentContextUsageEvent,
   AgentInteraction,
   AgentInteractionsEvent,
   ApprovalPayload,
@@ -183,7 +187,15 @@ function formatTokenCount(value: number): string {
 }
 
 function conciseError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message =
+    error instanceof Error
+      ? error.message
+      : error &&
+          typeof error === "object" &&
+          "message" in error &&
+          typeof error.message === "string"
+        ? error.message
+        : String(error);
   return message.replace(/^Error:\s*/i, "");
 }
 
@@ -192,7 +204,7 @@ function fetchMessagePage(
   beforeId?: string,
 ): Promise<MessagePage> {
   return invoke<MessagePage>("list_conversation_messages", {
-    conversationId,
+    sessionId: conversationId,
     beforeId,
     pageSize: HISTORY_PAGE_SIZE,
   });
@@ -290,9 +302,9 @@ function reduceAgentChatEvent(
     turn.turnId === undefined ? { ...turn, turnId: event.turnId } : turn;
 
   switch (event.type) {
-    case "turn_started":
+    case "turn.started":
       return { ...next, status: "running" };
-    case "turn_ended":
+    case "turn.ended":
       return {
         ...next,
         status: event.reason,
@@ -305,7 +317,7 @@ function reduceAgentChatEvent(
               )
             : next.error,
       };
-    case "step_started": {
+    case "turn.step.started": {
       const index = next.steps.findIndex(
         (step) =>
           (event.stepId && step.stepId === event.stepId) ||
@@ -330,7 +342,7 @@ function reduceAgentChatEvent(
       steps[index] = { ...steps[index], status: "running" };
       return { ...next, status: "running", steps };
     }
-    case "step_completed": {
+    case "turn.step.completed": {
       const steps = next.steps.map((step) =>
         step.step === event.step
           ? {
@@ -342,7 +354,7 @@ function reduceAgentChatEvent(
       );
       return { ...next, steps };
     }
-    case "step_interrupted": {
+    case "turn.step.interrupted": {
       const steps = next.steps.map((step) =>
         step.step === event.step
           ? {
@@ -354,22 +366,22 @@ function reduceAgentChatEvent(
       );
       return { ...next, steps };
     }
-    case "assistant_delta":
+    case "assistant.delta":
       return appendLiveContent(next, "text", event.delta);
-    case "assistant_content":
+    case "assistant.content":
       return withCurrentStep(next, (step) => ({
         ...step,
         blocks: [...step.blocks, { kind: "content", content: event.content }],
       }));
-    case "thinking_delta":
+    case "thinking.delta":
       return appendLiveContent(next, "thinking", event.delta);
-    case "tool_call_delta":
+    case "tool.call.delta":
       return updateLiveTool(next, event.toolCallId, (tool) => ({
         ...tool,
         name: event.name ?? tool.name,
         argumentsText: tool.argumentsText + (event.argumentsPart ?? ""),
       }));
-    case "tool_call_started":
+    case "tool.call.started":
       return updateLiveTool(next, event.toolCallId, (tool) => ({
         ...tool,
         name: event.name,
@@ -378,13 +390,13 @@ function reduceAgentChatEvent(
         display: event.display,
         status: "running",
       }));
-    case "tool_progress":
+    case "tool.progress":
       return updateLiveTool(next, event.toolCallId, (tool) => ({
         ...tool,
         status: "running",
         updates: [...tool.updates, event.update],
       }));
-    case "tool_result":
+    case "tool.result":
       return updateLiveTool(next, event.toolCallId, (tool) => ({
         ...tool,
         status: event.isError ? "error" : "completed",
@@ -392,6 +404,25 @@ function reduceAgentChatEvent(
         isError: event.isError,
       }));
   }
+}
+
+const CHAT_EVENT_TYPES = new Set([
+  "turn.started",
+  "turn.ended",
+  "turn.step.started",
+  "turn.step.completed",
+  "turn.step.interrupted",
+  "assistant.delta",
+  "assistant.content",
+  "thinking.delta",
+  "tool.call.delta",
+  "tool.call.started",
+  "tool.progress",
+  "tool.result",
+]);
+
+function isAgentChatEvent(event: { type: string }): event is AgentChatEvent {
+  return CHAT_EVENT_TYPES.has(event.type);
 }
 
 function messageOriginKind(message: ProtocolMessage): string | undefined {
@@ -451,7 +482,7 @@ function mergeHistoryToolResults(
 }
 
 export default function App() {
-  const [desktop, setDesktop] = useState<DesktopState>(() => loadState());
+  const [desktop, setDesktop] = useState<DesktopState>({ projects: [] });
   const [auth, setAuth] = useState<AuthStatus>({
     loggedIn: false,
     provider: "kimi-code",
@@ -481,6 +512,10 @@ export default function App() {
   const [inFlightTurns, setInFlightTurns] = useState<
     Record<string, InFlightTurn>
   >({});
+  const [activeAgentScope, setActiveAgentScope] = useState<{
+    sessionId: string;
+    agentId: string;
+  }>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -561,11 +596,14 @@ export default function App() {
   };
 
   useEffect(() => {
-    persistState(desktop);
-  }, [desktop]);
-
-  useEffect(() => {
     let active = true;
+    loadDesktopState()
+      .then((state) => {
+        if (active) setDesktop(state);
+      })
+      .catch(() => {
+        // Vite's browser preview has no Tauri bridge.
+      });
     invoke<AuthStatus>("auth_status")
       .then((status) => {
         if (!active) return;
@@ -581,6 +619,49 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    setActiveAgentScope(undefined);
+    if (
+      !auth.loggedIn ||
+      !activeProject ||
+      !activeConversation ||
+      !selectedModel
+    ) {
+      return;
+    }
+    let disposed = false;
+    let subscriptionId: string | undefined;
+    void prepareSession({
+      sessionId: activeConversation.id,
+      workDir: activeProject.path,
+      model: selectedModel.id,
+      thinking: effort,
+      permission: permissionMode,
+    })
+      .then(async (scope) => {
+        if (disposed) return;
+        subscriptionId = await subscribeAgentEvents(scope);
+        if (disposed && subscriptionId) {
+          await unsubscribeAgentEvents(subscriptionId);
+        } else {
+          setActiveAgentScope(scope);
+        }
+      })
+      .catch((error) => {
+        if (!disposed) showNotice(conciseError(error));
+      });
+    return () => {
+      disposed = true;
+      setActiveAgentScope(undefined);
+      if (subscriptionId) void unsubscribeAgentEvents(subscriptionId);
+    };
+  }, [
+    activeConversation?.id,
+    activeProject?.path,
+    auth.loggedIn,
+    models.length,
+  ]);
+
+  useEffect(() => {
     const unlistenDevice = listen<DeviceCode>("auth-device-code", (event) => {
       setDeviceCode(event.payload);
       setLoginOpen(true);
@@ -592,17 +673,71 @@ export default function App() {
       },
     );
     const unlistenChatEvent = listen<AgentChatEventEnvelope>(
-      "agent-chat-event",
+      "agent-event",
       (event) => {
         const payload = event.payload;
-        setInFlightTurns((current) => {
-          const turn = current[payload.conversationId];
-          if (!turn) return current;
-          return {
-            ...current,
-            [payload.conversationId]: reduceAgentChatEvent(turn, payload.event),
-          };
-        });
+        if (isAgentChatEvent(payload.event)) {
+          const chatEvent = payload.event;
+          setInFlightTurns((current) => {
+            const turn = current[payload.sessionId];
+            if (!turn) return current;
+            return {
+              ...current,
+              [payload.sessionId]: reduceAgentChatEvent(turn, chatEvent),
+            };
+          });
+        }
+        if (payload.event.type.startsWith("compaction.")) {
+          const phase = payload.event.type.slice("compaction.".length);
+          if (
+            phase === "started" ||
+            phase === "completed" ||
+            phase === "cancelled"
+          ) {
+            const result =
+              payload.event.result &&
+              typeof payload.event.result === "object"
+                ? (payload.event.result as Record<string, unknown>)
+                : undefined;
+            setCompactions((current) => ({
+              ...current,
+              [payload.sessionId]: {
+                phase,
+                trigger:
+                  payload.event.trigger === "manual" ||
+                  payload.event.trigger === "auto"
+                    ? payload.event.trigger
+                    : undefined,
+                compactedCount:
+                  typeof result?.compactedCount === "number"
+                    ? result.compactedCount
+                    : undefined,
+                tokensBefore:
+                  typeof result?.tokensBefore === "number"
+                    ? result.tokensBefore
+                    : undefined,
+                tokensAfter:
+                  typeof result?.tokensAfter === "number"
+                    ? result.tokensAfter
+                    : undefined,
+              },
+            }));
+          }
+        }
+        if (
+          payload.event.type === "agent.status.updated" ||
+          payload.event.type === "context.spliced"
+        ) {
+          void invoke<ContextUsage | null>("conversation_context_usage", {
+            sessionId: payload.sessionId,
+          }).then((usage) => {
+            if (!usage) return;
+            setContextUsages((current) => ({
+              ...current,
+              [payload.sessionId]: usage,
+            }));
+          });
+        }
       },
     );
     const unlistenInteractions = listen<AgentInteractionsEvent>(
@@ -610,25 +745,7 @@ export default function App() {
       (event) => {
         setInteractions((current) => ({
           ...current,
-          [event.payload.conversationId]: event.payload.interactions,
-        }));
-      },
-    );
-    const unlistenCompaction = listen<AgentCompactionEvent>(
-      "agent-compaction",
-      (event) => {
-        setCompactions((current) => ({
-          ...current,
-          [event.payload.conversationId]: event.payload.event,
-        }));
-      },
-    );
-    const unlistenContextUsage = listen<AgentContextUsageEvent>(
-      "agent-context-usage",
-      (event) => {
-        setContextUsages((current) => ({
-          ...current,
-          [event.payload.conversationId]: event.payload.usage,
+          [event.payload.sessionId]: event.payload.interactions,
         }));
       },
     );
@@ -637,8 +754,6 @@ export default function App() {
       void unlistenBrowserError.then((unlisten) => unlisten());
       void unlistenChatEvent.then((unlisten) => unlisten());
       void unlistenInteractions.then((unlisten) => unlisten());
-      void unlistenCompaction.then((unlisten) => unlisten());
-      void unlistenContextUsage.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -715,7 +830,7 @@ export default function App() {
     if (!conversationId || !auth.loggedIn) return;
     let active = true;
     invoke<ContextUsage | null>("conversation_context_usage", {
-      conversationId,
+      sessionId: conversationId,
     })
       .then((usage) => {
         if (!active || !usage) return;
@@ -757,7 +872,10 @@ export default function App() {
         title: "选择一个项目目录",
       });
       if (!selection) return;
-      const existing = desktop.projects.find((item) => item.path === selection);
+      const workspace = await createOrTouchWorkspace(selection);
+      const existing = desktop.projects.find(
+        (item) => item.id === workspace.id || item.path === selection,
+      );
       if (existing) {
         updateDesktop((current) => ({
           ...current,
@@ -770,11 +888,11 @@ export default function App() {
         }));
         return;
       }
-      const project = newProject(selection, desktop.projects.length);
+      const project = projectFromWorkspace(workspace, desktop.projects.length);
       updateDesktop((current) => ({
         projects: [...current.projects, project],
         activeProjectId: project.id,
-        activeConversationId: project.conversations[0].id,
+        activeConversationId: undefined,
       }));
       setSidebarCollapsed(false);
     } catch (error) {
@@ -782,27 +900,50 @@ export default function App() {
     }
   };
 
-  const createConversation = (
+  const createConversation = async (
     project: Project,
     event?: MouseEvent<HTMLButtonElement>,
-  ): void => {
+  ): Promise<void> => {
     event?.stopPropagation();
-    const conversation = newConversation();
-    updateDesktop((current) => ({
-      ...current,
-      activeProjectId: project.id,
-      activeConversationId: conversation.id,
-      projects: current.projects.map((item) =>
-        item.id === project.id
-          ? {
-              ...item,
-              expanded: true,
-              conversations: [conversation, ...item.conversations],
-            }
-          : item,
-      ),
-    }));
-    setPrompt("");
+    if (!auth.loggedIn) {
+      void startLogin();
+      return;
+    }
+    const model = selectedModel ?? models[0];
+    if (!model) {
+      showNotice("请先同步并选择一个模型");
+      return;
+    }
+    try {
+      const scope = await prepareSession({
+        workDir: project.path,
+        model: model.id,
+        thinking: effort,
+        permission: permissionMode,
+      });
+      const conversation = {
+        ...conversationFromSession(scope.sessionId),
+        modelId: model.id,
+        permissionMode,
+      };
+      updateDesktop((current) => ({
+        ...current,
+        activeProjectId: project.id,
+        activeConversationId: conversation.id,
+        projects: current.projects.map((item) =>
+          item.id === project.id
+            ? {
+                ...item,
+                expanded: true,
+                conversations: [conversation, ...item.conversations],
+              }
+            : item,
+        ),
+      }));
+      setPrompt("");
+    } catch (error) {
+      showNotice(conciseError(error));
+    }
   };
 
   const selectConversation = (
@@ -845,7 +986,19 @@ export default function App() {
       ),
     }));
     const model = models.find((item) => item.id === modelId);
-    if (model?.defaultEffort) setEffort(model.defaultEffort);
+    if (activeAgentScope) {
+      void createAgentClient(activeAgentScope)
+        .setModel(modelId)
+        .catch((error) => showNotice(conciseError(error)));
+    }
+    if (model?.defaultEffort) {
+      setEffort(model.defaultEffort);
+      if (activeAgentScope) {
+        void createAgentClient(activeAgentScope)
+          .setThinking(model.defaultEffort)
+          .catch((error) => showNotice(conciseError(error)));
+      }
+    }
   };
 
   const choosePermissionMode = (mode: PermissionMode): void => {
@@ -865,6 +1018,20 @@ export default function App() {
             },
       ),
     }));
+    if (activeAgentScope) {
+      void createAgentClient(activeAgentScope)
+        .setPermission(mode)
+        .catch((error) => showNotice(conciseError(error)));
+    }
+  };
+
+  const chooseEffort = (level: string): void => {
+    setEffort(level);
+    if (activeAgentScope) {
+      void createAgentClient(activeAgentScope)
+        .setThinking(level)
+        .catch((error) => showNotice(conciseError(error)));
+    }
   };
 
   const startLogin = async (): Promise<void> => {
@@ -952,6 +1119,10 @@ export default function App() {
 
     const conversationId = activeConversation.id;
     const projectId = activeProject.id;
+    if (activeAgentScope?.sessionId !== conversationId) {
+      showNotice("会话正在准备，请稍后再试");
+      return;
+    }
     const title =
       activeConversation.title === "新对话"
         ? text.replace(/\s+/g, " ").slice(0, 28)
@@ -993,31 +1164,16 @@ export default function App() {
     setPrompt("");
 
     try {
-      await invoke("send_message", {
-        conversationId,
-        request: {
-          prompt: text,
-          model: selectedModel.id,
-          protocol: selectedModel.protocol,
-          effort,
-          permissionMode,
-          projectPath: activeProject.path,
-        },
-      });
-      setInFlightTurns((current) => {
-        const turn = current[conversationId];
-        if (!turn) return current;
-        return {
+      const launched = await createAgentClient(activeAgentScope).prompt(text);
+      if (!launched) {
+        setInFlightTurns((current) => ({
           ...current,
           [conversationId]: {
-            ...turn,
-            status:
-              turn.status === "queued" || turn.status === "running"
-                ? "completed"
-                : turn.status,
+            ...current[conversationId],
+            status: "blocked",
           },
-        };
-      });
+        }));
+      }
     } catch (error) {
       const message = conciseError(error);
       setInFlightTurns((current) => {
@@ -1035,15 +1191,33 @@ export default function App() {
       showNotice(message);
     }
 
-    if (await refreshHistory(conversationId)) {
+  };
+
+  useEffect(() => {
+    const conversationId = activeConversation?.id;
+    const status = activeTurn?.status;
+    if (
+      !conversationId ||
+      !status ||
+      status === "queued" ||
+      status === "running"
+    ) {
+      return;
+    }
+    let active = true;
+    void refreshHistory(conversationId).then((refreshed) => {
+      if (!active || !refreshed) return;
       setInFlightTurns((current) => {
         if (!(conversationId in current)) return current;
         const next = { ...current };
         delete next[conversationId];
         return next;
       });
-    }
-  };
+    });
+    return () => {
+      active = false;
+    };
+  }, [activeConversation?.id, activeTurn?.status]);
 
   const loadOlderMessages = async (): Promise<void> => {
     if (
@@ -1107,6 +1281,15 @@ export default function App() {
     void sendPrompt();
   };
 
+  const cancelActiveTurn = async (): Promise<void> => {
+    if (!activeAgentScope || !activeTurn) return;
+    try {
+      await createAgentClient(activeAgentScope).cancel(activeTurn.turnId);
+    } catch (error) {
+      showNotice(conciseError(error));
+    }
+  };
+
   const handlePromptKeyDown = (
     event: KeyboardEvent<HTMLTextAreaElement>,
   ): void => {
@@ -1131,7 +1314,7 @@ export default function App() {
     setResolvingInteraction(interaction.id);
     try {
       await invoke("respond_interaction", {
-        conversationId: activeConversation.id,
+        sessionId: activeConversation.id,
         interactionId: interaction.id,
         response: {
           decision,
@@ -1226,7 +1409,9 @@ export default function App() {
                         <span className="project-actions">
                           <button
                             className="icon-button tiny"
-                            onClick={(event) => createConversation(project, event)}
+                            onClick={(event) =>
+                              void createConversation(project, event)
+                            }
                             title="新建对话"
                           >
                             <Plus size={14} />
@@ -1353,7 +1538,7 @@ export default function App() {
                   <i className={auth.loggedIn ? "online" : ""} />
                   {auth.loggedIn ? "Core v2 已连接" : "等待登录"}
                 </span>
-                <button className="icon-button" title="新建对话" onClick={() => createConversation(activeProject)}>
+                <button className="icon-button" title="新建对话" onClick={() => void createConversation(activeProject)}>
                   <SquarePen size={17} />
                 </button>
               </div>
@@ -1497,7 +1682,7 @@ export default function App() {
                                 ? "更深入分析复杂问题"
                                 : "速度与推理深度平衡",
                         }))}
-                        onChange={setEffort}
+                        onChange={chooseEffort}
                       />
                     )}
                     <ToolbarSelect
@@ -1552,11 +1737,20 @@ export default function App() {
                     <span>Enter 发送</span>
                     <button
                       className="send-button"
-                      type="submit"
-                      disabled={!prompt.trim() || isStreaming || isHistoryLoading}
+                      type={isStreaming ? "button" : "submit"}
+                      onClick={
+                        isStreaming ? () => void cancelActiveTurn() : undefined
+                      }
+                      disabled={
+                        isStreaming
+                          ? !activeAgentScope
+                          : !prompt.trim() ||
+                            isHistoryLoading ||
+                            !activeAgentScope
+                      }
                       title="发送"
                     >
-                      {isStreaming ? <span className="send-loader" /> : <ArrowUp size={18} />}
+                      {isStreaming ? <X size={17} /> : <ArrowUp size={18} />}
                     </button>
                   </div>
                 </div>

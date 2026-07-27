@@ -27,7 +27,10 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::{
     _base::{
-        di::{lifecycle::DisposableStore, scope::Scope},
+        di::{
+            lifecycle::{DisposableHandle, DisposableStore},
+            scope::Scope,
+        },
         errors::errors::Error2,
     },
     agent::{
@@ -43,8 +46,9 @@ use crate::{
         profile::{AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle, BindAgentInput},
         prompt::{AGENT_PROMPT_SERVICE_ID, PromptCompletionState, PromptInput},
         rpc::{
-            PromptMetadataUpdateTarget, apply_prompt_metadata_update,
-            prompt_metadata_text_from_content_parts,
+            AGENT_RPC_SERVICE_ID, AgentRpcServiceHandle, PromptMetadataUpdateTarget,
+            SetModelPayload, SetPermissionPayload, SetThinkingPayload,
+            apply_prompt_metadata_update, prompt_metadata_text_from_content_parts,
         },
         tool_executor::{ToolCallStartedEvent, ToolProgressEvent, ToolResultEvent},
     },
@@ -60,11 +64,15 @@ use crate::{
         message_legacy::{
             MESSAGE_LEGACY_SERVICE_ID, MessageListQuery, PageResponse as MessagePageResponse,
         },
+        session_index::SessionSummary,
         session_lifecycle::{CreateSessionOptions, SESSION_LIFECYCLE_SERVICE_ID},
+        workspace_registry::{
+            WORKSPACE_QUERY_SERVICE_ID, WORKSPACE_REGISTRY_SERVICE_ID, Workspace,
+        },
     },
     kosong::contract::message::{ContentPart, Message, Role},
     session::{
-        agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID},
+        agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID, ensure_main_agent},
         interaction::{Interaction, InteractionKind, SESSION_INTERACTION_SERVICE_ID},
         session_metadata::SESSION_METADATA_ID,
     },
@@ -109,6 +117,37 @@ pub struct DesktopModel {
     pub protocol: String,
     pub support_efforts: Vec<String>,
     pub default_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopWorkspace {
+    pub id: String,
+    pub root: String,
+    pub name: String,
+    pub created_at: i64,
+    pub last_opened_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DesktopPrepareSessionRequest {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    pub work_dir: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub thinking: Option<String>,
+    #[serde(default)]
+    pub permission: Option<PermissionMode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopPreparedSession {
+    pub session_id: String,
+    pub agent_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -425,6 +464,213 @@ impl KimiCodeDesktopClient {
         Ok(models)
     }
 
+    pub async fn list_workspaces(&self) -> Result<Vec<DesktopWorkspace>, String> {
+        let registry = self
+            .app
+            .get(WORKSPACE_REGISTRY_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        registry
+            .list()
+            .await
+            .map(|workspaces| workspaces.into_iter().map(map_desktop_workspace).collect())
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn create_or_touch_workspace(
+        &self,
+        root: &str,
+        name: Option<&str>,
+    ) -> Result<DesktopWorkspace, String> {
+        let root = root.trim();
+        if root.is_empty() {
+            return Err("A workspace directory is required.".to_owned());
+        }
+        let registry = self
+            .app
+            .get(WORKSPACE_REGISTRY_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        registry
+            .create_or_touch(root, name)
+            .await
+            .map(map_desktop_workspace)
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn list_workspace_sessions(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<SessionSummary>, String> {
+        let query = self
+            .app
+            .get(WORKSPACE_QUERY_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        query
+            .list_recent_sessions(workspace_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn prepare_session(
+        &self,
+        request: DesktopPrepareSessionRequest,
+    ) -> Result<DesktopPreparedSession, String> {
+        let work_dir = request.work_dir.trim();
+        if work_dir.is_empty() {
+            return Err("A workspace directory is required.".to_owned());
+        }
+        self.ensure_models_configured().await?;
+
+        let sessions = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let session = if let Some(session_id) = request
+            .session_id
+            .as_deref()
+            .filter(|session_id| !session_id.trim().is_empty())
+        {
+            if let Some(session) = sessions.get(session_id) {
+                session
+            } else {
+                sessions
+                    .resume(session_id)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("Session `{session_id}` was not found."))?
+            }
+        } else {
+            sessions
+                .create(CreateSessionOptions {
+                    work_dir: work_dir.to_owned(),
+                    main_agent_binding: Some(BindAgentInput {
+                        profile: "agent".into(),
+                        model: request.model.as_deref().map(managed_model_alias),
+                        thinking: request.thinking.clone(),
+                        strict_thinking: None,
+                        cwd: Some(work_dir.to_owned()),
+                    }),
+                    ..CreateSessionOptions::default()
+                })
+                .await
+                .map_err(|error| error.to_string())?
+        };
+
+        let agent = ensure_main_agent(&session, None)
+            .await
+            .map_err(|error| error.to_string())?;
+        let rpc = agent
+            .get(AGENT_RPC_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        if let Some(model) = request.model.filter(|model| !model.trim().is_empty()) {
+            rpc.set_model(SetModelPayload {
+                model: managed_model_alias(&model),
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        if let Some(thinking) = request
+            .thinking
+            .filter(|thinking| !thinking.trim().is_empty())
+        {
+            rpc.set_thinking(SetThinkingPayload { level: thinking })
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        if let Some(permission) = request.permission {
+            rpc.set_permission(SetPermissionPayload { mode: permission })
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+
+        Ok(DesktopPreparedSession {
+            session_id: session.id().to_owned(),
+            agent_id: agent.id().to_owned(),
+        })
+    }
+
+    pub async fn agent_rpc(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+    ) -> Result<AgentRpcServiceHandle, String> {
+        let sessions = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "the session is not active; prepare it first".to_owned())?;
+        let agent = if agent_id == MAIN_AGENT_ID {
+            ensure_main_agent(&session, None)
+                .await
+                .map_err(|error| error.to_string())?
+        } else {
+            session
+                .get(AGENT_LIFECYCLE_SERVICE_ID)
+                .map_err(|error| error.to_string())?
+                .get(agent_id)
+                .ok_or_else(|| format!("Agent `{agent_id}` was not found."))?
+        };
+        agent
+            .get(AGENT_RPC_SERVICE_ID)
+            .map(|service| (*service).clone())
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn subscribe_agent_events(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        on_event: Arc<dyn Fn(Value) + Send + Sync>,
+        on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
+    ) -> Result<DisposableHandle, String> {
+        let sessions = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "the session is not active; prepare it first".to_owned())?;
+        let agent = if agent_id == MAIN_AGENT_ID {
+            ensure_main_agent(&session, None)
+                .await
+                .map_err(|error| error.to_string())?
+        } else {
+            session
+                .get(AGENT_LIFECYCLE_SERVICE_ID)
+                .map_err(|error| error.to_string())?
+                .get(agent_id)
+                .ok_or_else(|| format!("Agent `{agent_id}` was not found."))?
+        };
+
+        let subscriptions = Arc::new(DisposableStore::new());
+        let event_bus = agent
+            .get(EVENT_BUS_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
+            on_event(event.clone().into_value());
+        })));
+
+        let interaction = session
+            .get(SESSION_INTERACTION_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        on_interactions(map_desktop_interactions(
+            interaction.list_pending(None).await,
+        ));
+        let interaction_for_updates = interaction.clone();
+        subscriptions.add(interaction.on_did_change_pending().subscribe(move |_| {
+            let interaction = interaction_for_updates.clone();
+            let on_interactions = Arc::clone(&on_interactions);
+            tokio::spawn(async move {
+                on_interactions(map_desktop_interactions(
+                    interaction.list_pending(None).await,
+                ));
+            });
+        }));
+
+        Ok(subscriptions)
+    }
+
     pub async fn chat(
         &self,
         conversation_id: &str,
@@ -455,7 +701,7 @@ impl KimiCodeDesktopClient {
             .app
             .get(SESSION_LIFECYCLE_SERVICE_ID)
             .map_err(|error| error.to_string())?;
-        let session_id = desktop_session_id(conversation_id);
+        let session_id = conversation_id.to_owned();
         let model = managed_model_alias(&request.model);
         let session = if let Some(session) = sessions.get(&session_id) {
             session
@@ -663,10 +909,9 @@ impl KimiCodeDesktopClient {
             .app
             .get(MESSAGE_LEGACY_SERVICE_ID)
             .map_err(|error| error.to_string())?;
-        let session_id = desktop_session_id(conversation_id);
         let page = messages
             .list(
-                &session_id,
+                conversation_id,
                 MessageListQuery {
                     before_id,
                     page_size,
@@ -702,12 +947,11 @@ impl KimiCodeDesktopClient {
             .app
             .get(SESSION_LIFECYCLE_SERVICE_ID)
             .map_err(|error| error.to_string())?;
-        let session_id = desktop_session_id(conversation_id);
-        let session = if let Some(session) = sessions.get(&session_id) {
+        let session = if let Some(session) = sessions.get(conversation_id) {
             session
         } else {
             let Some(session) = sessions
-                .resume(&session_id)
+                .resume(conversation_id)
                 .await
                 .map_err(|error| error.to_string())?
             else {
@@ -740,9 +984,8 @@ impl KimiCodeDesktopClient {
             .app
             .get(SESSION_LIFECYCLE_SERVICE_ID)
             .map_err(|error| error.to_string())?;
-        let session_id = desktop_session_id(conversation_id);
         let session = sessions
-            .get(&session_id)
+            .get(conversation_id)
             .ok_or_else(|| "the conversation session is not active".to_owned())?;
         let interaction = session
             .get(SESSION_INTERACTION_SERVICE_ID)
@@ -853,6 +1096,16 @@ fn map_desktop_model(model: ManagedKimiCodeModelInfo) -> DesktopModel {
         .to_owned(),
         support_efforts: model.support_efforts.unwrap_or_default(),
         default_effort: model.default_effort,
+    }
+}
+
+fn map_desktop_workspace(workspace: Workspace) -> DesktopWorkspace {
+    DesktopWorkspace {
+        id: workspace.id,
+        root: workspace.root,
+        name: workspace.name,
+        created_at: workspace.created_at_millis,
+        last_opened_at: workspace.last_opened_at_millis,
     }
 }
 
@@ -1020,20 +1273,6 @@ fn managed_model_alias(model: &str) -> String {
     }
 }
 
-fn desktop_session_id(conversation_id: &str) -> String {
-    let normalized = conversation_id
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    format!("desktop-{normalized}")
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -1042,8 +1281,7 @@ mod tests {
 
     use super::{
         DesktopChatEvent, DesktopChatEventRelay, DesktopChatRequest, context_usage_from_size,
-        desktop_session_id, managed_model_alias, map_desktop_chat_event,
-        map_desktop_compaction_event,
+        managed_model_alias, map_desktop_chat_event, map_desktop_compaction_event,
     };
     use crate::{
         agent::{
@@ -1059,14 +1297,6 @@ mod tests {
         assert_eq!(
             managed_model_alias("kimi-code/kimi-k2"),
             "kimi-code/kimi-k2"
-        );
-    }
-
-    #[test]
-    fn normalizes_frontend_conversation_ids_for_agent_sessions() {
-        assert_eq!(
-            desktop_session_id("chat_1234/abcd"),
-            "desktop-chat-1234-abcd"
         );
     }
 

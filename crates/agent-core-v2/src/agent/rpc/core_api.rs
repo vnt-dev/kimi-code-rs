@@ -531,6 +531,7 @@ pub struct RemoveKimiProviderPayload {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PromptLaunchResult {
     pub turn_id: i64,
 }
@@ -826,6 +827,10 @@ mod tests {
                 "agentId": "main",
                 "turnId": 7
             })
+        );
+        assert_eq!(
+            serde_json::to_value(PromptLaunchResult { turn_id: 7 }).unwrap(),
+            json!({"turnId": 7})
         );
     }
 

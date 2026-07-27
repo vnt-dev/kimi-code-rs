@@ -1,48 +1,70 @@
-import type { Conversation, DesktopState, Project } from "./types";
+import { listWorkspaces, listWorkspaceSessions } from "./agentRpc";
+import type {
+  Conversation,
+  DesktopState,
+  Project,
+  SessionSummary,
+  Workspace,
+} from "./types";
 
-const STORAGE_KEY = "kimi-code.desktop.workspace.v2";
 const ACCENTS = ["#8b7cf6", "#5aa9ff", "#47c7a2", "#f0a45d", "#df719d"];
 
-export function createId(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID()}`;
-}
-
-export function loadState(): DesktopState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { projects: [] };
-    const parsed = JSON.parse(raw) as DesktopState;
-    return Array.isArray(parsed.projects) ? parsed : { projects: [] };
-  } catch {
-    return { projects: [] };
-  }
-}
-
-export function persistState(state: DesktopState): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-export function newConversation(): Conversation {
-  const now = Date.now();
+function toConversation(session: SessionSummary): Conversation {
   return {
-    id: createId("chat"),
-    title: "新对话",
-    createdAt: now,
-    updatedAt: now,
+    id: session.id,
+    title: session.title || session.lastPrompt || "新对话",
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
   };
 }
 
-export function newProject(path: string, index: number): Project {
-  const normalized = path.replace(/[\\/]+$/, "");
-  const name = normalized.split(/[\\/]/).filter(Boolean).at(-1) || "未命名项目";
-  const conversation = newConversation();
+function toProject(
+  workspace: Workspace,
+  sessions: SessionSummary[],
+  index: number,
+): Project {
   return {
-    id: createId("project"),
-    name,
-    path: normalized,
+    id: workspace.id,
+    name: workspace.name,
+    path: workspace.root,
     accent: ACCENTS[index % ACCENTS.length],
     expanded: true,
-    conversations: [conversation],
+    conversations: sessions.map(toConversation),
+  };
+}
+
+export async function loadDesktopState(): Promise<DesktopState> {
+  const workspaces = await listWorkspaces();
+  const sessionLists = await Promise.all(
+    workspaces.map((workspace) => listWorkspaceSessions(workspace.id)),
+  );
+  const projects = workspaces.map((workspace, index) =>
+    toProject(workspace, sessionLists[index], index),
+  );
+  const project = projects[0];
+  return {
+    projects,
+    activeProjectId: project?.id,
+    activeConversationId: project?.conversations[0]?.id,
+  };
+}
+
+export function projectFromWorkspace(
+  workspace: Workspace,
+  index: number,
+): Project {
+  return toProject(workspace, [], index);
+}
+
+export function conversationFromSession(
+  sessionId: string,
+  now = Date.now(),
+): Conversation {
+  return {
+    id: sessionId,
+    title: "新对话",
+    createdAt: now,
+    updatedAt: now,
   };
 }
 
