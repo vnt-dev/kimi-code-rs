@@ -25,7 +25,7 @@ use serde_json::{Map, Value};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::{
-    _base::di::scope::Scope,
+    _base::di::{lifecycle::DisposableStore, scope::Scope},
     agent::{
         context_memory::{ContextMessage, PromptOrigin},
         context_size::{AGENT_CONTEXT_SIZE_SERVICE_ID, AgentContextSizeServiceHandle, ContextSize},
@@ -341,12 +341,13 @@ impl KimiCodeDesktopClient {
         let interaction = session
             .get(SESSION_INTERACTION_SERVICE_ID)
             .map_err(|error| error.to_string())?;
+        let subscriptions = DisposableStore::new();
         on_interactions(map_desktop_interactions(
             interaction.list_pending(None).await,
         ));
         let interaction_for_updates = interaction.clone();
         let on_interactions_for_updates = Arc::clone(&on_interactions);
-        let _interaction_updates = interaction.on_did_change_pending().subscribe(move |_| {
+        subscriptions.add(interaction.on_did_change_pending().subscribe(move |_| {
             let interaction = interaction_for_updates.clone();
             let on_interactions = Arc::clone(&on_interactions_for_updates);
             tokio::spawn(async move {
@@ -354,7 +355,7 @@ impl KimiCodeDesktopClient {
                     interaction.list_pending(None).await,
                 ));
             });
-        });
+        }));
 
         let profile = agent
             .get(AGENT_PROFILE_SERVICE_ID)
@@ -392,7 +393,7 @@ impl KimiCodeDesktopClient {
         let context_size_for_updates = context_size.clone();
         let profile_for_updates = profile.clone();
         let on_context_usage_for_updates = Arc::clone(&on_context_usage);
-        let _context_usage_updates = event_bus.subscribe(Arc::new(move |event| {
+        subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
             if matches!(
                 event.event_type.as_str(),
                 "agent.status.updated" | "context.spliced"
@@ -403,13 +404,13 @@ impl KimiCodeDesktopClient {
                     &on_context_usage_for_updates,
                 );
             }
-        }));
-        let _compaction_updates = event_bus.subscribe(Arc::new(move |event| {
+        })));
+        subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
             if let Some(event) = map_desktop_compaction_event(event) {
                 on_compaction(event);
             }
-        }));
-        let _assistant_output = event_bus.subscribe_type(
+        })));
+        subscriptions.add(event_bus.subscribe_type(
             "assistant.delta",
             Arc::new(move |event| {
                 let Some(text) = event.fields.get("delta").and_then(Value::as_str) else {
@@ -423,7 +424,7 @@ impl KimiCodeDesktopClient {
                     content: text.to_owned(),
                 });
             }),
-        );
+        ));
 
         let prompt_service = agent
             .get(AGENT_PROMPT_SERVICE_ID)
