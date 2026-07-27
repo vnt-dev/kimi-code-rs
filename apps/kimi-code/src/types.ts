@@ -96,10 +96,100 @@ export interface Model {
   defaultEffort?: string;
 }
 
-export interface ChatStreamEvent {
+export interface ToolUpdate {
+  kind: "stdout" | "stderr" | "progress" | "status" | "custom";
+  text?: string;
+  percent?: number;
+  customKind?: string;
+  customData?: unknown;
+}
+
+export type AgentContentPart =
+  | { type: "text"; text: string }
+  | { type: "think"; think: string; encrypted?: string }
+  | { type: "image_url"; imageUrl: { url: string; id?: string } }
+  | { type: "audio_url"; audioUrl: { url: string; id?: string } }
+  | { type: "video_url"; videoUrl: { url: string; id?: string } };
+
+export type AgentChatEvent =
+  | {
+      type: "turn_started";
+      turnId: number;
+      origin: unknown;
+      prompt?: string;
+    }
+  | {
+      type: "turn_ended";
+      turnId: number;
+      reason: "completed" | "cancelled" | "failed" | "blocked";
+      error?: unknown;
+      durationMs?: number;
+    }
+  | {
+      type: "step_started";
+      turnId: number;
+      step: number;
+      stepId?: string;
+    }
+  | {
+      type: "step_completed";
+      turnId: number;
+      step: number;
+      stepId?: string;
+      usage?: unknown;
+      finishReason?: string;
+      providerFinishReason?: unknown;
+      rawFinishReason?: string;
+    }
+  | {
+      type: "step_interrupted";
+      turnId: number;
+      step: number;
+      stepId?: string;
+      reason: string;
+      message?: string;
+    }
+  | { type: "assistant_delta"; turnId: number; delta: string }
+  | {
+      type: "assistant_content";
+      turnId: number;
+      content: AgentContentPart;
+    }
+  | { type: "thinking_delta"; turnId: number; delta: string }
+  | {
+      type: "tool_call_delta";
+      turnId: number;
+      toolCallId: string;
+      name?: string;
+      argumentsPart?: string;
+    }
+  | {
+      type: "tool_call_started";
+      turnId: number;
+      toolCallId: string;
+      name: string;
+      args: unknown;
+      description?: string;
+      display?: unknown;
+    }
+  | {
+      type: "tool_progress";
+      turnId: number;
+      toolCallId: string;
+      update: ToolUpdate;
+    }
+  | {
+      type: "tool_result";
+      turnId: number;
+      toolCallId: string;
+      output: unknown;
+      isError?: boolean;
+      synthetic?: boolean;
+    };
+
+export interface AgentChatEventEnvelope {
   conversationId: string;
-  kind: "text" | "thinking";
-  content: string;
+  event: AgentChatEvent;
 }
 
 export interface CommandDisplay {

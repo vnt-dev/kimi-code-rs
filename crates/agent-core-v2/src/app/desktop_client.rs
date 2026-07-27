@@ -4,6 +4,7 @@
 //! configuration, streamed output, and host-mediated interactions.
 
 use std::{
+    collections::VecDeque,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -32,18 +33,23 @@ use crate::{
     agent::{
         context_memory::{ContextMessage, PromptOrigin, protocol_message::ProtocolMessage},
         context_size::{AGENT_CONTEXT_SIZE_SERVICE_ID, AgentContextSizeServiceHandle, ContextSize},
-        loop_::{AssistantDeltaEvent, LoopRunResult},
+        loop_::{
+            AssistantContentEvent, AssistantDeltaEvent, LoopRunResult, ThinkingDeltaEvent,
+            ToolCallDeltaEvent, TurnEndedEvent, TurnStartedEvent, TurnStepCompletedEvent,
+            TurnStepInterruptedEvent, TurnStepStartedEvent,
+        },
         permission_mode::AGENT_PERMISSION_MODE_SERVICE_ID,
         permission_policy::PermissionMode,
         profile::{AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle, BindAgentInput},
         prompt::{AGENT_PROMPT_SERVICE_ID, PromptCompletionState, PromptInput},
+        tool_executor::{ToolCallStartedEvent, ToolProgressEvent, ToolResultEvent},
     },
     app::{
         agent_app_runtime::bootstrap_agent_app,
         auth::{OAuthToolkitContract, OAuthToolkitService},
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         config::{CONFIG_SERVICE_ID, ConfigTarget},
-        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, TypedEventBusExt},
+        event::event_bus::{DomainEvent, DomainEventPayload, EVENT_BUS_SERVICE_ID},
         message_legacy::{
             MESSAGE_LEGACY_SERVICE_ID, MessageListQuery, PageResponse as MessagePageResponse,
         },
@@ -113,10 +119,20 @@ pub struct DesktopChatRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopChatDelta {
-    pub kind: String,
-    pub content: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DesktopChatEvent {
+    TurnStarted(TurnStartedEvent),
+    TurnEnded(TurnEndedEvent),
+    StepStarted(TurnStepStartedEvent),
+    StepCompleted(TurnStepCompletedEvent),
+    StepInterrupted(TurnStepInterruptedEvent),
+    AssistantDelta(AssistantDeltaEvent),
+    AssistantContent(AssistantContentEvent),
+    ThinkingDelta(ThinkingDeltaEvent),
+    ToolCallDelta(ToolCallDeltaEvent),
+    ToolCallStarted(ToolCallStartedEvent),
+    ToolProgress(ToolProgressEvent),
+    ToolResult(ToolResultEvent),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -160,6 +176,134 @@ pub struct DesktopContextUsage {
     pub estimated_tokens: f64,
     pub max_context_tokens: u64,
     pub usage_ratio: f64,
+}
+
+#[derive(Default)]
+struct DesktopChatEventRelayState {
+    turn_id: Option<i64>,
+    emitting: bool,
+    buffered: VecDeque<DesktopChatEvent>,
+}
+
+struct DesktopChatEventRelay {
+    state: Mutex<DesktopChatEventRelayState>,
+    content: Arc<Mutex<String>>,
+    thinking: Arc<Mutex<String>>,
+    callback: Arc<dyn Fn(DesktopChatEvent) + Send + Sync>,
+}
+
+impl DesktopChatEvent {
+    fn turn_id(&self) -> i64 {
+        match self {
+            Self::TurnStarted(event) => event.turn_id,
+            Self::TurnEnded(event) => event.turn_id,
+            Self::StepStarted(event) => event.turn_id,
+            Self::StepCompleted(event) => event.turn_id,
+            Self::StepInterrupted(event) => event.turn_id,
+            Self::AssistantDelta(event) => event.turn_id,
+            Self::AssistantContent(event) => event.turn_id,
+            Self::ThinkingDelta(event) => event.turn_id,
+            Self::ToolCallDelta(event) => event.turn_id,
+            Self::ToolCallStarted(event) => event.turn_id,
+            Self::ToolProgress(event) => event.turn_id,
+            Self::ToolResult(event) => event.turn_id,
+        }
+    }
+}
+
+impl DesktopChatEventRelay {
+    fn new(
+        content: Arc<Mutex<String>>,
+        thinking: Arc<Mutex<String>>,
+        callback: Arc<dyn Fn(DesktopChatEvent) + Send + Sync>,
+    ) -> Self {
+        Self {
+            state: Mutex::new(DesktopChatEventRelayState::default()),
+            content,
+            thinking,
+            callback,
+        }
+    }
+
+    fn push(&self, event: DesktopChatEvent) {
+        let should_drain = {
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            match state.turn_id {
+                None => {
+                    state.buffered.push_back(event);
+                    return;
+                }
+                Some(turn_id) if turn_id != event.turn_id() => return,
+                Some(_) => state.buffered.push_back(event),
+            }
+            if state.emitting {
+                false
+            } else {
+                state.emitting = true;
+                true
+            }
+        };
+        if should_drain {
+            self.drain();
+        }
+    }
+
+    fn select_turn(&self, turn_id: i64) {
+        let should_drain = {
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            state.turn_id = Some(turn_id);
+            state.buffered = std::mem::take(&mut state.buffered)
+                .into_iter()
+                .filter(|event| event.turn_id() == turn_id)
+                .collect();
+            if state.buffered.is_empty() || state.emitting {
+                false
+            } else {
+                state.emitting = true;
+                true
+            }
+        };
+        if should_drain {
+            self.drain();
+        }
+    }
+
+    fn drain(&self) {
+        loop {
+            let event = {
+                let Ok(mut state) = self.state.lock() else {
+                    return;
+                };
+                let Some(event) = state.buffered.pop_front() else {
+                    state.emitting = false;
+                    return;
+                };
+                event
+            };
+            self.emit(event);
+        }
+    }
+
+    fn emit(&self, event: DesktopChatEvent) {
+        match &event {
+            DesktopChatEvent::AssistantDelta(event) => {
+                if let Ok(mut content) = self.content.lock() {
+                    content.push_str(&event.delta);
+                }
+            }
+            DesktopChatEvent::ThinkingDelta(event) => {
+                if let Ok(mut thinking) = self.thinking.lock() {
+                    thinking.push_str(&event.delta);
+                }
+            }
+            _ => {}
+        }
+        (self.callback)(event);
+    }
 }
 
 struct CallbackObserver {
@@ -277,7 +421,7 @@ impl KimiCodeDesktopClient {
         &self,
         conversation_id: &str,
         request: DesktopChatRequest,
-        on_delta: Arc<dyn Fn(DesktopChatDelta) + Send + Sync>,
+        on_event: Arc<dyn Fn(DesktopChatEvent) + Send + Sync>,
         on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
         on_compaction: Arc<dyn Fn(DesktopCompactionEvent) + Send + Sync>,
         on_context_usage: Arc<dyn Fn(DesktopContextUsage) + Send + Sync>,
@@ -386,7 +530,12 @@ impl KimiCodeDesktopClient {
         emit_context_usage(&context_size, &profile, &on_context_usage);
 
         let content = Arc::new(Mutex::new(String::new()));
-        let streamed_content = Arc::clone(&content);
+        let thinking = Arc::new(Mutex::new(String::new()));
+        let chat_event_relay = Arc::new(DesktopChatEventRelay::new(
+            Arc::clone(&content),
+            Arc::clone(&thinking),
+            on_event,
+        ));
         let event_bus = agent
             .get(EVENT_BUS_SERVICE_ID)
             .map_err(|error| error.to_string())?;
@@ -410,18 +559,12 @@ impl KimiCodeDesktopClient {
                 on_compaction(event);
             }
         })));
-        subscriptions.add(event_bus.subscribe_typed::<AssistantDeltaEvent>(Arc::new(
-            move |event| {
-                let text = &event.delta;
-                if let Ok(mut content) = streamed_content.lock() {
-                    content.push_str(text);
-                }
-                on_delta(DesktopChatDelta {
-                    kind: "text".to_owned(),
-                    content: text.to_owned(),
-                });
-            },
-        )));
+        let relay_for_events = Arc::clone(&chat_event_relay);
+        subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
+            if let Some(event) = map_desktop_chat_event(event) {
+                relay_for_events.push(event);
+            }
+        })));
 
         let prompt_service = agent
             .get(AGENT_PROMPT_SERVICE_ID)
@@ -444,6 +587,9 @@ impl KimiCodeDesktopClient {
             })
             .await
             .map_err(|error| error.to_string())?;
+        if let Some(turn) = handle.launched().await {
+            chat_event_relay.select_turn(turn.id());
+        }
         let completion = handle.completion().await;
 
         agent
@@ -471,10 +617,14 @@ impl KimiCodeDesktopClient {
             .lock()
             .map_err(|_| "failed to collect assistant output".to_owned())?
             .clone();
+        let thinking = thinking
+            .lock()
+            .map_err(|_| "failed to collect assistant thinking".to_owned())?
+            .clone();
 
         Ok(DesktopChatResult {
             content,
-            thinking: String::new(),
+            thinking,
             finish_reason,
         })
     }
@@ -736,6 +886,68 @@ fn map_desktop_interactions(interactions: Vec<Interaction>) -> Vec<DesktopIntera
         .collect()
 }
 
+fn map_desktop_chat_event(event: &DomainEvent) -> Option<DesktopChatEvent> {
+    match event.event_type.as_str() {
+        TurnStartedEvent::TYPE => event
+            .with_payload::<TurnStartedEvent, _>(|event| {
+                DesktopChatEvent::TurnStarted(event.clone())
+            })
+            .ok(),
+        TurnEndedEvent::TYPE => event
+            .with_payload::<TurnEndedEvent, _>(|event| DesktopChatEvent::TurnEnded(event.clone()))
+            .ok(),
+        TurnStepStartedEvent::TYPE => event
+            .with_payload::<TurnStepStartedEvent, _>(|event| {
+                DesktopChatEvent::StepStarted(event.clone())
+            })
+            .ok(),
+        TurnStepCompletedEvent::TYPE => event
+            .with_payload::<TurnStepCompletedEvent, _>(|event| {
+                DesktopChatEvent::StepCompleted(event.clone())
+            })
+            .ok(),
+        TurnStepInterruptedEvent::TYPE => event
+            .with_payload::<TurnStepInterruptedEvent, _>(|event| {
+                DesktopChatEvent::StepInterrupted(event.clone())
+            })
+            .ok(),
+        AssistantDeltaEvent::TYPE => event
+            .with_payload::<AssistantDeltaEvent, _>(|event| {
+                DesktopChatEvent::AssistantDelta(event.clone())
+            })
+            .ok(),
+        AssistantContentEvent::TYPE => event
+            .with_payload::<AssistantContentEvent, _>(|event| {
+                DesktopChatEvent::AssistantContent(event.clone())
+            })
+            .ok(),
+        ThinkingDeltaEvent::TYPE => event
+            .with_payload::<ThinkingDeltaEvent, _>(|event| {
+                DesktopChatEvent::ThinkingDelta(event.clone())
+            })
+            .ok(),
+        ToolCallDeltaEvent::TYPE => event
+            .with_payload::<ToolCallDeltaEvent, _>(|event| {
+                DesktopChatEvent::ToolCallDelta(event.clone())
+            })
+            .ok(),
+        ToolCallStartedEvent::TYPE => event
+            .with_payload::<ToolCallStartedEvent, _>(|event| {
+                DesktopChatEvent::ToolCallStarted(event.clone())
+            })
+            .ok(),
+        ToolProgressEvent::TYPE => event
+            .with_payload::<ToolProgressEvent, _>(|event| {
+                DesktopChatEvent::ToolProgress(event.clone())
+            })
+            .ok(),
+        ToolResultEvent::TYPE => event
+            .with_payload::<ToolResultEvent, _>(|event| DesktopChatEvent::ToolResult(event.clone()))
+            .ok(),
+        _ => None,
+    }
+}
+
 fn map_desktop_compaction_event(event: &DomainEvent) -> Option<DesktopCompactionEvent> {
     match event.event_type.as_str() {
         "compaction.started" => Some(DesktopCompactionEvent {
@@ -800,13 +1012,22 @@ fn desktop_session_id(conversation_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use serde_json::json;
 
     use super::{
-        DesktopChatRequest, context_usage_from_size, desktop_session_id, managed_model_alias,
+        DesktopChatEvent, DesktopChatEventRelay, DesktopChatRequest, context_usage_from_size,
+        desktop_session_id, managed_model_alias, map_desktop_chat_event,
         map_desktop_compaction_event,
     };
-    use crate::{agent::context_size::ContextSize, app::event::event_bus::DomainEvent};
+    use crate::{
+        agent::{
+            context_size::ContextSize,
+            loop_::{AssistantDeltaEvent, ThinkingDeltaEvent},
+        },
+        app::event::event_bus::DomainEvent,
+    };
 
     #[test]
     fn qualifies_managed_model_ids_once() {
@@ -843,6 +1064,66 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn serializes_realtime_events_as_a_discriminated_event_union() {
+        let event = DesktopChatEvent::AssistantDelta(AssistantDeltaEvent {
+            turn_id: 7,
+            delta: "hello".into(),
+        });
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({
+                "type": "assistant_delta",
+                "turnId": 7,
+                "delta": "hello"
+            })
+        );
+    }
+
+    #[test]
+    fn maps_and_relays_only_the_launched_turn_in_original_event_order() {
+        let mapped = map_desktop_chat_event(&DomainEvent::typed(AssistantDeltaEvent {
+            turn_id: 11,
+            delta: "a".into(),
+        }))
+        .unwrap();
+        assert!(matches!(
+            mapped,
+            DesktopChatEvent::AssistantDelta(AssistantDeltaEvent {
+                turn_id: 11,
+                ref delta
+            }) if delta == "a"
+        ));
+
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let received_for_callback = Arc::clone(&received);
+        let content = Arc::new(Mutex::new(String::new()));
+        let thinking = Arc::new(Mutex::new(String::new()));
+        let relay = DesktopChatEventRelay::new(
+            Arc::clone(&content),
+            Arc::clone(&thinking),
+            Arc::new(move |event| received_for_callback.lock().unwrap().push(event)),
+        );
+        relay.push(DesktopChatEvent::AssistantDelta(AssistantDeltaEvent {
+            turn_id: 12,
+            delta: "other".into(),
+        }));
+        relay.push(DesktopChatEvent::AssistantDelta(AssistantDeltaEvent {
+            turn_id: 11,
+            delta: "hello".into(),
+        }));
+        relay.select_turn(11);
+        relay.push(DesktopChatEvent::ThinkingDelta(ThinkingDeltaEvent {
+            turn_id: 11,
+            delta: "reason".into(),
+        }));
+
+        assert_eq!(received.lock().unwrap().len(), 2);
+        assert_eq!(*content.lock().unwrap(), "hello");
+        assert_eq!(*thinking.lock().unwrap(), "reason");
     }
 
     #[test]

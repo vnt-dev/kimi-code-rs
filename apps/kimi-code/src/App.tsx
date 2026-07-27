@@ -49,7 +49,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import {
-  createId,
   getActive,
   loadState,
   newConversation,
@@ -57,13 +56,15 @@ import {
   persistState,
 } from "./store";
 import type {
+  AgentChatEvent,
+  AgentChatEventEnvelope,
+  AgentContentPart,
   AgentCompactionEvent,
   AgentContextUsageEvent,
   AgentInteraction,
   AgentInteractionsEvent,
   ApprovalPayload,
   AuthStatus,
-  ChatStreamEvent,
   CompactionEvent,
   ContextUsage,
   DesktopState,
@@ -74,6 +75,7 @@ import type {
   PermissionMode,
   Project,
   ProtocolMessage,
+  ToolUpdate,
 } from "./types";
 
 const HISTORY_PAGE_SIZE = 50;
@@ -91,10 +93,58 @@ interface ConversationHistory {
   error?: string;
 }
 
+type LiveTurnStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "cancelled"
+  | "failed"
+  | "blocked";
+
+type LiveStepStatus = "running" | "completed" | "interrupted";
+
+type LiveBlock =
+  | { kind: "text"; content: string }
+  | { kind: "thinking"; content: string }
+  | { kind: "content"; content: AgentContentPart }
+  | {
+      kind: "tool";
+      toolCallId: string;
+      name?: string;
+      argumentsText: string;
+      input?: unknown;
+      description?: string;
+      display?: unknown;
+      status: "streaming" | "running" | "completed" | "error";
+      updates: ToolUpdate[];
+      output?: unknown;
+      isError?: boolean;
+    };
+
+interface LiveStep {
+  step: number;
+  stepId?: string;
+  status: LiveStepStatus;
+  blocks: LiveBlock[];
+  finishReason?: string;
+  interruption?: string;
+}
+
 interface InFlightTurn {
-  user: RenderMessage;
-  assistant: RenderMessage;
+  prompt: string;
+  createdAt: string;
+  turnId?: number;
+  status: LiveTurnStatus;
+  steps: LiveStep[];
+  error?: string;
   historyBoundaryId?: string;
+}
+
+type ToolResultContent = Extract<MessageContent, { type: "tool_result" }>;
+
+interface HistoryToolPresentation {
+  messages: ProtocolMessage[];
+  results: Map<string, ToolResultContent>;
 }
 
 const PROMPT_SUGGESTIONS = [
@@ -148,48 +198,200 @@ function fetchMessagePage(
   });
 }
 
-function pendingMessage(
-  conversationId: string,
-  role: "user" | "assistant",
-  text: string,
-  status: RenderMessage["status"],
-): RenderMessage {
+function newInFlightTurn(
+  prompt: string,
+  historyBoundaryId?: string,
+): InFlightTurn {
   return {
-    id: createId("pending"),
-    session_id: conversationId,
-    role,
-    content: [{ type: "text", text }],
-    created_at: new Date().toISOString(),
-    status,
+    prompt,
+    createdAt: new Date().toISOString(),
+    status: "queued",
+    steps: [],
+    historyBoundaryId,
   };
 }
 
-function appendStreamDelta(
-  message: RenderMessage,
-  delta: ChatStreamEvent,
-): RenderMessage {
-  const targetType = delta.kind === "thinking" ? "thinking" : "text";
-  const content = [...message.content];
-  let index = content.length - 1;
-  while (index >= 0 && content[index].type !== targetType) {
-    index -= 1;
-  }
-  if (index < 0) {
-    content.push(
-      targetType === "thinking"
-        ? { type: "thinking", thinking: delta.content }
-        : { type: "text", text: delta.content },
+function withCurrentStep(
+  turn: InFlightTurn,
+  update: (step: LiveStep) => LiveStep,
+): InFlightTurn {
+  const steps =
+    turn.steps.length > 0
+      ? [...turn.steps]
+      : [{ step: 0, status: "running" as const, blocks: [] }];
+  const index = steps.length - 1;
+  steps[index] = update(steps[index]);
+  return { ...turn, steps };
+}
+
+function appendLiveContent(
+  turn: InFlightTurn,
+  kind: "text" | "thinking",
+  content: string,
+): InFlightTurn {
+  return withCurrentStep(turn, (step) => {
+    const blocks = [...step.blocks];
+    const last = blocks.at(-1);
+    if (last?.kind === kind) {
+      blocks[blocks.length - 1] = {
+        ...last,
+        content: last.content + content,
+      };
+    } else {
+      blocks.push({ kind, content });
+    }
+    return { ...step, blocks };
+  });
+}
+
+function updateLiveTool(
+  turn: InFlightTurn,
+  toolCallId: string,
+  update: (tool: Extract<LiveBlock, { kind: "tool" }>) => LiveBlock,
+): InFlightTurn {
+  const steps = turn.steps.map((step) => ({
+    ...step,
+    blocks: [...step.blocks],
+  }));
+  for (let stepIndex = steps.length - 1; stepIndex >= 0; stepIndex -= 1) {
+    const blockIndex = steps[stepIndex].blocks.findIndex(
+      (block) => block.kind === "tool" && block.toolCallId === toolCallId,
     );
-  } else {
-    const part = content[index];
-    content[index] =
-      part.type === "thinking"
-        ? { ...part, thinking: part.thinking + delta.content }
-        : part.type === "text"
-          ? { ...part, text: part.text + delta.content }
-          : part;
+    if (blockIndex >= 0) {
+      const block = steps[stepIndex].blocks[blockIndex];
+      if (block.kind === "tool") {
+        steps[stepIndex].blocks[blockIndex] = update(block);
+      }
+      return { ...turn, steps };
+    }
   }
-  return { ...message, content };
+
+  return withCurrentStep({ ...turn, steps }, (step) => ({
+    ...step,
+    blocks: [
+      ...step.blocks,
+      update({
+        kind: "tool",
+        toolCallId,
+        argumentsText: "",
+        status: "streaming",
+        updates: [],
+      }),
+    ],
+  }));
+}
+
+function reduceAgentChatEvent(
+  turn: InFlightTurn,
+  event: AgentChatEvent,
+): InFlightTurn {
+  if (turn.turnId !== undefined && turn.turnId !== event.turnId) return turn;
+  const next =
+    turn.turnId === undefined ? { ...turn, turnId: event.turnId } : turn;
+
+  switch (event.type) {
+    case "turn_started":
+      return { ...next, status: "running" };
+    case "turn_ended":
+      return {
+        ...next,
+        status: event.reason,
+        error:
+          event.reason === "failed" && event.error !== undefined
+            ? conciseError(
+                typeof event.error === "string"
+                  ? event.error
+                  : JSON.stringify(event.error),
+              )
+            : next.error,
+      };
+    case "step_started": {
+      const index = next.steps.findIndex(
+        (step) =>
+          (event.stepId && step.stepId === event.stepId) ||
+          step.step === event.step,
+      );
+      if (index < 0) {
+        return {
+          ...next,
+          status: "running",
+          steps: [
+            ...next.steps,
+            {
+              step: event.step,
+              stepId: event.stepId,
+              status: "running",
+              blocks: [],
+            },
+          ],
+        };
+      }
+      const steps = [...next.steps];
+      steps[index] = { ...steps[index], status: "running" };
+      return { ...next, status: "running", steps };
+    }
+    case "step_completed": {
+      const steps = next.steps.map((step) =>
+        step.step === event.step
+          ? {
+              ...step,
+              status: "completed" as const,
+              finishReason: event.finishReason,
+            }
+          : step,
+      );
+      return { ...next, steps };
+    }
+    case "step_interrupted": {
+      const steps = next.steps.map((step) =>
+        step.step === event.step
+          ? {
+              ...step,
+              status: "interrupted" as const,
+              interruption: event.message ?? event.reason,
+            }
+          : step,
+      );
+      return { ...next, steps };
+    }
+    case "assistant_delta":
+      return appendLiveContent(next, "text", event.delta);
+    case "assistant_content":
+      return withCurrentStep(next, (step) => ({
+        ...step,
+        blocks: [...step.blocks, { kind: "content", content: event.content }],
+      }));
+    case "thinking_delta":
+      return appendLiveContent(next, "thinking", event.delta);
+    case "tool_call_delta":
+      return updateLiveTool(next, event.toolCallId, (tool) => ({
+        ...tool,
+        name: event.name ?? tool.name,
+        argumentsText: tool.argumentsText + (event.argumentsPart ?? ""),
+      }));
+    case "tool_call_started":
+      return updateLiveTool(next, event.toolCallId, (tool) => ({
+        ...tool,
+        name: event.name,
+        input: event.args,
+        description: event.description,
+        display: event.display,
+        status: "running",
+      }));
+    case "tool_progress":
+      return updateLiveTool(next, event.toolCallId, (tool) => ({
+        ...tool,
+        status: "running",
+        updates: [...tool.updates, event.update],
+      }));
+    case "tool_result":
+      return updateLiveTool(next, event.toolCallId, (tool) => ({
+        ...tool,
+        status: event.isError ? "error" : "completed",
+        output: event.output,
+        isError: event.isError,
+      }));
+  }
 }
 
 function messageOriginKind(message: ProtocolMessage): string | undefined {
@@ -216,7 +418,7 @@ function historyBeforeInFlightTurn(
     if (boundary >= 0) return items.slice(0, boundary + 1);
   }
 
-  const prompt = messageText(turn.user);
+  const prompt = turn.prompt;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const message = items[index];
     if (message.role === "user" && messageText(message) === prompt) {
@@ -224,6 +426,28 @@ function historyBeforeInFlightTurn(
     }
   }
   return items;
+}
+
+function mergeHistoryToolResults(
+  messages: ProtocolMessage[],
+): HistoryToolPresentation {
+  const results = new Map<string, ToolResultContent>();
+
+  for (const message of messages) {
+    for (const part of message.content) {
+      if (part.type === "tool_result") results.set(part.tool_call_id, part);
+    }
+  }
+
+  const mergedMessages = messages.flatMap((message) => {
+    const content = message.content.filter((part) => part.type !== "tool_result");
+    if (content.length === 0) return [];
+    return content.length === message.content.length
+      ? [message]
+      : [{ ...message, content }];
+  });
+
+  return { messages: mergedMessages, results };
 }
 
 export default function App() {
@@ -274,19 +498,28 @@ export default function App() {
     : undefined;
   const activeHistory =
     history?.conversationId === activeConversation?.id ? history : undefined;
-  const visibleMessages = useMemo(
-    () => [
-      ...((activeHistory
+  const visibleHistoryMessages = useMemo(
+    () =>
+      (activeHistory
         ? activeTurn
           ? historyBeforeInFlightTurn(activeHistory.items, activeTurn)
           : activeHistory.items
         : []
-      ).filter(isVisibleHistoryMessage)),
-      ...(activeTurn ? [activeTurn.user, activeTurn.assistant] : []),
+      ).filter(isVisibleHistoryMessage),
+    [
+      activeHistory?.items,
+      activeTurn?.historyBoundaryId,
+      activeTurn?.prompt,
     ],
-    [activeHistory?.items, activeTurn],
   );
-  const isStreaming = activeTurn?.assistant.status === "streaming";
+  const historyToolPresentation = useMemo(
+    () => mergeHistoryToolResults(visibleHistoryMessages),
+    [visibleHistoryMessages],
+  );
+  const hasVisibleMessages =
+    historyToolPresentation.messages.length > 0 || activeTurn !== undefined;
+  const isStreaming =
+    activeTurn?.status === "queued" || activeTurn?.status === "running";
   const isHistoryLoading =
     activeConversation !== undefined &&
     (activeHistory === undefined || activeHistory.loading);
@@ -358,20 +591,20 @@ export default function App() {
         showNotice(`未能自动打开浏览器：${event.payload}`);
       },
     );
-    const unlistenStream = listen<ChatStreamEvent>("chat-stream", (event) => {
-      const delta = event.payload;
-      setInFlightTurns((current) => {
-        const turn = current[delta.conversationId];
-        if (!turn) return current;
-        return {
-          ...current,
-          [delta.conversationId]: {
-            ...turn,
-            assistant: appendStreamDelta(turn.assistant, delta),
-          },
-        };
-      });
-    });
+    const unlistenChatEvent = listen<AgentChatEventEnvelope>(
+      "agent-chat-event",
+      (event) => {
+        const payload = event.payload;
+        setInFlightTurns((current) => {
+          const turn = current[payload.conversationId];
+          if (!turn) return current;
+          return {
+            ...current,
+            [payload.conversationId]: reduceAgentChatEvent(turn, payload.event),
+          };
+        });
+      },
+    );
     const unlistenInteractions = listen<AgentInteractionsEvent>(
       "agent-interactions",
       (event) => {
@@ -402,7 +635,7 @@ export default function App() {
     return () => {
       void unlistenDevice.then((unlisten) => unlisten());
       void unlistenBrowserError.then((unlisten) => unlisten());
-      void unlistenStream.then((unlisten) => unlisten());
+      void unlistenChatEvent.then((unlisten) => unlisten());
       void unlistenInteractions.then((unlisten) => unlisten());
       void unlistenCompaction.then((unlisten) => unlisten());
       void unlistenContextUsage.then((unlisten) => unlisten());
@@ -443,7 +676,13 @@ export default function App() {
         });
         setInFlightTurns((current) => {
           const turn = current[conversationId];
-          if (!turn || turn.assistant.status === "streaming") return current;
+          if (
+            !turn ||
+            turn.status === "queued" ||
+            turn.status === "running"
+          ) {
+            return current;
+          }
           const next = { ...current };
           delete next[conversationId];
           return next;
@@ -499,7 +738,7 @@ export default function App() {
   }, [
     activeConversation?.id,
     activeHistory?.loading,
-    activeTurn?.assistant.content,
+    activeTurn?.steps,
     activeCompaction?.phase,
   ]);
 
@@ -713,18 +952,6 @@ export default function App() {
 
     const conversationId = activeConversation.id;
     const projectId = activeProject.id;
-    const userMessage = pendingMessage(
-      conversationId,
-      "user",
-      text,
-      "done",
-    );
-    const assistantMessage = pendingMessage(
-      conversationId,
-      "assistant",
-      "",
-      "streaming",
-    );
     const title =
       activeConversation.title === "新对话"
         ? text.replace(/\s+/g, " ").slice(0, 28)
@@ -738,11 +965,10 @@ export default function App() {
     });
     setInFlightTurns((current) => ({
       ...current,
-      [conversationId]: {
-        user: userMessage,
-        assistant: assistantMessage,
-        historyBoundaryId: activeHistory?.items.at(-1)?.id,
-      },
+      [conversationId]: newInFlightTurn(
+        text,
+        activeHistory?.items.at(-1)?.id,
+      ),
     }));
     updateDesktop((current) => ({
       ...current,
@@ -767,7 +993,7 @@ export default function App() {
     setPrompt("");
 
     try {
-      const result = await invoke<{ content: string }>("send_message", {
+      await invoke("send_message", {
         conversationId,
         request: {
           prompt: text,
@@ -781,20 +1007,14 @@ export default function App() {
       setInFlightTurns((current) => {
         const turn = current[conversationId];
         if (!turn) return current;
-        const hasStreamedText = turn.assistant.content.some(
-          (part) => part.type === "text" && part.text.length > 0,
-        );
         return {
           ...current,
           [conversationId]: {
             ...turn,
-            assistant: {
-              ...turn.assistant,
-              content: hasStreamedText
-                ? turn.assistant.content
-                : [{ type: "text", text: result.content }],
-              status: "done",
-            },
+            status:
+              turn.status === "queued" || turn.status === "running"
+                ? "completed"
+                : turn.status,
           },
         };
       });
@@ -803,20 +1023,12 @@ export default function App() {
       setInFlightTurns((current) => {
         const turn = current[conversationId];
         if (!turn) return current;
-        const hasContent = turn.assistant.content.some(
-          (part) => part.type === "text" && part.text.length > 0,
-        );
         return {
           ...current,
           [conversationId]: {
             ...turn,
-            assistant: {
-              ...turn.assistant,
-              content: hasContent
-                ? turn.assistant.content
-                : [{ type: "text", text: `请求失败：${message}` }],
-              status: "error",
-            },
+            status: "failed",
+            error: message,
           },
         };
       });
@@ -1153,11 +1365,11 @@ export default function App() {
                   <span className="spinner" />
                   正在读取会话历史…
                 </div>
-              ) : activeHistory?.error && visibleMessages.length === 0 ? (
+              ) : activeHistory?.error && !hasVisibleMessages ? (
                 <div className="history-loading error">
                   {activeHistory.error}
                 </div>
-              ) : visibleMessages.length === 0 ? (
+              ) : !hasVisibleMessages ? (
                 <Welcome
                   project={activeProject}
                   onSuggestion={(value) => void sendPrompt(value)}
@@ -1184,14 +1396,16 @@ export default function App() {
                   {activeHistory?.error && (
                     <div className="history-error">{activeHistory.error}</div>
                   )}
-                  {visibleMessages.map((message) => (
+                  {historyToolPresentation.messages.map((message) => (
                     <MessageView
                       key={message.id}
                       message={message}
+                      toolResults={historyToolPresentation.results}
                       copied={copiedMessage === message.id}
                       onCopy={() => void copyMessage(message)}
                     />
                   ))}
+                  {activeTurn && <LiveTurnView turn={activeTurn} />}
                   {activeCompaction && (
                     <CompactionNotice event={activeCompaction} />
                   )}
@@ -1691,12 +1905,271 @@ function Welcome({
   );
 }
 
+function LiveTurnView({ turn }: { turn: InFlightTurn }) {
+  const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
+
+  return (
+    <>
+      <article className="message user-message live-user-message">
+        <div className="message-meta">
+          <span>你</span>
+          <time>{formatTime(turn.createdAt)}</time>
+        </div>
+        <div className="user-bubble">{turn.prompt}</div>
+      </article>
+      <article className={`message assistant-message live-turn ${turn.status}`}>
+        <div className="assistant-rail">
+          <span className="assistant-avatar">
+            <Sparkles size={15} />
+          </span>
+          <i />
+        </div>
+        <div className="assistant-body">
+          <div className="message-meta">
+            <span>Kimi</span>
+            <time>{formatTime(turn.createdAt)}</time>
+            <span className={`live-turn-status ${turn.status}`}>
+              {liveTurnStatusLabel(turn.status)}
+            </span>
+          </div>
+          {turn.steps.map((step) => (
+            <section
+              className={`live-step ${step.status}`}
+              key={step.stepId ?? step.step}
+            >
+              {step.blocks.map((block, index) => {
+                if (block.kind === "text") {
+                  return (
+                    <div className="markdown-body live-text" key={index}>
+                      <MarkdownMessage content={block.content} />
+                    </div>
+                  );
+                }
+                if (block.kind === "thinking") {
+                  return (
+                    <LiveThinkingBlock content={block.content} key={index} />
+                  );
+                }
+                if (block.kind === "content") {
+                  return (
+                    <LiveAssistantContent
+                      content={block.content}
+                      key={index}
+                    />
+                  );
+                }
+                return <LiveToolBlock tool={block} key={block.toolCallId} />;
+              })}
+              {step.interruption && (
+                <div className="live-step-interruption">{step.interruption}</div>
+              )}
+            </section>
+          ))}
+          {!hasBlocks &&
+            (turn.status === "queued" || turn.status === "running") && (
+              <div className="typing">
+                <i />
+                <i />
+                <i />
+              </div>
+            )}
+          {turn.error && <div className="live-turn-error">{turn.error}</div>}
+        </div>
+      </article>
+    </>
+  );
+}
+
+function liveTurnStatusLabel(status: LiveTurnStatus): string {
+  switch (status) {
+    case "queued":
+      return "等待中";
+    case "running":
+      return "进行中";
+    case "completed":
+      return "已完成";
+    case "cancelled":
+      return "已取消";
+    case "failed":
+      return "失败";
+    case "blocked":
+      return "已阻止";
+  }
+}
+
+function LiveThinkingBlock({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="thinking-block live-thinking">
+      <button onClick={() => setOpen((value) => !value)}>
+        <BrainCircuit size={14} />
+        <span>思考过程</span>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+      </button>
+      {open && <p>{content}</p>}
+    </div>
+  );
+}
+
+function LiveAssistantContent({ content }: { content: AgentContentPart }) {
+  switch (content.type) {
+    case "text":
+      return (
+        <div className="markdown-body live-text">
+          <MarkdownMessage content={content.text} />
+        </div>
+      );
+    case "think":
+      return <LiveThinkingBlock content={content.think} />;
+    case "image_url":
+      return (
+        <img
+          className="history-media"
+          src={content.imageUrl.url}
+          alt="对话图片"
+        />
+      );
+    case "audio_url":
+      return (
+        <div className="markdown-body">
+          <MarkdownMessage content={`[audio:${content.audioUrl.url}]`} />
+        </div>
+      );
+    case "video_url":
+      return (
+        <div className="markdown-body">
+          <MarkdownMessage content={`[video:${content.videoUrl.url}]`} />
+        </div>
+      );
+  }
+}
+
+function LiveToolBlock({
+  tool,
+}: {
+  tool: Extract<LiveBlock, { kind: "tool" }>;
+}) {
+  const [open, setOpen] = useState(
+    tool.status === "streaming" || tool.status === "running",
+  );
+  useEffect(() => {
+    setOpen(tool.status === "streaming" || tool.status === "running");
+  }, [tool.status]);
+  const progress = tool.updates.at(-1);
+  const updateLog = tool.updates
+    .filter((update) => update.text)
+    .slice(-20)
+    .map((update) => update.text)
+    .join("\n");
+  const input =
+    tool.input ??
+    (tool.argumentsText
+      ? parseStructuredValue(tool.argumentsText)
+      : undefined);
+  return (
+    <details
+      className={`live-tool-card ${tool.status}`}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <ToolStatusIcon status={tool.status} />
+        <Wrench size={13} />
+        <span>{tool.name ?? "准备工具调用"}</span>
+        <small>{liveToolStatusLabel(tool.status)}</small>
+      </summary>
+      <div className="live-tool-detail">
+        {tool.description && <p>{tool.description}</p>}
+        {input !== undefined && (
+          <section className="tool-detail-section">
+            <span>参数</span>
+            <pre>{structuredValue(input)}</pre>
+          </section>
+        )}
+        {updateLog && <pre className="live-tool-update-log">{updateLog}</pre>}
+        {progress && (progress.percent !== undefined || !updateLog) && (
+          <div className="live-tool-progress">
+            <span>{progress.text ?? progress.kind}</span>
+            {progress.percent !== undefined && (
+              <strong>{Math.round(progress.percent)}%</strong>
+            )}
+          </div>
+        )}
+        {tool.output !== undefined && (
+          <section className="tool-detail-section">
+            <span>结果</span>
+            <pre className={tool.isError ? "error" : ""}>
+              {structuredValue(tool.output)}
+            </pre>
+          </section>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function parseStructuredValue(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function liveToolStatusLabel(
+  status: Extract<LiveBlock, { kind: "tool" }>["status"],
+): string {
+  switch (status) {
+    case "streaming":
+      return "准备中";
+    case "running":
+      return "执行中";
+    case "completed":
+      return "已完成";
+    case "error":
+      return "失败";
+  }
+}
+
+function ToolStatusIcon({
+  status,
+}: {
+  status:
+    | Extract<LiveBlock, { kind: "tool" }>["status"]
+    | "incomplete";
+}) {
+  if (status === "streaming" || status === "running") {
+    return <span className="tool-status-icon spinning" aria-label="执行中" />;
+  }
+  if (status === "completed") {
+    return (
+      <span className="tool-status-icon completed" aria-label="已完成">
+        <Check size={11} />
+      </span>
+    );
+  }
+  if (status === "error") {
+    return (
+      <span className="tool-status-icon error" aria-label="执行失败">
+        <X size={11} />
+      </span>
+    );
+  }
+  return (
+    <span className="tool-status-icon incomplete" aria-label="未完成">
+      <MoreHorizontal size={11} />
+    </span>
+  );
+}
+
 function MessageView({
   message,
+  toolResults,
   copied,
   onCopy,
 }: {
   message: RenderMessage;
+  toolResults: Map<string, ToolResultContent>;
   copied: boolean;
   onCopy: () => void;
 }) {
@@ -1735,7 +2208,10 @@ function MessageView({
         </div>
         <div className="user-bubble">
           {text}
-          <StructuredMessageContent parts={structured} />
+          <StructuredMessageContent
+            parts={structured}
+            toolResults={toolResults}
+          />
         </div>
       </article>
     );
@@ -1784,7 +2260,10 @@ function MessageView({
               <i />
             </div>
           )}
-          <StructuredMessageContent parts={structured} />
+          <StructuredMessageContent
+            parts={structured}
+            toolResults={toolResults}
+          />
         </div>
         {message.status !== "streaming" &&
           messageCopyText(message).length > 0 && (
@@ -1862,35 +2341,61 @@ function mediaSourceUrl(
   return undefined;
 }
 
-function StructuredMessageContent({ parts }: { parts: MessageContent[] }) {
+function StructuredMessageContent({
+  parts,
+  toolResults,
+}: {
+  parts: MessageContent[];
+  toolResults: Map<string, ToolResultContent>;
+}) {
   if (parts.length === 0) return null;
   return (
     <div className="structured-content">
       {parts.map((part, index) => {
         switch (part.type) {
-          case "tool_use":
-            return (
-              <details className="history-tool-card" key={`${part.tool_call_id}-${index}`}>
-                <summary>
-                  <Wrench size={13} />
-                  {part.tool_name}
-                </summary>
-                <pre>{structuredValue(part.input)}</pre>
-              </details>
-            );
-          case "tool_result":
+          case "tool_use": {
+            const result = toolResults.get(part.tool_call_id);
+            const status = result
+              ? result.is_error
+                ? "error"
+                : "completed"
+              : "incomplete";
             return (
               <details
-                className={`history-tool-card result ${part.is_error ? "error" : ""}`}
+                className={`history-tool-card ${status}`}
                 key={`${part.tool_call_id}-${index}`}
               >
                 <summary>
-                  <TerminalSquare size={13} />
-                  {part.is_error ? "工具执行失败" : "工具执行结果"}
+                  <ToolStatusIcon status={status} />
+                  <Wrench size={13} />
+                  <span>{part.tool_name}</span>
+                  <small>
+                    {result
+                      ? result.is_error
+                        ? "失败"
+                        : "已完成"
+                      : "未完成"}
+                  </small>
                 </summary>
-                <pre>{structuredValue(part.output)}</pre>
+                <div className="history-tool-detail">
+                  <section className="tool-detail-section">
+                    <span>参数</span>
+                    <pre>{structuredValue(part.input)}</pre>
+                  </section>
+                  {result && (
+                    <section className="tool-detail-section">
+                      <span>结果</span>
+                      <pre className={result.is_error ? "error" : ""}>
+                        {structuredValue(result.output)}
+                      </pre>
+                    </section>
+                  )}
+                </div>
               </details>
             );
+          }
+          case "tool_result":
+            return null;
           case "image": {
             const url = mediaSourceUrl(part.source);
             return url ? (

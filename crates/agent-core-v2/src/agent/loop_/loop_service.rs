@@ -1348,7 +1348,10 @@ impl AgentLoopService {
                             delta: think,
                         });
                     }
-                    StreamedMessagePart::Content(_) => {}
+                    StreamedMessagePart::Content(content) => {
+                        on_response_event();
+                        event_bus.publish_typed(super::AssistantContentEvent { turn_id, content });
+                    }
                     StreamedMessagePart::ToolCall(call) => {
                         on_response_event();
                         calls

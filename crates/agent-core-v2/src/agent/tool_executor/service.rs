@@ -10,7 +10,6 @@ use std::{
 };
 
 use futures_util::{Stream, StreamExt, future::BoxFuture, stream::FuturesUnordered};
-use serde::Serialize;
 use serde_json::Value;
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -36,7 +35,7 @@ use crate::{
         },
     },
     app::{
-        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusHandle},
+        event::event_bus::{EVENT_BUS_SERVICE_ID, EventBusHandle, TypedEventBusExt},
         telemetry::{
             TELEMETRY_SERVICE_ID, TelemetryServiceEventExt, TelemetryServiceHandle,
             ToolCallDupType as TelemetryDupType, ToolCallErrorType, ToolCallEvent, ToolCallOutcome,
@@ -483,7 +482,7 @@ impl ExecutorRunner {
                     tool_call_id: progress_call_id.clone(),
                     update,
                 };
-                let _ = publish_payload(&event_bus, ToolProgressEvent::EVENT_TYPE, &payload);
+                event_bus.publish_typed(payload);
             }
         });
         run_single_execution(RunSingleExecutionInput {
@@ -602,7 +601,7 @@ impl ExecutorRunner {
             description,
             display,
         };
-        publish_payload(&self.event_bus, ToolCallStartedEvent::EVENT_TYPE, &payload)?;
+        self.event_bus.publish_typed(payload);
         if let Some(handler) = &options.on_tool_call {
             handler(ToolCallStartedPayload {
                 tool_call_id: call.id.clone(),
@@ -626,7 +625,8 @@ impl ExecutorRunner {
             is_error: Some(result.is_error),
             synthetic: None,
         };
-        publish_payload(&self.event_bus, ToolResultEvent::EVENT_TYPE, &payload)
+        self.event_bus.publish_typed(payload);
+        Ok(())
     }
 
     fn track(
@@ -696,20 +696,6 @@ fn output_value(output: &ExecutableToolOutput) -> Result<Value, BoxError> {
         ExecutableToolOutput::Content(parts) => Ok(serde_json::to_value(parts)?),
     }
 }
-fn publish_payload<T: Serialize>(
-    bus: &EventBusHandle,
-    event_type: &str,
-    payload: &T,
-) -> Result<(), BoxError> {
-    let Value::Object(fields) = serde_json::to_value(payload)? else {
-        return Err(
-            std::io::Error::other("domain event payload must serialize as an object").into(),
-        );
-    };
-    bus.publish(DomainEvent::new(event_type, fields));
-    Ok(())
-}
-
 struct ManagedExecutionStream {
     receiver: mpsc::UnboundedReceiver<Result<ToolExecutionResult, BoxError>>,
     task: JoinHandle<()>,

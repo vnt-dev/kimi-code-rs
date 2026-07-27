@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use kimi_code_agent_core_v2::app::desktop_client::{
-    DesktopAuthStatus, DesktopChatDelta, DesktopChatRequest, DesktopChatResult,
+    DesktopAuthStatus, DesktopChatEvent, DesktopChatRequest, DesktopChatResult,
     DesktopCompactionEvent, DesktopContextUsage, DesktopDeviceCode, DesktopInteraction,
     DesktopMessagePage, DesktopModel, KimiCodeDesktopClient,
 };
@@ -36,10 +36,9 @@ impl From<DesktopDeviceCode> for DeviceCodeEvent {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ChatStreamEvent {
+struct AgentChatEvent {
     conversation_id: String,
-    kind: String,
-    content: String,
+    event: DesktopChatEvent,
 }
 
 #[derive(Clone, Serialize)]
@@ -141,13 +140,12 @@ async fn send_message(
         .chat(
             &conversation_id,
             request,
-            Arc::new(move |DesktopChatDelta { kind, content }| {
+            Arc::new(move |event| {
                 let _ = app_for_event.emit(
-                    "chat-stream",
-                    ChatStreamEvent {
+                    "agent-chat-event",
+                    AgentChatEvent {
                         conversation_id: conversation_for_event.clone(),
-                        kind,
-                        content,
+                        event,
                     },
                 );
             }),

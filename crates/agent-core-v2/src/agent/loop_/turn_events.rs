@@ -93,6 +93,12 @@ pub struct AssistantDeltaEvent {
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AssistantContentEvent {
+    pub turn_id: i64,
+    pub content: ContentPart,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ThinkingDeltaEvent {
     pub turn_id: i64,
     pub delta: String,
@@ -125,6 +131,7 @@ impl_domain_event_payload!(
     TurnStepCompletedEvent => "turn.step.completed",
     TurnStepInterruptedEvent => "turn.step.interrupted",
     AssistantDeltaEvent => "assistant.delta",
+    AssistantContentEvent => "assistant.content",
     ThinkingDeltaEvent => "thinking.delta",
     ToolCallDeltaEvent => "tool.call.delta",
 );

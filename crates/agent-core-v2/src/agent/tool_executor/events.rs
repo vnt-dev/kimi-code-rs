@@ -2,13 +2,16 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/toolExecutor/toolExecutorEvents.ts`.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::tool::{ToolInputDisplay, ToolUpdate};
+use crate::{
+    app::event::event_bus::DomainEventPayload,
+    tool::{ToolInputDisplay, ToolUpdate},
+};
 
 /// Payload published when a tool call has been prepared for execution.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallStartedEvent {
     pub turn_id: i64,
@@ -25,8 +28,12 @@ impl ToolCallStartedEvent {
     pub const EVENT_TYPE: &'static str = "tool.call.started";
 }
 
+impl DomainEventPayload for ToolCallStartedEvent {
+    const TYPE: &'static str = Self::EVENT_TYPE;
+}
+
 /// Payload published for a live update emitted by a runnable tool.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolProgressEvent {
     pub turn_id: i64,
@@ -38,8 +45,12 @@ impl ToolProgressEvent {
     pub const EVENT_TYPE: &'static str = "tool.progress";
 }
 
+impl DomainEventPayload for ToolProgressEvent {
+    const TYPE: &'static str = Self::EVENT_TYPE;
+}
+
 /// Payload published after a tool result has completed finalization.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolResultEvent {
     pub turn_id: i64,
@@ -53,6 +64,10 @@ pub struct ToolResultEvent {
 
 impl ToolResultEvent {
     pub const EVENT_TYPE: &'static str = "tool.result";
+}
+
+impl DomainEventPayload for ToolResultEvent {
+    const TYPE: &'static str = Self::EVENT_TYPE;
 }
 
 #[cfg(test)]
