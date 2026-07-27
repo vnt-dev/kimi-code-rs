@@ -24,12 +24,14 @@ use crate::{
         full_compaction::{AGENT_FULL_COMPACTION_SERVICE_ID, AgentFullCompactionServiceHandle},
         loop_::{
             AGENT_LOOP_SERVICE_ID, AgentLoopServiceHandle, AgentLoopState, AgentLoopStatus,
-            TurnEndReason, TurnEndedEvent, TurnStartedEvent, TurnStepInterruptedEvent,
-            TurnStepStartedEvent,
+            AssistantDeltaEvent, ThinkingDeltaEvent, ToolCallDeltaEvent, TurnEndReason,
+            TurnEndedEvent, TurnStartedEvent, TurnStepInterruptedEvent, TurnStepStartedEvent,
         },
         task::{AGENT_TASK_SERVICE_ID, AgentTaskInfo, AgentTaskServiceHandle},
     },
-    app::event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusHandle},
+    app::event::event_bus::{
+        DomainEvent, DomainEventPayload, EVENT_BUS_SERVICE_ID, EventBusHandle, TypedEventBusExt,
+    },
 };
 
 use super::{
@@ -184,28 +186,19 @@ impl AgentActivityView {
     }
 
     fn install_listeners(self: &Arc<Self>) {
-        self.subscribe("turn.started", |service, event| {
-            let Ok(event) = serde_json::from_value::<TurnStartedEvent>(event.clone().into_value())
-            else {
-                return;
-            };
-            service.on_turn_started(event.turn_id, event.origin);
+        self.subscribe_typed(|service, event: &TurnStartedEvent| {
+            service.on_turn_started(event.turn_id, event.origin.clone());
         });
-        self.subscribe("turn.step.started", |service, event| {
-            let Ok(event) =
-                serde_json::from_value::<TurnStepStartedEvent>(event.clone().into_value())
-            else {
-                return;
-            };
+        self.subscribe_typed(|service, event: &TurnStepStartedEvent| {
             service.on_step_started(event.step);
         });
-        self.subscribe("assistant.delta", |service, _| {
+        self.subscribe_typed(|service, _: &AssistantDeltaEvent| {
             service.on_delta(ActivityStream::Assistant);
         });
-        self.subscribe("thinking.delta", |service, _| {
+        self.subscribe_typed(|service, _: &ThinkingDeltaEvent| {
             service.on_delta(ActivityStream::Thinking);
         });
-        self.subscribe("tool.call.delta", |service, _| {
+        self.subscribe_typed(|service, _: &ToolCallDeltaEvent| {
             service.on_delta(ActivityStream::ToolCall);
         });
         self.subscribe("tool.call.started", |service, event| {
@@ -224,7 +217,7 @@ impl AgentActivityView {
         });
         self.subscribe("turn.step.retrying", |service, event| {
             let Ok(event) =
-                serde_json::from_value::<RetryingEvent>(Value::Object(event.fields.clone()))
+                serde_json::from_value::<RetryingEvent>(Value::Object(event.fields().clone()))
             else {
                 return;
             };
@@ -248,19 +241,10 @@ impl AgentActivityView {
                 turn.retry = None;
             });
         });
-        self.subscribe("turn.step.interrupted", |service, event| {
-            let Ok(event) =
-                serde_json::from_value::<TurnStepInterruptedEvent>(event.clone().into_value())
-            else {
-                return;
-            };
+        self.subscribe_typed(|service, event: &TurnStepInterruptedEvent| {
             service.on_step_interrupted(event.turn_id, &event.reason);
         });
-        self.subscribe("turn.ended", |service, event| {
-            let Ok(event) = serde_json::from_value::<TurnEndedEvent>(event.clone().into_value())
-            else {
-                return;
-            };
+        self.subscribe_typed(|service, event: &TurnEndedEvent| {
             service.on_turn_ended(event.turn_id, event.reason);
         });
         self.subscribe("permission.approval.requested", |service, event| {
@@ -336,6 +320,19 @@ impl AgentActivityView {
                 }
             }),
         ));
+    }
+
+    fn subscribe_typed<T>(self: &Arc<Self>, handler: impl Fn(&Self, &T) + Send + Sync + 'static)
+    where
+        T: DomainEventPayload,
+    {
+        let weak: Weak<Self> = Arc::downgrade(self);
+        self.disposables
+            .add(self.event_bus.subscribe_typed(Arc::new(move |event| {
+                if let Some(service) = weak.upgrade() {
+                    handler(&service, event);
+                }
+            })));
     }
 
     fn on_full_compaction_ended(&self) {
@@ -593,7 +590,7 @@ struct TaskInfoEvent {
 }
 
 fn task_info(event: &DomainEvent) -> Option<AgentTaskInfo> {
-    serde_json::from_value::<TaskInfoEvent>(Value::Object(event.fields.clone()))
+    serde_json::from_value::<TaskInfoEvent>(Value::Object(event.fields().clone()))
         .ok()
         .map(|event| event.info)
 }

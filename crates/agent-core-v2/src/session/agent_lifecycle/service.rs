@@ -38,7 +38,7 @@ use crate::{
     agent::{
         context_memory::AGENT_CONTEXT_MEMORY_SERVICE_ID,
         full_compaction::AGENT_FULL_COMPACTION_SERVICE_ID,
-        loop_::{AGENT_LOOP_SERVICE_ID, LoopValue},
+        loop_::{AGENT_LOOP_SERVICE_ID, LoopValue, TurnEndedEvent},
         permission_mode::{
             AGENT_PERMISSION_MODE_SERVICE_ID, DEFAULT_PERMISSION_MODE_SECTION,
             PERMISSION_MODE_CONFIGURED_MODEL,
@@ -53,7 +53,7 @@ use crate::{
     app::{
         bootstrap::{BOOTSTRAP_SERVICE_ID, BootstrapServiceHandle},
         config::{CONFIG_SERVICE_ID, ConfigServiceHandle},
-        event::event_bus::EVENT_BUS_SERVICE_ID,
+        event::event_bus::{EVENT_BUS_SERVICE_ID, TypedEventBusExt},
         telemetry::{TELEMETRY_SERVICE_ID, TelemetryContextPatch, TelemetryServiceHandle},
     },
     session::{
@@ -387,18 +387,13 @@ impl AgentLifecycleService {
             .get(EVENT_BUS_SERVICE_ID)
             .map_err(|error| LifecycleError::new(error.to_string()))?;
         let interaction = self.inner.interaction.0.clone();
-        let disposable = events.subscribe_type(
-            "turn.ended",
-            Arc::new(move |event| {
-                let Some(turn_id) = event.fields.get("turnId").and_then(Value::as_f64) else {
-                    return;
-                };
-                let interaction = interaction.clone();
-                tokio::spawn(async move {
-                    interaction.cancel_pending_for_turn(turn_id).await;
-                });
-            }),
-        );
+        let disposable = events.subscribe_typed::<TurnEndedEvent>(Arc::new(move |event| {
+            let turn_id = event.turn_id as f64;
+            let interaction = interaction.clone();
+            tokio::spawn(async move {
+                interaction.cancel_pending_for_turn(turn_id).await;
+            });
+        }));
         subscriptions.insert(agent_id, disposable);
         Ok(())
     }

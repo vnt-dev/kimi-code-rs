@@ -104,9 +104,11 @@ pub fn register_event_bus_service() {
 
 #[cfg(test)]
 mod tests {
+    use serde::{Deserialize, Serialize};
     use serde_json::{Map, Value};
 
     use super::*;
+    use crate::app::event::event_bus::{DomainEventPayload, TypedEventBusExt};
 
     #[test]
     fn full_stream_precedes_matching_type_and_disposal_stops_delivery() {
@@ -152,5 +154,32 @@ mod tests {
         bus.dispose().unwrap();
         bus.dispose().unwrap();
         bus.publish(DomainEvent::new("after", serde_json::Map::new()));
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct TestTypedEvent {
+        x: u64,
+    }
+
+    impl DomainEventPayload for TestTypedEvent {
+        const TYPE: &'static str = "test.typed";
+    }
+
+    #[test]
+    fn typed_subscription_accepts_rust_and_dynamic_payloads() {
+        let bus = EventBusService::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_by_handler = Arc::clone(&seen);
+        let _subscription = bus.subscribe_typed::<TestTypedEvent>(Arc::new(move |event| {
+            seen_by_handler.lock().unwrap().push(event.x);
+        }));
+
+        bus.publish_typed(TestTypedEvent { x: 1 });
+        bus.publish(DomainEvent::new(
+            "test.typed",
+            Map::from_iter([("x".into(), Value::from(2))]),
+        ));
+
+        assert_eq!(*seen.lock().unwrap(), [1, 2]);
     }
 }

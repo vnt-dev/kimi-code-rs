@@ -54,7 +54,9 @@ use crate::{
     },
     app::{
         config::{CONFIG_SERVICE_ID, ConfigServiceContract, ConfigServiceHandle},
-        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusContract, EventBusHandle},
+        event::event_bus::{
+            DomainEvent, EVENT_BUS_SERVICE_ID, EventBusContract, EventBusHandle, TypedEventBusExt,
+        },
         telemetry::{
             AGENT_TELEMETRY_CONTEXT_SERVICE_ID, AgentTelemetryContextPatch,
             AgentTelemetryContextServiceContract, AgentTelemetryContextServiceHandle,
@@ -480,16 +482,13 @@ impl AgentLoopService {
             .wire
             .dispatch([prompt_turn(job.seed.clone()).expect("turn seed is serializable")]);
         job.turn_impl.mutable.lock().unwrap().state = TurnState::Running;
-        self.publish_serialized(
-            "turn.started",
-            super::TurnStartedEvent {
-                turn_id: job.turn.0.id(),
-                origin: job.seed.origin.clone(),
-                prompt: is_displayable_prompt_origin(&job.seed.origin)
-                    .then(|| turn_prompt_text(&job.seed.input))
-                    .flatten(),
-            },
-        );
+        self.event_bus.publish_typed(super::TurnStartedEvent {
+            turn_id: job.turn.0.id(),
+            origin: job.seed.origin.clone(),
+            prompt: is_displayable_prompt_origin(&job.seed.origin)
+                .then(|| turn_prompt_text(&job.seed.input))
+                .flatten(),
+        });
         let service = self.self_weak.upgrade().expect("loop service is alive");
         tokio::spawn(async move {
             let result = service.run_turn(Arc::clone(&job)).await;
@@ -547,15 +546,12 @@ impl AgentLoopService {
             LoopRunResult::Failed { error, .. } => Some(error_payload(error)),
             _ => None,
         };
-        self.publish_serialized(
-            "turn.ended",
-            super::TurnEndedEvent {
-                turn_id,
-                reason: turn_end_reason(&result),
-                error: error.clone(),
-                duration_ms: Some(duration_ms as f64),
-            },
-        );
+        self.event_bus.publish_typed(super::TurnEndedEvent {
+            turn_id,
+            reason: turn_end_reason(&result),
+            error: error.clone(),
+            duration_ms: Some(duration_ms as f64),
+        });
         if let Some(error) = error {
             self.publish_error(error);
         }
@@ -1106,14 +1102,11 @@ impl AgentLoopService {
         signal
             .throw_if_aborted()
             .map_err(|error| LoopValue::Error(error))?;
-        self.publish_serialized(
-            "turn.step.started",
-            super::TurnStepStartedEvent {
-                turn_id,
-                step: current_step,
-                step_id: Some(step_uuid.into()),
-            },
-        );
+        self.event_bus.publish_typed(super::TurnStepStartedEvent {
+            turn_id,
+            step: current_step,
+            step_id: Some(step_uuid.into()),
+        });
         self.context
             .append_loop_event(LoopRecordedEvent::StepBegin {
                 uuid: step_uuid.into(),
@@ -1264,24 +1257,21 @@ impl AgentLoopService {
                 raw_finish_reason: response.raw_finish_reason.clone(),
             })
             .map_err(loop_error)?;
-        self.publish_serialized(
-            "turn.step.completed",
-            super::TurnStepCompletedEvent {
-                turn_id,
-                step: current_step,
-                step_id: Some(step_uuid.into()),
-                usage: Some(response.usage),
-                finish_reason: Some(normalized),
-                llm_first_token_latency_ms: timing.map(|value| value.first_token_latency_ms),
-                llm_stream_duration_ms: timing.map(|value| value.stream_duration_ms),
-                llm_request_build_ms: timing.and_then(|value| value.request_build_ms),
-                llm_server_first_token_ms: timing.and_then(|value| value.server_first_token_ms),
-                llm_server_decode_ms: timing.and_then(|value| value.server_decode_ms),
-                llm_client_consume_ms: timing.and_then(|value| value.client_consume_ms),
-                provider_finish_reason: response.provider_finish_reason,
-                raw_finish_reason: response.raw_finish_reason.clone(),
-            },
-        );
+        self.event_bus.publish_typed(super::TurnStepCompletedEvent {
+            turn_id,
+            step: current_step,
+            step_id: Some(step_uuid.into()),
+            usage: Some(response.usage),
+            finish_reason: Some(normalized),
+            llm_first_token_latency_ms: timing.map(|value| value.first_token_latency_ms),
+            llm_stream_duration_ms: timing.map(|value| value.stream_duration_ms),
+            llm_request_build_ms: timing.and_then(|value| value.request_build_ms),
+            llm_server_first_token_ms: timing.and_then(|value| value.server_first_token_ms),
+            llm_server_decode_ms: timing.and_then(|value| value.server_decode_ms),
+            llm_client_consume_ms: timing.and_then(|value| value.client_consume_ms),
+            provider_finish_reason: response.provider_finish_reason,
+            raw_finish_reason: response.raw_finish_reason.clone(),
+        });
         Ok(())
     }
 
@@ -1319,16 +1309,14 @@ impl AgentLoopService {
         let Some(step) = step else {
             return;
         };
-        self.publish_serialized(
-            "turn.step.interrupted",
-            super::TurnStepInterruptedEvent {
+        self.event_bus
+            .publish_typed(super::TurnStepInterruptedEvent {
                 turn_id,
                 step,
                 step_id: None,
                 reason: reason.into(),
                 message,
-            },
-        );
+            });
     }
 
     fn create_stream_part_handler(
@@ -1348,19 +1336,17 @@ impl AgentLoopService {
                 match part {
                     StreamedMessagePart::Content(ContentPart::Text { text }) => {
                         on_response_event();
-                        publish_value(
-                            &event_bus,
-                            "assistant.delta",
-                            serde_json::json!({"turnId": turn_id, "delta": text}),
-                        );
+                        event_bus.publish_typed(super::AssistantDeltaEvent {
+                            turn_id,
+                            delta: text,
+                        });
                     }
                     StreamedMessagePart::Content(ContentPart::Think { think, .. }) => {
                         on_response_event();
-                        publish_value(
-                            &event_bus,
-                            "thinking.delta",
-                            serde_json::json!({"turnId": turn_id, "delta": think}),
-                        );
+                        event_bus.publish_typed(super::ThinkingDeltaEvent {
+                            turn_id,
+                            delta: think,
+                        });
                     }
                     StreamedMessagePart::Content(_) => {}
                     StreamedMessagePart::ToolCall(call) => {
@@ -1369,16 +1355,12 @@ impl AgentLoopService {
                             .lock()
                             .unwrap()
                             .insert(call.stream_index, (call.id.clone(), call.name.clone()));
-                        publish_value(
-                            &event_bus,
-                            "tool.call.delta",
-                            serde_json::json!({
-                                "turnId": turn_id,
-                                "toolCallId": call.id,
-                                "name": call.name,
-                                "argumentsPart": call.arguments
-                            }),
-                        );
+                        event_bus.publish_typed(super::ToolCallDeltaEvent {
+                            turn_id,
+                            tool_call_id: call.id,
+                            name: Some(call.name),
+                            arguments_part: call.arguments,
+                        });
                     }
                     StreamedMessagePart::ToolCallPart(part) => {
                         let Some(arguments) = part.arguments_part else {
@@ -1387,16 +1369,12 @@ impl AgentLoopService {
                         let call = calls.lock().unwrap().get(&part.index).cloned();
                         if let Some((id, name)) = call {
                             on_response_event();
-                            publish_value(
-                                &event_bus,
-                                "tool.call.delta",
-                                serde_json::json!({
-                                    "turnId": turn_id,
-                                    "toolCallId": id,
-                                    "name": name,
-                                    "argumentsPart": arguments
-                                }),
-                            );
+                            event_bus.publish_typed(super::ToolCallDeltaEvent {
+                                turn_id,
+                                tool_call_id: id,
+                                name: Some(name),
+                                arguments_part: Some(arguments),
+                            });
                         }
                     }
                 }
@@ -1404,12 +1382,6 @@ impl AgentLoopService {
             }
             .boxed()
         })
-    }
-
-    fn publish_serialized<T: serde::Serialize>(&self, event_type: &str, payload: T) {
-        if let Ok(Value::Object(fields)) = serde_json::to_value(payload) {
-            self.event_bus.publish(DomainEvent::new(event_type, fields));
-        }
     }
 
     fn publish_error(&self, error: KimiErrorPayload) {
@@ -1795,12 +1767,6 @@ fn normalize_finish_reason(reason: FinishReason) -> &'static str {
         FinishReason::Filtered => "filtered",
         FinishReason::Paused => "paused",
         FinishReason::Other => "other",
-    }
-}
-
-fn publish_value(event_bus: &Arc<dyn EventBusContract>, event_type: &str, value: Value) {
-    if let Value::Object(fields) = value {
-        event_bus.publish(DomainEvent::new(event_type, fields));
     }
 }
 

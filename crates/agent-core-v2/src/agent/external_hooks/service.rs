@@ -52,7 +52,7 @@ use crate::{
         },
     },
     app::{
-        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusHandle},
+        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusHandle, TypedEventBusExt},
         external_hooks_runner::{
             EXTERNAL_HOOKS_RUNNER_SERVICE_ID, ExternalHooksRunnerServiceHandle,
             ExternalHooksRunnerTriggerArgs,
@@ -199,7 +199,7 @@ impl AgentExternalHooksService {
                 if let Some(service) = weak.upgrade() {
                     service.fire_and_forget(
                         "PermissionRequest",
-                        event.fields.clone(),
+                        event.fields().clone(),
                         string_field(&event.fields, "toolName").map(HookMatcherValue::String),
                         None,
                     );
@@ -214,7 +214,7 @@ impl AgentExternalHooksService {
                 if let Some(service) = weak.upgrade() {
                     service.fire_and_forget(
                         "PermissionResult",
-                        event.fields.clone(),
+                        event.fields().clone(),
                         string_field(&event.fields, "toolName").map(HookMatcherValue::String),
                         None,
                     );
@@ -250,17 +250,15 @@ impl AgentExternalHooksService {
 
     fn register_turn_hooks(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
-        self.disposables.add(self.event_bus.subscribe_type(
-            "turn.ended",
-            Arc::new(move |event| {
-                if let Some(service) = weak.upgrade()
-                    && let Ok(event) =
-                        serde_json::from_value::<TurnEndedEvent>(event.clone().into_value())
-                {
-                    service.notify_turn_ended(&event);
-                }
-            }),
-        ));
+        self.disposables
+            .add(
+                self.event_bus
+                    .subscribe_typed::<TurnEndedEvent>(Arc::new(move |event| {
+                        if let Some(service) = weak.upgrade() {
+                            service.notify_turn_ended(event);
+                        }
+                    })),
+            );
     }
 
     fn register_loop_hooks(
@@ -639,7 +637,7 @@ impl AgentExternalHooksService {
             return;
         };
         let mut input_data = Map::from_iter([("sink".into(), Value::String("context".into()))]);
-        input_data.extend(event.fields.clone());
+        input_data.extend(event.fields().clone());
         self.fire_and_forget(
             "Notification",
             input_data,

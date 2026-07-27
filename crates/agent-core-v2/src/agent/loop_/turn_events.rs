@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     _base::errors::serialize::KimiErrorPayload,
     agent::context_memory::{PluginCommandTrigger, PromptOrigin, SkillActivationTrigger},
+    app::event::event_bus::DomainEventPayload,
     kosong::contract::{message::ContentPart, provider::FinishReason, usage::TokenUsage},
 };
 
@@ -106,6 +107,27 @@ pub struct ToolCallDeltaEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments_part: Option<String>,
 }
+
+macro_rules! impl_domain_event_payload {
+    ($($event:ty => $event_type:literal),+ $(,)?) => {
+        $(
+            impl DomainEventPayload for $event {
+                const TYPE: &'static str = $event_type;
+            }
+        )+
+    };
+}
+
+impl_domain_event_payload!(
+    TurnStartedEvent => "turn.started",
+    TurnEndedEvent => "turn.ended",
+    TurnStepStartedEvent => "turn.step.started",
+    TurnStepCompletedEvent => "turn.step.completed",
+    TurnStepInterruptedEvent => "turn.step.interrupted",
+    AssistantDeltaEvent => "assistant.delta",
+    ThinkingDeltaEvent => "thinking.delta",
+    ToolCallDeltaEvent => "tool.call.delta",
+);
 
 pub fn turn_prompt_text(input: &[ContentPart]) -> Option<String> {
     let text = input

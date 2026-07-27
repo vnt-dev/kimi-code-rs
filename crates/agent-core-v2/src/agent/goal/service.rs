@@ -56,7 +56,7 @@ use crate::{
     },
     app::{
         config::{CONFIG_SERVICE_ID, ConfigServiceHandle},
-        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusHandle},
+        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusHandle, TypedEventBusExt},
         telemetry::{
             GoalBudgetProperties, GoalBudgetSetEvent, GoalClearedEvent, GoalContinuedEvent,
             GoalCreatedEvent, GoalStatus as TelemetryGoalStatus, GoalStatusChangedEvent,
@@ -274,17 +274,15 @@ impl AgentGoalService {
             )?);
 
         let weak = Arc::downgrade(self);
-        self.disposables.add(self.event_bus.subscribe_type(
-            "turn.started",
-            Arc::new(move |event| {
-                if let Some(service) = weak.upgrade()
-                    && let Ok(event) =
-                        serde_json::from_value::<TurnStartedEvent>(event.clone().into_value())
-                {
-                    let _ = service.handle_turn_launched(event.turn_id, &event.origin);
-                }
-            }),
-        ));
+        self.disposables
+            .add(
+                self.event_bus
+                    .subscribe_typed::<TurnStartedEvent>(Arc::new(move |event| {
+                        if let Some(service) = weak.upgrade() {
+                            let _ = service.handle_turn_launched(event.turn_id, &event.origin);
+                        }
+                    })),
+            );
 
         let weak = Arc::downgrade(self);
         self.disposables
@@ -402,26 +400,22 @@ impl AgentGoalService {
             )?);
 
         let weak = Arc::downgrade(self);
-        self.disposables.add(self.event_bus.subscribe_type(
-            "turn.ended",
-            Arc::new(move |event| {
-                let Some(service) = weak.upgrade() else {
-                    return;
-                };
-                let Ok(event) =
-                    serde_json::from_value::<TurnEndedEvent>(event.clone().into_value())
-                else {
-                    return;
-                };
-                let goal_id = service.goal_turn_target(event.turn_id);
-                if let Err(error) = service.handle_turn_ended(event) {
-                    service.settle_goal_after_continuation_failure(
-                        &error.to_string(),
-                        goal_id.as_deref(),
-                    );
-                }
-            }),
-        ));
+        self.disposables
+            .add(
+                self.event_bus
+                    .subscribe_typed::<TurnEndedEvent>(Arc::new(move |event| {
+                        let Some(service) = weak.upgrade() else {
+                            return;
+                        };
+                        let goal_id = service.goal_turn_target(event.turn_id);
+                        if let Err(error) = service.handle_turn_ended(event.clone()) {
+                            service.settle_goal_after_continuation_failure(
+                                &error.to_string(),
+                                goal_id.as_deref(),
+                            );
+                        }
+                    })),
+            );
         Ok(())
     }
 

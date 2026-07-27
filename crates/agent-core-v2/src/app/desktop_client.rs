@@ -29,7 +29,7 @@ use crate::{
     agent::{
         context_memory::{ContextMessage, PromptOrigin},
         context_size::{AGENT_CONTEXT_SIZE_SERVICE_ID, AgentContextSizeServiceHandle, ContextSize},
-        loop_::LoopRunResult,
+        loop_::{AssistantDeltaEvent, LoopRunResult},
         permission_mode::AGENT_PERMISSION_MODE_SERVICE_ID,
         permission_policy::PermissionMode,
         profile::{AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle, BindAgentInput},
@@ -40,7 +40,7 @@ use crate::{
         auth::{OAuthToolkitContract, OAuthToolkitService},
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         config::{CONFIG_SERVICE_ID, ConfigTarget},
-        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID},
+        event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, TypedEventBusExt},
         session_lifecycle::{CreateSessionOptions, SESSION_LIFECYCLE_SERVICE_ID},
     },
     kosong::contract::message::{ContentPart, Message, Role},
@@ -410,12 +410,9 @@ impl KimiCodeDesktopClient {
                 on_compaction(event);
             }
         })));
-        subscriptions.add(event_bus.subscribe_type(
-            "assistant.delta",
-            Arc::new(move |event| {
-                let Some(text) = event.fields.get("delta").and_then(Value::as_str) else {
-                    return;
-                };
+        subscriptions.add(event_bus.subscribe_typed::<AssistantDeltaEvent>(Arc::new(
+            move |event| {
+                let text = &event.delta;
                 if let Ok(mut content) = streamed_content.lock() {
                     content.push_str(text);
                 }
@@ -423,8 +420,8 @@ impl KimiCodeDesktopClient {
                     kind: "text".to_owned(),
                     content: text.to_owned(),
                 });
-            }),
-        ));
+            },
+        )));
 
         let prompt_service = agent
             .get(AGENT_PROMPT_SERVICE_ID)
