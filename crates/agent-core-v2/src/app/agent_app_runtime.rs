@@ -123,6 +123,7 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
     crate::app::edit::register_edit_tool();
     crate::os::backends::node_local::tools::register_node_local_tools();
     crate::session::subagent::register_agent_tool();
+    crate::session::todo::register_todo_list_tool();
     Ok(())
 }
 
