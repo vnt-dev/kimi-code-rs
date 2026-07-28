@@ -42,7 +42,7 @@ import {
   Minus,
   Minimize2,
   MoreHorizontal,
-  ImagePlus,
+  Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -111,8 +111,8 @@ import type {
 } from "./types";
 
 const HISTORY_PAGE_SIZE = 50;
-const MAX_PROMPT_IMAGES = 8;
-const MAX_PROMPT_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_PROMPT_ATTACHMENTS = 8;
+const MAX_PROMPT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_IMAGE_DIMENSION = 2048;
 const IMAGE_COMPRESSION_THRESHOLD = 4 * 1024 * 1024;
 const PROMPT_IMAGE_TYPES = new Set([
@@ -120,6 +120,24 @@ const PROMPT_IMAGE_TYPES = new Set([
   "image/jpeg",
   "image/gif",
   "image/webp",
+]);
+const PROMPT_AUDIO_TYPES = new Set([
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/ogg",
+  "audio/webm",
+  "audio/mp4",
+]);
+const PROMPT_VIDEO_TYPES = new Set([
+  "video/mp4",
+  "video/mpeg",
+  "video/quicktime",
+  "video/webm",
+  "video/x-matroska",
+  "video/x-msvideo",
+  "video/3gpp",
 ]);
 
 type RenderMessage = ProtocolMessage & {
@@ -189,7 +207,7 @@ interface LiveStep {
 
 interface InFlightTurn {
   prompt: string;
-  images: readonly PromptImage[];
+  attachments: readonly PromptAttachment[];
   createdAt: string;
   turnId?: number;
   status: LiveTurnStatus;
@@ -199,10 +217,22 @@ interface InFlightTurn {
   historyBoundaryId?: string;
 }
 
-interface PromptImage {
+type PromptAttachmentKind = "image" | "audio" | "video";
+
+interface PromptAttachment {
   id: string;
   name: string;
   dataUrl: string;
+  kind: PromptAttachmentKind;
+}
+
+function promptAttachmentKind(
+  mimeType: string,
+): PromptAttachmentKind | undefined {
+  if (PROMPT_IMAGE_TYPES.has(mimeType)) return "image";
+  if (PROMPT_AUDIO_TYPES.has(mimeType)) return "audio";
+  if (PROMPT_VIDEO_TYPES.has(mimeType)) return "video";
+  return undefined;
 }
 
 function readFileAsDataUrl(file: Blob): Promise<string> {
@@ -211,8 +241,9 @@ function readFileAsDataUrl(file: Blob): Promise<string> {
     reader.onload = () =>
       typeof reader.result === "string"
         ? resolve(reader.result)
-        : reject(new Error("无法读取图片"));
-    reader.onerror = () => reject(reader.error ?? new Error("无法读取图片"));
+        : reject(new Error("无法读取媒体文件"));
+    reader.onerror = () =>
+      reject(reader.error ?? new Error("无法读取媒体文件"));
     reader.readAsDataURL(file);
   });
 }
@@ -232,16 +263,17 @@ function canvasToBlob(
   });
 }
 
-async function preparePromptImage(file: File): Promise<PromptImage> {
-  if (!PROMPT_IMAGE_TYPES.has(file.type)) {
-    throw new Error(`不支持 ${file.name} 的图片格式`);
+async function preparePromptAttachment(file: File): Promise<PromptAttachment> {
+  const kind = promptAttachmentKind(file.type);
+  if (!kind) {
+    throw new Error(`不支持 ${file.name} 的媒体格式`);
   }
-  if (file.size > MAX_PROMPT_IMAGE_BYTES) {
+  if (file.size > MAX_PROMPT_ATTACHMENT_BYTES) {
     throw new Error(`${file.name} 超过 20 MB`);
   }
 
   let payload: Blob = file;
-  if (file.type !== "image/gif") {
+  if (kind === "image" && file.type !== "image/gif") {
     const bitmap = await createImageBitmap(file);
     try {
       const scale = Math.min(
@@ -269,8 +301,9 @@ async function preparePromptImage(file: File): Promise<PromptImage> {
       typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    name: file.name || "clipboard-image",
+    name: file.name || `clipboard-${kind}`,
     dataUrl: await readFileAsDataUrl(payload),
+    kind,
   };
 }
 
@@ -358,12 +391,12 @@ function fetchMessagePage(
 
 function newInFlightTurn(
   prompt: string,
-  images: readonly PromptImage[],
+  attachments: readonly PromptAttachment[],
   historyBoundaryId?: string,
 ): InFlightTurn {
   return {
     prompt,
-    images,
+    attachments,
     createdAt: new Date().toISOString(),
     status: "queued",
     steps: [],
@@ -694,7 +727,9 @@ export default function App() {
   });
   const [models, setModels] = useState<Model[]>([]);
   const [prompt, setPrompt] = useState("");
-  const [promptImages, setPromptImages] = useState<PromptImage[]>([]);
+  const [promptAttachments, setPromptAttachments] = useState<
+    PromptAttachment[]
+  >([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
@@ -734,7 +769,7 @@ export default function App() {
     agentId: string;
   }>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -1307,7 +1342,7 @@ export default function App() {
     );
     if (activeConversation && ids.has(activeConversation.id)) {
       setPrompt("");
-      setPromptImages([]);
+      setPromptAttachments([]);
       setResolvingInteraction(undefined);
     }
   };
@@ -1465,7 +1500,7 @@ export default function App() {
         ),
       }));
       setPrompt("");
-      setPromptImages([]);
+      setPromptAttachments([]);
     } catch (error) {
       showNotice(conciseError(error));
     }
@@ -1736,57 +1771,68 @@ export default function App() {
     }
   };
 
-  const addPromptImages = async (files: readonly File[]): Promise<void> => {
+  const addPromptAttachments = async (
+    files: readonly File[],
+  ): Promise<void> => {
     if (files.length === 0) return;
-    if (!selectedModel?.supportsImage) {
-      showNotice("当前模型不支持图片输入");
-      return;
-    }
-    const remaining = MAX_PROMPT_IMAGES - promptImages.length;
+    const remaining = MAX_PROMPT_ATTACHMENTS - promptAttachments.length;
     if (remaining <= 0) {
-      showNotice(`每次最多添加 ${MAX_PROMPT_IMAGES} 张图片`);
+      showNotice(`每次最多添加 ${MAX_PROMPT_ATTACHMENTS} 个附件`);
       return;
     }
 
     const selected = files.slice(0, remaining);
-    const prepared: PromptImage[] = [];
+    const prepared: PromptAttachment[] = [];
     for (const file of selected) {
       try {
-        prepared.push(await preparePromptImage(file));
+        const kind = promptAttachmentKind(file.type);
+        if (kind === "image" && !selectedModel?.supportsImage) {
+          throw new Error("当前模型不支持图片输入");
+        }
+        if (kind === "video" && !selectedModel?.supportsVideo) {
+          throw new Error("当前模型不支持视频输入");
+        }
+        prepared.push(await preparePromptAttachment(file));
       } catch (error) {
         showNotice(conciseError(error));
       }
     }
     if (prepared.length > 0) {
-      setPromptImages((current) => [...current, ...prepared]);
+      setPromptAttachments((current) => [...current, ...prepared]);
     }
     if (files.length > remaining) {
-      showNotice(`每次最多添加 ${MAX_PROMPT_IMAGES} 张图片`);
+      showNotice(`每次最多添加 ${MAX_PROMPT_ATTACHMENTS} 个附件`);
     }
   };
 
-  const handleImageInput = (event: ChangeEvent<HTMLInputElement>): void => {
+  const handleAttachmentInput = (
+    event: ChangeEvent<HTMLInputElement>,
+  ): void => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
-    void addPromptImages(files);
+    void addPromptAttachments(files);
   };
 
   const handlePromptPaste = (
     event: ClipboardEvent<HTMLTextAreaElement>,
   ): void => {
-    const images = Array.from(event.clipboardData.items)
+    const media = Array.from(event.clipboardData.items)
       .filter(
-        (item) => item.kind === "file" && item.type.startsWith("image/"),
+        (item) =>
+          item.kind === "file" &&
+          (item.type.startsWith("image/") ||
+            item.type.startsWith("audio/") ||
+            item.type.startsWith("video/")),
       )
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null);
-    if (images.length > 0) void addPromptImages(images);
+    if (media.length > 0) void addPromptAttachments(media);
   };
 
   const sendPrompt = async (override?: string): Promise<void> => {
     const text = (override ?? prompt).trim();
     if (
-      (!text && promptImages.length === 0) ||
+      (!text && promptAttachments.length === 0) ||
       !activeProject ||
       !activeConversation ||
       isStreaming ||
@@ -1803,8 +1849,18 @@ export default function App() {
       showNotice("请先同步并选择一个模型");
       return;
     }
-    if (promptImages.length > 0 && !selectedModel.supportsImage) {
+    if (
+      promptAttachments.some((attachment) => attachment.kind === "image") &&
+      !selectedModel.supportsImage
+    ) {
       showNotice("当前模型不支持图片输入");
+      return;
+    }
+    if (
+      promptAttachments.some((attachment) => attachment.kind === "video") &&
+      !selectedModel.supportsVideo
+    ) {
+      showNotice("当前模型不支持视频输入");
       return;
     }
 
@@ -1816,19 +1872,24 @@ export default function App() {
     }
     const title =
       activeConversation.title === "新对话"
-        ? (text || `图片对话（${promptImages.length} 张）`)
+        ? (text || `媒体对话（${promptAttachments.length} 个附件）`)
             .replace(/\s+/g, " ")
             .slice(0, 28)
         : activeConversation.title;
-    const images = [...promptImages];
+    const attachments = [...promptAttachments];
     const input: AgentPromptPart[] = [
       ...(text ? [{ type: "text" as const, text }] : []),
-      ...images.map(
-        (image): AgentPromptPart => ({
-          type: "image_url",
-          imageUrl: { url: image.dataUrl, id: image.id },
-        }),
-      ),
+      ...attachments.map((attachment): AgentPromptPart => {
+        const media = { url: attachment.dataUrl, id: attachment.id };
+        switch (attachment.kind) {
+          case "image":
+            return { type: "image_url", imageUrl: media };
+          case "audio":
+            return { type: "audio_url", audioUrl: media };
+          case "video":
+            return { type: "video_url", videoUrl: media };
+        }
+      }),
     ];
 
     setCompactions((current) => {
@@ -1841,7 +1902,7 @@ export default function App() {
       ...current,
       [conversationId]: newInFlightTurn(
         text,
-        images,
+        attachments,
         activeHistory?.items.at(-1)?.id,
       ),
     }));
@@ -1866,7 +1927,7 @@ export default function App() {
       ),
     }));
     setPrompt("");
-    setPromptImages([]);
+    setPromptAttachments([]);
 
     try {
       const launched = await createAgentClient(activeAgentScope).prompt(input);
@@ -2448,18 +2509,43 @@ export default function App() {
                 />
               ) : null}
               <form className="composer" onSubmit={handleSubmit}>
-                {promptImages.length > 0 && (
-                  <div className="prompt-image-list">
-                    {promptImages.map((image) => (
-                      <figure className="prompt-image" key={image.id}>
-                        <img src={image.dataUrl} alt={image.name} />
+                {promptAttachments.length > 0 && (
+                  <div className="prompt-attachment-list">
+                    {promptAttachments.map((attachment) => (
+                      <figure
+                        className={`prompt-attachment ${attachment.kind}`}
+                        key={attachment.id}
+                      >
+                        {attachment.kind === "image" ? (
+                          <img
+                            src={attachment.dataUrl}
+                            alt={attachment.name}
+                          />
+                        ) : attachment.kind === "audio" ? (
+                          <audio
+                            src={attachment.dataUrl}
+                            controls
+                            preload="metadata"
+                          />
+                        ) : (
+                          <video
+                            src={attachment.dataUrl}
+                            controls
+                            preload="metadata"
+                          />
+                        )}
+                        <figcaption title={attachment.name}>
+                          {attachment.name}
+                        </figcaption>
                         <button
                           type="button"
-                          aria-label={`移除 ${image.name}`}
-                          title="移除图片"
+                          aria-label={`移除 ${attachment.name}`}
+                          title="移除附件"
                           onClick={() =>
-                            setPromptImages((current) =>
-                              current.filter((item) => item.id !== image.id),
+                            setPromptAttachments((current) =>
+                              current.filter(
+                                (item) => item.id !== attachment.id,
+                              ),
                             )
                           }
                         >
@@ -2470,12 +2556,12 @@ export default function App() {
                   </div>
                 )}
                 <input
-                  ref={imageInputRef}
-                  className="prompt-image-input"
+                  ref={attachmentInputRef}
+                  className="prompt-attachment-input"
                   type="file"
-                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/mp4,video/mp4,video/mpeg,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/3gpp"
                   multiple
-                  onChange={handleImageInput}
+                  onChange={handleAttachmentInput}
                 />
                 <textarea
                   ref={textareaRef}
@@ -2496,23 +2582,19 @@ export default function App() {
                 <div className="composer-toolbar">
                   <div className="composer-options">
                     <button
-                      className="toolbar-icon image-button"
+                      className="toolbar-icon attachment-button"
                       type="button"
-                      title={
-                        selectedModel?.supportsImage
-                          ? "添加图片"
-                          : "当前模型不支持图片输入"
-                      }
-                      aria-label="添加图片"
-                      onClick={() => imageInputRef.current?.click()}
+                      title="添加图片、音频或视频"
+                      aria-label="添加媒体附件"
+                      onClick={() => attachmentInputRef.current?.click()}
                       disabled={
-                        !selectedModel?.supportsImage ||
+                        !selectedModel ||
                         isStreaming ||
                         modelBusy ||
-                        promptImages.length >= MAX_PROMPT_IMAGES
+                        promptAttachments.length >= MAX_PROMPT_ATTACHMENTS
                       }
                     >
-                      <ImagePlus size={14} />
+                      <Paperclip size={14} />
                     </button>
                     <ToolbarSelect
                       className="model-select"
@@ -2641,12 +2723,19 @@ export default function App() {
                         isStreaming
                           ? !activeAgentScope
                           : hasBlockingInteraction ||
-                            (!prompt.trim() && promptImages.length === 0) ||
+                            (!prompt.trim() &&
+                              promptAttachments.length === 0) ||
                             isHistoryLoading ||
                             modelBusy ||
                             !activeAgentScope ||
-                            (promptImages.length > 0 &&
-                              !selectedModel?.supportsImage)
+                            (promptAttachments.some(
+                              (attachment) => attachment.kind === "image",
+                            ) &&
+                              !selectedModel?.supportsImage) ||
+                            (promptAttachments.some(
+                              (attachment) => attachment.kind === "video",
+                            ) &&
+                              !selectedModel?.supportsVideo)
                       }
                       title="发送"
                     >
@@ -3663,7 +3752,7 @@ function LiveTurnView({ turn }: { turn: InFlightTurn }) {
         </div>
         <div className="user-bubble">
           {turn.prompt}
-          <PromptImageContent images={turn.images} />
+          <PromptAttachmentContent attachments={turn.attachments} />
         </div>
       </article>
       <article className={`message assistant-message live-turn ${turn.status}`}>
@@ -3812,17 +3901,9 @@ function LiveAssistantContent({ content }: { content: AgentContentPart }) {
         />
       );
     case "audio_url":
-      return (
-        <div className="markdown-body">
-          <MarkdownMessage content={`[audio:${content.audioUrl.url}]`} />
-        </div>
-      );
+      return <MessageAudio src={content.audioUrl.url} />;
     case "video_url":
-      return (
-        <div className="markdown-body">
-          <MarkdownMessage content={`[video:${content.videoUrl.url}]`} />
-        </div>
-      );
+      return <MessageVideo src={content.videoUrl.url} />;
   }
 }
 
@@ -3960,9 +4041,7 @@ function MessageView({
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const text = messageText(message);
   const thinking = messageThinking(message);
-  const structured = message.content.filter(
-    (part) => part.type !== "text" && part.type !== "thinking",
-  );
+  const structured = messageStructuredContent(message);
   const origin = message.metadata?.origin;
   const originKind =
     origin && typeof origin === "object" && "kind" in origin
@@ -4069,10 +4148,30 @@ function messageText(message: ProtocolMessage): string {
   return message.content
     .filter(
       (part): part is Extract<MessageContent, { type: "text" }> =>
-        part.type === "text",
+        part.type === "text" && embeddedMediaContent(part.text) === undefined,
     )
     .map((part) => part.text)
     .join("");
+}
+
+function embeddedMediaContent(text: string): MessageContent | undefined {
+  for (const type of ["audio", "video"] as const) {
+    const prefix = `[${type}:`;
+    if (text.startsWith(prefix) && text.endsWith("]")) {
+      const url = text.slice(prefix.length, -1);
+      if (url) return { type, source: { kind: "url", url } };
+    }
+  }
+  return undefined;
+}
+
+function messageStructuredContent(message: ProtocolMessage): MessageContent[] {
+  return message.content.flatMap((part) => {
+    if (part.type === "thinking") return [];
+    if (part.type !== "text") return [part];
+    const media = embeddedMediaContent(part.text);
+    return media ? [media] : [];
+  });
 }
 
 function messageThinking(message: ProtocolMessage): string {
@@ -4107,6 +4206,7 @@ function messageCopyText(message: ProtocolMessage): string {
         case "tool_result":
           return structuredValue(part.output);
         case "image":
+        case "audio":
         case "video":
           return part.source.kind === "url" ? part.source.url : "";
         case "file":
@@ -4118,7 +4218,10 @@ function messageCopyText(message: ProtocolMessage): string {
 }
 
 function mediaSourceUrl(
-  source: Extract<MessageContent, { type: "image" | "video" }>["source"],
+  source: Extract<
+    MessageContent,
+    { type: "image" | "audio" | "video" }
+  >["source"],
 ): string | undefined {
   if (source.kind === "url") return source.url;
   if (source.kind === "base64") {
@@ -4137,17 +4240,46 @@ function MessageImage({
   return <img className="history-media" src={src} alt={alt} />;
 }
 
-function PromptImageContent({
-  images,
+function MessageAudio({ src }: { src: string }) {
+  return (
+    <audio className="history-media" src={src} controls preload="metadata" />
+  );
+}
+
+function MessageVideo({ src }: { src: string }) {
+  return (
+    <video className="history-media" src={src} controls preload="metadata" />
+  );
+}
+
+function PromptAttachmentContent({
+  attachments,
 }: {
-  images: readonly PromptImage[];
+  attachments: readonly PromptAttachment[];
 }) {
-  if (images.length === 0) return null;
+  if (attachments.length === 0) return null;
   return (
     <div className="structured-content">
-      {images.map((image) => (
-        <MessageImage src={image.dataUrl} alt={image.name} key={image.id} />
-      ))}
+      {attachments.map((attachment) => {
+        switch (attachment.kind) {
+          case "image":
+            return (
+              <MessageImage
+                src={attachment.dataUrl}
+                alt={attachment.name}
+                key={attachment.id}
+              />
+            );
+          case "audio":
+            return (
+              <MessageAudio src={attachment.dataUrl} key={attachment.id} />
+            );
+          case "video":
+            return (
+              <MessageVideo src={attachment.dataUrl} key={attachment.id} />
+            );
+        }
+      })}
     </div>
   );
 }
@@ -4217,10 +4349,21 @@ function StructuredMessageContent({
               </div>
             );
           }
+          case "audio": {
+            const url = mediaSourceUrl(part.source);
+            return url ? (
+              <MessageAudio src={url} key={index} />
+            ) : (
+              <div className="history-file" key={index}>
+                音频文件：
+                {part.source.kind === "file" ? part.source.file_id : ""}
+              </div>
+            );
+          }
           case "video": {
             const url = mediaSourceUrl(part.source);
             return url ? (
-              <video className="history-media" src={url} controls key={index} />
+              <MessageVideo src={url} key={index} />
             ) : (
               <div className="history-file" key={index}>
                 视频文件：{part.source.kind === "file" ? part.source.file_id : ""}

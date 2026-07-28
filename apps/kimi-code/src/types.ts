@@ -21,6 +21,7 @@ export type MessageContent =
       is_error?: boolean;
     }
   | { type: "image"; source: MessageMediaSource }
+  | { type: "audio"; source: MessageMediaSource }
   | { type: "video"; source: MessageMediaSource }
   | {
       type: "file";
@@ -178,7 +179,7 @@ export type AgentContentPart =
 
 export type AgentPromptPart = Extract<
   AgentContentPart,
-  { type: "text" | "image_url" | "video_url" }
+  { type: "text" | "image_url" | "audio_url" | "video_url" }
 >;
 
 export type AgentChatEvent =
