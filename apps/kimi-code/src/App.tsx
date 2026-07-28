@@ -74,6 +74,11 @@ import {
   loadDesktopState,
   projectFromWorkspace,
 } from "./store";
+import {
+  normalizeThinkingLevel,
+  thinkingLevelDescription,
+  thinkingLevelsForModel,
+} from "./modelControls";
 import type {
   AccountUsage,
   AgentChatEvent,
@@ -589,30 +594,6 @@ function omitSessionKeys<T>(
   return changed ? next : current;
 }
 
-const THINKING_LEVELS = ["low", "medium", "high"] as const;
-
-function thinkingLevelsForModel(model?: Model): string[] {
-  if (!model?.supportEfforts.length) return [...THINKING_LEVELS];
-  const supported = THINKING_LEVELS.filter((level) =>
-    model.supportEfforts.includes(level),
-  );
-  return supported.length ? supported : [...THINKING_LEVELS];
-}
-
-function normalizeThinkingLevel(
-  level: string | undefined,
-  model?: Model,
-): string {
-  const supported = thinkingLevelsForModel(model);
-  if (level && supported.includes(level)) return level;
-  if (model?.defaultEffort && supported.includes(model.defaultEffort)) {
-    return model.defaultEffort;
-  }
-  return supported.includes("medium")
-    ? "medium"
-    : supported[Math.floor(supported.length / 2)];
-}
-
 export default function App() {
   const [desktop, setDesktop] = useState<DesktopState>({ projects: [] });
   const [auth, setAuth] = useState<AuthStatus>({
@@ -681,6 +662,7 @@ export default function App() {
         model.id === activeConversation?.modelId ||
         model.model === activeConversation?.modelId,
     ) ?? defaultModel;
+  const supportedThinkingLevels = thinkingLevelsForModel(selectedModel);
   const effort = normalizeThinkingLevel(
     activeConversation?.thinkingLevel,
     selectedModel,
@@ -1510,7 +1492,8 @@ export default function App() {
   };
 
   const chooseEffort = (level: string): void => {
-    if (!activeConversation || !activeProject) return;
+    if (!activeConversation || !activeProject || modelBusy) return;
+    if (!thinkingLevelsForModel(selectedModel).includes(level)) return;
     if (activeAgentScope?.sessionId !== activeConversation.id) {
       showNotice("The conversation is still preparing. Try again in a moment.");
       return;
@@ -2358,28 +2341,23 @@ export default function App() {
                         <RefreshCw size={14} />
                       </button>
                     )}
-                    {selectedModel?.supportsReasoning && (
-                      <ToolbarSelect
-                        className="effort-select"
-                        ariaLabel="选择思考强度"
-                        icon={<BrainCircuit size={15} />}
-                        value={effort}
-                        label={`思考 · ${effort}`}
-                        options={thinkingLevelsForModel(selectedModel).map(
-                          (value) => ({
+                    {selectedModel?.supportsReasoning &&
+                      supportedThinkingLevels.length > 0 && (
+                        <ToolbarSelect
+                          className="effort-select"
+                          ariaLabel="选择思考强度"
+                          icon={<BrainCircuit size={15} />}
+                          value={effort}
+                          label={`思考 · ${effort}`}
+                          disabled={modelBusy || !activeAgentScope}
+                          options={supportedThinkingLevels.map((value) => ({
                             value,
                             label: `思考 · ${value}`,
-                            description:
-                              value === "low"
-                                ? "快速响应，适合简单任务"
-                                : value === "high"
-                                  ? "更深入分析复杂问题"
-                                  : "速度与推理深度平衡",
-                          }),
-                        )}
-                        onChange={chooseEffort}
-                      />
-                    )}
+                            description: thinkingLevelDescription(value),
+                          }))}
+                          onChange={chooseEffort}
+                        />
+                      )}
                     <ToolbarSelect
                       className={`permission-select ${
                         permissionMode === "yolo"
