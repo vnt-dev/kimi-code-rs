@@ -4,10 +4,9 @@
 //! configuration, streamed output, and host-mediated interactions.
 
 use std::{
-    collections::VecDeque,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -35,22 +34,17 @@ use crate::{
         errors::errors::Error2,
     },
     agent::{
-        context_memory::{ContextMessage, PromptOrigin, protocol_message::ProtocolMessage},
+        context_memory::protocol_message::ProtocolMessage,
         context_size::{AGENT_CONTEXT_SIZE_SERVICE_ID, AgentContextSizeServiceHandle, ContextSize},
         loop_::{
-            AssistantContentEvent, AssistantDeltaEvent, LoopRunResult, ThinkingDeltaEvent,
-            ToolCallDeltaEvent, TurnEndedEvent, TurnStartedEvent, TurnStepCompletedEvent,
-            TurnStepInterruptedEvent, TurnStepStartedEvent,
+            AssistantContentEvent, AssistantDeltaEvent, ThinkingDeltaEvent, ToolCallDeltaEvent,
+            TurnEndedEvent, TurnStartedEvent, TurnStepCompletedEvent, TurnStepInterruptedEvent,
+            TurnStepStartedEvent,
         },
         permission_mode::AGENT_PERMISSION_MODE_SERVICE_ID,
         permission_policy::PermissionMode,
         profile::{AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle, BindAgentInput},
-        prompt::{AGENT_PROMPT_SERVICE_ID, PromptCompletionState, PromptInput},
-        rpc::{
-            AGENT_RPC_SERVICE_ID, AgentRpcServiceHandle, EmptyPayload, PromptMetadataUpdateTarget,
-            SetPermissionPayload, apply_prompt_metadata_update,
-            prompt_metadata_text_from_content_parts,
-        },
+        rpc::{AGENT_RPC_SERVICE_ID, AgentRpcServiceHandle, EmptyPayload, SetPermissionPayload},
         tool_executor::{ToolCallStartedEvent, ToolProgressEvent, ToolResultEvent},
     },
     app::{
@@ -58,10 +52,7 @@ use crate::{
         auth::{OAuthToolkitContract, OAuthToolkitService, config_section::SERVICES_SECTION},
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         config::{CONFIG_SERVICE_ID, ConfigTarget},
-        event::{
-            EVENT_SERVICE_ID,
-            event_bus::{DomainEvent, DomainEventPayload, EVENT_BUS_SERVICE_ID},
-        },
+        event::event_bus::EVENT_BUS_SERVICE_ID,
         message_legacy::{
             MESSAGE_LEGACY_SERVICE_ID, MessageListQuery, PageResponse as MessagePageResponse,
         },
@@ -72,7 +63,6 @@ use crate::{
         },
     },
     kosong::{
-        contract::message::{ContentPart, Message, Role},
         model::{
             MODEL_CATALOG_SERVICE_ID, Model, ModelCatalogItem,
             contract::{DEFAULT_MODEL_SECTION, MODELS_SECTION},
@@ -83,9 +73,7 @@ use crate::{
     session::{
         agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID, ensure_main_agent},
         interaction::{Interaction, InteractionKind, SESSION_INTERACTION_SERVICE_ID},
-        session_metadata::SESSION_METADATA_ID,
     },
-    wire::contract::WIRE_SERVICE_ID,
 };
 
 pub struct KimiCodeDesktopClient {
@@ -290,134 +278,6 @@ pub struct DesktopContextUsage {
     pub estimated_tokens: f64,
     pub max_context_tokens: u64,
     pub usage_ratio: f64,
-}
-
-#[derive(Default)]
-struct DesktopChatEventRelayState {
-    turn_id: Option<i64>,
-    emitting: bool,
-    buffered: VecDeque<DesktopChatEvent>,
-}
-
-struct DesktopChatEventRelay {
-    state: Mutex<DesktopChatEventRelayState>,
-    content: Arc<Mutex<String>>,
-    thinking: Arc<Mutex<String>>,
-    callback: Arc<dyn Fn(DesktopChatEvent) + Send + Sync>,
-}
-
-impl DesktopChatEvent {
-    fn turn_id(&self) -> i64 {
-        match self {
-            Self::TurnStarted(event) => event.turn_id,
-            Self::TurnEnded(event) => event.turn_id,
-            Self::StepStarted(event) => event.turn_id,
-            Self::StepCompleted(event) => event.turn_id,
-            Self::StepInterrupted(event) => event.turn_id,
-            Self::AssistantDelta(event) => event.turn_id,
-            Self::AssistantContent(event) => event.turn_id,
-            Self::ThinkingDelta(event) => event.turn_id,
-            Self::ToolCallDelta(event) => event.turn_id,
-            Self::ToolCallStarted(event) => event.turn_id,
-            Self::ToolProgress(event) => event.turn_id,
-            Self::ToolResult(event) => event.turn_id,
-        }
-    }
-}
-
-impl DesktopChatEventRelay {
-    fn new(
-        content: Arc<Mutex<String>>,
-        thinking: Arc<Mutex<String>>,
-        callback: Arc<dyn Fn(DesktopChatEvent) + Send + Sync>,
-    ) -> Self {
-        Self {
-            state: Mutex::new(DesktopChatEventRelayState::default()),
-            content,
-            thinking,
-            callback,
-        }
-    }
-
-    fn push(&self, event: DesktopChatEvent) {
-        let should_drain = {
-            let Ok(mut state) = self.state.lock() else {
-                return;
-            };
-            match state.turn_id {
-                None => {
-                    state.buffered.push_back(event);
-                    return;
-                }
-                Some(turn_id) if turn_id != event.turn_id() => return,
-                Some(_) => state.buffered.push_back(event),
-            }
-            if state.emitting {
-                false
-            } else {
-                state.emitting = true;
-                true
-            }
-        };
-        if should_drain {
-            self.drain();
-        }
-    }
-
-    fn select_turn(&self, turn_id: i64) {
-        let should_drain = {
-            let Ok(mut state) = self.state.lock() else {
-                return;
-            };
-            state.turn_id = Some(turn_id);
-            state.buffered = std::mem::take(&mut state.buffered)
-                .into_iter()
-                .filter(|event| event.turn_id() == turn_id)
-                .collect();
-            if state.buffered.is_empty() || state.emitting {
-                false
-            } else {
-                state.emitting = true;
-                true
-            }
-        };
-        if should_drain {
-            self.drain();
-        }
-    }
-
-    fn drain(&self) {
-        loop {
-            let event = {
-                let Ok(mut state) = self.state.lock() else {
-                    return;
-                };
-                let Some(event) = state.buffered.pop_front() else {
-                    state.emitting = false;
-                    return;
-                };
-                event
-            };
-            self.emit(event);
-        }
-    }
-
-    fn emit(&self, event: DesktopChatEvent) {
-        match &event {
-            DesktopChatEvent::AssistantDelta(event) => {
-                if let Ok(mut content) = self.content.lock() {
-                    content.push_str(&event.delta);
-                }
-            }
-            DesktopChatEvent::ThinkingDelta(event) => {
-                if let Ok(mut thinking) = self.thinking.lock() {
-                    thinking.push_str(&event.delta);
-                }
-            }
-            _ => {}
-        }
-        (self.callback)(event);
-    }
 }
 
 struct CallbackObserver {
@@ -724,12 +584,10 @@ impl KimiCodeDesktopClient {
         let rpc = agent
             .get(AGENT_RPC_SERVICE_ID)
             .map_err(|error| error.to_string())?;
-        if creating {
-            if let Some(permission) = request.permission {
-                rpc.set_permission(SetPermissionPayload { mode: permission })
-                    .await
-                    .map_err(|error| error.to_string())?;
-            }
+        if creating && let Some(permission) = request.permission {
+            rpc.set_permission(SetPermissionPayload { mode: permission })
+                .await
+                .map_err(|error| error.to_string())?;
         }
         let model = rpc
             .get_model(EmptyPayload {})
@@ -836,234 +694,6 @@ impl KimiCodeDesktopClient {
         }));
 
         Ok(subscriptions)
-    }
-
-    pub async fn chat(
-        &self,
-        conversation_id: &str,
-        request: DesktopChatRequest,
-        on_event: Arc<dyn Fn(DesktopChatEvent) + Send + Sync>,
-        on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
-        on_compaction: Arc<dyn Fn(DesktopCompactionEvent) + Send + Sync>,
-        on_context_usage: Arc<dyn Fn(DesktopContextUsage) + Send + Sync>,
-    ) -> Result<DesktopChatResult, String> {
-        if request.model.trim().is_empty() {
-            return Err("A model must be selected.".to_owned());
-        }
-        let work_dir = request
-            .project_path
-            .as_deref()
-            .filter(|path| !path.trim().is_empty())
-            .ok_or_else(|| "A project directory is required.".to_owned())?
-            .to_owned();
-        let prompt = request.prompt.trim();
-        if prompt.is_empty() {
-            return Err("A user message is required.".to_owned());
-        }
-        let prompt = prompt.to_owned();
-
-        self.ensure_models_configured().await?;
-
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let session_id = conversation_id.to_owned();
-        let model = managed_model_alias(&request.model);
-        let session = if let Some(session) = sessions.get(&session_id) {
-            session
-        } else if let Some(session) = sessions
-            .resume(&session_id)
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            session
-        } else {
-            sessions
-                .create(CreateSessionOptions {
-                    session_id: Some(session_id.clone()),
-                    work_dir: work_dir.clone(),
-                    main_agent_binding: Some(BindAgentInput {
-                        profile: "agent".into(),
-                        model: Some(model.clone()),
-                        thinking: request.effort.clone(),
-                        strict_thinking: None,
-                        cwd: Some(work_dir),
-                    }),
-                    ..CreateSessionOptions::default()
-                })
-                .await
-                .map_err(|error| error.to_string())?
-        };
-
-        let agents = session
-            .get(AGENT_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let agent = agents
-            .get(MAIN_AGENT_ID)
-            .ok_or_else(|| "the session did not create its main agent".to_owned())?;
-
-        let interaction = session
-            .get(SESSION_INTERACTION_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let subscriptions = DisposableStore::new();
-        on_interactions(map_desktop_interactions(
-            interaction.list_pending(None).await,
-        ));
-        let interaction_for_updates = interaction.clone();
-        let on_interactions_for_updates = Arc::clone(&on_interactions);
-        subscriptions.add(interaction.on_did_change_pending().subscribe(move |_| {
-            let interaction = interaction_for_updates.clone();
-            let on_interactions = Arc::clone(&on_interactions_for_updates);
-            tokio::spawn(async move {
-                on_interactions(map_desktop_interactions(
-                    interaction.list_pending(None).await,
-                ));
-            });
-        }));
-
-        let profile = agent
-            .get(AGENT_PROFILE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        profile
-            .set_model(model)
-            .await
-            .map_err(|error| error.to_string())?;
-        if let Some(effort) = request.effort.filter(|effort| !effort.is_empty()) {
-            profile
-                .set_thinking(effort)
-                .map_err(|error| error.to_string())?;
-        }
-        let permission_mode = match request.permission_mode.as_deref() {
-            Some("yolo" | "full_access") => PermissionMode::Yolo,
-            Some("auto") => PermissionMode::Auto,
-            _ => PermissionMode::Manual,
-        };
-        agent
-            .get(AGENT_PERMISSION_MODE_SERVICE_ID)
-            .map_err(|error| error.to_string())?
-            .set_mode(permission_mode)
-            .map_err(|error| error.to_string())?;
-
-        let context_size = agent
-            .get(AGENT_CONTEXT_SIZE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        emit_context_usage(&context_size, &profile, &on_context_usage);
-
-        let content = Arc::new(Mutex::new(String::new()));
-        let thinking = Arc::new(Mutex::new(String::new()));
-        let chat_event_relay = Arc::new(DesktopChatEventRelay::new(
-            Arc::clone(&content),
-            Arc::clone(&thinking),
-            on_event,
-        ));
-        let event_bus = agent
-            .get(EVENT_BUS_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let context_size_for_updates = context_size.clone();
-        let profile_for_updates = profile.clone();
-        let on_context_usage_for_updates = Arc::clone(&on_context_usage);
-        subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
-            if matches!(
-                event.event_type.as_str(),
-                "agent.status.updated" | "context.spliced"
-            ) {
-                emit_context_usage(
-                    &context_size_for_updates,
-                    &profile_for_updates,
-                    &on_context_usage_for_updates,
-                );
-            }
-        })));
-        subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
-            if let Some(event) = map_desktop_compaction_event(event) {
-                on_compaction(event);
-            }
-        })));
-        let relay_for_events = Arc::clone(&chat_event_relay);
-        subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
-            if let Some(event) = map_desktop_chat_event(event) {
-                relay_for_events.push(event);
-            }
-        })));
-
-        let metadata = session
-            .get(SESSION_METADATA_ID)
-            .map_err(|error| error.to_string())?;
-        let event_service = self
-            .app
-            .get(EVENT_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let prompt_content = vec![ContentPart::Text { text: prompt }];
-        let prompt_metadata = prompt_metadata_text_from_content_parts(&prompt_content);
-        apply_prompt_metadata_update(
-            PromptMetadataUpdateTarget {
-                metadata: metadata.0.as_ref(),
-                event_service: event_service.0.as_ref(),
-                session_id: &session_id,
-            },
-            prompt_metadata.as_deref(),
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-
-        let prompt_service = agent
-            .get(AGENT_PROMPT_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let handle = prompt_service
-            .enqueue(PromptInput {
-                id: None,
-                message: ContextMessage {
-                    message: Message::new(Role::User, prompt_content, Vec::new()),
-                    id: None,
-                    provider_message_id: None,
-                    origin: Some(PromptOrigin::User),
-                    is_error: None,
-                    note: None,
-                },
-            })
-            .await
-            .map_err(|error| error.to_string())?;
-        if let Some(turn) = handle.launched().await {
-            chat_event_relay.select_turn(turn.id());
-        }
-        let completion = handle.completion().await;
-
-        agent
-            .get(WIRE_SERVICE_ID)
-            .map_err(|error| error.to_string())?
-            .flush()
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_context_usage(&context_size, &profile, &on_context_usage);
-
-        let finish_reason = match completion.result {
-            Some(LoopRunResult::Completed { steps, truncated }) => {
-                Some(format!("completed:steps={steps},truncated={truncated}"))
-            }
-            Some(LoopRunResult::Failed { error, .. }) => return Err(error.to_string()),
-            Some(LoopRunResult::Cancelled { reason, .. }) => return Err(reason.to_string()),
-            None if completion.state == PromptCompletionState::Blocked => {
-                return Err("The prompt was blocked by a submission hook.".to_owned());
-            }
-            None => {
-                return Err(format!("The prompt did not launch: {:?}", completion.state));
-            }
-        };
-        let content = content
-            .lock()
-            .map_err(|_| "failed to collect assistant output".to_owned())?
-            .clone();
-        let thinking = thinking
-            .lock()
-            .map_err(|_| "failed to collect assistant thinking".to_owned())?
-            .clone();
-
-        Ok(DesktopChatResult {
-            content,
-            thinking,
-            finish_reason,
-        })
     }
 
     pub async fn list_messages(
@@ -1386,16 +1016,6 @@ fn context_usage_from_size(context: ContextSize, max_context_tokens: u64) -> Des
     }
 }
 
-fn emit_context_usage(
-    context_size: &AgentContextSizeServiceHandle,
-    profile: &AgentProfileServiceHandle,
-    callback: &Arc<dyn Fn(DesktopContextUsage) + Send + Sync>,
-) {
-    if let Ok(usage) = context_usage_snapshot(context_size, profile) {
-        callback(usage);
-    }
-}
-
 fn map_desktop_interactions(interactions: Vec<Interaction>) -> Vec<DesktopInteraction> {
     interactions
         .into_iter()
@@ -1413,146 +1033,21 @@ fn map_desktop_interactions(interactions: Vec<Interaction>) -> Vec<DesktopIntera
         .collect()
 }
 
-fn map_desktop_chat_event(event: &DomainEvent) -> Option<DesktopChatEvent> {
-    match event.event_type.as_str() {
-        TurnStartedEvent::TYPE => event
-            .with_payload::<TurnStartedEvent, _>(|event| {
-                DesktopChatEvent::TurnStarted(event.clone())
-            })
-            .ok(),
-        TurnEndedEvent::TYPE => event
-            .with_payload::<TurnEndedEvent, _>(|event| DesktopChatEvent::TurnEnded(event.clone()))
-            .ok(),
-        TurnStepStartedEvent::TYPE => event
-            .with_payload::<TurnStepStartedEvent, _>(|event| {
-                DesktopChatEvent::StepStarted(event.clone())
-            })
-            .ok(),
-        TurnStepCompletedEvent::TYPE => event
-            .with_payload::<TurnStepCompletedEvent, _>(|event| {
-                DesktopChatEvent::StepCompleted(event.clone())
-            })
-            .ok(),
-        TurnStepInterruptedEvent::TYPE => event
-            .with_payload::<TurnStepInterruptedEvent, _>(|event| {
-                DesktopChatEvent::StepInterrupted(event.clone())
-            })
-            .ok(),
-        AssistantDeltaEvent::TYPE => event
-            .with_payload::<AssistantDeltaEvent, _>(|event| {
-                DesktopChatEvent::AssistantDelta(event.clone())
-            })
-            .ok(),
-        AssistantContentEvent::TYPE => event
-            .with_payload::<AssistantContentEvent, _>(|event| {
-                DesktopChatEvent::AssistantContent(event.clone())
-            })
-            .ok(),
-        ThinkingDeltaEvent::TYPE => event
-            .with_payload::<ThinkingDeltaEvent, _>(|event| {
-                DesktopChatEvent::ThinkingDelta(event.clone())
-            })
-            .ok(),
-        ToolCallDeltaEvent::TYPE => event
-            .with_payload::<ToolCallDeltaEvent, _>(|event| {
-                DesktopChatEvent::ToolCallDelta(event.clone())
-            })
-            .ok(),
-        ToolCallStartedEvent::TYPE => event
-            .with_payload::<ToolCallStartedEvent, _>(|event| {
-                DesktopChatEvent::ToolCallStarted(event.clone())
-            })
-            .ok(),
-        ToolProgressEvent::TYPE => event
-            .with_payload::<ToolProgressEvent, _>(|event| {
-                DesktopChatEvent::ToolProgress(event.clone())
-            })
-            .ok(),
-        ToolResultEvent::TYPE => event
-            .with_payload::<ToolResultEvent, _>(|event| DesktopChatEvent::ToolResult(event.clone()))
-            .ok(),
-        _ => None,
-    }
-}
-
-fn map_desktop_compaction_event(event: &DomainEvent) -> Option<DesktopCompactionEvent> {
-    match event.event_type.as_str() {
-        "compaction.started" => Some(DesktopCompactionEvent {
-            phase: "started".to_owned(),
-            trigger: event
-                .fields
-                .get("trigger")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            compacted_count: None,
-            tokens_before: None,
-            tokens_after: None,
-        }),
-        "compaction.completed" => {
-            let result = event.fields.get("result").and_then(Value::as_object);
-            Some(DesktopCompactionEvent {
-                phase: "completed".to_owned(),
-                trigger: None,
-                compacted_count: result
-                    .and_then(|result| result.get("compactedCount"))
-                    .and_then(Value::as_f64),
-                tokens_before: result
-                    .and_then(|result| result.get("tokensBefore"))
-                    .and_then(Value::as_f64),
-                tokens_after: result
-                    .and_then(|result| result.get("tokensAfter"))
-                    .and_then(Value::as_f64),
-            })
-        }
-        "compaction.cancelled" => Some(DesktopCompactionEvent {
-            phase: "cancelled".to_owned(),
-            trigger: None,
-            compacted_count: None,
-            tokens_before: None,
-            tokens_after: None,
-        }),
-        _ => None,
-    }
-}
-
-fn managed_model_alias(model: &str) -> String {
-    if model.contains('/') {
-        model.to_owned()
-    } else {
-        format!("kimi-code/{model}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use serde_json::json;
 
     use super::{
-        DesktopChatEvent, DesktopChatEventRelay, DesktopChatRequest, DesktopPrepareSessionRequest,
-        KimiCodeDesktopClient, ManagedKimiCodeModelInfo, context_usage_from_size,
-        managed_model_alias, map_desktop_chat_event, map_desktop_compaction_event,
-        map_desktop_model,
+        DesktopChatEvent, DesktopChatRequest, DesktopPrepareSessionRequest, KimiCodeDesktopClient,
+        ManagedKimiCodeModelInfo, context_usage_from_size, map_desktop_model,
     };
     use crate::{
         agent::{
-            context_size::ContextSize,
-            loop_::{AssistantDeltaEvent, ThinkingDeltaEvent},
+            context_size::ContextSize, loop_::AssistantDeltaEvent,
             permission_policy::PermissionMode,
         },
-        app::event::event_bus::DomainEvent,
         kosong::model::ModelCatalogItem,
     };
-
-    #[test]
-    fn qualifies_managed_model_ids_once() {
-        assert_eq!(managed_model_alias("kimi-k2"), "kimi-code/kimi-k2");
-        assert_eq!(
-            managed_model_alias("kimi-code/kimi-k2"),
-            "kimi-code/kimi-k2"
-        );
-    }
 
     #[test]
     fn desktop_catalog_models_expose_the_configured_alias_as_id() {
@@ -1709,49 +1204,6 @@ mod tests {
     }
 
     #[test]
-    fn maps_and_relays_only_the_launched_turn_in_original_event_order() {
-        let mapped = map_desktop_chat_event(&DomainEvent::typed(AssistantDeltaEvent {
-            turn_id: 11,
-            delta: "a".into(),
-        }))
-        .unwrap();
-        assert!(matches!(
-            mapped,
-            DesktopChatEvent::AssistantDelta(AssistantDeltaEvent {
-                turn_id: 11,
-                ref delta
-            }) if delta == "a"
-        ));
-
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let received_for_callback = Arc::clone(&received);
-        let content = Arc::new(Mutex::new(String::new()));
-        let thinking = Arc::new(Mutex::new(String::new()));
-        let relay = DesktopChatEventRelay::new(
-            Arc::clone(&content),
-            Arc::clone(&thinking),
-            Arc::new(move |event| received_for_callback.lock().unwrap().push(event)),
-        );
-        relay.push(DesktopChatEvent::AssistantDelta(AssistantDeltaEvent {
-            turn_id: 12,
-            delta: "other".into(),
-        }));
-        relay.push(DesktopChatEvent::AssistantDelta(AssistantDeltaEvent {
-            turn_id: 11,
-            delta: "hello".into(),
-        }));
-        relay.select_turn(11);
-        relay.push(DesktopChatEvent::ThinkingDelta(ThinkingDeltaEvent {
-            turn_id: 11,
-            delta: "reason".into(),
-        }));
-
-        assert_eq!(received.lock().unwrap().len(), 2);
-        assert_eq!(*content.lock().unwrap(), "hello");
-        assert_eq!(*thinking.lock().unwrap(), "reason");
-    }
-
-    #[test]
     fn computes_desktop_context_usage_from_measured_and_estimated_tokens() {
         let usage = context_usage_from_size(
             ContextSize {
@@ -1767,35 +1219,5 @@ mod tests {
         assert_eq!(usage.estimated_tokens, 4_000.0);
         assert_eq!(usage.max_context_tokens, 128_000);
         assert_eq!(usage.usage_ratio, 0.5);
-    }
-
-    #[test]
-    fn maps_compaction_lifecycle_events_for_desktop_hosts() {
-        let started = DomainEvent::try_from(json!({
-            "type": "compaction.started",
-            "trigger": "auto"
-        }))
-        .unwrap();
-        let started = map_desktop_compaction_event(&started).unwrap();
-        assert_eq!(started.phase, "started");
-        assert_eq!(started.trigger.as_deref(), Some("auto"));
-
-        let completed = DomainEvent::try_from(json!({
-            "type": "compaction.completed",
-            "result": {
-                "compactedCount": 12,
-                "tokensBefore": 64000,
-                "tokensAfter": 9000
-            }
-        }))
-        .unwrap();
-        let completed = map_desktop_compaction_event(&completed).unwrap();
-        assert_eq!(completed.phase, "completed");
-        assert_eq!(completed.compacted_count, Some(12.0));
-        assert_eq!(completed.tokens_before, Some(64_000.0));
-        assert_eq!(completed.tokens_after, Some(9_000.0));
-
-        let unrelated = DomainEvent::try_from(json!({"type": "assistant.delta"})).unwrap();
-        assert!(map_desktop_compaction_event(&unrelated).is_none());
     }
 }
