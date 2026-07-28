@@ -81,6 +81,10 @@ impl HostFileSystemService for HostFileSystem {
             .map_err(|error| host_error(error, path, "append"))?;
         file.write_all(data.as_bytes())
             .await
+            .map_err(|error| host_error(error, path, "append"))?;
+        // Tokio may finish write_all before its blocking filesystem write completes.
+        file.flush()
+            .await
             .map_err(|error| host_error(error, path, "append"))
     }
 
@@ -388,6 +392,19 @@ mod tests {
         assert_eq!(fs_service.read_dir(&root).await.unwrap().len(), 2);
         fs_service.remove(&root).await.unwrap();
         fs_service.remove(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn append_text_is_visible_when_it_returns() {
+        let root = temp_dir();
+        let file = root.join("file.txt");
+        fs::create_dir(&root).await.unwrap();
+        fs::write(&file, "a\nb").await.unwrap();
+
+        HostFileSystem.append_text(&file, "\nc").await.unwrap();
+
+        assert_eq!(fs::read_to_string(&file).await.unwrap(), "a\nb\nc");
+        fs::remove_dir_all(&root).await.unwrap();
     }
 
     #[cfg(unix)]
