@@ -47,15 +47,15 @@ use crate::{
         profile::{AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle, BindAgentInput},
         prompt::{AGENT_PROMPT_SERVICE_ID, PromptCompletionState, PromptInput},
         rpc::{
-            AGENT_RPC_SERVICE_ID, AgentRpcServiceHandle, PromptMetadataUpdateTarget,
-            SetModelPayload, SetPermissionPayload, SetThinkingPayload,
-            apply_prompt_metadata_update, prompt_metadata_text_from_content_parts,
+            AGENT_RPC_SERVICE_ID, AgentRpcServiceHandle, EmptyPayload, PromptMetadataUpdateTarget,
+            SetPermissionPayload, apply_prompt_metadata_update,
+            prompt_metadata_text_from_content_parts,
         },
         tool_executor::{ToolCallStartedEvent, ToolProgressEvent, ToolResultEvent},
     },
     app::{
         agent_app_runtime::bootstrap_agent_app,
-        auth::{OAuthToolkitContract, OAuthToolkitService},
+        auth::{OAuthToolkitContract, OAuthToolkitService, config_section::SERVICES_SECTION},
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         config::{CONFIG_SERVICE_ID, ConfigTarget},
         event::{
@@ -71,7 +71,15 @@ use crate::{
             WORKSPACE_QUERY_SERVICE_ID, WORKSPACE_REGISTRY_SERVICE_ID, Workspace,
         },
     },
-    kosong::contract::message::{ContentPart, Message, Role},
+    kosong::{
+        contract::message::{ContentPart, Message, Role},
+        model::{
+            MODEL_CATALOG_SERVICE_ID, Model, ModelCatalogItem,
+            contract::{DEFAULT_MODEL_SECTION, MODELS_SECTION},
+            thinking::THINKING_SECTION,
+        },
+        provider::config::PROVIDERS_SECTION,
+    },
     session::{
         agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID, ensure_main_agent},
         interaction::{Interaction, InteractionKind, SESSION_INTERACTION_SERVICE_ID},
@@ -161,6 +169,9 @@ pub struct DesktopDeviceCode {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopModel {
     pub id: String,
+    pub model: String,
+    pub provider_id: String,
+    pub is_default: bool,
     pub display_name: String,
     pub context_length: u64,
     pub supports_reasoning: bool,
@@ -201,6 +212,7 @@ pub struct DesktopPrepareSessionRequest {
 pub struct DesktopPreparedSession {
     pub session_id: String,
     pub agent_id: String,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -527,16 +539,51 @@ impl KimiCodeDesktopClient {
         self.auth_status().await
     }
 
-    pub async fn list_models(&self) -> Result<Vec<DesktopModel>, String> {
-        let models = self.fetch_models().await?;
-        self.configure_models(&models).await?;
+    pub async fn list_models(&self, refresh: bool) -> Result<Vec<DesktopModel>, String> {
+        if refresh {
+            let models = self.fetch_models().await?;
+            self.configure_models(&models).await?;
+        } else {
+            self.ensure_models_configured().await?;
+        }
 
-        let mut models = models
+        self.configured_desktop_models().await
+    }
+
+    async fn configured_desktop_models(&self) -> Result<Vec<DesktopModel>, String> {
+        let catalog = self
+            .app
+            .get(MODEL_CATALOG_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let default_model = self
+            .app
+            .get(CONFIG_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .get(DEFAULT_MODEL_SECTION)
+            .and_then(|value| value.as_str().map(str::to_owned));
+        let mut models = catalog
+            .list_models()
+            .await
             .into_iter()
-            .map(map_desktop_model)
+            .map(|item| {
+                let resolved = catalog.get(&item.model).ok();
+                let is_default = default_model.as_deref() == Some(item.model.as_str());
+                map_desktop_model(item, resolved.as_deref(), is_default)
+            })
             .collect::<Vec<_>>();
         models.sort_by(|left, right| left.display_name.cmp(&right.display_name));
         Ok(models)
+    }
+
+    pub async fn set_default_model(&self, model: &str) -> Result<(), String> {
+        self.ensure_models_configured().await?;
+        self.app
+            .get(MODEL_CATALOG_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .set_default_model(model)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     pub async fn list_workspaces(&self) -> Result<Vec<DesktopWorkspace>, String> {
@@ -637,11 +684,12 @@ impl KimiCodeDesktopClient {
             .app
             .get(SESSION_LIFECYCLE_SERVICE_ID)
             .map_err(|error| error.to_string())?;
-        let session = if let Some(session_id) = request
+        let requested_session_id = request
             .session_id
             .as_deref()
-            .filter(|session_id| !session_id.trim().is_empty())
-        {
+            .filter(|session_id| !session_id.trim().is_empty());
+        let creating = requested_session_id.is_none();
+        let session = if let Some(session_id) = requested_session_id {
             if let Some(session) = sessions.get(session_id) {
                 session
             } else {
@@ -657,7 +705,7 @@ impl KimiCodeDesktopClient {
                     work_dir: work_dir.to_owned(),
                     main_agent_binding: Some(BindAgentInput {
                         profile: "agent".into(),
-                        model: request.model.as_deref().map(managed_model_alias),
+                        model: request.model.clone(),
                         thinking: request.thinking.clone(),
                         strict_thinking: None,
                         cwd: Some(work_dir.to_owned()),
@@ -674,30 +722,22 @@ impl KimiCodeDesktopClient {
         let rpc = agent
             .get(AGENT_RPC_SERVICE_ID)
             .map_err(|error| error.to_string())?;
-        if let Some(model) = request.model.filter(|model| !model.trim().is_empty()) {
-            rpc.set_model(SetModelPayload {
-                model: managed_model_alias(&model),
-            })
+        if creating {
+            if let Some(permission) = request.permission {
+                rpc.set_permission(SetPermissionPayload { mode: permission })
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        let model = rpc
+            .get_model(EmptyPayload {})
             .await
             .map_err(|error| error.to_string())?;
-        }
-        if let Some(thinking) = request
-            .thinking
-            .filter(|thinking| !thinking.trim().is_empty())
-        {
-            rpc.set_thinking(SetThinkingPayload { level: thinking })
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        if let Some(permission) = request.permission {
-            rpc.set_permission(SetPermissionPayload { mode: permission })
-                .await
-                .map_err(|error| error.to_string())?;
-        }
 
         Ok(DesktopPreparedSession {
             session_id: session.id().to_owned(),
             agent_id: agent.id().to_owned(),
+            model,
         })
     }
 
@@ -1132,6 +1172,16 @@ impl KimiCodeDesktopClient {
         if self.models_configured.load(Ordering::Acquire) {
             return Ok(());
         }
+        let configured = self
+            .app
+            .get(MODEL_CATALOG_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .list_models()
+            .await;
+        if !configured.is_empty() {
+            self.models_configured.store(true, Ordering::Release);
+            return Ok(());
+        }
         let models = self.fetch_models().await?;
         self.configure_models(&models).await
     }
@@ -1144,7 +1194,19 @@ impl KimiCodeDesktopClient {
             .map_err(|error| error.to_string())?;
         config.ready().await.map_err(|error| error.to_string())?;
 
+        let managed_sections = [
+            PROVIDERS_SECTION,
+            MODELS_SECTION,
+            SERVICES_SECTION,
+            DEFAULT_MODEL_SECTION,
+            THINKING_SECTION,
+        ];
         let mut generated = Map::new();
+        for section in managed_sections {
+            if let Some(value) = config.inspect(section).user_value {
+                generated.insert(section.to_owned(), value);
+            }
+        }
         apply_managed_kimi_code_config(
             &mut generated,
             ManagedKimiCodeApplyOptions {
@@ -1152,13 +1214,33 @@ impl KimiCodeDesktopClient {
                 base_url: None,
                 oauth_key: None,
                 oauth_host: None,
-                preserve_default_model: false,
+                preserve_default_model: true,
             },
         )
         .map_err(|error| error.to_string())?;
-        for (section, value) in generated {
+        for section in [PROVIDERS_SECTION, MODELS_SECTION, SERVICES_SECTION] {
+            let next = generated.get(section).cloned();
+            if config.inspect(section).user_value != next {
+                config
+                    .replace(section, next, ConfigTarget::User)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
             config
-                .replace(&section, Some(value), ConfigTarget::Memory)
+                .replace(section, None, ConfigTarget::Memory)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        for section in [DEFAULT_MODEL_SECTION, THINKING_SECTION] {
+            let next = generated.get(section).cloned();
+            if config.inspect(section).user_value != next {
+                config
+                    .set(section, next, ConfigTarget::User)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            config
+                .replace(section, None, ConfigTarget::Memory)
                 .await
                 .map_err(|error| error.to_string())?;
         }
@@ -1190,25 +1272,60 @@ impl KimiCodeDesktopClient {
     }
 }
 
-fn map_desktop_model(model: ManagedKimiCodeModelInfo) -> DesktopModel {
+fn map_desktop_model(
+    item: ModelCatalogItem,
+    resolved: Option<&Model>,
+    is_default: bool,
+) -> DesktopModel {
+    let declared_capabilities = item.capabilities.as_deref().unwrap_or_default();
+    let has_declared_capability = |capability: &str| {
+        declared_capabilities
+            .iter()
+            .any(|value| value == capability)
+    };
+    let supports_reasoning = resolved.map_or_else(
+        || has_declared_capability("thinking") || has_declared_capability("always_thinking"),
+        |model| model.capabilities.thinking,
+    );
+    let supports_image = resolved.map_or_else(
+        || has_declared_capability("image_in"),
+        |model| model.capabilities.image_in,
+    );
+    let supports_video = resolved.map_or_else(
+        || has_declared_capability("video_in"),
+        |model| model.capabilities.video_in,
+    );
+    let supports_tools = resolved.map_or_else(
+        || has_declared_capability("tool_use"),
+        |model| model.capabilities.tool_use,
+    );
+    let wire_model = resolved.map_or_else(
+        || {
+            item.model
+                .rsplit_once('/')
+                .map_or_else(|| item.model.clone(), |(_, model)| model.to_owned())
+        },
+        |model| model.name.clone(),
+    );
+    let protocol = resolved.map_or("openai", |model| model.protocol.as_str());
+
     DesktopModel {
-        display_name: model
+        display_name: item
             .display_name
             .clone()
-            .unwrap_or_else(|| model.id.clone()),
-        id: model.id,
-        context_length: model.context_length,
-        supports_reasoning: model.supports_reasoning,
-        supports_image: model.supports_image_in,
-        supports_video: model.supports_video_in,
-        supports_tools: model.supports_tool_use,
-        protocol: match model.protocol {
-            Some(kimi_code_oauth::ManagedKimiCodeProtocol::Anthropic) => "anthropic",
-            None => "openai",
-        }
-        .to_owned(),
-        support_efforts: model.support_efforts.unwrap_or_default(),
-        default_effort: model.default_effort,
+            .unwrap_or_else(|| wire_model.clone()),
+        id: item.model,
+        model: wire_model,
+        provider_id: item.provider,
+        is_default,
+        context_length: item.max_context_size,
+        supports_reasoning,
+        supports_image,
+        supports_video,
+        supports_tools,
+        protocol: protocol.to_owned(),
+        support_efforts: item.support_efforts.unwrap_or_default(),
+        default_effort: item.default_effort,
     }
 }
 
@@ -1393,8 +1510,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        DesktopChatEvent, DesktopChatEventRelay, DesktopChatRequest, context_usage_from_size,
+        DesktopChatEvent, DesktopChatEventRelay, DesktopChatRequest, DesktopPrepareSessionRequest,
+        KimiCodeDesktopClient, ManagedKimiCodeModelInfo, context_usage_from_size,
         managed_model_alias, map_desktop_chat_event, map_desktop_compaction_event,
+        map_desktop_model,
     };
     use crate::{
         agent::{
@@ -1402,6 +1521,7 @@ mod tests {
             loop_::{AssistantDeltaEvent, ThinkingDeltaEvent},
         },
         app::event::event_bus::DomainEvent,
+        kosong::model::ModelCatalogItem,
     };
 
     #[test]
@@ -1411,6 +1531,106 @@ mod tests {
             managed_model_alias("kimi-code/kimi-k2"),
             "kimi-code/kimi-k2"
         );
+    }
+
+    #[test]
+    fn desktop_catalog_models_expose_the_configured_alias_as_id() {
+        let model = map_desktop_model(
+            ModelCatalogItem {
+                provider: "managed:kimi-code".into(),
+                model: "kimi-code/kimi-for-coding".into(),
+                display_name: Some("Kimi for Coding".into()),
+                max_context_size: 262_144,
+                capabilities: Some(vec!["thinking".into(), "tool_use".into()]),
+                support_efforts: Some(vec!["low".into(), "high".into()]),
+                default_effort: Some("high".into()),
+            },
+            None,
+            true,
+        );
+
+        assert_eq!(model.id, "kimi-code/kimi-for-coding");
+        assert_eq!(model.model, "kimi-for-coding");
+        assert_eq!(model.provider_id, "managed:kimi-code");
+        assert!(model.is_default);
+        assert!(model.supports_reasoning);
+        assert!(model.supports_tools);
+    }
+
+    fn managed_model(id: &str) -> ManagedKimiCodeModelInfo {
+        ManagedKimiCodeModelInfo {
+            id: id.into(),
+            context_length: 262_144,
+            supports_reasoning: true,
+            supports_image_in: false,
+            supports_video_in: false,
+            supports_tool_use: true,
+            supports_thinking_type: None,
+            support_efforts: Some(vec!["low".into(), "high".into()]),
+            default_effort: Some("high".into()),
+            display_name: Some(id.into()),
+            protocol: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn persists_default_model_and_does_not_override_resumed_session_model() {
+        let root = std::env::temp_dir().join(format!(
+            "kimi-desktop-model-selection-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let home = root.join("home");
+        let work_dir = root.join("workspace");
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let client = KimiCodeDesktopClient::new(&home, "test").unwrap();
+        let models = [managed_model("first"), managed_model("second")];
+        client.configure_models(&models).await.unwrap();
+        client
+            .models_configured
+            .store(false, std::sync::atomic::Ordering::Release);
+        client.ensure_models_configured().await.unwrap();
+
+        let created = client
+            .prepare_session(DesktopPrepareSessionRequest {
+                session_id: None,
+                work_dir: work_dir.to_string_lossy().into_owned(),
+                model: Some("kimi-code/first".into()),
+                thinking: Some("high".into()),
+                permission: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.model, "kimi-code/first");
+
+        let resumed = client
+            .prepare_session(DesktopPrepareSessionRequest {
+                session_id: Some(created.session_id),
+                work_dir: work_dir.to_string_lossy().into_owned(),
+                model: Some("kimi-code/second".into()),
+                thinking: None,
+                permission: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(resumed.model, "kimi-code/first");
+
+        client.set_default_model("kimi-code/second").await.unwrap();
+        client.configure_models(&models).await.unwrap();
+        let persisted = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        let persisted = toml::from_str::<toml::Value>(&persisted).unwrap();
+        assert_eq!(
+            persisted.get("default_model").and_then(toml::Value::as_str),
+            Some("kimi-code/second")
+        );
+        assert!(
+            persisted
+                .get("models")
+                .and_then(toml::Value::as_table)
+                .is_some_and(|models| models.contains_key("kimi-code/second"))
+        );
+
+        drop(client);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

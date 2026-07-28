@@ -88,6 +88,9 @@ export function createAgentClient(scope: AgentScope) {
         { model },
       );
     },
+    getModel() {
+      return callAgentRpc<string>(scope, "getModel");
+    },
     setThinking(level: string) {
       return callAgentRpc<void>(scope, "setThinking", { level });
     },
@@ -129,6 +132,10 @@ export function listWorkspaceSessions(
 
 export function archiveSession(sessionId: string): Promise<void> {
   return invoke<void>("archive_session", { sessionId });
+}
+
+export function setDefaultModel(model: string): Promise<void> {
+  return invoke<void>("set_default_model", { model });
 }
 
 export function prepareSession(input: {

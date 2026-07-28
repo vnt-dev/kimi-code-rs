@@ -64,6 +64,7 @@ import {
   listWorkspaceSessions,
   prepareSession,
   removeWorkspace,
+  setDefaultModel,
   subscribeAgentEvents,
   unsubscribeAgentEvents,
 } from "./agentRpc";
@@ -601,6 +602,7 @@ export default function App() {
   const [accountUsageBusy, setAccountUsageBusy] = useState(false);
   const [accountUsageError, setAccountUsageError] = useState<string>();
   const [modelsBusy, setModelsBusy] = useState(false);
+  const [modelBusy, setModelBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [copiedMessage, setCopiedMessage] = useState<string>();
   const [interactions, setInteractions] = useState<
@@ -643,8 +645,13 @@ export default function App() {
     () => getActive(desktop),
     [desktop],
   );
+  const defaultModel = models.find((model) => model.isDefault) ?? models[0];
   const selectedModel =
-    models.find((model) => model.id === activeConversation?.modelId) ?? models[0];
+    models.find(
+      (model) =>
+        model.id === activeConversation?.modelId ||
+        model.model === activeConversation?.modelId,
+    ) ?? defaultModel;
   const permissionMode = activeConversation?.permissionMode ?? "manual";
   const activeTurn = activeConversation
     ? inFlightTurns[activeConversation.id]
@@ -786,10 +793,10 @@ export default function App() {
     });
   };
 
-  const loadModels = async (): Promise<void> => {
+  const loadModels = async (refresh = false): Promise<void> => {
     setModelsBusy(true);
     try {
-      const nextModels = await invoke<Model[]>("list_models");
+      const nextModels = await invoke<Model[]>("list_models", { refresh });
       setModels(nextModels);
       if (nextModels.length === 0) showNotice("当前账号没有可用模型");
     } catch (error) {
@@ -893,13 +900,25 @@ export default function App() {
     void prepareSession({
       sessionId: activeConversation.id,
       workDir: activeProject.path,
-      model: selectedModel.id,
-      thinking: effort,
-      permission: permissionMode,
     })
       .then(async (scope) => {
         await ensureAgentSubscription(scope);
         if (disposed) return;
+        updateDesktop((current) => ({
+          ...current,
+          projects: current.projects.map((project) =>
+            project.id !== activeProject.id
+              ? project
+              : {
+                  ...project,
+                  conversations: project.conversations.map((conversation) =>
+                    conversation.id === activeConversation.id
+                      ? { ...conversation, modelId: scope.model }
+                      : conversation,
+                  ),
+                },
+          ),
+        }));
         setActiveAgentScope(scope);
         await refreshModeState(scope);
       })
@@ -1299,7 +1318,7 @@ export default function App() {
       });
       const conversation = {
         ...conversationFromSession(scope.sessionId),
-        modelId: model.id,
+        modelId: scope.model,
         permissionMode,
       };
       updateDesktop((current) => ({
@@ -1345,36 +1364,58 @@ export default function App() {
   };
 
   const chooseModel = (modelId: string): void => {
-    if (!activeConversation || !activeProject) return;
-    updateDesktop((current) => ({
-      ...current,
-      projects: current.projects.map((project) =>
-        project.id === activeProject.id
-          ? {
-              ...project,
-              conversations: project.conversations.map((conversation) =>
-                conversation.id === activeConversation.id
-                  ? { ...conversation, modelId }
-                  : conversation,
-              ),
-            }
-          : project,
-      ),
-    }));
+    if (!activeConversation || !activeProject || modelBusy) return;
+    if (!activeAgentScope) {
+      showNotice("The conversation is still preparing. Try again in a moment.");
+      return;
+    }
     const model = models.find((item) => item.id === modelId);
-    if (activeAgentScope) {
-      void createAgentClient(activeAgentScope)
-        .setModel(modelId)
-        .catch((error) => showNotice(conciseError(error)));
-    }
-    if (model?.defaultEffort) {
-      setEffort(model.defaultEffort);
-      if (activeAgentScope) {
-        void createAgentClient(activeAgentScope)
-          .setThinking(model.defaultEffort)
-          .catch((error) => showNotice(conciseError(error)));
+    const projectId = activeProject.id;
+    const conversationId = activeConversation.id;
+    const scope = activeAgentScope;
+    void (async () => {
+      setModelBusy(true);
+      try {
+        const agent = createAgentClient(scope);
+        await agent.setModel(modelId);
+        const effectiveModel = await agent.getModel();
+        if (effectiveModel !== modelId) {
+          throw new Error(
+            `Model switch returned "${effectiveModel}" instead of "${modelId}".`,
+          );
+        }
+        updateDesktop((current) => ({
+          ...current,
+          projects: current.projects.map((project) =>
+            project.id !== projectId
+              ? project
+              : {
+                  ...project,
+                  conversations: project.conversations.map((conversation) =>
+                    conversation.id === conversationId
+                      ? { ...conversation, modelId: effectiveModel }
+                      : conversation,
+                  ),
+                },
+          ),
+        }));
+        if (model?.defaultEffort) {
+          await agent.setThinking(model.defaultEffort);
+          setEffort(model.defaultEffort);
+        }
+        await setDefaultModel(effectiveModel);
+        setModels((current) =>
+          current.map((item) => ({
+            ...item,
+            isDefault: item.id === effectiveModel,
+          })),
+        );
+      } catch (error) {
+        showNotice(conciseError(error));
+      } finally {
+        setModelBusy(false);
       }
-    }
+    })();
   };
 
   const choosePermissionMode = (mode: PermissionMode): void => {
@@ -1451,7 +1492,7 @@ export default function App() {
       if (status.loggedIn) {
         setLoginOpen(false);
         showNotice("已登录 Kimi Code");
-        await loadModels();
+        await loadModels(true);
       }
     } catch (error) {
       showNotice(conciseError(error));
@@ -1534,6 +1575,7 @@ export default function App() {
       !activeProject ||
       !activeConversation ||
       isStreaming ||
+      modelBusy ||
       isHistoryLoading
     ) {
       return;
@@ -2184,7 +2226,7 @@ export default function App() {
                       : "登录后开始与 Kimi Code 对话…"
                   }
                   rows={1}
-                  disabled={isStreaming || hasBlockingInteraction}
+                  disabled={isStreaming || modelBusy || hasBlockingInteraction}
                 />
                 <div className="composer-toolbar">
                   <div className="composer-options">
@@ -2199,7 +2241,12 @@ export default function App() {
                           : selectedModel?.displayName ??
                             (auth.loggedIn ? "暂无模型" : "登录后选择模型")
                       }
-                      disabled={modelsBusy || !models.length}
+                      disabled={
+                        modelsBusy ||
+                        modelBusy ||
+                        !activeAgentScope ||
+                        !models.length
+                      }
                       options={models.map((model) => ({
                         value: model.id,
                         label: model.displayName,
@@ -2214,7 +2261,7 @@ export default function App() {
                         className="toolbar-icon"
                         type="button"
                         title="刷新模型列表"
-                        onClick={() => void loadModels()}
+                        onClick={() => void loadModels(true)}
                         disabled={modelsBusy}
                       >
                         <RefreshCw size={14} />
@@ -2261,7 +2308,7 @@ export default function App() {
                             ? "自动选择"
                             : "请求审批"
                       }
-                      disabled={isStreaming}
+                      disabled={isStreaming || modelBusy}
                       options={[
                         {
                           value: "manual",
@@ -2318,6 +2365,7 @@ export default function App() {
                           : hasBlockingInteraction ||
                             !prompt.trim() ||
                             isHistoryLoading ||
+                            modelBusy ||
                             !activeAgentScope
                       }
                       title="发送"

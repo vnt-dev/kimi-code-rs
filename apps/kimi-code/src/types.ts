@@ -94,6 +94,7 @@ export interface SessionSummary {
 export interface PreparedSession {
   sessionId: string;
   agentId: string;
+  model: string;
 }
 
 export interface PlanData {
@@ -138,6 +139,9 @@ export interface DeviceCode {
 
 export interface Model {
   id: string;
+  model: string;
+  providerId: string;
+  isDefault: boolean;
   displayName: string;
   contextLength: number;
   supportsReasoning: boolean;
