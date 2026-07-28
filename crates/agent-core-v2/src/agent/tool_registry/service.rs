@@ -77,17 +77,23 @@ impl AgentToolRegistryServiceContract for AgentToolRegistryService {
 
     // Original: toolRegistryService.ts, list().
     fn list(&self) -> Vec<ToolInfo> {
-        let state = self.state.lock().unwrap();
-        let mut tools = state
+        let entries = self
+            .state
+            .lock()
+            .unwrap()
             .tools
             .values()
-            .map(|entry| {
-                let definition = entry.tool.current_tool();
+            .map(|entry| (Arc::clone(&entry.tool), entry.source))
+            .collect::<Vec<_>>();
+        let mut tools = entries
+            .into_iter()
+            .map(|(tool, source)| {
+                let definition = tool.current_tool();
                 ToolInfo {
                     name: definition.name,
                     description: definition.description,
                     parameters: Some(definition.parameters),
-                    source: entry.source,
+                    source,
                     info: None,
                 }
             })
@@ -151,6 +157,11 @@ pub fn register_agent_tool_registry_service() {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::{Arc, mpsc},
+        time::Duration,
+    };
+
     use async_trait::async_trait;
     use serde_json::Value;
 
@@ -163,6 +174,30 @@ mod tests {
     struct TestTool {
         definition: Tool,
         current_description: Option<String>,
+    }
+
+    struct ReentrantTool {
+        definition: Tool,
+        registry: Arc<AgentToolRegistryService>,
+    }
+
+    #[async_trait]
+    impl ExecutableTool for ReentrantTool {
+        type Input = Value;
+
+        fn tool(&self) -> &Tool {
+            &self.definition
+        }
+
+        fn current_tool(&self) -> Tool {
+            let mut definition = self.definition.clone();
+            definition.description = format!("{} tools", self.registry.list_references().len());
+            definition
+        }
+
+        async fn resolve_execution(&self, _input: Value) -> ToolExecution {
+            ToolExecution::Error(crate::tool::ExecutableToolResult::success("unused"))
+        }
     }
 
     impl TestTool {
@@ -262,5 +297,32 @@ mod tests {
             registry.resolve("Agent").unwrap().tool().description,
             "initial"
         );
+    }
+
+    #[test]
+    fn list_releases_registry_lock_before_resolving_dynamic_definitions() {
+        let registry = Arc::new(AgentToolRegistryService::new());
+        registry.register(
+            Arc::new(ReentrantTool {
+                definition: Tool {
+                    name: "Agent".into(),
+                    description: "initial".into(),
+                    parameters: serde_json::Map::new(),
+                    deferred: None,
+                },
+                registry: Arc::clone(&registry),
+            }),
+            ToolRegistrationOptions::default(),
+        );
+
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(registry.list());
+        });
+        let listed = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("dynamic tool definition must not deadlock the registry");
+
+        assert_eq!(listed[0].description, "1 tools");
     }
 }
