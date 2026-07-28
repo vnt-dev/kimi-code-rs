@@ -176,6 +176,11 @@ export type AgentContentPart =
   | { type: "audio_url"; audioUrl: { url: string; id?: string } }
   | { type: "video_url"; videoUrl: { url: string; id?: string } };
 
+export type AgentPromptPart = Extract<
+  AgentContentPart,
+  { type: "text" | "image_url" | "video_url" }
+>;
+
 export type AgentChatEvent =
   | {
       type: "turn.started";

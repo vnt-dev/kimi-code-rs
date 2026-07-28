@@ -2,6 +2,8 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type ClipboardEvent,
+  type ChangeEvent,
   type ReactNode,
   isValidElement,
   useEffect,
@@ -40,6 +42,7 @@ import {
   Minus,
   Minimize2,
   MoreHorizontal,
+  ImagePlus,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -96,6 +99,7 @@ import type {
   MessagePage,
   ManagedUsageRow,
   Model,
+  AgentPromptPart,
   PermissionMode,
   PlanData,
   PlanReviewDisplay,
@@ -107,6 +111,16 @@ import type {
 } from "./types";
 
 const HISTORY_PAGE_SIZE = 50;
+const MAX_PROMPT_IMAGES = 8;
+const MAX_PROMPT_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_PROMPT_IMAGE_DIMENSION = 2048;
+const IMAGE_COMPRESSION_THRESHOLD = 4 * 1024 * 1024;
+const PROMPT_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
 
 type RenderMessage = ProtocolMessage & {
   status?: "streaming" | "done" | "error";
@@ -175,6 +189,7 @@ interface LiveStep {
 
 interface InFlightTurn {
   prompt: string;
+  images: readonly PromptImage[];
   createdAt: string;
   turnId?: number;
   status: LiveTurnStatus;
@@ -182,6 +197,81 @@ interface InFlightTurn {
   steps: LiveStep[];
   error?: string;
   historyBoundaryId?: string;
+}
+
+interface PromptImage {
+  id: string;
+  name: string;
+  dataUrl: string;
+}
+
+function readFileAsDataUrl(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      typeof reader.result === "string"
+        ? resolve(reader.result)
+        : reject(new Error("无法读取图片"));
+    reader.onerror = () => reject(reader.error ?? new Error("无法读取图片"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function canvasToBlob(
+  canvas: HTMLCanvasElement,
+  type: string,
+  quality?: number,
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) =>
+        blob ? resolve(blob) : reject(new Error("无法处理所选图片")),
+      type,
+      quality,
+    );
+  });
+}
+
+async function preparePromptImage(file: File): Promise<PromptImage> {
+  if (!PROMPT_IMAGE_TYPES.has(file.type)) {
+    throw new Error(`不支持 ${file.name} 的图片格式`);
+  }
+  if (file.size > MAX_PROMPT_IMAGE_BYTES) {
+    throw new Error(`${file.name} 超过 20 MB`);
+  }
+
+  let payload: Blob = file;
+  if (file.type !== "image/gif") {
+    const bitmap = await createImageBitmap(file);
+    try {
+      const scale = Math.min(
+        1,
+        MAX_PROMPT_IMAGE_DIMENSION / Math.max(bitmap.width, bitmap.height),
+      );
+      if (scale < 1 || file.size > IMAGE_COMPRESSION_THRESHOLD) {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        const context = canvas.getContext("2d", { alpha: false });
+        if (!context) throw new Error("无法处理所选图片");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        payload = await canvasToBlob(canvas, "image/jpeg", 0.86);
+      }
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  return {
+    id:
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: file.name || "clipboard-image",
+    dataUrl: await readFileAsDataUrl(payload),
+  };
 }
 
 interface AgentSubscription {
@@ -268,10 +358,12 @@ function fetchMessagePage(
 
 function newInFlightTurn(
   prompt: string,
+  images: readonly PromptImage[],
   historyBoundaryId?: string,
 ): InFlightTurn {
   return {
     prompt,
+    images,
     createdAt: new Date().toISOString(),
     status: "queued",
     steps: [],
@@ -602,6 +694,7 @@ export default function App() {
   });
   const [models, setModels] = useState<Model[]>([]);
   const [prompt, setPrompt] = useState("");
+  const [promptImages, setPromptImages] = useState<PromptImage[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
@@ -641,6 +734,7 @@ export default function App() {
     agentId: string;
   }>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -1213,6 +1307,7 @@ export default function App() {
     );
     if (activeConversation && ids.has(activeConversation.id)) {
       setPrompt("");
+      setPromptImages([]);
       setResolvingInteraction(undefined);
     }
   };
@@ -1370,6 +1465,7 @@ export default function App() {
         ),
       }));
       setPrompt("");
+      setPromptImages([]);
     } catch (error) {
       showNotice(conciseError(error));
     }
@@ -1640,10 +1736,57 @@ export default function App() {
     }
   };
 
+  const addPromptImages = async (files: readonly File[]): Promise<void> => {
+    if (files.length === 0) return;
+    if (!selectedModel?.supportsImage) {
+      showNotice("当前模型不支持图片输入");
+      return;
+    }
+    const remaining = MAX_PROMPT_IMAGES - promptImages.length;
+    if (remaining <= 0) {
+      showNotice(`每次最多添加 ${MAX_PROMPT_IMAGES} 张图片`);
+      return;
+    }
+
+    const selected = files.slice(0, remaining);
+    const prepared: PromptImage[] = [];
+    for (const file of selected) {
+      try {
+        prepared.push(await preparePromptImage(file));
+      } catch (error) {
+        showNotice(conciseError(error));
+      }
+    }
+    if (prepared.length > 0) {
+      setPromptImages((current) => [...current, ...prepared]);
+    }
+    if (files.length > remaining) {
+      showNotice(`每次最多添加 ${MAX_PROMPT_IMAGES} 张图片`);
+    }
+  };
+
+  const handleImageInput = (event: ChangeEvent<HTMLInputElement>): void => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    void addPromptImages(files);
+  };
+
+  const handlePromptPaste = (
+    event: ClipboardEvent<HTMLTextAreaElement>,
+  ): void => {
+    const images = Array.from(event.clipboardData.items)
+      .filter(
+        (item) => item.kind === "file" && item.type.startsWith("image/"),
+      )
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (images.length > 0) void addPromptImages(images);
+  };
+
   const sendPrompt = async (override?: string): Promise<void> => {
     const text = (override ?? prompt).trim();
     if (
-      !text ||
+      (!text && promptImages.length === 0) ||
       !activeProject ||
       !activeConversation ||
       isStreaming ||
@@ -1660,6 +1803,10 @@ export default function App() {
       showNotice("请先同步并选择一个模型");
       return;
     }
+    if (promptImages.length > 0 && !selectedModel.supportsImage) {
+      showNotice("当前模型不支持图片输入");
+      return;
+    }
 
     const conversationId = activeConversation.id;
     const projectId = activeProject.id;
@@ -1669,8 +1816,20 @@ export default function App() {
     }
     const title =
       activeConversation.title === "新对话"
-        ? text.replace(/\s+/g, " ").slice(0, 28)
+        ? (text || `图片对话（${promptImages.length} 张）`)
+            .replace(/\s+/g, " ")
+            .slice(0, 28)
         : activeConversation.title;
+    const images = [...promptImages];
+    const input: AgentPromptPart[] = [
+      ...(text ? [{ type: "text" as const, text }] : []),
+      ...images.map(
+        (image): AgentPromptPart => ({
+          type: "image_url",
+          imageUrl: { url: image.dataUrl, id: image.id },
+        }),
+      ),
+    ];
 
     setCompactions((current) => {
       if (!(conversationId in current)) return current;
@@ -1682,6 +1841,7 @@ export default function App() {
       ...current,
       [conversationId]: newInFlightTurn(
         text,
+        images,
         activeHistory?.items.at(-1)?.id,
       ),
     }));
@@ -1706,9 +1866,10 @@ export default function App() {
       ),
     }));
     setPrompt("");
+    setPromptImages([]);
 
     try {
-      const launched = await createAgentClient(activeAgentScope).prompt(text);
+      const launched = await createAgentClient(activeAgentScope).prompt(input);
       if (!launched) {
         setInFlightTurns((current) => {
           const turn = current[conversationId];
@@ -2287,11 +2448,41 @@ export default function App() {
                 />
               ) : null}
               <form className="composer" onSubmit={handleSubmit}>
+                {promptImages.length > 0 && (
+                  <div className="prompt-image-list">
+                    {promptImages.map((image) => (
+                      <figure className="prompt-image" key={image.id}>
+                        <img src={image.dataUrl} alt={image.name} />
+                        <button
+                          type="button"
+                          aria-label={`移除 ${image.name}`}
+                          title="移除图片"
+                          onClick={() =>
+                            setPromptImages((current) =>
+                              current.filter((item) => item.id !== image.id),
+                            )
+                          }
+                        >
+                          <X size={12} />
+                        </button>
+                      </figure>
+                    ))}
+                  </div>
+                )}
+                <input
+                  ref={imageInputRef}
+                  className="prompt-image-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  multiple
+                  onChange={handleImageInput}
+                />
                 <textarea
                   ref={textareaRef}
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
                   onKeyDown={handlePromptKeyDown}
+                  onPaste={handlePromptPaste}
                   placeholder={
                     activePlan
                       ? "计划模式：描述需要分析和规划的任务…"
@@ -2304,6 +2495,25 @@ export default function App() {
                 />
                 <div className="composer-toolbar">
                   <div className="composer-options">
+                    <button
+                      className="toolbar-icon image-button"
+                      type="button"
+                      title={
+                        selectedModel?.supportsImage
+                          ? "添加图片"
+                          : "当前模型不支持图片输入"
+                      }
+                      aria-label="添加图片"
+                      onClick={() => imageInputRef.current?.click()}
+                      disabled={
+                        !selectedModel?.supportsImage ||
+                        isStreaming ||
+                        modelBusy ||
+                        promptImages.length >= MAX_PROMPT_IMAGES
+                      }
+                    >
+                      <ImagePlus size={14} />
+                    </button>
                     <ToolbarSelect
                       className="model-select"
                       ariaLabel="选择模型"
@@ -2431,10 +2641,12 @@ export default function App() {
                         isStreaming
                           ? !activeAgentScope
                           : hasBlockingInteraction ||
-                            !prompt.trim() ||
+                            (!prompt.trim() && promptImages.length === 0) ||
                             isHistoryLoading ||
                             modelBusy ||
-                            !activeAgentScope
+                            !activeAgentScope ||
+                            (promptImages.length > 0 &&
+                              !selectedModel?.supportsImage)
                       }
                       title="发送"
                     >
@@ -3449,7 +3661,10 @@ function LiveTurnView({ turn }: { turn: InFlightTurn }) {
         <div className="message-meta">
           <time>{formatTime(turn.createdAt)}</time>
         </div>
-        <div className="user-bubble">{turn.prompt}</div>
+        <div className="user-bubble">
+          {turn.prompt}
+          <PromptImageContent images={turn.images} />
+        </div>
       </article>
       <article className={`message assistant-message live-turn ${turn.status}`}>
         <div className="assistant-rail">
@@ -3912,6 +4127,31 @@ function mediaSourceUrl(
   return undefined;
 }
 
+function MessageImage({
+  src,
+  alt,
+}: {
+  src: string;
+  alt: string;
+}) {
+  return <img className="history-media" src={src} alt={alt} />;
+}
+
+function PromptImageContent({
+  images,
+}: {
+  images: readonly PromptImage[];
+}) {
+  if (images.length === 0) return null;
+  return (
+    <div className="structured-content">
+      {images.map((image) => (
+        <MessageImage src={image.dataUrl} alt={image.name} key={image.id} />
+      ))}
+    </div>
+  );
+}
+
 function StructuredMessageContent({
   parts,
   toolResults,
@@ -3970,7 +4210,7 @@ function StructuredMessageContent({
           case "image": {
             const url = mediaSourceUrl(part.source);
             return url ? (
-              <img className="history-media" src={url} alt="会话图片" key={index} />
+              <MessageImage src={url} alt="会话图片" key={index} />
             ) : (
               <div className="history-file" key={index}>
                 图片文件：{part.source.kind === "file" ? part.source.file_id : ""}

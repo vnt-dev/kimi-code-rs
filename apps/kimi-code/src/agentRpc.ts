@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   AgentConfig,
+  AgentPromptPart,
   PermissionMode,
   PlanData,
   PreparedSession,
@@ -74,9 +75,12 @@ export async function callAgentRpc<T>(
 
 export function createAgentClient(scope: AgentScope) {
   return {
-    prompt(text: string) {
+    prompt(input: string | readonly AgentPromptPart[]) {
       return callAgentRpc<{ turnId: number } | null>(scope, "prompt", {
-        input: [{ type: "text", text }],
+        input:
+          typeof input === "string"
+            ? [{ type: "text", text: input }]
+            : [...input],
       });
     },
     cancel(turnId?: number) {
