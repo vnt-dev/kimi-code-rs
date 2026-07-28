@@ -81,12 +81,15 @@ impl AgentToolRegistryServiceContract for AgentToolRegistryService {
         let mut tools = state
             .tools
             .values()
-            .map(|entry| ToolInfo {
-                name: entry.tool.tool().name.clone(),
-                description: entry.tool.tool().description.clone(),
-                parameters: Some(entry.tool.tool().parameters.clone()),
-                source: entry.source,
-                info: None,
+            .map(|entry| {
+                let definition = entry.tool.current_tool();
+                ToolInfo {
+                    name: definition.name,
+                    description: definition.description,
+                    parameters: Some(definition.parameters),
+                    source: entry.source,
+                    info: None,
+                }
             })
             .collect::<Vec<_>>();
         tools.sort_by(|left, right| left.name.cmp(&right.name));
@@ -159,6 +162,7 @@ mod tests {
 
     struct TestTool {
         definition: Tool,
+        current_description: Option<String>,
     }
 
     impl TestTool {
@@ -170,7 +174,14 @@ mod tests {
                     parameters: serde_json::Map::new(),
                     deferred: None,
                 },
+                current_description: None,
             }
+        }
+
+        fn dynamic(name: &str, static_description: &str, current_description: &str) -> Self {
+            let mut tool = Self::new(name, static_description);
+            tool.current_description = Some(current_description.into());
+            tool
         }
     }
 
@@ -180,6 +191,14 @@ mod tests {
 
         fn tool(&self) -> &Tool {
             &self.definition
+        }
+
+        fn current_tool(&self) -> Tool {
+            let mut definition = self.definition.clone();
+            if let Some(description) = &self.current_description {
+                definition.description = description.clone();
+            }
+            definition
         }
 
         async fn resolve_execution(&self, _input: Value) -> ToolExecution {
@@ -227,5 +246,21 @@ mod tests {
         assert!(registry.resolve("Read").is_none());
         zed.dispose().unwrap();
         assert!(registry.list().is_empty());
+    }
+
+    #[test]
+    fn list_uses_the_current_dynamic_tool_definition() {
+        let registry = AgentToolRegistryService::new();
+        registry.register(
+            Arc::new(TestTool::dynamic("Agent", "initial", "current")),
+            ToolRegistrationOptions::default(),
+        );
+
+        let listed = registry.list();
+        assert_eq!(listed[0].description, "current");
+        assert_eq!(
+            registry.resolve("Agent").unwrap().tool().description,
+            "initial"
+        );
     }
 }

@@ -282,11 +282,14 @@ impl AgentToolSelectServiceContract for AgentToolSelectService {
                 .to_load
                 .iter()
                 .filter_map(|name| self.registry.resolve(name))
-                .map(|tool| Tool {
-                    name: tool.tool().name.clone(),
-                    description: tool.tool().description.clone(),
-                    parameters: tool.tool().parameters.clone(),
-                    deferred: None,
+                .map(|tool| {
+                    let definition = tool.current_tool();
+                    Tool {
+                        name: definition.name,
+                        description: definition.description,
+                        parameters: definition.parameters,
+                        deferred: None,
+                    }
                 })
                 .collect();
             let mut message = Message::new(Role::System, Vec::new(), Vec::new());

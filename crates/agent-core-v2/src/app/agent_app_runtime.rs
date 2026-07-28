@@ -119,6 +119,7 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
     register_exit_plan_mode_tool();
     register_ask_user_question_tool();
     crate::os::backends::node_local::tools::register_node_local_tools();
+    crate::session::subagent::register_agent_tool();
     Ok(())
 }
 

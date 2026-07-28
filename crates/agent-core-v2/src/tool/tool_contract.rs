@@ -186,6 +186,10 @@ pub trait ExecutableTool: Send + Sync {
 
     fn tool(&self) -> &Tool;
 
+    fn current_tool(&self) -> Tool {
+        self.tool().clone()
+    }
+
     async fn resolve_execution(&self, input: Self::Input) -> ToolExecution;
 }
 
@@ -197,6 +201,8 @@ impl<T: ExecutableTool> BuiltinTool for T {}
 #[async_trait]
 pub trait ErasedExecutableTool: Send + Sync {
     fn tool(&self) -> &Tool;
+
+    fn current_tool(&self) -> Tool;
 
     async fn resolve_execution_value(
         &self,
@@ -212,6 +218,10 @@ where
 {
     fn tool(&self) -> &Tool {
         ExecutableTool::tool(self)
+    }
+
+    fn current_tool(&self) -> Tool {
+        ExecutableTool::current_tool(self)
     }
 
     async fn resolve_execution_value(
