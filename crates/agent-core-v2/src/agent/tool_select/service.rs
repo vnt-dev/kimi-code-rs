@@ -40,12 +40,12 @@ use crate::{
 };
 
 use super::{
-    DYNAMIC_TOOL_SCHEMA_VARIANT, collect_loaded_dynamic_tool_names, fold_announced_tool_names,
-    render_loadable_tools_announcement, strip_dynamic_tool_context,
+    DYNAMIC_TOOL_SCHEMA_VARIANT, TOOL_SELECT_FLAG_ID, collect_loaded_dynamic_tool_names,
+    fold_announced_tool_names, register_tool_select_flag, render_loadable_tools_announcement,
+    strip_dynamic_tool_context,
 };
 
 pub const SELECT_TOOLS_TOOL_NAME: &str = "select_tools";
-pub const TOOL_SELECT_FLAG_ID: &str = "tool-select";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapedToolEntry {
@@ -382,6 +382,7 @@ fn describe_unavailable(
     (source == ToolSource::Mcp && active && !loaded.contains(name)).then(|| format!("Tool \"{name}\" is available but not loaded. Call select_tools with [\"{name}\"] first, then call the tool."))
 }
 pub fn register_agent_tool_select_service() {
+    register_tool_select_flag();
     register_scoped_service(
         LifecycleScope::Agent,
         AGENT_TOOL_SELECT_SERVICE_ID,
