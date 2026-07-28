@@ -6,6 +6,7 @@ pub mod edit_service;
 pub mod file_edit;
 pub mod file_edit_service;
 pub mod text_model;
+pub mod tools;
 
 pub use edit_service::{EditApplyInput, EditApplyResult, EditService};
 pub use file_edit::{
@@ -14,3 +15,4 @@ pub use file_edit::{
 };
 pub use file_edit_service::{FileEditService, register_file_edit_service};
 pub use text_model::TextModel;
+pub use tools::*;

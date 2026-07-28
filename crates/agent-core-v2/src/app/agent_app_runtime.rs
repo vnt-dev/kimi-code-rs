@@ -118,6 +118,7 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
     register_enter_plan_mode_tool();
     register_exit_plan_mode_tool();
     register_ask_user_question_tool();
+    crate::app::edit::register_edit_tool();
     crate::os::backends::node_local::tools::register_node_local_tools();
     crate::session::subagent::register_agent_tool();
     Ok(())
@@ -185,6 +186,7 @@ fn register_agent_app_services_once() {
             },
             config::{register_config_registry, register_config_service},
             cron::register_cron_task_persistence_service,
+            edit::register_file_edit_service,
             event::{register_event_bus_service, register_event_service},
             external_hooks_runner::register_external_hooks_runner_service,
             file::register_file_service,
@@ -266,6 +268,7 @@ fn register_agent_app_services_once() {
     register_workspace_local_config_service();
     register_local_host_environment_service();
     register_local_host_file_system_service();
+    register_file_edit_service();
     register_local_host_process_service();
     register_local_host_terminal_service();
 
