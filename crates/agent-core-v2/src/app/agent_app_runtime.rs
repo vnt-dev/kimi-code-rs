@@ -191,6 +191,7 @@ fn register_agent_app_services_once() {
                 register_oauth_service, register_oauth_toolkit_service,
                 register_web_search_provider_service,
             },
+            auth_legacy::register_auth_legacy_service,
             config::{register_config_registry, register_config_service},
             cron::register_cron_task_persistence_service,
             edit::register_file_edit_service,
@@ -198,6 +199,8 @@ fn register_agent_app_services_once() {
             external_hooks_runner::register_external_hooks_runner_service,
             file::register_file_service,
             flag::{register_flag_registry_service, register_flag_service},
+            git::register_git_service,
+            host_folder_browser::register_host_folder_browser,
             message_legacy::register_message_legacy_service,
             plugin::register_plugin_service,
             session_index::register_session_index_service,
@@ -288,6 +291,7 @@ fn register_agent_app_services_once() {
     register_flag_service();
     register_oauth_toolkit_service();
     register_oauth_service();
+    register_auth_legacy_service();
     register_protocol_adapter_registry();
     register_provider_service();
     register_model_service();
@@ -303,11 +307,13 @@ fn register_agent_app_services_once() {
     register_plugin_service();
     register_workspace_persistence();
     register_workspace_registry_service();
+    register_host_folder_browser();
     register_session_index_service();
     register_workspace_query_service();
     register_cron_task_persistence_service();
     register_external_hooks_runner_service();
     register_file_service();
+    register_git_service();
     register_web_fetch_service();
     register_web_search_provider_service();
     register_session_lifecycle_service();
