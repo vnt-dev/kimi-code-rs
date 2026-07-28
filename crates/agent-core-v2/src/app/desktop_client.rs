@@ -213,6 +213,8 @@ pub struct DesktopPreparedSession {
     pub session_id: String,
     pub agent_id: String,
     pub model: String,
+    pub thinking_level: String,
+    pub permission_mode: PermissionMode,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -733,11 +735,23 @@ impl KimiCodeDesktopClient {
             .get_model(EmptyPayload {})
             .await
             .map_err(|error| error.to_string())?;
+        let thinking_level = agent
+            .get(AGENT_PROFILE_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .get_effective_thinking_level()
+            .map_err(|error| error.to_string())?
+            .to_string();
+        let permission_mode = agent
+            .get(AGENT_PERMISSION_MODE_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .mode();
 
         Ok(DesktopPreparedSession {
             session_id: session.id().to_owned(),
             agent_id: agent.id().to_owned(),
             model,
+            thinking_level,
+            permission_mode,
         })
     }
 
@@ -1218,6 +1232,12 @@ impl KimiCodeDesktopClient {
             },
         )
         .map_err(|error| error.to_string())?;
+        generated
+            .entry(THINKING_SECTION.to_owned())
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| "The thinking configuration must be an object.".to_owned())?
+            .insert("enabled".to_owned(), Value::Bool(true));
         for section in [PROVIDERS_SECTION, MODELS_SECTION, SERVICES_SECTION] {
             let next = generated.get(section).cloned();
             if config.inspect(section).user_value != next {
@@ -1519,6 +1539,7 @@ mod tests {
         agent::{
             context_size::ContextSize,
             loop_::{AssistantDeltaEvent, ThinkingDeltaEvent},
+            permission_policy::PermissionMode,
         },
         app::event::event_bus::DomainEvent,
         kosong::model::ModelCatalogItem,
@@ -1574,14 +1595,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persists_default_model_and_does_not_override_resumed_session_model() {
+    async fn session_settings_are_restored_instead_of_overridden_by_new_defaults() {
         let root = std::env::temp_dir().join(format!(
             "kimi-desktop-model-selection-{}",
             uuid::Uuid::new_v4()
         ));
         let home = root.join("home");
         let work_dir = root.join("workspace");
+        std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&work_dir).unwrap();
+        std::fs::write(home.join("config.toml"), "[thinking]\nenabled = false\n").unwrap();
         let client = KimiCodeDesktopClient::new(&home, "test").unwrap();
         let models = [managed_model("first"), managed_model("second")];
         client.configure_models(&models).await.unwrap();
@@ -1596,23 +1619,30 @@ mod tests {
                 work_dir: work_dir.to_string_lossy().into_owned(),
                 model: Some("kimi-code/first".into()),
                 thinking: Some("high".into()),
-                permission: None,
+                permission: Some(PermissionMode::Yolo),
             })
             .await
             .unwrap();
         assert_eq!(created.model, "kimi-code/first");
+        assert_eq!(created.thinking_level, "high");
+        assert_eq!(created.permission_mode, PermissionMode::Yolo);
+        let created_json = serde_json::to_value(&created).unwrap();
+        assert_eq!(created_json["thinkingLevel"], "high");
+        assert_eq!(created_json["permissionMode"], "yolo");
 
         let resumed = client
             .prepare_session(DesktopPrepareSessionRequest {
                 session_id: Some(created.session_id),
                 work_dir: work_dir.to_string_lossy().into_owned(),
                 model: Some("kimi-code/second".into()),
-                thinking: None,
-                permission: None,
+                thinking: Some("low".into()),
+                permission: Some(PermissionMode::Auto),
             })
             .await
             .unwrap();
         assert_eq!(resumed.model, "kimi-code/first");
+        assert_eq!(resumed.thinking_level, "high");
+        assert_eq!(resumed.permission_mode, PermissionMode::Yolo);
 
         client.set_default_model("kimi-code/second").await.unwrap();
         client.configure_models(&models).await.unwrap();
@@ -1621,6 +1651,14 @@ mod tests {
         assert_eq!(
             persisted.get("default_model").and_then(toml::Value::as_str),
             Some("kimi-code/second")
+        );
+        assert_eq!(
+            persisted
+                .get("thinking")
+                .and_then(toml::Value::as_table)
+                .and_then(|thinking| thinking.get("enabled"))
+                .and_then(toml::Value::as_bool),
+            Some(true)
         );
         assert!(
             persisted

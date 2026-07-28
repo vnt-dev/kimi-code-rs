@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AgentConfig,
   PermissionMode,
   PlanData,
   PreparedSession,
@@ -90,6 +91,9 @@ export function createAgentClient(scope: AgentScope) {
     },
     getModel() {
       return callAgentRpc<string>(scope, "getModel");
+    },
+    getConfig() {
+      return callAgentRpc<AgentConfig>(scope, "getConfig");
     },
     setThinking(level: string) {
       return callAgentRpc<void>(scope, "setThinking", { level });

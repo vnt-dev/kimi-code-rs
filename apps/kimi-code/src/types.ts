@@ -53,6 +53,7 @@ export interface Conversation {
   createdAt: number;
   updatedAt: number;
   modelId?: string;
+  thinkingLevel?: string;
   permissionMode?: PermissionMode;
 }
 
@@ -95,6 +96,13 @@ export interface PreparedSession {
   sessionId: string;
   agentId: string;
   model: string;
+  thinkingLevel: string;
+  permissionMode: PermissionMode;
+}
+
+export interface AgentConfig {
+  modelAlias?: string;
+  thinkingLevel: string;
 }
 
 export interface PlanData {

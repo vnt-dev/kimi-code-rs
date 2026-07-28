@@ -589,6 +589,30 @@ function omitSessionKeys<T>(
   return changed ? next : current;
 }
 
+const THINKING_LEVELS = ["low", "medium", "high"] as const;
+
+function thinkingLevelsForModel(model?: Model): string[] {
+  if (!model?.supportEfforts.length) return [...THINKING_LEVELS];
+  const supported = THINKING_LEVELS.filter((level) =>
+    model.supportEfforts.includes(level),
+  );
+  return supported.length ? supported : [...THINKING_LEVELS];
+}
+
+function normalizeThinkingLevel(
+  level: string | undefined,
+  model?: Model,
+): string {
+  const supported = thinkingLevelsForModel(model);
+  if (level && supported.includes(level)) return level;
+  if (model?.defaultEffort && supported.includes(model.defaultEffort)) {
+    return model.defaultEffort;
+  }
+  return supported.includes("medium")
+    ? "medium"
+    : supported[Math.floor(supported.length / 2)];
+}
+
 export default function App() {
   const [desktop, setDesktop] = useState<DesktopState>({ projects: [] });
   const [auth, setAuth] = useState<AuthStatus>({
@@ -597,7 +621,6 @@ export default function App() {
   });
   const [models, setModels] = useState<Model[]>([]);
   const [prompt, setPrompt] = useState("");
-  const [effort, setEffort] = useState("medium");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
@@ -658,6 +681,10 @@ export default function App() {
         model.id === activeConversation?.modelId ||
         model.model === activeConversation?.modelId,
     ) ?? defaultModel;
+  const effort = normalizeThinkingLevel(
+    activeConversation?.thinkingLevel,
+    selectedModel,
+  );
   const permissionMode = activeConversation?.permissionMode ?? "manual";
   const activeTurn = activeConversation
     ? inFlightTurns[activeConversation.id]
@@ -910,6 +937,19 @@ export default function App() {
       .then(async (scope) => {
         await ensureAgentSubscription(scope);
         if (disposed) return;
+        const sessionModel = models.find(
+          (model) => model.id === scope.model || model.model === scope.model,
+        );
+        const thinkingLevel = normalizeThinkingLevel(
+          scope.thinkingLevel,
+          sessionModel,
+        );
+        if (
+          sessionModel?.supportsReasoning &&
+          thinkingLevel !== scope.thinkingLevel
+        ) {
+          await createAgentClient(scope).setThinking(thinkingLevel);
+        }
         updateDesktop((current) => ({
           ...current,
           projects: current.projects.map((project) =>
@@ -919,7 +959,12 @@ export default function App() {
                   ...project,
                   conversations: project.conversations.map((conversation) =>
                     conversation.id === activeConversation.id
-                      ? { ...conversation, modelId: scope.model }
+                      ? {
+                          ...conversation,
+                          modelId: scope.model,
+                          thinkingLevel,
+                          permissionMode: scope.permissionMode,
+                        }
                       : conversation,
                   ),
                 },
@@ -1325,7 +1370,8 @@ export default function App() {
       const conversation = {
         ...conversationFromSession(scope.sessionId),
         modelId: scope.model,
-        permissionMode,
+        thinkingLevel: scope.thinkingLevel,
+        permissionMode: scope.permissionMode,
       };
       updateDesktop((current) => ({
         ...current,
@@ -1371,7 +1417,7 @@ export default function App() {
 
   const chooseModel = (modelId: string): void => {
     if (!activeConversation || !activeProject || modelBusy) return;
-    if (!activeAgentScope) {
+    if (activeAgentScope?.sessionId !== activeConversation.id) {
       showNotice("The conversation is still preparing. Try again in a moment.");
       return;
     }
@@ -1385,6 +1431,14 @@ export default function App() {
         const agent = createAgentClient(scope);
         await agent.setModel(modelId);
         const effectiveModel = await agent.getModel();
+        const config = await agent.getConfig();
+        const thinkingLevel = normalizeThinkingLevel(
+          config.thinkingLevel,
+          model,
+        );
+        if (model?.supportsReasoning && thinkingLevel !== config.thinkingLevel) {
+          await agent.setThinking(thinkingLevel);
+        }
         if (effectiveModel !== modelId) {
           throw new Error(
             `Model switch returned "${effectiveModel}" instead of "${modelId}".`,
@@ -1399,16 +1453,16 @@ export default function App() {
                   ...project,
                   conversations: project.conversations.map((conversation) =>
                     conversation.id === conversationId
-                      ? { ...conversation, modelId: effectiveModel }
+                      ? {
+                          ...conversation,
+                          modelId: effectiveModel,
+                          thinkingLevel,
+                        }
                       : conversation,
                   ),
                 },
           ),
         }));
-        if (model?.defaultEffort) {
-          await agent.setThinking(model.defaultEffort);
-          setEffort(model.defaultEffort);
-        }
         await setDefaultModel(effectiveModel);
         setModels((current) =>
           current.map((item) => ({
@@ -1426,35 +1480,64 @@ export default function App() {
 
   const choosePermissionMode = (mode: PermissionMode): void => {
     if (!activeConversation || !activeProject) return;
-    updateDesktop((current) => ({
-      ...current,
-      projects: current.projects.map((project) =>
-        project.id !== activeProject.id
-          ? project
-          : {
-              ...project,
-              conversations: project.conversations.map((conversation) =>
-                conversation.id === activeConversation.id
-                  ? { ...conversation, permissionMode: mode }
-                  : conversation,
-              ),
-            },
-      ),
-    }));
-    if (activeAgentScope) {
-      void createAgentClient(activeAgentScope)
-        .setPermission(mode)
-        .catch((error) => showNotice(conciseError(error)));
+    if (activeAgentScope?.sessionId !== activeConversation.id) {
+      showNotice("The conversation is still preparing. Try again in a moment.");
+      return;
     }
+    const projectId = activeProject.id;
+    const conversationId = activeConversation.id;
+    const scope = activeAgentScope;
+    void createAgentClient(scope)
+      .setPermission(mode)
+      .then(() => {
+        updateDesktop((current) => ({
+          ...current,
+          projects: current.projects.map((project) =>
+            project.id !== projectId
+              ? project
+              : {
+                  ...project,
+                  conversations: project.conversations.map((conversation) =>
+                    conversation.id === conversationId
+                      ? { ...conversation, permissionMode: mode }
+                      : conversation,
+                  ),
+                },
+          ),
+        }));
+      })
+      .catch((error) => showNotice(conciseError(error)));
   };
 
   const chooseEffort = (level: string): void => {
-    setEffort(level);
-    if (activeAgentScope) {
-      void createAgentClient(activeAgentScope)
-        .setThinking(level)
-        .catch((error) => showNotice(conciseError(error)));
+    if (!activeConversation || !activeProject) return;
+    if (activeAgentScope?.sessionId !== activeConversation.id) {
+      showNotice("The conversation is still preparing. Try again in a moment.");
+      return;
     }
+    const projectId = activeProject.id;
+    const conversationId = activeConversation.id;
+    const scope = activeAgentScope;
+    void createAgentClient(scope)
+      .setThinking(level)
+      .then(() => {
+        updateDesktop((current) => ({
+          ...current,
+          projects: current.projects.map((project) =>
+            project.id !== projectId
+              ? project
+              : {
+                  ...project,
+                  conversations: project.conversations.map((conversation) =>
+                    conversation.id === conversationId
+                      ? { ...conversation, thinkingLevel: level }
+                      : conversation,
+                  ),
+                },
+          ),
+        }));
+      })
+      .catch((error) => showNotice(conciseError(error)));
   };
 
   const togglePlanMode = async (): Promise<void> => {
@@ -2282,19 +2365,18 @@ export default function App() {
                         icon={<BrainCircuit size={15} />}
                         value={effort}
                         label={`思考 · ${effort}`}
-                        options={(selectedModel.supportEfforts.length
-                          ? selectedModel.supportEfforts
-                          : ["low", "medium", "high"]
-                        ).map((value) => ({
-                          value,
-                          label: `思考 · ${value}`,
-                          description:
-                            value === "low"
-                              ? "快速响应，适合简单任务"
-                              : value === "high"
-                                ? "更深入分析复杂问题"
-                                : "速度与推理深度平衡",
-                        }))}
+                        options={thinkingLevelsForModel(selectedModel).map(
+                          (value) => ({
+                            value,
+                            label: `思考 · ${value}`,
+                            description:
+                              value === "low"
+                                ? "快速响应，适合简单任务"
+                                : value === "high"
+                                  ? "更深入分析复杂问题"
+                                  : "速度与推理深度平衡",
+                          }),
+                        )}
                         onChange={chooseEffort}
                       />
                     )}
