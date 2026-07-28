@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 
+use serde::{Deserialize, Serialize};
+
 pub const DEFAULT_SUBAGENT_TYPE: &str = "coder";
 pub const PROMPT_TEMPLATE_PLACEHOLDER: &str = "{{item}}";
 pub const MAX_AGENT_SWARM_SUBAGENTS: usize = 128;
@@ -18,7 +20,12 @@ pub struct AgentSwarmInput {
     pub resume_agent_ids: Vec<(String, String)>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
 pub enum AgentSwarmSpec {
     Spawn {
         index: usize,
@@ -31,6 +38,27 @@ pub enum AgentSwarmSpec {
         item: Option<String>,
         prompt: String,
     },
+}
+
+impl AgentSwarmSpec {
+    pub fn index(&self) -> usize {
+        match self {
+            Self::Spawn { index, .. } | Self::Resume { index, .. } => *index,
+        }
+    }
+
+    pub fn item(&self) -> Option<&str> {
+        match self {
+            Self::Spawn { item, .. } => Some(item),
+            Self::Resume { item, .. } => item.as_deref(),
+        }
+    }
+
+    pub fn prompt(&self) -> &str {
+        match self {
+            Self::Spawn { prompt, .. } | Self::Resume { prompt, .. } => prompt,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,7 +94,7 @@ pub async fn create_agent_swarm_specs<F, Fut>(
 ) -> Result<Vec<AgentSwarmSpec>, String>
 where
     F: Fn(&str) -> Fut,
-    Fut: Future<Output = Option<String>>,
+    Fut: Future<Output = Result<Option<String>, String>>,
 {
     let resume_entries = input
         .resume_agent_ids
@@ -108,7 +136,7 @@ where
 
     let mut specs = Vec::with_capacity(resume_entries.len() + items.len());
     for (agent_id, prompt) in resume_entries {
-        let item = get_resume_item(&agent_id).await;
+        let item = get_resume_item(&agent_id).await?;
         specs.push(AgentSwarmSpec::Resume {
             index: specs.len() + 1,
             agent_id,
@@ -184,7 +212,7 @@ pub fn render_swarm_results(results: &[AgentSwarmResult]) -> String {
         let mode = matches!(result.spec, AgentSwarmSpec::Resume { .. })
             .then_some(" mode=\"resume\"")
             .unwrap_or_default();
-        let item = spec_item(&result.spec).map_or_else(String::new, |item| {
+        let item = result.spec.item().map_or_else(String::new, |item| {
             format!(" item=\"{}\"", escape_xml_attribute(item))
         });
         let state = result.state.map_or_else(String::new, |state| {
@@ -232,13 +260,6 @@ fn normalize_optional_string(value: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-fn spec_item(spec: &AgentSwarmSpec) -> Option<&str> {
-    match spec {
-        AgentSwarmSpec::Spawn { item, .. } => Some(item),
-        AgentSwarmSpec::Resume { item, .. } => item.as_deref(),
-    }
-}
-
 fn agent_swarm_status_name(status: AgentSwarmStatus) -> &'static str {
     match status {
         AgentSwarmStatus::Completed => "completed",
@@ -271,7 +292,7 @@ mod tests {
         let lookups = std::sync::Mutex::new(Vec::new());
         let specs = create_agent_swarm_specs(&input, |agent_id| {
             lookups.lock().unwrap().push(agent_id.to_owned());
-            std::future::ready(Some(format!("item for {agent_id}")))
+            std::future::ready(Ok(Some(format!("item for {agent_id}"))))
         })
         .await
         .unwrap();
@@ -308,10 +329,11 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_invalid_item_input_and_duplicate_prompts() {
-        let too_few =
-            create_agent_swarm_specs(&AgentSwarmInput::default(), |_| std::future::ready(None))
-                .await
-                .unwrap_err();
+        let too_few = create_agent_swarm_specs(&AgentSwarmInput::default(), |_| {
+            std::future::ready(Ok(None))
+        })
+        .await
+        .unwrap_err();
         assert_eq!(
             too_few,
             "AgentSwarm requires at least 2 items unless resume_agent_ids is provided."
@@ -323,7 +345,7 @@ mod tests {
                 items: vec!["a".into(), "b".into()],
                 ..Default::default()
             },
-            |_| std::future::ready(None),
+            |_| std::future::ready(Ok(None)),
         )
         .await
         .unwrap_err();
@@ -338,7 +360,7 @@ mod tests {
                 items: vec![" same ".into(), "same".into()],
                 ..Default::default()
             },
-            |_| std::future::ready(None),
+            |_| std::future::ready(Ok(None)),
         )
         .await
         .unwrap_err();

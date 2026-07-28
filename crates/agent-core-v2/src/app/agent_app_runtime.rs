@@ -111,6 +111,7 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
 
     crate::agent::tool_select::register_select_tools_tool();
     crate::agent::skill::register_skill_tool();
+    crate::agent::swarm::register_agent_swarm_tool();
     crate::app::web::register_fetch_url_tool();
     register_web_search_tool();
     crate::agent::task::tools::register_task_list_tool();
