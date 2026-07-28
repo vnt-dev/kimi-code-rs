@@ -3387,7 +3387,6 @@ function LiveTurnView({ turn }: { turn: InFlightTurn }) {
     <>
       <article className="message user-message live-user-message">
         <div className="message-meta">
-          <span>你</span>
           <time>{formatTime(turn.createdAt)}</time>
         </div>
         <div className="user-bubble">{turn.prompt}</div>
@@ -3713,7 +3712,6 @@ function MessageView({
     return (
       <article className="message user-message">
         <div className="message-meta">
-          <span>你</span>
           <time>{formatTime(message.created_at)}</time>
         </div>
         <div className="user-bubble">
