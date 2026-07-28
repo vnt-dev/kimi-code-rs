@@ -226,6 +226,7 @@ fn register_agent_app_services_once() {
         os::backends::node_local::{
             host_environment_service::register_local_host_environment_service,
             host_fs_service::register_local_host_file_system_service,
+            host_fs_watch_service::register_local_host_fs_watch_service,
             host_process_service::register_local_host_process_service,
             host_terminal_service::register_local_host_terminal_service,
         },
@@ -252,6 +253,7 @@ fn register_agent_app_services_once() {
             mcp::register_session_mcp_service,
             process::register_session_process_runner,
             question::register_session_question_service,
+            session_fs::{register_session_fs_service, register_session_fs_watch_service},
             session_init::register_session_init_service,
             session_log::register_session_log_service,
             session_metadata::register_session_metadata,
@@ -278,6 +280,7 @@ fn register_agent_app_services_once() {
     register_workspace_local_config_service();
     register_local_host_environment_service();
     register_local_host_file_system_service();
+    register_local_host_fs_watch_service();
     register_file_edit_service();
     register_local_host_process_service();
     register_local_host_terminal_service();
@@ -325,6 +328,8 @@ fn register_agent_app_services_once() {
     register_session_metadata();
     register_session_log_service();
     register_session_workspace_context();
+    register_session_fs_service();
+    register_session_fs_watch_service();
     register_session_tool_policy();
     register_session_mcp_service();
     register_explicit_file_skill_source();

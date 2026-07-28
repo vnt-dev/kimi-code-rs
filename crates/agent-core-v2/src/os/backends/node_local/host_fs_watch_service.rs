@@ -14,15 +14,20 @@ use notify::{
 
 use crate::{
     _base::{
-        di::lifecycle::{Disposable, DisposeResult},
+        di::{
+            descriptors::SyncDescriptor,
+            lifecycle::{Disposable, DisposeResult},
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
         errors::unexpected_error::on_unexpected_error,
         event::{Emitter, Event as CoreEvent},
     },
     os::interface::{
         host_fs_errors::{HostFsError, to_host_fs_error},
         host_fs_watch::{
-            HostFsChange, HostFsChangeAction, HostFsChangeKind, HostFsWatchHandle,
-            HostFsWatchOptions, HostFsWatchService, IgnoredPath,
+            HOST_FS_WATCH_SERVICE_ID, HostFsChange, HostFsChangeAction, HostFsChangeKind,
+            HostFsWatchHandle, HostFsWatchOptions, HostFsWatchService, HostFsWatchServiceHandle,
+            IgnoredPath,
         },
     },
 };
@@ -177,6 +182,19 @@ fn infer_kind(path: &Path) -> HostFsChangeKind {
 
 fn watcher_error(error: notify::Error, path: &Path) -> HostFsError {
     to_host_fs_error(Box::new(error), &path.to_string_lossy(), "watch")
+}
+
+pub fn register_local_host_fs_watch_service() {
+    register_scoped_service(
+        LifecycleScope::App,
+        HOST_FS_WATCH_SERVICE_ID,
+        SyncDescriptor::new(|_| {
+            let service: Arc<dyn HostFsWatchService> = Arc::new(LocalHostFsWatchService);
+            Ok(HostFsWatchServiceHandle(service))
+        }),
+        InstantiationType::Eager,
+        "os",
+    );
 }
 
 #[cfg(test)]

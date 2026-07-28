@@ -2,7 +2,7 @@
 //!
 //! Original: `packages/agent-core-v2/src/os/interface/hostFsWatch.ts`.
 
-use std::{path::Path, sync::Arc};
+use std::{ops::Deref, path::Path, sync::Arc};
 
 use crate::_base::{
     di::{instantiation::ServiceIdentifier, lifecycle::Disposable},
@@ -51,7 +51,18 @@ pub trait HostFsWatchService: Send + Sync {
     ) -> Result<Arc<dyn HostFsWatchHandle>, HostFsError>;
 }
 
-pub const HOST_FS_WATCH_SERVICE_ID: ServiceIdentifier<dyn HostFsWatchService> =
+#[derive(Clone)]
+pub struct HostFsWatchServiceHandle(pub Arc<dyn HostFsWatchService>);
+
+impl Deref for HostFsWatchServiceHandle {
+    type Target = dyn HostFsWatchService;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+pub const HOST_FS_WATCH_SERVICE_ID: ServiceIdentifier<HostFsWatchServiceHandle> =
     ServiceIdentifier::new("hostFsWatchService");
 
 #[cfg(test)]
