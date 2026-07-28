@@ -241,7 +241,13 @@ function conciseError(error: unknown): string {
           typeof error.message === "string"
         ? error.message
         : String(error);
-  return message.replace(/^Error:\s*/i, "");
+  const summary =
+    message
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) ?? "Unknown error";
+  const cleaned = summary.replace(/^Error:\s*/i, "");
+  return cleaned.length > 300 ? `${cleaned.slice(0, 297)}...` : cleaned;
 }
 
 function fetchMessagePage(
@@ -1678,7 +1684,9 @@ export default function App() {
       !conversationId ||
       !status ||
       status === "queued" ||
-      status === "running"
+      status === "running" ||
+      status === "failed" ||
+      status === "blocked"
     ) {
       return;
     }
