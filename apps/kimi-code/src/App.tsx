@@ -2350,7 +2350,7 @@ export default function App() {
                       aria-pressed={Boolean(activePlan)}
                     >
                       <ClipboardList size={14} />
-                      <span>{activePlan ? "计划中" : "计划"}</span>
+                      <span>计划</span>
                     </button>
                     {selectedModel && (
                       <ContextUsageIndicator
@@ -2562,12 +2562,11 @@ function ManagedUsageProgress({
           style={{ width: `${String(ratio * 100)}%` }}
         />
       </div>
-      <div className="managed-usage-meta">
-        <span>
-          {formatUsageValue(used)} / {formatUsageValue(limit)}
-        </span>
-        {row.resetHint && <span>{formatResetHint(row.resetHint)}</span>}
-      </div>
+      {row.resetHint && (
+        <div className="managed-usage-meta">
+          <span>{formatResetHint(row.resetHint)}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -2629,12 +2628,6 @@ function formatResetHint(hint: string): string {
   if (hint.startsWith("resets in ")) return `${hint.slice(10)} 后重置`;
   if (hint.startsWith("resets at ")) return `${hint.slice(10)} 重置`;
   return hint;
-}
-
-function formatUsageValue(value: number): string {
-  return new Intl.NumberFormat("zh-CN", {
-    maximumFractionDigits: Number.isInteger(value) ? 0 : 1,
-  }).format(value);
 }
 
 function formatCurrency(cents: number, currency: string): string {

@@ -1115,6 +1115,7 @@ select:focus-visible {
 }
 
 .managed-usage-meta {
+  justify-content: flex-end;
   color: #666671;
   font-size: 8.5px;
   font-variant-numeric: tabular-nums;
