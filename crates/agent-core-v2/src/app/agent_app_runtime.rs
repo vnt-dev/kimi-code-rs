@@ -117,6 +117,10 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
     crate::agent::task::tools::register_task_list_tool();
     crate::agent::task::tools::register_task_output_tool();
     crate::agent::task::tools::register_task_stop_tool();
+    crate::agent::goal::register_create_goal_tool();
+    crate::agent::goal::register_get_goal_tool();
+    crate::agent::goal::register_set_goal_budget_tool();
+    crate::agent::goal::register_update_goal_tool();
     register_enter_plan_mode_tool();
     register_exit_plan_mode_tool();
     register_ask_user_question_tool();
