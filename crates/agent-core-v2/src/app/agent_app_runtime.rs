@@ -110,6 +110,7 @@ fn register_agent_app_contributions_once() -> Result<(), String> {
     ensure_google_gen_ai_base_registered().map_err(|error| error.to_string())?;
 
     crate::agent::tool_select::register_select_tools_tool();
+    crate::agent::skill::register_skill_tool();
     crate::app::web::register_fetch_url_tool();
     register_web_search_tool();
     crate::agent::task::tools::register_task_list_tool();

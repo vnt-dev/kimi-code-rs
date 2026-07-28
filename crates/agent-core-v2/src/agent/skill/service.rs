@@ -5,7 +5,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
@@ -35,7 +34,7 @@ use crate::{
             errors::{SKILL_NOT_FOUND, SKILL_TYPE_UNSUPPORTED, ensure_skill_errors_registered},
             is_user_activatable_skill_type,
         },
-        telemetry::{TELEMETRY_SERVICE_ID, TelemetryProperties, TelemetryServiceHandle},
+        telemetry::{TELEMETRY_SERVICE_ID, TelemetryServiceHandle},
     },
     kosong::contract::message::{ContentPart, Message, Role},
     session::{
@@ -191,30 +190,26 @@ impl Disposable for AgentSkillService {
 }
 
 fn publish_activation(telemetry: &TelemetryServiceHandle, origin: &SkillActivationOrigin) {
-    telemetry.track(
-        "skill_invoked",
-        Some(&TelemetryProperties::from_iter([
-            (
-                "skill_name".into(),
-                Some(Value::String(origin.skill_name.clone())),
-            ),
-            (
-                "trigger".into(),
-                Some(
-                    serde_json::to_value(origin.trigger)
-                        .expect("skill activation trigger is serializable"),
-                ),
-            ),
-        ])),
-    );
+    use crate::app::telemetry::{
+        FlowInvokedEvent, SkillInvokedEvent, SkillTrigger, TelemetryServiceEventExt,
+    };
+
+    telemetry
+        .track_event(&SkillInvokedEvent {
+            skill_name: origin.skill_name.clone(),
+            trigger: match origin.trigger {
+                SkillActivationTrigger::UserSlash => SkillTrigger::UserSlash,
+                SkillActivationTrigger::ModelTool => SkillTrigger::ModelTool,
+                SkillActivationTrigger::NestedSkill => SkillTrigger::NestedSkill,
+            },
+        })
+        .expect("skill invocation telemetry payload is serializable");
     if origin.skill_type.as_deref() == Some("flow") {
-        telemetry.track(
-            "flow_invoked",
-            Some(&TelemetryProperties::from_iter([(
-                "flow_name".into(),
-                Some(Value::String(origin.skill_name.clone())),
-            )])),
-        );
+        telemetry
+            .track_event(&FlowInvokedEvent {
+                flow_name: origin.skill_name.clone(),
+            })
+            .expect("flow invocation telemetry payload is serializable");
     }
 }
 
