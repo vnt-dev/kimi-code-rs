@@ -78,16 +78,23 @@ impl AgentTask for ProcessTask {
 
     async fn start(&self, sink: &dyn AgentTaskSink) -> Result<(), AgentTaskError> {
         let signal = sink.signal();
-        let process_for_abort = Arc::clone(&self.process);
-        let abort_signal = signal.clone();
-        let abort_task = tokio::spawn(async move {
-            abort_signal.cancelled().await;
-            let _ = process_for_abort.kill(Some(ProcessSignal::Terminate)).await;
-        });
+        let abort_task = if signal.aborted() {
+            let _ = self.process.kill(Some(ProcessSignal::Terminate)).await;
+            None
+        } else {
+            let process_for_abort = Arc::clone(&self.process);
+            let abort_signal = signal.clone();
+            Some(tokio::spawn(async move {
+                abort_signal.cancelled().await;
+                let _ = process_for_abort.kill(Some(ProcessSignal::Terminate)).await;
+            }))
+        };
 
         let (wait, drain) =
             wait_and_observe(&self.process, sink, &signal, self.on_output.as_ref()).await;
-        abort_task.abort();
+        if let Some(abort_task) = abort_task {
+            abort_task.abort();
+        }
         let settlement = match wait {
             Ok(exit_code) if drain.is_ok() => {
                 *self.exit_code.lock().unwrap() = Some(exit_code);
@@ -317,14 +324,21 @@ pub async fn execute_process(
         signal: signal.clone(),
         output,
     };
-    let process_for_abort = Arc::clone(&process);
-    let abort_signal = signal.clone();
-    let abort_task = tokio::spawn(async move {
-        abort_signal.cancelled().await;
-        let _ = process_for_abort.kill(Some(ProcessSignal::Terminate)).await;
-    });
+    let abort_task = if signal.aborted() {
+        let _ = process.kill(Some(ProcessSignal::Terminate)).await;
+        None
+    } else {
+        let process_for_abort = Arc::clone(&process);
+        let abort_signal = signal.clone();
+        Some(tokio::spawn(async move {
+            abort_signal.cancelled().await;
+            let _ = process_for_abort.kill(Some(ProcessSignal::Terminate)).await;
+        }))
+    };
     let (wait, drain) = wait_and_observe(&process, &sink, signal, on_output).await;
-    abort_task.abort();
+    if let Some(abort_task) = abort_task {
+        abort_task.abort();
+    }
     process.dispose();
     drain?;
     let exit_code = wait?;
@@ -362,11 +376,21 @@ impl AgentTaskSink for RawOutputSink<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use tokio::{
+        io::{empty, sink},
+        sync::{Mutex as AsyncMutex, watch},
+    };
+
     use crate::{
         _base::utils::abort::AbortController,
         os::{
             backends::node_local::host_process_service::LocalHostProcessService,
-            interface::host_process::{HostProcessOptions, HostProcessService},
+            interface::host_process::{
+                HostProcessOptions, HostProcessService, ProcessReader, ProcessWriter,
+                SharedProcessWriter,
+            },
         },
     };
 
@@ -389,6 +413,66 @@ mod tests {
         async fn settle(&self, settlement: AgentTaskSettlement) -> Result<bool, AgentTaskError> {
             *self.settlement.lock().unwrap() = Some(settlement);
             Ok(true)
+        }
+    }
+
+    struct KillableProcess {
+        killed: watch::Sender<bool>,
+        signals: Mutex<Vec<Option<ProcessSignal>>>,
+        disposed: AtomicBool,
+    }
+
+    impl KillableProcess {
+        fn new() -> Arc<Self> {
+            let (killed, _) = watch::channel(false);
+            Arc::new(Self {
+                killed,
+                signals: Mutex::new(Vec::new()),
+                disposed: AtomicBool::new(false),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HostProcess for KillableProcess {
+        fn pid(&self) -> i64 {
+            42
+        }
+
+        fn exit_code(&self) -> Option<i32> {
+            (*self.killed.borrow()).then_some(-1)
+        }
+
+        fn stdin(&self) -> SharedProcessWriter {
+            Arc::new(AsyncMutex::new(Box::new(sink()) as ProcessWriter))
+        }
+
+        fn stdout(&self) -> SharedProcessReader {
+            Arc::new(AsyncMutex::new(Box::new(empty()) as ProcessReader))
+        }
+
+        fn stderr(&self) -> SharedProcessReader {
+            Arc::new(AsyncMutex::new(Box::new(empty()) as ProcessReader))
+        }
+
+        async fn wait(&self) -> Result<i32, HostProcessError> {
+            let mut killed = self.killed.subscribe();
+            while !*killed.borrow() {
+                if killed.changed().await.is_err() {
+                    break;
+                }
+            }
+            Ok(-1)
+        }
+
+        async fn kill(&self, signal: Option<ProcessSignal>) -> Result<(), HostProcessError> {
+            self.signals.lock().unwrap().push(signal);
+            self.killed.send_replace(true);
+            Ok(())
+        }
+
+        fn dispose(&self) {
+            self.disposed.store(true, Ordering::Release);
         }
     }
 
@@ -466,11 +550,8 @@ mod tests {
 
     #[tokio::test]
     async fn already_aborted_task_terminates_and_settles_killed() {
-        #[cfg(windows)]
-        let command = "ping 127.0.0.1 -n 31 >nul";
-        #[cfg(not(windows))]
-        let command = "sleep 30";
-        let task = ProcessTask::new(shell(command).await, "sleep", "sleeping", None);
+        let process = KillableProcess::new();
+        let task = ProcessTask::new(process.clone(), "sleep", "sleeping", None);
         let controller = AbortController::new();
         controller.abort(None);
         let sink = Sink {
@@ -478,7 +559,7 @@ mod tests {
             output: Mutex::new(String::new()),
             settlement: Mutex::new(None),
         };
-        tokio::time::timeout(Duration::from_secs(3), task.start(&sink))
+        tokio::time::timeout(Duration::from_secs(1), task.start(&sink))
             .await
             .unwrap()
             .unwrap();
@@ -486,5 +567,24 @@ mod tests {
             sink.settlement.lock().unwrap().as_ref().unwrap().status,
             AgentTaskSettlementStatus::Killed
         );
+        assert_eq!(
+            *process.signals.lock().unwrap(),
+            [Some(ProcessSignal::Terminate)]
+        );
+        assert!(process.disposed.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn already_aborted_executor_terminates_before_waiting() {
+        let process = KillableProcess::new();
+        let controller = AbortController::new();
+        controller.abort(None);
+        let result = execute_process(process.clone(), &controller.signal(), &|_| {}, None).await;
+        assert!(matches!(result, Err(ProcessExecutorError::Aborted(_))));
+        assert_eq!(
+            *process.signals.lock().unwrap(),
+            [Some(ProcessSignal::Terminate)]
+        );
+        assert!(process.disposed.load(Ordering::Acquire));
     }
 }

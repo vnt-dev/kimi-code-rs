@@ -26,16 +26,25 @@ pub struct FlagRegistryService {
 }
 
 impl FlagRegistryService {
-    // Original: FlagRegistryService.constructor().
-    pub fn new() -> Result<Self, FlagRegistryError> {
-        let service = Self {
+    fn empty() -> Self {
+        Self {
             by_id: Arc::new(Mutex::new(IndexMap::new())),
             registrations: DisposableStore::new(),
-        };
+        }
+    }
+
+    // Original: FlagRegistryService.constructor().
+    pub fn new() -> Result<Self, FlagRegistryError> {
+        let service = Self::empty();
         for definition in get_contributed_flags() {
             service.add(definition)?;
         }
         Ok(service)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn empty_for_tests() -> Self {
+        Self::empty()
     }
 
     // Original: FlagRegistryService.add().
@@ -114,7 +123,7 @@ mod tests {
 
     #[test]
     fn registers_resolves_and_preserves_insertion_order() {
-        let registry = FlagRegistryService::new().unwrap();
+        let registry = FlagRegistryService::empty_for_tests();
         let definition = example_flag();
         registry.register(definition.clone()).unwrap();
 
@@ -132,7 +141,7 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_ids_with_the_original_error() {
-        let registry = FlagRegistryService::new().unwrap();
+        let registry = FlagRegistryService::empty_for_tests();
         registry.register(example_flag()).unwrap();
         assert_eq!(
             registry.register(example_flag()).err(),
@@ -142,7 +151,7 @@ mod tests {
 
     #[test]
     fn registration_is_removed_when_its_handle_is_disposed() {
-        let registry = FlagRegistryService::new().unwrap();
+        let registry = FlagRegistryService::empty_for_tests();
         let handle = registry.register(example_flag()).unwrap();
         handle.dispose().unwrap();
         handle.dispose().unwrap();
@@ -151,7 +160,7 @@ mod tests {
 
     #[test]
     fn disposing_registry_removes_runtime_registrations() {
-        let registry = FlagRegistryService::new().unwrap();
+        let registry = FlagRegistryService::empty_for_tests();
         let _handle = registry.register(example_flag()).unwrap();
         registry.dispose().unwrap();
         assert_eq!(registry.get("example_flag"), None);

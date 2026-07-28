@@ -358,7 +358,7 @@ mod tests {
             }));
         let config = StubConfig::new(config_value);
         let config_contract: Arc<dyn ConfigServiceContract> = config.clone();
-        let registry = Arc::new(FlagRegistryService::new().unwrap());
+        let registry = Arc::new(FlagRegistryService::empty_for_tests());
         registry
             .register(FlagDefinitionInput {
                 id: "example_flag".into(),

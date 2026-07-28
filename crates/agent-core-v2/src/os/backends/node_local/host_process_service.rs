@@ -32,8 +32,9 @@ use crate::{
     },
     os::interface::host_process::{
         HOST_PROCESS_SERVICE_ID, HostProcess, HostProcessError, HostProcessOptions,
-        HostProcessService, HostProcessServiceHandle, OS_PROCESS_SPAWN_FAILED, ProcessReader,
-        ProcessShell, ProcessSignal, ProcessWriter, SharedProcessReader, SharedProcessWriter,
+        HostProcessService, HostProcessServiceHandle, OS_PROCESS_KILL_FAILED,
+        OS_PROCESS_SPAWN_FAILED, ProcessReader, ProcessShell, ProcessSignal, ProcessWriter,
+        SharedProcessReader, SharedProcessWriter,
     },
 };
 
@@ -86,10 +87,15 @@ impl HostProcess for LocalHostProcess {
     }
 
     async fn kill(&self, signal: Option<ProcessSignal>) -> Result<(), HostProcessError> {
-        if self.pid <= 0 {
+        if self.pid <= 0 || self.exit_code().is_some() {
             return Ok(());
         }
-        kill_process_tree(self.pid, signal.unwrap_or(ProcessSignal::Terminate)).await
+        let result = kill_process_tree(self.pid, signal.unwrap_or(ProcessSignal::Terminate)).await;
+        if result.is_err() && self.exit_code().is_some() {
+            Ok(())
+        } else {
+            result
+        }
     }
 
     fn dispose(&self) {
@@ -367,18 +373,27 @@ async fn kill_process_tree(pid: i64, signal: ProcessSignal) -> Result<(), HostPr
 }
 
 #[cfg(windows)]
-async fn kill_process_tree(pid: i64, _: ProcessSignal) -> Result<(), HostProcessError> {
-    let _ = Command::new("taskkill")
+async fn kill_process_tree(pid: i64, signal: ProcessSignal) -> Result<(), HostProcessError> {
+    let output = Command::new("taskkill")
         .args(["/T", "/F", "/PID", &pid.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
-    Ok(())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|error| kill_error(pid, signal_name(signal), error))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    Err(kill_status_error(
+        pid,
+        signal_name(signal),
+        output.status.code(),
+        &stderr,
+    ))
 }
 
-#[cfg(unix)]
 fn kill_error(pid: i64, signal: &str, error: std::io::Error) -> HostProcessError {
     let errno = io_errno(&error);
     let details = Map::from_iter([
@@ -399,7 +414,6 @@ fn kill_error(pid: i64, signal: &str, error: std::io::Error) -> HostProcessError
     )
 }
 
-#[cfg(unix)]
 fn signal_name(signal: ProcessSignal) -> &'static str {
     match signal {
         ProcessSignal::Terminate => "SIGTERM",
@@ -408,8 +422,42 @@ fn signal_name(signal: ProcessSignal) -> &'static str {
     }
 }
 
+#[cfg(windows)]
+fn kill_status_error(
+    pid: i64,
+    signal: &str,
+    exit_code: Option<i32>,
+    stderr: &str,
+) -> HostProcessError {
+    let details = Map::from_iter([
+        ("pid".into(), Value::from(pid)),
+        ("signal".into(), Value::String(signal.into())),
+        (
+            "exitCode".into(),
+            exit_code.map_or(Value::Null, Value::from),
+        ),
+        ("stderr".into(), Value::String(stderr.into())),
+    ]);
+    let suffix = if stderr.is_empty() {
+        String::new()
+    } else {
+        format!(": {stderr}")
+    };
+    HostProcessError::with_options(
+        OS_PROCESS_KILL_FAILED,
+        format!("Failed to kill process {pid}{suffix}"),
+        Error2Options {
+            details: Some(details),
+            ..Error2Options::default()
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use std::time::Duration;
+
     use tokio::io::AsyncReadExt;
 
     use super::*;
@@ -634,5 +682,24 @@ mod tests {
         assert!(process.pid() > 0);
         process.kill(None).await.unwrap();
         assert_ne!(process.wait().await.unwrap(), 0);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn terminates_a_running_process_tree() {
+        let (shell, args) = test_shell("ping 127.0.0.1 -n 31 >nul");
+        let process = LocalHostProcessService::default()
+            .spawn(&shell, &args, HostProcessOptions::default())
+            .await
+            .unwrap();
+        assert!(process.pid() > 0);
+        let exit_code = tokio::time::timeout(Duration::from_secs(10), async {
+            process.kill(None).await?;
+            process.wait().await
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_ne!(exit_code, 0);
     }
 }
