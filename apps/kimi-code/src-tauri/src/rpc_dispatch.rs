@@ -48,6 +48,7 @@ pub enum AgentRpcMethod {
     GetConfig,
     GetPermission,
     GetPlan,
+    GetTodos,
     GetUsage,
     GetTools,
     GetTasks,
@@ -205,6 +206,7 @@ pub async fn dispatch(
         AgentRpcMethod::GetConfig => invoke!(rpc, payload, get_config, EmptyPayload),
         AgentRpcMethod::GetPermission => invoke!(rpc, payload, get_permission, EmptyPayload),
         AgentRpcMethod::GetPlan => invoke!(rpc, payload, get_plan, EmptyPayload),
+        AgentRpcMethod::GetTodos => invoke!(rpc, payload, get_todos, EmptyPayload),
         AgentRpcMethod::GetUsage => invoke!(rpc, payload, get_usage, EmptyPayload),
         AgentRpcMethod::GetTools => invoke!(rpc, payload, get_tools, EmptyPayload),
         AgentRpcMethod::GetTasks => invoke!(rpc, payload, get_tasks, GetTasksPayload),
@@ -230,6 +232,10 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<AgentRpcMethod>("\"activatePluginCommand\"").unwrap(),
             AgentRpcMethod::ActivatePluginCommand
+        ));
+        assert!(matches!(
+            serde_json::from_str::<AgentRpcMethod>("\"getTodos\"").unwrap(),
+            AgentRpcMethod::GetTodos
         ));
     }
 

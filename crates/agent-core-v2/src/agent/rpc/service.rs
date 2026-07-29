@@ -74,6 +74,7 @@ use crate::{
         btw::{SESSION_BTW_SERVICE_ID, SessionBtwServiceHandle},
         session_context::{SESSION_CONTEXT_ID, SessionContext},
         session_metadata::{SESSION_METADATA_ID, SessionMetadataHandle},
+        todo::{SESSION_TODO_SERVICE_ID, SessionTodoServiceHandle, TodoItem},
     },
 };
 
@@ -136,6 +137,7 @@ pub struct AgentRpcService {
     btw: SessionBtwServiceHandle,
     scope_context: AgentScopeContext,
     agent_lifecycle: AgentLifecycleServiceHandle,
+    todo: SessionTodoServiceHandle,
 }
 
 impl AgentRpcService {
@@ -170,6 +172,7 @@ impl AgentRpcService {
         btw: SessionBtwServiceHandle,
         scope_context: AgentScopeContext,
         agent_lifecycle: AgentLifecycleServiceHandle,
+        todo: SessionTodoServiceHandle,
     ) -> Self {
         Self {
             prompt_service,
@@ -201,6 +204,7 @@ impl AgentRpcService {
             btw,
             scope_context,
             agent_lifecycle,
+            todo,
         }
     }
 
@@ -607,6 +611,10 @@ impl AgentRpcServiceContract for AgentRpcService {
         Ok(self.plan_mode.status().await?)
     }
 
+    async fn get_todos(&self, _payload: EmptyPayload) -> AgentRpcResult<Vec<TodoItem>> {
+        Ok(self.todo.get_todos())
+    }
+
     async fn get_usage(&self, _payload: EmptyPayload) -> AgentRpcResult<UsageStatus> {
         Ok(self.usage.status())
     }
@@ -702,6 +710,7 @@ pub fn register_agent_rpc_service() {
                 (*accessor.get(SESSION_BTW_SERVICE_ID)?).clone(),
                 (*accessor.get(AGENT_SCOPE_CONTEXT_ID)?).clone(),
                 (*accessor.get(AGENT_LIFECYCLE_SERVICE_ID)?).clone(),
+                (*accessor.get(SESSION_TODO_SERVICE_ID)?).clone(),
             );
             let service: Arc<dyn AgentRpcServiceContract> = Arc::new(service);
             Ok(AgentRpcServiceHandle(service))

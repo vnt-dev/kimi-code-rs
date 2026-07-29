@@ -6,6 +6,7 @@ use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
+use kimi_code_protocol::display::{TodoDisplayItem, ToolInputDisplay};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
@@ -169,6 +170,7 @@ impl ExecutableTool for TodoListTool {
             Some(todos) if todos.is_empty() => "Clearing todo list",
             Some(_) => "Updating todo list",
         };
+        let displayed_todos = args.todos.clone().unwrap_or_else(|| self.todo.get_todos());
         let todo = Arc::clone(&self.todo);
         let todos = args.todos;
         let execute = Arc::new(move |_context: ExecutableToolContext| {
@@ -198,6 +200,20 @@ impl ExecutableTool for TodoListTool {
         });
         let mut execution = RunnableToolExecution::new(TODO_LIST_TOOL_NAME, execute);
         execution.description = Some(description.into());
+        execution.display = Some(ToolInputDisplay::TodoList {
+            items: displayed_todos
+                .into_iter()
+                .map(|todo| TodoDisplayItem {
+                    title: todo.title,
+                    status: match todo.status {
+                        TodoStatus::Pending => "pending",
+                        TodoStatus::InProgress => "in_progress",
+                        TodoStatus::Done => "done",
+                    }
+                    .into(),
+                })
+                .collect(),
+        });
         ToolExecution::Runnable(execution)
     }
 }
@@ -331,6 +347,15 @@ mod tests {
         let (execution, result) = execute(&tool, TodoListInput::default()).await;
         assert_eq!(execution.description.as_deref(), Some("Reading todo list"));
         assert_eq!(execution.approval_rule, TODO_LIST_TOOL_NAME);
+        assert_eq!(
+            execution.display,
+            Some(ToolInputDisplay::TodoList {
+                items: vec![TodoDisplayItem {
+                    title: "existing".into(),
+                    status: "in_progress".into(),
+                }],
+            })
+        );
         assert_eq!(
             result.output,
             ExecutableToolOutput::Text("Current todo list:\n  [in_progress] existing".into())

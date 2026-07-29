@@ -8,6 +8,7 @@ import type {
   PlanData,
   PreparedSession,
   SessionSummary,
+  TodoItem,
   Workspace,
 } from "./types";
 
@@ -54,6 +55,7 @@ export type AgentRpcMethod =
   | "getConfig"
   | "getPermission"
   | "getPlan"
+  | "getTodos"
   | "getUsage"
   | "getTools"
   | "getTasks";
@@ -117,6 +119,9 @@ export function createAgentClient(scope: AgentScope) {
     },
     getPlan() {
       return callAgentRpc<PlanData | null>(scope, "getPlan");
+    },
+    getTodos() {
+      return callAgentRpc<TodoItem[]>(scope, "getTodos");
     },
     getUsage() {
       return callAgentRpc<AgentUsageStatus>(scope, "getUsage");

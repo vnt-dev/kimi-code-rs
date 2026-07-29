@@ -332,7 +332,7 @@ select:focus-visible {
 
 .sidebar-heading-copy strong {
   color: #a9a9b3;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
 }
@@ -2526,6 +2526,249 @@ select:focus-visible {
   opacity: 0.45;
 }
 
+.todo-progress-anchor {
+  position: relative;
+  display: flex;
+  width: min(850px, 100%);
+  height: 34px;
+  margin: 0 auto 8px;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+  z-index: 8;
+  animation: todo-progress-in 180ms ease-out;
+}
+
+.todo-progress-anchor::before {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: min(430px, calc(100% - 24px));
+  height: 1px;
+  content: "";
+  transform: translateX(-50%);
+}
+
+.todo-progress-anchor:focus-visible .todo-progress-pill {
+  outline: 2px solid rgba(139, 124, 246, 0.7);
+  outline-offset: 2px;
+}
+
+.todo-progress-pill {
+  display: flex;
+  height: 32px;
+  min-width: 108px;
+  padding: 0 13px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(139, 124, 246, 0.17);
+  border-radius: 999px;
+  color: #8c8995;
+  background:
+    linear-gradient(135deg, rgba(139, 124, 246, 0.045), transparent 60%),
+    rgba(20, 20, 25, 0.96);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.18),
+    inset 0 1px rgba(255, 255, 255, 0.025);
+  font-size: 9.5px;
+  cursor: default;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    background 150ms ease,
+    transform 150ms ease;
+}
+
+.todo-progress-anchor:hover .todo-progress-pill,
+.todo-progress-anchor:focus-within .todo-progress-pill {
+  transform: translateY(-1px);
+  border-color: rgba(139, 124, 246, 0.32);
+  color: #b1aabc;
+  background:
+    linear-gradient(135deg, rgba(139, 124, 246, 0.09), transparent 62%),
+    rgba(22, 22, 28, 0.98);
+}
+
+.todo-progress-ring,
+.todo-status-mark {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.todo-progress-ring {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgba(139, 124, 246, 0.64);
+  color: #a99df3;
+  box-shadow: 0 0 8px rgba(139, 124, 246, 0.13);
+}
+
+.todo-progress-ring::after {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #a99df3;
+  box-shadow: 0 0 5px rgba(139, 124, 246, 0.65);
+  content: "";
+}
+
+.todo-progress-anchor.complete .todo-progress-ring {
+  border-color: rgba(84, 207, 154, 0.55);
+  color: var(--green);
+}
+
+.todo-progress-anchor.complete .todo-progress-ring::after {
+  display: none;
+}
+
+.todo-popover {
+  position: absolute;
+  bottom: calc(100% + 1px);
+  left: 50%;
+  width: min(430px, calc(100% - 24px));
+  max-height: min(340px, 46vh);
+  padding: 11px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.095);
+  border-radius: 13px;
+  visibility: hidden;
+  opacity: 0;
+  background:
+    radial-gradient(circle at 20% 0, rgba(139, 124, 246, 0.08), transparent 40%),
+    rgba(24, 24, 30, 0.985);
+  box-shadow:
+    0 20px 52px rgba(0, 0, 0, 0.42),
+    inset 0 1px rgba(255, 255, 255, 0.025);
+  pointer-events: none;
+  transform: translate(-50%, 8px) scale(0.985);
+  transform-origin: bottom center;
+  transition:
+    opacity 150ms ease,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s linear 180ms;
+}
+
+.todo-progress-anchor:hover .todo-popover,
+.todo-progress-anchor:focus-within .todo-popover {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0) scale(1);
+  transition-delay: 70ms, 70ms, 0s;
+}
+
+.todo-popover-heading {
+  display: flex;
+  min-height: 25px;
+  padding: 0 3px 7px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.todo-popover-heading strong {
+  color: #c9c6d0;
+  font-size: 9.5px;
+  font-weight: 590;
+}
+
+.todo-popover-heading span {
+  color: #706c78;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+}
+
+.todo-list {
+  display: grid;
+  max-height: min(286px, 38vh);
+  margin: 7px 0 0;
+  padding: 0 2px;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: #35343e transparent;
+  gap: 2px;
+}
+
+.todo-list-item {
+  display: grid;
+  min-width: 0;
+  min-height: 27px;
+  padding: 5px 6px;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  border-radius: 7px;
+  color: #92909a;
+  font-size: 10.5px;
+  line-height: 1.45;
+  transition:
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.todo-list-item:hover {
+  color: #b9b6c0;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.todo-list-item.in_progress {
+  color: #c3bdde;
+  background: rgba(139, 124, 246, 0.065);
+}
+
+.todo-list-item.done {
+  color: #686671;
+}
+
+.todo-list-item.done > span:last-child {
+  text-decoration: line-through;
+  text-decoration-color: rgba(104, 102, 113, 0.7);
+}
+
+.todo-status-mark {
+  width: 13px;
+  height: 13px;
+  border: 1px solid #56535f;
+  color: var(--green);
+}
+
+.todo-list-item.in_progress .todo-status-mark {
+  border-color: #8f83d3;
+  box-shadow: 0 0 8px rgba(139, 124, 246, 0.17);
+}
+
+.todo-list-item.in_progress .todo-status-mark::after {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #a99df3;
+  box-shadow: 0 0 5px rgba(139, 124, 246, 0.55);
+  content: "";
+}
+
+.todo-list-item.done .todo-status-mark {
+  border-color: rgba(84, 207, 154, 0.42);
+  background: rgba(84, 207, 154, 0.075);
+}
+
+@keyframes todo-progress-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .interaction-card {
   width: min(850px, 100%);
   margin: 0 auto 10px;
@@ -4325,12 +4568,16 @@ select:focus-visible {
   .message,
   .live-step,
   .live-tool-card,
-  .live-text {
+  .live-text,
+  .todo-progress-anchor {
     animation: none;
   }
 
   .collapsible,
-  .collapsible.open {
+  .collapsible.open,
+  .todo-popover,
+  .todo-progress-pill,
+  .todo-list-item {
     transition: none;
   }
 }

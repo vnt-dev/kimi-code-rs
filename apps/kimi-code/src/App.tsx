@@ -111,6 +111,7 @@ import type {
   QuestionPayload,
   QuestionResponse,
   TokenUsage,
+  TodoItem,
   ToolUpdate,
 } from "./types";
 
@@ -787,6 +788,28 @@ function isAgentChatEvent(event: { type: string }): event is AgentChatEvent {
   return CHAT_EVENT_TYPES.has(event.type);
 }
 
+function readTodoItems(value: unknown): TodoItem[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const todos: TodoItem[] = [];
+  for (const item of value) {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      !("title" in item) ||
+      typeof item.title !== "string" ||
+      !("status" in item) ||
+      !["pending", "in_progress", "done"].includes(String(item.status))
+    ) {
+      return undefined;
+    }
+    todos.push({
+      title: item.title,
+      status: item.status as TodoItem["status"],
+    });
+  }
+  return todos;
+}
+
 function messageOriginKind(message: ProtocolMessage): string | undefined {
   const origin = message.metadata?.origin;
   return origin && typeof origin === "object" && "kind" in origin
@@ -934,6 +957,9 @@ export default function App() {
     Record<string, Record<string, number>>
   >({});
   const [plans, setPlans] = useState<Record<string, PlanData | null>>({});
+  const [sessionTodos, setSessionTodos] = useState<Record<string, TodoItem[]>>(
+    {},
+  );
   const [modeBusy, setModeBusy] = useState(false);
   const [removalTarget, setRemovalTarget] = useState<RemovalTarget>();
   const [removalBusy, setRemovalBusy] = useState(false);
@@ -1034,6 +1060,9 @@ export default function App() {
   const activePlan = activeConversation
     ? plans[activeConversation.id]
     : undefined;
+  const activeTodos = activeConversation
+    ? (sessionTodos[activeConversation.id] ?? [])
+    : [];
 
   const updateDesktop = (
     recipe: (current: DesktopState) => DesktopState,
@@ -1052,8 +1081,16 @@ export default function App() {
     agentId: string;
   }): Promise<void> => {
     const agent = createAgentClient(scope);
-    const [plan, usage] = await Promise.all([agent.getPlan(), agent.getUsage()]);
+    const [plan, todos, usage] = await Promise.all([
+      agent.getPlan(),
+      agent.getTodos(),
+      agent.getUsage(),
+    ]);
     setPlans((current) => ({ ...current, [scope.sessionId]: plan }));
+    setSessionTodos((current) => ({
+      ...current,
+      [scope.sessionId]: todos,
+    }));
     setAgentUsages((current) => ({
       ...current,
       [scope.sessionId]: usage,
@@ -1364,6 +1401,15 @@ export default function App() {
             }));
           }
         }
+        if (payload.event.type === "todo.updated") {
+          const todos = readTodoItems(payload.event.todos);
+          if (todos) {
+            setSessionTodos((current) => ({
+              ...current,
+              [payload.sessionId]: todos,
+            }));
+          }
+        }
         if (
           payload.event.type === "agent.status.updated" &&
           typeof payload.event.planMode === "boolean"
@@ -1608,6 +1654,7 @@ export default function App() {
     setAgentUsages((current) => omitSessionKeys(current, ids));
     setMessageDurations((current) => omitSessionKeys(current, ids));
     setPlans((current) => omitSessionKeys(current, ids));
+    setSessionTodos((current) => omitSessionKeys(current, ids));
     setInFlightTurns((current) => omitSessionKeys(current, ids));
     setHistory((current) =>
       current && ids.has(current.conversationId) ? undefined : current,
@@ -1988,6 +2035,7 @@ export default function App() {
       setAccountUsageError(undefined);
       setContextUsages({});
       setAgentUsages({});
+      setSessionTodos({});
       setMessageDurations({});
       setProfileOpen(false);
       showNotice("已退出登录");
@@ -2800,6 +2848,9 @@ export default function App() {
                   }
                 />
               ) : null}
+              {activeTodos.length > 0 && (
+                <TodoProgress todos={activeTodos} />
+              )}
               <form className="composer" onSubmit={handleSubmit}>
                 {promptAttachments.length > 0 && (
                   <div className="prompt-attachment-list">
@@ -3618,6 +3669,60 @@ function AgentModeStatus({
         </article>
       )}
     </section>
+  );
+}
+
+function TodoProgress({ todos }: { todos: readonly TodoItem[] }) {
+  const completed = todos.filter((todo) => todo.status === "done").length;
+  const activeIndex = todos.findIndex(
+    (todo) => todo.status === "in_progress",
+  );
+  const pendingIndex = todos.findIndex((todo) => todo.status === "pending");
+  const currentIndex =
+    activeIndex >= 0
+      ? activeIndex
+      : pendingIndex >= 0
+        ? pendingIndex
+        : Math.max(0, todos.length - 1);
+  const allDone = completed === todos.length;
+  const progressLabel = allDone
+    ? `已完成 ${completed} / ${todos.length}`
+    : `第 ${currentIndex + 1} / ${todos.length} 步`;
+
+  return (
+    <div
+      className={`todo-progress-anchor ${allDone ? "complete" : ""}`}
+      tabIndex={0}
+      aria-label={`${progressLabel}，悬停或聚焦查看任务列表`}
+    >
+      <div className="todo-popover" role="tooltip">
+        <div className="todo-popover-heading">
+          <strong>当前任务</strong>
+          <span>
+            {completed} / {todos.length} 已完成
+          </span>
+        </div>
+        <ol className="todo-list">
+          {todos.map((todo, index) => (
+            <li
+              className={`todo-list-item ${todo.status}`}
+              key={`${index}-${todo.title}`}
+            >
+              <span className="todo-status-mark" aria-hidden="true">
+                {todo.status === "done" && <Check size={10} strokeWidth={2.4} />}
+              </span>
+              <span>{todo.title}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+      <div className="todo-progress-pill" aria-hidden="true">
+        <span className="todo-progress-ring">
+          {allDone && <Check size={9} strokeWidth={2.6} />}
+        </span>
+        <span>{progressLabel}</span>
+      </div>
+    </div>
   );
 }
 

@@ -23,6 +23,7 @@ use crate::{
         task::AgentTaskInfo,
         usage::UsageStatus,
     },
+    session::todo::TodoItem,
     tool::ToolSource,
 };
 
@@ -87,6 +88,7 @@ pub trait AgentRpcServiceContract: Send + Sync {
     async fn get_config(&self, payload: EmptyPayload) -> AgentRpcResult<ProfileData>;
     async fn get_permission(&self, payload: EmptyPayload) -> AgentRpcResult<PermissionData>;
     async fn get_plan(&self, payload: EmptyPayload) -> AgentRpcResult<Option<PlanData>>;
+    async fn get_todos(&self, payload: EmptyPayload) -> AgentRpcResult<Vec<TodoItem>>;
     async fn get_usage(&self, payload: EmptyPayload) -> AgentRpcResult<UsageStatus>;
     async fn get_tools(&self, payload: EmptyPayload) -> AgentRpcResult<Vec<AgentRpcToolInfo>>;
     async fn get_tasks(&self, payload: GetTasksPayload) -> AgentRpcResult<Vec<AgentTaskInfo>>;

@@ -44,7 +44,7 @@ use crate::{
     },
     app::{config::ResolvedConfig, flag::ExperimentalFeatureState, session_legacy::SessionWarning},
     kosong::contract::message::{ContentPart, MediaUrl},
-    session::session_metadata::SessionMeta,
+    session::{session_metadata::SessionMeta, todo::TodoItem},
     tool::ToolInfo,
 };
 
@@ -720,6 +720,7 @@ pub trait AgentApi {
     fn get_config(&self, payload: EmptyPayload) -> AgentConfigData;
     fn get_permission(&self, payload: EmptyPayload) -> PermissionData;
     fn get_plan(&self, payload: EmptyPayload) -> Option<PlanData>;
+    fn get_todos(&self, payload: EmptyPayload) -> Vec<TodoItem>;
     fn get_usage(&self, payload: EmptyPayload) -> UsageStatus;
     fn get_tools(&self, payload: EmptyPayload) -> Vec<ToolInfo>;
     fn get_tasks(&self, payload: GetTasksPayload) -> Vec<AgentTaskInfo>;

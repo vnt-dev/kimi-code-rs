@@ -74,6 +74,7 @@ use crate::{
     session::{
         agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID, ensure_main_agent},
         interaction::{Interaction, InteractionKind, SESSION_INTERACTION_SERVICE_ID},
+        todo::SESSION_TODO_SERVICE_ID,
     },
 };
 
@@ -703,9 +704,20 @@ impl KimiCodeDesktopClient {
         let event_bus = agent
             .get(EVENT_BUS_SERVICE_ID)
             .map_err(|error| error.to_string())?;
+        let on_agent_event = Arc::clone(&on_event);
         subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
-            on_event(event.clone().into_value());
+            on_agent_event(event.clone().into_value());
         })));
+
+        let todo = session
+            .get(SESSION_TODO_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        subscriptions.add(todo.on_did_change().subscribe(move |todos| {
+            on_event(serde_json::json!({
+                "type": "todo.updated",
+                "todos": todos,
+            }));
+        }));
 
         let interaction = session
             .get(SESSION_INTERACTION_SERVICE_ID)

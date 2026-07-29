@@ -112,6 +112,13 @@ export interface PlanData {
   path: string;
 }
 
+export type TodoStatus = "pending" | "in_progress" | "done";
+
+export interface TodoItem {
+  title: string;
+  status: TodoStatus;
+}
+
 export interface AuthStatus {
   loggedIn: boolean;
   provider: string;
