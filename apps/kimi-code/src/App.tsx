@@ -335,29 +335,6 @@ async function preparePromptAttachment(file: File): Promise<PromptAttachment> {
   };
 }
 
-async function snapshotPastedFiles(files: readonly File[]): Promise<File[]> {
-  // Clipboard-backed File objects on Windows WebView can become unreadable
-  // after the paste event returns. Start every read while the event is still
-  // active and detach the bytes into ordinary in-memory File objects.
-  const snapshots = files.map(async (file) => {
-    if (file.size > MAX_PROMPT_ATTACHMENT_BYTES) {
-      throw new Error(`${file.name} 超过 20 MB`);
-    }
-    try {
-      const bytes = await file.arrayBuffer();
-      return new File([bytes], file.name || "attachment", {
-        type: file.type || "application/octet-stream",
-        lastModified: file.lastModified,
-      });
-    } catch {
-      throw new Error(
-        `无法读取剪贴板中的文件 ${file.name || "attachment"}，请使用附件按钮重新选择`,
-      );
-    }
-  });
-  return Promise.all(snapshots);
-}
-
 interface AgentSubscription {
   agentId: string;
   subscriptionId: string;
@@ -1972,34 +1949,19 @@ export default function App() {
   const handleAttachmentInput = (
     event: ChangeEvent<HTMLInputElement>,
   ): void => {
-    const input = event.currentTarget;
     const files = Array.from(event.target.files ?? []);
-    // Keep the input selection alive until every File has been read. Clearing
-    // it first can invalidate WebView-backed handles.
-    void addPromptAttachments(files).finally(() => {
-      input.value = "";
-    });
+    event.target.value = "";
+    void addPromptAttachments(files);
   };
 
   const handlePromptPaste = (
     event: ClipboardEvent<HTMLTextAreaElement>,
   ): void => {
-    const directFiles = Array.from(event.clipboardData.files);
-    const files =
-      directFiles.length > 0
-        ? directFiles
-        : Array.from(event.clipboardData.items)
-            .filter((item) => item.kind === "file")
-            .map((item) => item.getAsFile())
-            .filter((file): file is File => file !== null);
-    if (files.length === 0) return;
-
-    event.preventDefault();
-    // Calling snapshotPastedFiles here starts all arrayBuffer reads before
-    // this handler returns and the clipboard releases its virtual files.
-    void snapshotPastedFiles(files)
-      .then((snapshots) => addPromptAttachments(snapshots))
-      .catch((error) => showNotice(conciseError(error)));
+    const media = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (media.length > 0) void addPromptAttachments(media);
   };
 
   const sendPrompt = async (override?: string): Promise<void> => {
