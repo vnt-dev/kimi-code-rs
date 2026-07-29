@@ -833,6 +833,8 @@ export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followLatestMessageRef = useRef(true);
+  const lastChatScrollTopRef = useRef(0);
   const profileRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
   const accountUsageRequest = useRef(0);
@@ -1386,15 +1388,41 @@ export default function App() {
   }, [activeConversation?.id, auth.loggedIn]);
 
   useLayoutEffect(() => {
+    followLatestMessageRef.current = true;
     const scroll = scrollRef.current;
-    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    if (scroll) {
+      scroll.scrollTop = scroll.scrollHeight;
+      lastChatScrollTopRef.current = scroll.scrollTop;
+    }
   }, [activeConversation?.id, activeHistory?.loading]);
 
   useEffect(() => {
     const scroll = scrollRef.current;
-    if (!scroll || activeHistory?.loading) return;
-    scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
+    if (
+      !scroll ||
+      activeHistory?.loading ||
+      !followLatestMessageRef.current
+    ) {
+      return;
+    }
+    scroll.scrollTop = scroll.scrollHeight;
+    lastChatScrollTopRef.current = scroll.scrollTop;
   }, [activeTurn?.steps, activeCompaction?.phase]);
+
+  const handleChatScroll = (): void => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    const scrollingUp =
+      scroll.scrollTop < lastChatScrollTopRef.current - 1;
+    lastChatScrollTopRef.current = scroll.scrollTop;
+    if (scrollingUp) {
+      followLatestMessageRef.current = false;
+      return;
+    }
+    const distanceFromBottom =
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
+    followLatestMessageRef.current = distanceFromBottom <= 48;
+  };
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -2488,7 +2516,11 @@ export default function App() {
               </div>
             </header>
 
-            <div className="chat-scroll" ref={scrollRef}>
+            <div
+              className="chat-scroll"
+              ref={scrollRef}
+              onScroll={handleChatScroll}
+            >
               {activeHistory?.loading ? (
                 <div className="history-loading">
                   <span className="spinner" />
