@@ -32,6 +32,8 @@ pub struct ScopedEntry {
     pub id: super::instantiation::ErasedServiceIdentifier,
     pub descriptor: ErasedSyncDescriptor,
     pub domain: String,
+    #[cfg(test)]
+    test_owner: std::thread::ThreadId,
 }
 
 fn scoped_registry() -> &'static Mutex<Vec<ScopedEntry>> {
@@ -58,6 +60,8 @@ pub fn register_scoped_service<T>(
         id: id.erase(),
         descriptor: descriptor.erase(),
         domain: domain.into(),
+        #[cfg(test)]
+        test_owner: std::thread::current().id(),
     });
 }
 
@@ -71,8 +75,18 @@ pub fn get_scoped_service_descriptors(scope: LifecycleScope) -> Vec<ScopedEntry>
         .collect()
 }
 
+#[cfg(test)]
+/// Removes only registrations created by the current test harness thread.
+///
+/// The production registry is process-global and append-only. Tests execute in
+/// parallel, so clearing every entry lets one test erase another test's service
+/// graph between registration and lazy child-scope creation.
 pub fn clear_scoped_registry_for_tests() {
-    scoped_registry().lock().unwrap().clear();
+    let owner = std::thread::current().id();
+    scoped_registry()
+        .lock()
+        .unwrap()
+        .retain(|entry| entry.test_owner != owner);
 }
 
 #[derive(Clone, Default)]
@@ -305,6 +319,10 @@ mod tests {
     const SESSION_NAME: ServiceIdentifier<String> = ServiceIdentifier::new("sessionName");
     const DISPOSABLE_PROBE: ServiceIdentifier<DisposableProbe> =
         ServiceIdentifier::new("disposableProbe");
+    const LOCAL_TEST_SERVICE: ServiceIdentifier<String> =
+        ServiceIdentifier::new("localTestService");
+    const REMOTE_TEST_SERVICE: ServiceIdentifier<String> =
+        ServiceIdentifier::new("remoteTestService");
 
     struct DisposableProbe(Arc<AtomicBool>);
 
@@ -313,6 +331,56 @@ mod tests {
             self.0.store(true, Ordering::Release);
             Ok(())
         }
+    }
+
+    #[test]
+    fn test_cleanup_preserves_other_threads_registrations() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_scoped_registry_for_tests();
+        register_scoped_service(
+            LifecycleScope::App,
+            LOCAL_TEST_SERVICE,
+            SyncDescriptor::new(|_| Ok("local".into())),
+            InstantiationType::Eager,
+            "local-test",
+        );
+
+        let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+        let (cleanup_sender, cleanup_receiver) = std::sync::mpsc::channel();
+        let remote = std::thread::spawn(move || {
+            register_scoped_service(
+                LifecycleScope::App,
+                REMOTE_TEST_SERVICE,
+                SyncDescriptor::new(|_| Ok("remote".into())),
+                InstantiationType::Eager,
+                "remote-test",
+            );
+            ready_sender.send(()).unwrap();
+            cleanup_receiver.recv().unwrap();
+            clear_scoped_registry_for_tests();
+        });
+        ready_receiver.recv().unwrap();
+
+        clear_scoped_registry_for_tests();
+        let entries = get_scoped_service_descriptors(LifecycleScope::App);
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.id.to_string() == LOCAL_TEST_SERVICE.to_string())
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.id.to_string() == REMOTE_TEST_SERVICE.to_string())
+        );
+
+        cleanup_sender.send(()).unwrap();
+        remote.join().unwrap();
+        assert!(
+            !get_scoped_service_descriptors(LifecycleScope::App)
+                .iter()
+                .any(|entry| entry.id.to_string() == REMOTE_TEST_SERVICE.to_string())
+        );
     }
 
     #[test]
