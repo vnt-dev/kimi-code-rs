@@ -3,7 +3,7 @@
 //! Original: `packages/agent-core-v2/src/agent/prompt/promptService.ts`.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     error::Error,
     sync::{Arc, Mutex},
 };
@@ -117,7 +117,7 @@ impl PromptHandleContract for RecordHandle {
 #[derive(Default)]
 struct SchedulerState {
     active: Option<(Arc<PromptRecord>, TurnHandle)>,
-    pending: Vec<Arc<PromptRecord>>,
+    pending: VecDeque<Arc<PromptRecord>>,
     steered: HashMap<String, Vec<Arc<PromptRecord>>>,
     launching: bool,
 }
@@ -237,7 +237,7 @@ impl AgentPromptServiceContract for AgentPromptService {
         });
         let should_start = {
             let mut state = self.runtime.state.lock().unwrap();
-            state.pending.push(Arc::clone(&record));
+            state.pending.push_back(Arc::clone(&record));
             state.active.is_none() && !state.launching
         };
         if should_start {
@@ -380,7 +380,10 @@ impl AgentPromptServiceContract for AgentPromptService {
         else {
             return false;
         };
-        let record = state.pending.remove(index);
+        let record = state
+            .pending
+            .remove(index)
+            .expect("pending prompt index must remain valid");
         drop(state);
         record.set_state(PromptState::Cancelled);
         record.launched.resolve(None);
@@ -544,18 +547,17 @@ fn start_next(runtime: Arc<Runtime>) -> BoxFuture<'static, ()> {
             if state.active.is_some() || state.launching {
                 return;
             }
-            let Some(record) = state.pending.first().cloned() else {
+            let Some(record) = state.pending.pop_front() else {
                 return;
             };
             state.launching = true;
-            state.pending.remove(0);
             record
         };
         if full_compaction(&runtime).is_some_and(|service| service.compacting().is_some())
             && runtime.loop_service.status().state != AgentLoopState::Running
         {
             let mut state = runtime.state.lock().unwrap();
-            state.pending.insert(0, record);
+            state.pending.push_front(record);
             state.launching = false;
             return;
         }
