@@ -153,28 +153,29 @@ where
         if let Some(index) = state.active_tasks.iter().position(|task| task.id == id) {
             state.active_tasks.remove(index);
         }
-        let mut ready = Vec::new();
-        let mut still_queued = VecDeque::new();
-        while let Some(task) = state.queued_tasks.pop_front() {
-            if is_blocked(&task.task, &state.active_tasks, &still_queued) {
-                still_queued.push_back(task);
-            } else {
-                ready.push(task);
-            }
-        }
-        state.queued_tasks = still_queued;
-        ready
+        take_ready_tasks(&mut state)
     };
     for task in ready {
-        {
-            let mut locked = state.lock().unwrap();
-            locked.active_tasks.push(ActiveToolCallTask {
+        start(Arc::downgrade(&state), task);
+    }
+}
+
+fn take_ready_tasks<R>(state: &mut SchedulerState<R>) -> Vec<ScheduledToolCallTask<R>> {
+    let mut ready = Vec::new();
+    let mut still_queued = VecDeque::new();
+    while let Some(task) = state.queued_tasks.pop_front() {
+        if is_blocked(&task.task, &state.active_tasks, &still_queued) {
+            still_queued.push_back(task);
+        } else {
+            state.active_tasks.push(ActiveToolCallTask {
                 id: task.id,
                 accesses: task.task.accesses.clone(),
             });
+            ready.push(task);
         }
-        start(Arc::downgrade(&state), task);
     }
+    state.queued_tasks = still_queued;
+    ready
 }
 
 #[cfg(test)]
@@ -257,5 +258,95 @@ mod tests {
         assert_eq!(read_other.await.unwrap().unwrap(), "other");
         assert_eq!(conflicting_read.await.unwrap().unwrap(), "after-write");
         assert!(conflicting_read_started.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn mutually_conflicting_queued_tasks_are_released_one_at_a_time() {
+        let scheduler = ToolScheduler::new();
+        let release_a = Arc::new(tokio::sync::Notify::new());
+        let release_b = Arc::new(tokio::sync::Notify::new());
+        let a_started = Arc::new(AtomicBool::new(false));
+        let b_started = Arc::new(AtomicBool::new(false));
+        let c_started = Arc::new(AtomicBool::new(false));
+
+        let a = scheduler.add(task(
+            ToolAccess::write_file("/workspace/shared"),
+            "a",
+            Arc::clone(&a_started),
+            Some(Arc::clone(&release_a)),
+        ));
+        let b = scheduler.add(task(
+            ToolAccess::write_file("/workspace/shared"),
+            "b",
+            Arc::clone(&b_started),
+            Some(Arc::clone(&release_b)),
+        ));
+        let c = scheduler.add(task(
+            ToolAccess::write_file("/workspace/shared"),
+            "c",
+            Arc::clone(&c_started),
+            None,
+        ));
+
+        wait_until_started(&a_started).await;
+        assert!(!b_started.load(Ordering::SeqCst));
+        assert!(!c_started.load(Ordering::SeqCst));
+
+        release_a.notify_one();
+        wait_until_started(&b_started).await;
+        assert!(!c_started.load(Ordering::SeqCst));
+
+        release_b.notify_one();
+        wait_until_started(&c_started).await;
+
+        assert_eq!(a.await.unwrap().unwrap(), "a");
+        assert_eq!(b.await.unwrap().unwrap(), "b");
+        assert_eq!(c.await.unwrap().unwrap(), "c");
+    }
+
+    #[test]
+    fn promotion_is_committed_to_active_state_before_queue_scan_returns() {
+        let (b_sender, _b_receiver) = oneshot::channel();
+        let (c_sender, _c_receiver) = oneshot::channel();
+        let mut state = SchedulerState::default();
+        state.queued_tasks.push_back(ScheduledToolCallTask {
+            id: 1,
+            task: task(
+                ToolAccess::write_file("/workspace/shared"),
+                "b",
+                Arc::new(AtomicBool::new(false)),
+                None,
+            ),
+            sender: b_sender,
+        });
+        state.queued_tasks.push_back(ScheduledToolCallTask {
+            id: 2,
+            task: task(
+                ToolAccess::write_file("/workspace/shared"),
+                "c",
+                Arc::new(AtomicBool::new(false)),
+                None,
+            ),
+            sender: c_sender,
+        });
+
+        let ready = take_ready_tasks(&mut state);
+
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, 1);
+        assert_eq!(state.active_tasks.len(), 1);
+        assert_eq!(state.active_tasks[0].id, 1);
+        assert_eq!(state.queued_tasks.len(), 1);
+        assert_eq!(state.queued_tasks[0].id, 2);
+    }
+
+    async fn wait_until_started(started: &AtomicBool) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }
