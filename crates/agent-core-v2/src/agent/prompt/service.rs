@@ -35,7 +35,7 @@ use crate::{
             PromptOrigin, UndoPrecheck, format_undo_unavailable_message, new_message_id,
             precheck_undo,
         },
-        full_compaction::AGENT_FULL_COMPACTION_SERVICE_ID,
+        full_compaction::{AGENT_FULL_COMPACTION_SERVICE_ID, AgentFullCompactionServiceHandle},
         loop_::{
             AGENT_LOOP_SERVICE_ID, AgentLoopServiceHandle, AgentLoopState, LoopRunResult,
             LoopValue, StepRequestAdmission, TurnHandle, TurnSeed,
@@ -127,16 +127,18 @@ struct Runtime {
     context: AgentContextMemoryServiceHandle,
     reminders: AgentSystemReminderServiceHandle,
     instantiation: Arc<InstantiationService>,
+    full_compaction: Mutex<Option<AgentFullCompactionServiceHandle>>,
     loop_service: AgentLoopServiceHandle,
     wire: WireServiceHandle,
     event_bus: EventBusHandle,
     hooks: Arc<AgentPromptHooks>,
+    disposables: Arc<DisposableStore>,
 }
 
 pub struct AgentPromptService {
     runtime: Arc<Runtime>,
     hooks: Arc<AgentPromptHooks>,
-    disposables: DisposableStore,
+    disposables: Arc<DisposableStore>,
 }
 
 impl AgentPromptService {
@@ -151,15 +153,18 @@ impl AgentPromptService {
     ) -> Self {
         ensure_prompt_errors_registered();
         let hooks = Arc::new(AgentPromptHooks::default());
+        let disposables = Arc::new(DisposableStore::new());
         let runtime = Arc::new(Runtime {
             state: Mutex::new(SchedulerState::default()),
             context,
             reminders,
             instantiation,
+            full_compaction: Mutex::new(None),
             loop_service,
             wire,
             event_bus,
             hooks: Arc::clone(&hooks),
+            disposables: Arc::clone(&disposables),
         });
         let delivery_runtime = Arc::clone(&runtime);
         let registration = tool_executor
@@ -197,7 +202,6 @@ impl AgentPromptService {
                 Default::default(),
             )
             .expect("prompt-service-delivery hook registration must succeed");
-        let disposables = DisposableStore::new();
         disposables.add(registration);
         Self {
             runtime,
@@ -237,6 +241,11 @@ impl AgentPromptServiceContract for AgentPromptService {
             state.active.is_none() && !state.launching
         };
         if should_start {
+            if full_compaction(&self.runtime).is_some_and(|service| service.compacting().is_some())
+                && self.runtime.loop_service.status().state != AgentLoopState::Running
+            {
+                return Ok(Self::handle(record));
+            }
             start_next(Arc::clone(&self.runtime)).await;
             tokio::select! { _ = record.launched.future.clone() => {}, _ = record.completion.future.clone() => {} }
         }
@@ -498,6 +507,36 @@ fn now() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+fn full_compaction(runtime: &Arc<Runtime>) -> Option<AgentFullCompactionServiceHandle> {
+    let weak_runtime = Arc::downgrade(runtime);
+    resolve_full_compaction(
+        &runtime.instantiation,
+        &runtime.full_compaction,
+        &runtime.disposables,
+        move |_| {
+            if let Some(runtime) = weak_runtime.upgrade() {
+                tokio::spawn(start_next(runtime));
+            }
+        },
+    )
+}
+
+fn resolve_full_compaction(
+    instantiation: &InstantiationService,
+    cache: &Mutex<Option<AgentFullCompactionServiceHandle>>,
+    disposables: &DisposableStore,
+    on_did_finish: impl Fn(&crate::agent::full_compaction::FullCompactionTask) + Send + Sync + 'static,
+) -> Option<AgentFullCompactionServiceHandle> {
+    let mut cached = cache.lock().unwrap();
+    if let Some(service) = cached.as_ref() {
+        return Some(service.clone());
+    }
+    let service = (*instantiation.get(AGENT_FULL_COMPACTION_SERVICE_ID).ok()?).clone();
+    disposables.add(service.on_did_finish_compaction().subscribe(on_did_finish));
+    *cached = Some(service.clone());
+    Some(service)
+}
+
 fn start_next(runtime: Arc<Runtime>) -> BoxFuture<'static, ()> {
     Box::pin(async move {
         let record = {
@@ -512,13 +551,7 @@ fn start_next(runtime: Arc<Runtime>) -> BoxFuture<'static, ()> {
             state.pending.remove(0);
             record
         };
-        let compaction = runtime
-            .instantiation
-            .get(AGENT_FULL_COMPACTION_SERVICE_ID)
-            .ok();
-        if compaction
-            .as_ref()
-            .is_some_and(|service| service.compacting().is_some())
+        if full_compaction(&runtime).is_some_and(|service| service.compacting().is_some())
             && runtime.loop_service.status().state != AgentLoopState::Running
         {
             let mut state = runtime.state.lock().unwrap();
@@ -742,4 +775,101 @@ fn publish_aborted(runtime: &Runtime, prompt_id: &str) {
             ("abortedAt".into(), Value::String(now())),
         ]),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use futures_util::{FutureExt, future};
+
+    use super::*;
+    use crate::{
+        _base::{
+            di::service_collection::ServiceCollection,
+            event::{Emitter, Event},
+            utils::abort::AbortController,
+        },
+        agent::full_compaction::{
+            AgentFullCompactionHooks, AgentFullCompactionServiceContract, CompactionSource,
+            FullCompactionError, FullCompactionInput, FullCompactionTask,
+        },
+    };
+
+    struct TestFullCompaction {
+        hooks: AgentFullCompactionHooks,
+        finished: Emitter<FullCompactionTask>,
+    }
+
+    impl TestFullCompaction {
+        fn new() -> Self {
+            Self {
+                hooks: AgentFullCompactionHooks::default(),
+                finished: Emitter::new(),
+            }
+        }
+    }
+
+    impl Disposable for TestFullCompaction {
+        fn dispose(&self) -> DisposeResult {
+            self.finished.dispose()
+        }
+    }
+
+    impl AgentFullCompactionServiceContract for TestFullCompaction {
+        fn compacting(&self) -> Option<FullCompactionTask> {
+            None
+        }
+
+        fn begin(&self, _input: FullCompactionInput) -> Result<bool, FullCompactionError> {
+            Ok(false)
+        }
+
+        fn hooks(&self) -> &AgentFullCompactionHooks {
+            &self.hooks
+        }
+
+        fn on_did_finish_compaction(&self) -> Event<FullCompactionTask> {
+            self.finished.event()
+        }
+    }
+
+    #[test]
+    fn compaction_finish_listener_is_installed_once_and_disposed_with_prompt_service() {
+        let compaction = Arc::new(TestFullCompaction::new());
+        let contract: Arc<dyn AgentFullCompactionServiceContract> = compaction.clone();
+        let mut services = ServiceCollection::new();
+        services.set_instance(
+            AGENT_FULL_COMPACTION_SERVICE_ID,
+            Arc::new(AgentFullCompactionServiceHandle(contract)),
+        );
+        let instantiation = InstantiationService::new(services);
+        let cache = Mutex::new(None);
+        let disposables = DisposableStore::new();
+        let wake_count = Arc::new(AtomicUsize::new(0));
+
+        for _ in 0..2 {
+            let wake_count = Arc::clone(&wake_count);
+            assert!(
+                resolve_full_compaction(&instantiation, &cache, &disposables, move |_| {
+                    wake_count.fetch_add(1, Ordering::SeqCst);
+                })
+                .is_some()
+            );
+        }
+
+        let task = FullCompactionTask::new(
+            AbortController::new(),
+            future::pending().boxed().shared(),
+            CompactionSource::Manual,
+            0.0,
+            Arc::new(Mutex::new(None)),
+        );
+        compaction.finished.fire(&task);
+        assert_eq!(wake_count.load(Ordering::SeqCst), 1);
+
+        disposables.dispose().unwrap();
+        compaction.finished.fire(&task);
+        assert_eq!(wake_count.load(Ordering::SeqCst), 1);
+    }
 }
