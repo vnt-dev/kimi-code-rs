@@ -56,6 +56,17 @@ pub static SWARM_EXIT: LazyLock<DefinedOp<Option<SwarmModeTrigger>, SwarmExitPay
             .expect("swarm_mode.exit must have one global definition")
     });
 
+/// Registers the swarm model and both persisted operations before wire restore.
+///
+/// TypeScript registers these operations while evaluating `swarmOps.ts`.
+/// Rust statics are lazy, so the swarm service must force the equivalent
+/// side effects before an existing agent journal is replayed.
+pub(crate) fn ensure_swarm_wire_registered() {
+    LazyLock::force(&SWARM_MODEL);
+    LazyLock::force(&SWARM_ENTER);
+    LazyLock::force(&SWARM_EXIT);
+}
+
 // Original: swarmOps.ts, swarmEnter()/swarmExit() Op creators.
 pub fn swarm_enter(trigger: SwarmModeTrigger) -> Result<Op, serde_json::Error> {
     SWARM_ENTER.create(SwarmEnterPayload { trigger })
@@ -68,7 +79,19 @@ pub fn swarm_exit() -> Result<Op, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::op::ErasedOpDescriptor;
+    use crate::wire::op::{ErasedOpDescriptor, registered_op};
+
+    #[test]
+    fn registration_covers_every_persisted_swarm_operation() {
+        ensure_swarm_wire_registered();
+
+        for op_type in ["swarm_mode.enter", "swarm_mode.exit"] {
+            assert!(
+                registered_op(op_type).is_some(),
+                "{op_type} must be registered before wire restore"
+            );
+        }
+    }
 
     #[test]
     fn model_and_ops_preserve_state_and_wire_payloads() {

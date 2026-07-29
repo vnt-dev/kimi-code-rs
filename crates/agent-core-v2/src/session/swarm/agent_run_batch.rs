@@ -15,8 +15,8 @@ use crate::{
     _base::{
         lifecycle::lifecycle_machine::BoxError,
         utils::abort::{
-            AbortController, AbortSignal, abortable, create_deadline_abort_signal,
-            is_user_cancellation, link_abort_signal,
+            AbortController, AbortSignal, create_deadline_abort_signal, is_user_cancellation,
+            link_abort_signal,
         },
     },
     kosong::contract::{
@@ -400,28 +400,22 @@ fn start_attempt<T, L>(
             let _ = on_ready_sender.send(AttemptEvent::Ready(index));
         });
         let options = attempt_options(&task, signal.clone(), on_ready);
+        // Launchers receive the attempt signal and may already have created a
+        // child before their future resolves. Keep polling them on abort so
+        // they can observe cancellation instead of orphaning that child.
         let launched = match &retry_agent_id {
-            Some(agent_id) => abortable(launcher.retry(agent_id, options), &signal)
-                .await
-                .map_err(|error| Box::new((*error).clone()) as BoxError)
-                .and_then(|result| result),
+            Some(agent_id) => launcher.retry(agent_id, options).await,
             None => match &task {
                 SessionSwarmTask::Resume {
                     resume_agent_id, ..
-                } => abortable(launcher.resume(resume_agent_id, options), &signal)
-                    .await
-                    .map_err(|error| Box::new((*error).clone()) as BoxError)
-                    .and_then(|result| result),
+                } => launcher.resume(resume_agent_id, options).await,
                 SessionSwarmTask::Spawn(base) => {
                     let spawn_options = AgentSpawnAttemptOptions {
                         profile_name: base.profile_name.clone(),
                         swarm_item: base.swarm_item.clone(),
                         attempt: options,
                     };
-                    abortable(launcher.spawn(spawn_options), &signal)
-                        .await
-                        .map_err(|error| Box::new((*error).clone()) as BoxError)
-                        .and_then(|result| result)
+                    launcher.spawn(spawn_options).await
                 }
             },
         };
@@ -446,15 +440,16 @@ fn start_attempt<T, L>(
             index,
             agent_id: agent_id.clone(),
         });
-        let completion = abortable(handle.completion, &signal)
-            .await
-            .map_err(|error| Box::new((*error).clone()) as BoxError)
-            .and_then(|result| {
-                result.map_err(|error| {
-                    Box::new(crate::session::subagent::SharedAgentRunError(error.into()))
-                        as BoxError
-                })
-            });
+        // Keep polling the run after cancellation. The completion future owns
+        // the cancellation bridge into the child loop and only settles after
+        // the active turn has released its state. Racing it with `signal`
+        // would drop that lazy future before it can call `loop.cancel()`.
+        let completion = handle.completion.await.map_err(|error| {
+            Box::new(crate::session::subagent::SharedAgentRunError(error.into())) as BoxError
+        });
+        let timed_out = deadline
+            .as_ref()
+            .is_some_and(|deadline| deadline.timed_out());
         drop(deadline.take());
         drop(task_link);
         drop(batch_link);
@@ -478,7 +473,7 @@ fn start_attempt<T, L>(
                     index,
                     Some(agent_id),
                     &controller.signal(),
-                    false,
+                    timed_out,
                     task.base().timeout.is_some(),
                     error.to_string(),
                 ));
@@ -801,6 +796,8 @@ pub fn resolve_swarm_max_concurrency(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::FutureExt;
+    use tokio::sync::Notify;
 
     struct NoopLauncher;
 
@@ -828,6 +825,99 @@ mod tests {
         ) -> Result<AgentRunAttemptHandle, BoxError> {
             Err("launcher should not be invoked".into())
         }
+    }
+
+    struct LaunchCancellationLauncher {
+        entered: Arc<Notify>,
+        cancellation_observed: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl AgentRunBatchLauncher<String> for LaunchCancellationLauncher {
+        async fn spawn(
+            &self,
+            options: AgentSpawnAttemptOptions,
+        ) -> Result<AgentRunAttemptHandle, BoxError> {
+            self.entered.notify_one();
+            let reason = options.attempt.signal.cancelled().await;
+            self.cancellation_observed.notify_one();
+            Err(Box::new((*reason).clone()))
+        }
+
+        async fn resume(
+            &self,
+            _agent_id: &str,
+            _options: AgentRunAttemptOptions,
+        ) -> Result<AgentRunAttemptHandle, BoxError> {
+            Err("launcher should not resume".into())
+        }
+
+        async fn retry(
+            &self,
+            _agent_id: &str,
+            _options: AgentRunAttemptOptions,
+        ) -> Result<AgentRunAttemptHandle, BoxError> {
+            Err("launcher should not retry".into())
+        }
+    }
+
+    struct CompletionCancellationLauncher {
+        launched: Arc<Notify>,
+        cancellation_observed: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl AgentRunBatchLauncher<String> for CompletionCancellationLauncher {
+        async fn spawn(
+            &self,
+            options: AgentSpawnAttemptOptions,
+        ) -> Result<AgentRunAttemptHandle, BoxError> {
+            let signal = options.attempt.signal;
+            let cancellation_observed = Arc::clone(&self.cancellation_observed);
+            self.launched.notify_one();
+            Ok(AgentRunAttemptHandle {
+                agent_id: "agent-cancellable".into(),
+                profile_name: options.profile_name,
+                completion: async move {
+                    let reason = signal.cancelled().await;
+                    cancellation_observed.notify_one();
+                    Err(Box::new((*reason).clone()) as BoxError)
+                }
+                .boxed(),
+            })
+        }
+
+        async fn resume(
+            &self,
+            _agent_id: &str,
+            _options: AgentRunAttemptOptions,
+        ) -> Result<AgentRunAttemptHandle, BoxError> {
+            Err("launcher should not resume".into())
+        }
+
+        async fn retry(
+            &self,
+            _agent_id: &str,
+            _options: AgentRunAttemptOptions,
+        ) -> Result<AgentRunAttemptHandle, BoxError> {
+            Err("launcher should not retry".into())
+        }
+    }
+
+    fn cancellable_spawn_task(signal: AbortSignal) -> SessionSwarmTask<String> {
+        SessionSwarmTask::Spawn(super::super::SessionSwarmTaskBase {
+            data: "work".into(),
+            profile_name: "coder".into(),
+            parent_tool_call_id: "call".into(),
+            parent_tool_call_uuid: None,
+            prompt: "do work".into(),
+            description: "work".into(),
+            swarm_index: Some(1),
+            swarm_item: None,
+            run_in_background: false,
+            timeout: None,
+            signal: Some(signal),
+        })
     }
 
     #[tokio::test]
@@ -871,6 +961,70 @@ mod tests {
                 "The user manually interrupted this subagent batch before this subagent was started."
             )
         );
+    }
+
+    #[tokio::test]
+    async fn user_cancellation_keeps_polling_an_inflight_launch() {
+        let entered = Arc::new(Notify::new());
+        let cancellation_observed = Arc::new(Notify::new());
+        let launcher = Arc::new(LaunchCancellationLauncher {
+            entered: Arc::clone(&entered),
+            cancellation_observed: Arc::clone(&cancellation_observed),
+        });
+        let controller = AbortController::new();
+        let batch = AgentRunBatch::new(
+            launcher,
+            vec![cancellable_spawn_task(controller.signal())],
+            AgentRunBatchOptions::default(),
+        );
+        let batch_task = tokio::spawn(batch.run());
+
+        tokio::time::timeout(Duration::from_secs(1), entered.notified())
+            .await
+            .expect("launcher should start");
+        controller.abort(Some(crate::_base::utils::abort::user_cancellation_reason()));
+
+        let results = tokio::time::timeout(Duration::from_secs(1), batch_task)
+            .await
+            .expect("batch should return promptly")
+            .expect("batch task should not panic")
+            .expect("user cancellation should resolve");
+        assert_eq!(results[0].status, SessionSwarmRunStatus::Aborted);
+        tokio::time::timeout(Duration::from_secs(1), cancellation_observed.notified())
+            .await
+            .expect("inflight launcher should observe cancellation");
+    }
+
+    #[tokio::test]
+    async fn user_cancellation_keeps_polling_the_active_completion() {
+        let launched = Arc::new(Notify::new());
+        let cancellation_observed = Arc::new(Notify::new());
+        let launcher = Arc::new(CompletionCancellationLauncher {
+            launched: Arc::clone(&launched),
+            cancellation_observed: Arc::clone(&cancellation_observed),
+        });
+        let controller = AbortController::new();
+        let batch = AgentRunBatch::new(
+            launcher,
+            vec![cancellable_spawn_task(controller.signal())],
+            AgentRunBatchOptions::default(),
+        );
+        let batch_task = tokio::spawn(batch.run());
+
+        tokio::time::timeout(Duration::from_secs(1), launched.notified())
+            .await
+            .expect("launcher should return an active run");
+        controller.abort(Some(crate::_base::utils::abort::user_cancellation_reason()));
+
+        let results = tokio::time::timeout(Duration::from_secs(1), batch_task)
+            .await
+            .expect("batch should return promptly")
+            .expect("batch task should not panic")
+            .expect("user cancellation should resolve");
+        assert_eq!(results[0].status, SessionSwarmRunStatus::Aborted);
+        tokio::time::timeout(Duration::from_secs(1), cancellation_observed.notified())
+            .await
+            .expect("active completion should observe cancellation");
     }
 
     #[test]

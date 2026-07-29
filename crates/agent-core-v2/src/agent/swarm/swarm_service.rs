@@ -30,7 +30,7 @@ use crate::{
     },
 };
 
-use super::{SWARM_MODEL, SwarmModeTrigger, swarm_enter, swarm_exit};
+use super::{SWARM_MODEL, SwarmModeTrigger, ensure_swarm_wire_registered, swarm_enter, swarm_exit};
 
 const SWARM_MODE_ENTER_REMINDER: &str = include_str!("enter-reminder.md");
 const SWARM_MODE_EXIT_REMINDER: &str = include_str!("exit-reminder.md");
@@ -83,7 +83,7 @@ impl AgentSwarmService {
         context: Arc<dyn AgentContextMemoryServiceContract>,
         event_bus: Arc<dyn EventBusContract>,
     ) -> Arc<Self> {
-        std::sync::LazyLock::force(&SWARM_MODEL);
+        ensure_swarm_wire_registered();
         let service = Arc::new(Self {
             wire,
             reminders,
