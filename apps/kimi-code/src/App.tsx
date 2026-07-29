@@ -2848,7 +2848,7 @@ export default function App() {
                   }
                 />
               ) : null}
-              {activeTodos.length > 0 && (
+              {activeTodos.some((todo) => todo.status !== "done") && (
                 <TodoProgress todos={activeTodos} />
               )}
               <form className="composer" onSubmit={handleSubmit}>
