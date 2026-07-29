@@ -16,6 +16,7 @@ use futures_util::{
 };
 use serde_json::{Map, Value};
 use tokio::sync::oneshot;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     _base::{
@@ -27,7 +28,7 @@ use crate::{
             scope::{InstantiationType, LifecycleScope, register_scoped_service},
         },
         errors::errors::{Error2, Error2Options},
-        utils::abort::user_cancellation_reason,
+        utils::abort::{abort_error, user_cancellation_reason},
     },
     agent::{
         context_memory::{
@@ -99,6 +100,21 @@ impl PromptRecord {
     fn set_state(&self, state: PromptState) {
         self.snapshot.lock().unwrap().state = state;
     }
+
+    fn set_terminal_state(&self, state: PromptState) -> bool {
+        let mut snapshot = self.snapshot.lock().unwrap();
+        if matches!(
+            snapshot.state,
+            PromptState::Completed
+                | PromptState::Failed
+                | PromptState::Cancelled
+                | PromptState::Blocked
+        ) {
+            return false;
+        }
+        snapshot.state = state;
+        true
+    }
 }
 
 struct RecordHandle(Arc<PromptRecord>);
@@ -119,7 +135,7 @@ struct SchedulerState {
     active: Option<(Arc<PromptRecord>, TurnHandle)>,
     pending: VecDeque<Arc<PromptRecord>>,
     steered: HashMap<String, Vec<Arc<PromptRecord>>>,
-    launching: bool,
+    launching: Option<Arc<PromptRecord>>,
 }
 
 struct Runtime {
@@ -133,6 +149,8 @@ struct Runtime {
     event_bus: EventBusHandle,
     hooks: Arc<AgentPromptHooks>,
     disposables: Arc<DisposableStore>,
+    shutdown: CancellationToken,
+    tasks: TaskTracker,
 }
 
 pub struct AgentPromptService {
@@ -165,6 +183,8 @@ impl AgentPromptService {
             event_bus,
             hooks: Arc::clone(&hooks),
             disposables: Arc::clone(&disposables),
+            shutdown: CancellationToken::new(),
+            tasks: TaskTracker::new(),
         });
         let delivery_runtime = Arc::clone(&runtime);
         let registration = tool_executor
@@ -218,6 +238,7 @@ impl AgentPromptService {
 #[async_trait]
 impl AgentPromptServiceContract for AgentPromptService {
     async fn enqueue(&self, input: PromptInput) -> PromptServiceResult<PromptHandle> {
+        ensure_running(&self.runtime)?;
         let id = input
             .id
             .or_else(|| input.message.id.clone())
@@ -238,7 +259,7 @@ impl AgentPromptServiceContract for AgentPromptService {
         let should_start = {
             let mut state = self.runtime.state.lock().unwrap();
             state.pending.push_back(Arc::clone(&record));
-            state.active.is_none() && !state.launching
+            state.active.is_none() && state.launching.is_none()
         };
         if should_start {
             if full_compaction(&self.runtime).is_some_and(|service| service.compacting().is_some())
@@ -246,8 +267,12 @@ impl AgentPromptServiceContract for AgentPromptService {
             {
                 return Ok(Self::handle(record));
             }
-            start_next(Arc::clone(&self.runtime)).await;
-            tokio::select! { _ = record.launched.future.clone() => {}, _ = record.completion.future.clone() => {} }
+            spawn_start_next(&self.runtime);
+            tokio::select! {
+                _ = record.launched.future.clone() => {},
+                _ = record.completion.future.clone() => {},
+                _ = self.runtime.shutdown.cancelled() => {},
+            }
         }
         Ok(Self::handle(record))
     }
@@ -265,6 +290,7 @@ impl AgentPromptServiceContract for AgentPromptService {
     }
 
     async fn steer(&self, prompt_ids: &[String]) -> PromptServiceResult<Vec<PromptHandle>> {
+        ensure_running(&self.runtime)?;
         if prompt_ids.is_empty() {
             return Err(coded(REQUEST_INVALID, "prompt_ids must not be empty"));
         }
@@ -397,9 +423,11 @@ impl AgentPromptServiceContract for AgentPromptService {
     }
 
     async fn inject(&self, message: ContextMessage) -> PromptServiceResult<Option<TurnHandle>> {
+        ensure_running(&self.runtime)?;
         inject_runtime(Arc::clone(&self.runtime), message).await
     }
     async fn retry(&self) -> PromptServiceResult<Option<TurnHandle>> {
+        ensure_running(&self.runtime)?;
         Ok(self
             .runtime
             .loop_service
@@ -463,6 +491,10 @@ impl AgentPromptServiceContract for AgentPromptService {
         self.runtime.context.clear()?;
         Ok(())
     }
+    async fn shutdown(&self) {
+        begin_shutdown(&self.runtime);
+        self.runtime.tasks.wait().await;
+    }
     fn hooks(&self) -> &AgentPromptHooks {
         &self.hooks
     }
@@ -470,6 +502,7 @@ impl AgentPromptServiceContract for AgentPromptService {
 
 impl Disposable for AgentPromptService {
     fn dispose(&self) -> DisposeResult {
+        begin_shutdown(&self.runtime);
         self.disposables.dispose()
     }
 }
@@ -518,7 +551,7 @@ fn full_compaction(runtime: &Arc<Runtime>) -> Option<AgentFullCompactionServiceH
         &runtime.disposables,
         move |_| {
             if let Some(runtime) = weak_runtime.upgrade() {
-                tokio::spawn(start_next(runtime));
+                spawn_start_next(&runtime);
             }
         },
     )
@@ -542,23 +575,31 @@ fn resolve_full_compaction(
 
 fn start_next(runtime: Arc<Runtime>) -> BoxFuture<'static, ()> {
     Box::pin(async move {
+        if runtime.shutdown.is_cancelled() {
+            return;
+        }
         let record = {
             let mut state = runtime.state.lock().unwrap();
-            if state.active.is_some() || state.launching {
+            if state.active.is_some() || state.launching.is_some() {
                 return;
             }
             let Some(record) = state.pending.pop_front() else {
                 return;
             };
-            state.launching = true;
+            state.launching = Some(Arc::clone(&record));
             record
         };
         if full_compaction(&runtime).is_some_and(|service| service.compacting().is_some())
             && runtime.loop_service.status().state != AgentLoopState::Running
         {
             let mut state = runtime.state.lock().unwrap();
-            state.pending.push_front(record);
-            state.launching = false;
+            if runtime.shutdown.is_cancelled() {
+                drop(state);
+                cancel_record(&runtime, &record);
+            } else {
+                state.pending.push_front(record);
+                state.launching = None;
+            }
             return;
         }
         let snapshot = record.snapshot();
@@ -568,23 +609,32 @@ fn start_next(runtime: Arc<Runtime>) -> BoxFuture<'static, ()> {
             is_steer: false,
             block: false,
         };
-        let outcome: Result<(), _> = runtime
-            .hooks
-            .on_before_submit_prompt
-            .run(&mut hook, None)
-            .await;
+        let outcome: Result<(), _> = tokio::select! {
+            _ = runtime.shutdown.cancelled() => {
+                finish_launch(&runtime, &record);
+                cancel_record(&runtime, &record);
+                return;
+            }
+            outcome = runtime.hooks.on_before_submit_prompt.run(&mut hook, None) => outcome,
+        };
+        if runtime.shutdown.is_cancelled() {
+            finish_launch(&runtime, &record);
+            cancel_record(&runtime, &record);
+            return;
+        }
         if outcome.is_err() {
             fail_record(&runtime, &record);
         } else if hook.block {
             append_prompt(&runtime, &hook.prompt_message, &extracted.1);
-            record.set_state(PromptState::Blocked);
-            record.launched.resolve(None);
-            record.completion.resolve(PromptCompletion {
-                prompt_id: snapshot.id.clone(),
-                result: None,
-                state: PromptCompletionState::Blocked,
-            });
-            publish_completed(&runtime, &snapshot.id, "blocked");
+            if record.set_terminal_state(PromptState::Blocked) {
+                record.launched.resolve(None);
+                record.completion.resolve(PromptCompletion {
+                    prompt_id: snapshot.id.clone(),
+                    result: None,
+                    state: PromptCompletionState::Blocked,
+                });
+                publish_completed(&runtime, &snapshot.id, "blocked");
+            }
         } else {
             match runtime.loop_service.enqueue(
                 Arc::new(PromptStepRequest::new(
@@ -594,28 +644,42 @@ fn start_next(runtime: Arc<Runtime>) -> BoxFuture<'static, ()> {
                 )),
                 None,
             ) {
-                Ok(receipt) => match receipt.assigned.await {
-                    Ok(assignment) => {
+                Ok(receipt) => match tokio::select! {
+                    _ = runtime.shutdown.cancelled() => None,
+                    assignment = receipt.assigned => Some(assignment),
+                } {
+                    Some(Ok(assignment)) if !runtime.shutdown.is_cancelled() => {
                         let turn = assignment.turn;
                         record.set_state(PromptState::Running);
                         record.launched.resolve(Some(turn.clone()));
                         runtime.state.lock().unwrap().active =
                             Some((Arc::clone(&record), turn.clone()));
                         let settle_runtime = Arc::clone(&runtime);
-                        tokio::spawn(async move {
-                            settle(settle_runtime, record, turn.0.result().await);
+                        let settle_shutdown = runtime.shutdown.clone();
+                        let settle_record = Arc::clone(&record);
+                        spawn_prompt_task(&runtime, async move {
+                            tokio::select! {
+                                result = turn.0.result() => {
+                                    settle(settle_runtime, settle_record, result)
+                                }
+                                _ = settle_shutdown.cancelled() => {}
+                            }
                         });
                     }
-                    Err(_) => fail_record(&runtime, &record),
+                    Some(Ok(_)) => cancel_record(&runtime, &record),
+                    Some(Err(_)) if runtime.shutdown.is_cancelled() => {
+                        cancel_record(&runtime, &record)
+                    }
+                    Some(Err(_)) => fail_record(&runtime, &record),
+                    None => cancel_record(&runtime, &record),
                 },
                 Err(_) => fail_record(&runtime, &record),
             }
         }
-        {
-            runtime.state.lock().unwrap().launching = false;
-        }
-        if runtime.state.lock().unwrap().active.is_none() {
-            tokio::spawn(start_next(runtime));
+        finish_launch(&runtime, &record);
+        let should_continue = runtime.state.lock().unwrap().active.is_none();
+        if should_continue {
+            spawn_start_next(&runtime);
         }
     })
 }
@@ -671,12 +735,90 @@ fn settle(runtime: Arc<Runtime>, record: Arc<PromptRecord>, result: LoopRunResul
             );
         }
     }
-    tokio::spawn(start_next(runtime));
+    spawn_start_next(&runtime);
+}
+
+fn ensure_running(runtime: &Runtime) -> PromptServiceResult<()> {
+    if runtime.shutdown.is_cancelled() {
+        Err(Box::new(abort_error(Some(
+            "Agent prompt service shut down",
+        ))))
+    } else {
+        Ok(())
+    }
+}
+
+fn spawn_prompt_task(
+    runtime: &Arc<Runtime>,
+    future: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    let _admission = runtime.state.lock().unwrap();
+    if !runtime.shutdown.is_cancelled() {
+        runtime.tasks.spawn(future);
+    }
+}
+
+fn spawn_start_next(runtime: &Arc<Runtime>) {
+    spawn_prompt_task(runtime, start_next(Arc::clone(runtime)));
+}
+
+fn finish_launch(runtime: &Runtime, record: &Arc<PromptRecord>) {
+    let mut state = runtime.state.lock().unwrap();
+    if state
+        .launching
+        .as_ref()
+        .is_some_and(|launching| Arc::ptr_eq(launching, record))
+    {
+        state.launching = None;
+    }
+}
+
+fn cancel_record(runtime: &Runtime, record: &Arc<PromptRecord>) {
+    if !record.set_terminal_state(PromptState::Cancelled) {
+        return;
+    }
+    let id = record.snapshot().id;
+    record.launched.resolve(None);
+    record.completion.resolve(PromptCompletion {
+        prompt_id: id.clone(),
+        result: None,
+        state: PromptCompletionState::Cancelled,
+    });
+    publish_aborted(runtime, &id);
+}
+
+fn begin_shutdown(runtime: &Arc<Runtime>) {
+    runtime.shutdown.cancel();
+    let records = {
+        let mut state = runtime.state.lock().unwrap();
+        runtime.tasks.close();
+        let mut records = state.pending.drain(..).collect::<Vec<_>>();
+        if let Some(record) = state.launching.take() {
+            records.push(record);
+        }
+        if let Some((record, _)) = state.active.take() {
+            records.push(record);
+        }
+        for children in state.steered.drain().map(|(_, records)| records) {
+            records.extend(children);
+        }
+        records
+    };
+    let mut unique = Vec::<Arc<PromptRecord>>::new();
+    for record in records {
+        if unique.iter().any(|item| Arc::ptr_eq(item, &record)) {
+            continue;
+        }
+        cancel_record(runtime, &record);
+        unique.push(record);
+    }
 }
 
 fn fail_record(runtime: &Arc<Runtime>, record: &Arc<PromptRecord>) {
+    if !record.set_terminal_state(PromptState::Failed) {
+        return;
+    }
     let id = record.snapshot().id;
-    record.set_state(PromptState::Failed);
     record.launched.resolve(None);
     record.completion.resolve(PromptCompletion {
         prompt_id: id.clone(),

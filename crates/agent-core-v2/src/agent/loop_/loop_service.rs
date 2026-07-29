@@ -7,6 +7,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     error::Error,
+    panic::AssertUnwindSafe,
     sync::{Arc, Mutex, Weak},
     time::Instant,
 };
@@ -18,6 +19,7 @@ use futures_util::{
 };
 use serde_json::{Map, Value};
 use tokio::sync::oneshot;
+use tokio_util::task::TaskTracker;
 
 use crate::{
     _base::{
@@ -281,6 +283,7 @@ pub struct AgentLoopService {
     hooks: AgentLoopHooks,
     state: Mutex<LoopState>,
     self_weak: Weak<AgentLoopService>,
+    tasks: TaskTracker,
 }
 
 impl AgentLoopService {
@@ -308,6 +311,7 @@ impl AgentLoopService {
             hooks: AgentLoopHooks::default(),
             state: Mutex::new(LoopState::default()),
             self_weak: weak.clone(),
+            tasks: TaskTracker::new(),
         })
     }
 
@@ -466,7 +470,7 @@ impl AgentLoopService {
     }
 
     fn pump_turns(&self) {
-        let job = {
+        let (job, start_worker) = {
             let mut state = self.state.lock().unwrap();
             if state.disposing || state.active_turn_job.is_some() {
                 return;
@@ -476,7 +480,24 @@ impl AgentLoopService {
                 return;
             };
             state.active_turn_job = Some(Arc::clone(&job));
-            job
+            let service = self.self_weak.upgrade().expect("loop service is alive");
+            let worker_job = Arc::clone(&job);
+            let (start_worker, worker_ready) = oneshot::channel();
+            self.tasks.spawn(async move {
+                // The gate preserves prompt/event ordering while ensuring the
+                // worker is tracked before shutdown can acquire loop state.
+                let _ = worker_ready.await;
+                let result =
+                    match AssertUnwindSafe(Arc::clone(&service).run_turn(Arc::clone(&worker_job)))
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(result) => result,
+                        Err(payload) => service.fail_panicked_turn(&worker_job, payload),
+                    };
+                worker_job.result.settle(result);
+            });
+            (job, start_worker)
         };
         let _ = self
             .wire
@@ -489,11 +510,43 @@ impl AgentLoopService {
                 .then(|| turn_prompt_text(&job.seed.input))
                 .flatten(),
         });
-        let service = self.self_weak.upgrade().expect("loop service is alive");
-        tokio::spawn(async move {
-            let result = service.run_turn(Arc::clone(&job)).await;
-            job.result.settle(result);
-        });
+        let _ = start_worker.send(());
+    }
+
+    fn fail_panicked_turn(
+        &self,
+        job: &Arc<TurnJob>,
+        payload: Box<dyn std::any::Any + Send>,
+    ) -> LoopRunResult {
+        let message = panic_payload_message(payload);
+        let error = loop_error(BugIndicatingError::new(Some(&format!(
+            "Turn task panicked: {message}"
+        ))));
+        let result = LoopRunResult::Failed {
+            steps: 0,
+            error: error.clone(),
+        };
+        let is_active = self
+            .state
+            .lock()
+            .unwrap()
+            .active_turn_job
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, job));
+        if is_active {
+            self.settle_turn_ready(job, &result);
+            self.release_active_turn(job, &result);
+            let payload = error_payload(&error);
+            self.event_bus.publish_typed(super::TurnEndedEvent {
+                turn_id: job.turn.0.id(),
+                reason: super::TurnEndReason::Failed,
+                error: Some(payload.clone()),
+                duration_ms: None,
+            });
+            self.publish_error(payload);
+            self.pump_turns();
+        }
+        result
     }
 
     async fn run_turn(self: Arc<Self>, job: Arc<TurnJob>) -> LoopRunResult {
@@ -1520,6 +1573,12 @@ impl AgentLoopServiceContract for AgentLoopService {
         let _ = receiver.await;
     }
 
+    async fn shutdown(&self) {
+        let _ = Disposable::dispose(self);
+        self.tasks.close();
+        self.tasks.wait().await;
+    }
+
     fn has_pending_requests(&self) -> bool {
         self.status().has_pending_requests
     }
@@ -1574,6 +1633,7 @@ impl AgentLoopServiceContract for AgentLoopService {
 
 impl Disposable for AgentLoopService {
     fn dispose(&self) -> DisposeResult {
+        self.tasks.close();
         let (turn_ids, active, standalone) = {
             let mut state = self.state.lock().unwrap();
             if state.disposing {
@@ -1672,6 +1732,15 @@ fn completed_step_handle(
 
 fn loop_error(error: impl Error + Send + Sync + 'static) -> LoopValue {
     LoopValue::Error(Arc::new(error))
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("task panicked")
+        .to_owned()
 }
 
 async fn run_after_step_hooks(

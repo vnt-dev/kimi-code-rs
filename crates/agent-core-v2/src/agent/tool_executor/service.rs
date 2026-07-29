@@ -197,12 +197,11 @@ impl ExecutorRunner {
             stopped |= item.stop_batch_after_this;
             prepared.push(item);
         }
-        let scheduler = ToolScheduler::new();
-        let mut pending = FuturesUnordered::new();
+        let mut scheduler = ToolScheduler::new();
         for (index, item) in prepared.iter().enumerate() {
             let execute = Arc::clone(&item.execute);
             let signal = options.signal.clone();
-            let receipt = scheduler.add(super::ToolCallTask {
+            scheduler.add(super::ToolCallTask {
                 accesses: item.accesses.clone(),
                 start: Arc::new(move || {
                     let execute = Arc::clone(&execute);
@@ -226,39 +225,50 @@ impl ExecutorRunner {
                     })
                 }),
             });
-            pending
-                .push(async move { receipt.await.map_err(|error| Box::new(error) as BoxError)? });
         }
         // Original: `execute()` starts each finalization as a separate promise
         // and races scheduler completions against already-running
         // finalizations. This is essential for same-step deduplication: a
         // synthetic duplicate may await the original call's finalization.
         let mut finalizations = FuturesUnordered::<BoxFuture<'static, Result<(), BoxError>>>::new();
-        while !pending.is_empty() || !finalizations.is_empty() {
+        let mut first_error = None;
+        while scheduler.has_pending() || !finalizations.is_empty() {
+            let scheduler_pending = scheduler.has_pending();
             tokio::select! {
-                Some(timed) = pending.next(), if !pending.is_empty() => {
-                    let timed = timed?;
-                    let call = prepared[timed.index].call.clone();
-                    let runner = self.clone();
-                    let options = options.clone();
-                    let sender = sender.clone();
-                    finalizations.push(Box::pin(async move {
-                        let result = runner.finalize(&call, timed.result, &options).await;
-                        runner.dispatch_result(&call, &result, &options)?;
-                        runner.track(&call, &result, timed.duration_ms, &options);
-                        sender.send(Ok(ToolExecutionResult {
-                            tool_call_id: tool_call(&call).id.clone(),
-                            tool_name: tool_name(&call).into(),
-                            result,
-                        }))
-                        .map_err(|error| Box::new(error) as BoxError)?;
-                        Ok(())
-                    }));
+                Some(timed) = scheduler.next(), if scheduler_pending => {
+                    match timed {
+                        Ok(timed) => {
+                            let call = prepared[timed.index].call.clone();
+                            let runner = self.clone();
+                            let options = options.clone();
+                            let sender = sender.clone();
+                            finalizations.push(Box::pin(async move {
+                                let result = runner.finalize(&call, timed.result, &options).await;
+                                runner.dispatch_result(&call, &result, &options)?;
+                                runner.track(&call, &result, timed.duration_ms, &options);
+                                sender.send(Ok(ToolExecutionResult {
+                                    tool_call_id: tool_call(&call).id.clone(),
+                                    tool_name: tool_name(&call).into(),
+                                    result,
+                                }))
+                                .map_err(|error| Box::new(error) as BoxError)?;
+                                Ok(())
+                            }));
+                        }
+                        Err(error) if first_error.is_none() => first_error = Some(error),
+                        Err(_) => {}
+                    }
                 }
-                Some(result) = finalizations.next(), if !finalizations.is_empty() => result?,
+                Some(result) = finalizations.next(), if !finalizations.is_empty() => {
+                    if let Err(error) = result
+                        && first_error.is_none()
+                    {
+                        first_error = Some(error);
+                    }
+                },
             }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 
     async fn prepare(

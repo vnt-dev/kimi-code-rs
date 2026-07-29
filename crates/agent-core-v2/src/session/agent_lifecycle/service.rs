@@ -47,6 +47,7 @@ use crate::{
         profile::{
             AGENT_PROFILE_SERVICE_ID, BindAgentInput, ProfileBindingSnapshot, ProfileUpdateData,
         },
+        prompt::AGENT_PROMPT_SERVICE_ID,
         scope_context::{AGENT_SCOPE_CONTEXT_ID, AgentScopeContextInput, make_agent_scope_context},
         task::AGENT_TASK_SERVICE_ID,
     },
@@ -601,6 +602,11 @@ impl AgentLifecycleService {
             return Ok(());
         };
         handle
+            .get(AGENT_PROMPT_SERVICE_ID)
+            .map_err(|error| LifecycleError::new(error.to_string()))?
+            .shutdown()
+            .await;
+        handle
             .get(AGENT_TASK_SERVICE_ID)
             .map_err(|error| LifecycleError::new(error.to_string()))?
             .stop_all_on_exit("Session closed")
@@ -609,10 +615,10 @@ impl AgentLifecycleService {
         let loop_service = handle
             .get(AGENT_LOOP_SERVICE_ID)
             .map_err(|error| LifecycleError::new(error.to_string()))?;
-        let compaction = handle
+        let compaction_service = handle
             .get(AGENT_FULL_COMPACTION_SERVICE_ID)
-            .map_err(|error| LifecycleError::new(error.to_string()))?
-            .compacting();
+            .map_err(|error| LifecycleError::new(error.to_string()))?;
+        let compaction = compaction_service.compacting();
         let reason = Arc::new(abort_error(Some("Agent removed")));
         for turn_id in loop_service.status().pending_turn_ids {
             loop_service.cancel(Some(turn_id), Some(LoopValue::Error(reason.clone())));
@@ -623,18 +629,19 @@ impl AgentLifecycleService {
         {
             task.abort_controller.abort(Some((*reason).clone()));
         }
-        let compaction_settled = async move {
-            if let Some(task) = compaction {
-                let _ = task.promise.await;
-            }
-        };
-        tokio::join!(loop_service.settled(), compaction_settled);
-        handle
+        tokio::join!(loop_service.shutdown(), compaction_service.shutdown());
+        let flush_result = handle
+            .get(WIRE_SERVICE_ID)
+            .map_err(|error| LifecycleError::new(error.to_string()))?
+            .flush()
+            .await
+            .map_err(|error| LifecycleError::new(error.to_string()));
+        let dispose_result = handle
             .dispose()
-            .map_err(|error| LifecycleError::new(error.to_string()))?;
+            .map_err(|error| LifecycleError::new(error.to_string()));
         self.remove_interaction_subscription(&agent_id);
         self.inner.did_dispose.fire(&agent_id);
-        Ok(())
+        flush_result.and(dispose_result)
     }
 }
 

@@ -270,6 +270,9 @@ pub trait AgentLoopServiceContract: Send + Sync {
     fn status(&self) -> AgentLoopStatus;
     fn cancel(&self, turn_id: Option<i64>, reason: Option<LoopValue>) -> bool;
     async fn settled(&self);
+    async fn shutdown(&self) {
+        self.settled().await;
+    }
     fn has_pending_requests(&self) -> bool;
 
     fn register_loop_error_handler(

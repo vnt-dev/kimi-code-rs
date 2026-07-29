@@ -15,12 +15,13 @@ use futures_util::{StreamExt, TryStreamExt, future::join_all, stream};
 use indexmap::IndexMap;
 use serde_json::Value;
 use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio_util::task::TaskTracker;
 
 use crate::_base::{
     di::{
         descriptors::SyncDescriptor,
         instantiation::ServicesAccessorExt,
-        lifecycle::{DisposableHandle, to_disposable},
+        lifecycle::{DisposableHandle, disposable_none, to_disposable},
         scope::{InstantiationType, LifecycleScope, register_scoped_service},
     },
     errors::errors::{Error2Options, ErrorCause},
@@ -45,6 +46,9 @@ pub struct AppendLogStore {
 struct AppendLogStoreInner {
     storage: Arc<dyn FileSystemStorageService>,
     logs: Mutex<IndexMap<String, Arc<LogState>>>,
+    task_admission: Mutex<()>,
+    closed: AtomicBool,
+    tasks: TaskTracker,
 }
 
 struct LogState {
@@ -94,6 +98,9 @@ impl AppendLogStore {
             inner: Arc::new(AppendLogStoreInner {
                 storage,
                 logs: Mutex::new(IndexMap::new()),
+                task_admission: Mutex::new(()),
+                closed: AtomicBool::new(false),
+                tasks: TaskTracker::new(),
             }),
         }
     }
@@ -133,16 +140,19 @@ impl AppendLogStore {
         let store = self.clone();
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
-                handle.spawn(async move {
-                    tokio::task::yield_now().await;
-                    state.values.lock().unwrap().flush_scheduled = false;
-                    if let Err(error) = store.flush_state(&scope, &key, &state).await {
-                        let handler = state.values.lock().unwrap().on_error.clone();
-                        if let Some(handler) = handler {
-                            handler(&error);
+                self.inner.tasks.spawn_on(
+                    async move {
+                        tokio::task::yield_now().await;
+                        state.values.lock().unwrap().flush_scheduled = false;
+                        if let Err(error) = store.flush_state(&scope, &key, &state).await {
+                            let handler = state.values.lock().unwrap().on_error.clone();
+                            if let Some(handler) = handler {
+                                handler(&error);
+                            }
                         }
-                    }
-                });
+                    },
+                    &handle,
+                );
             }
             Err(error) => {
                 state.values.lock().unwrap().flush_scheduled = false;
@@ -266,6 +276,13 @@ pub fn register_append_log_store() {
 impl AppendLogStoreService for AppendLogStore {
     // Original: AppendLogStore.append<R>().
     fn append_value(&self, scope: &str, key: &str, record: Value, options: AppendLogOptions) {
+        let _admission = self.inner.task_admission.lock().unwrap();
+        if self.inner.closed.load(Ordering::Acquire) {
+            if let Some(handler) = options.on_error {
+                handler(&closed_error());
+            }
+            return;
+        }
         let state = self.state(scope, key);
         {
             let mut values = state.values.lock().unwrap();
@@ -353,10 +370,20 @@ impl AppendLogStoreService for AppendLogStore {
     }
 
     async fn close(&self) -> Result<(), AppendLogError> {
+        {
+            let _admission = self.inner.task_admission.lock().unwrap();
+            self.inner.closed.store(true, Ordering::Release);
+            self.inner.tasks.close();
+        }
+        self.inner.tasks.wait().await;
         self.flush().await
     }
 
     fn acquire(&self, scope: &str, key: &str) -> DisposableHandle {
+        let _admission = self.inner.task_admission.lock().unwrap();
+        if self.inner.closed.load(Ordering::Acquire) {
+            return disposable_none();
+        }
         let state = self.state(scope, key);
         state.values.lock().unwrap().ref_count += 1;
         let store = self.clone();
@@ -364,9 +391,22 @@ impl AppendLogStoreService for AppendLogStore {
         let key = key.to_owned();
         to_disposable(move || match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
-                handle.spawn(async move {
-                    store.release(scope, key, state).await;
-                });
+                let _admission = store.inner.task_admission.lock().unwrap();
+                if store.inner.closed.load(Ordering::Acquire) {
+                    let append_error = closed_error();
+                    if let Some(handler) = state.values.lock().unwrap().on_error.clone() {
+                        handler(&append_error);
+                    }
+                    return;
+                }
+                let tasks = store.inner.tasks.clone();
+                let release_store = store.clone();
+                tasks.spawn_on(
+                    async move {
+                        release_store.release(scope, key, state).await;
+                    },
+                    &handle,
+                );
             }
             Err(error) => {
                 let append_error = runtime_error(error);
@@ -407,6 +447,15 @@ fn runtime_error(error: impl Error + Send + Sync + 'static) -> AppendLogError {
             cause: Some(ErrorCause::Error(Arc::new(error))),
             ..Error2Options::default()
         },
+    )
+    .into()
+}
+
+fn closed_error() -> AppendLogError {
+    StorageError::with_options(
+        STORAGE_IO_FAILED,
+        "append-log store is closed",
+        Error2Options::default(),
     )
     .into()
 }
@@ -690,6 +739,40 @@ mod tests {
             .unwrap();
         assert_eq!(records, [Record { n: 1 }, Record { n: 2 }]);
         replacement.dispose().unwrap();
+    }
+
+    #[tokio::test]
+    async fn close_drains_tracked_tasks_and_rejects_late_appends() {
+        let storage = Arc::new(InMemoryStorageService::default());
+        let log = AppendLogStoreHandle(Arc::new(AppendLogStore::new(storage)));
+        log.append("s", "log", &Record { n: 1 }, Default::default())
+            .unwrap();
+
+        log.close().await.unwrap();
+
+        let errors = Arc::new(AtomicUsize::new(0));
+        log.append(
+            "s",
+            "log",
+            &Record { n: 2 },
+            AppendLogOptions {
+                on_error: Some(Arc::new({
+                    let errors = Arc::clone(&errors);
+                    move |_| {
+                        errors.fetch_add(1, Ordering::SeqCst);
+                    }
+                })),
+            },
+        )
+        .unwrap();
+        assert_eq!(errors.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            log.read::<Record>("s", "log")
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap(),
+            [Record { n: 1 }]
+        );
     }
 
     #[tokio::test]

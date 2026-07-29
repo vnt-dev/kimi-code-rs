@@ -6,6 +6,7 @@ use std::{
     collections::HashMap,
     error::Error,
     fmt,
+    panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex, OnceLock, Weak,
         atomic::{AtomicBool, Ordering},
@@ -17,6 +18,7 @@ use async_trait::async_trait;
 use futures_util::{FutureExt, future::Shared};
 use serde_json::{Map, Value};
 use tokio::sync::oneshot;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     _base::{
@@ -186,6 +188,8 @@ pub struct AgentFullCompactionService {
     begin_lock: Mutex<()>,
     self_weak: OnceLock<Weak<Self>>,
     disposables: DisposableStore,
+    shutdown: CancellationToken,
+    tasks: TaskTracker,
 }
 
 impl AgentFullCompactionService {
@@ -230,6 +234,8 @@ impl AgentFullCompactionService {
             begin_lock: Mutex::new(()),
             self_weak: OnceLock::new(),
             disposables: DisposableStore::new(),
+            shutdown: CancellationToken::new(),
+            tasks: TaskTracker::new(),
         });
         let _ = service.self_weak.set(Arc::downgrade(&service));
         service.install()?;
@@ -747,9 +753,38 @@ impl AgentFullCompactionService {
         active: Arc<ActiveCompaction>,
         data: CompactionBeginData,
     ) {
-        let result = self.compaction_worker_result(&active, &data).await;
+        let result = match AssertUnwindSafe(self.compaction_worker_result(&active, &data))
+            .catch_unwind()
+            .await
+        {
+            Ok(result) => result,
+            Err(payload) => {
+                self.cancel_active(&active);
+                Err(Arc::new(Error2::new(
+                    crate::_base::errors::codes::CORE_INTERNAL,
+                    format!(
+                        "Full compaction task panicked: {}",
+                        panic_payload_message(payload)
+                    ),
+                )) as FullCompactionError)
+            }
+        };
         self.on_did_finish_compaction.fire(&active.task);
         active.settle(result);
+    }
+
+    fn request_shutdown(&self) {
+        let _begin_guard = self.begin_lock.lock().unwrap();
+        self.shutdown.cancel();
+        self.tasks.close();
+        if let Some(active) = self.state.lock().unwrap().compacting.clone()
+            && !active.task.abort_controller.signal().aborted()
+        {
+            active
+                .task
+                .abort_controller
+                .abort(Some(AbortError::new("Full compaction service shut down.")));
+        }
     }
 
     async fn compaction_worker_result(
@@ -1226,6 +1261,7 @@ impl AgentFullCompactionService {
     }
 }
 
+#[async_trait]
 impl AgentFullCompactionServiceContract for AgentFullCompactionService {
     fn compacting(&self) -> Option<FullCompactionTask> {
         self.state
@@ -1238,6 +1274,11 @@ impl AgentFullCompactionServiceContract for AgentFullCompactionService {
 
     fn begin(&self, input: FullCompactionInput) -> Result<bool, FullCompactionError> {
         let _begin_guard = self.begin_lock.lock().unwrap();
+        if self.shutdown.is_cancelled() {
+            return Err(Arc::new(AbortError::new(
+                "Full compaction service was disposed.",
+            )));
+        }
         if self.state.lock().unwrap().compacting.is_some() {
             return Ok(false);
         }
@@ -1260,7 +1301,7 @@ impl AgentFullCompactionServiceContract for AgentFullCompactionService {
 
         let weak = self.self_weak.get().cloned().unwrap_or_default();
         let abort_active = Arc::clone(&active);
-        tokio::spawn(async move {
+        self.tasks.spawn(async move {
             let signal = abort_active.task.abort_controller.signal();
             tokio::select! {
                 _ = signal.cancelled() => {
@@ -1279,8 +1320,13 @@ impl AgentFullCompactionServiceContract for AgentFullCompactionService {
                 Arc::new(AbortError::new("Full compaction service was disposed."))
                     as FullCompactionError
             })?;
-        tokio::spawn(service.compaction_worker(active, data));
+        self.tasks.spawn(service.compaction_worker(active, data));
         Ok(true)
+    }
+
+    async fn shutdown(&self) {
+        self.request_shutdown();
+        self.tasks.wait().await;
     }
 
     fn hooks(&self) -> &AgentFullCompactionHooks {
@@ -1294,11 +1340,7 @@ impl AgentFullCompactionServiceContract for AgentFullCompactionService {
 
 impl Disposable for AgentFullCompactionService {
     fn dispose(&self) -> DisposeResult {
-        if let Some(active) = self.state.lock().unwrap().compacting.clone()
-            && !active.task.abort_controller.signal().aborted()
-        {
-            active.task.abort_controller.abort(None);
-        }
+        self.request_shutdown();
         let result = self.disposables.dispose();
         let emitter_result = self.on_did_finish_compaction.dispose();
         result.and(emitter_result)
@@ -1485,6 +1527,15 @@ fn insert_json(properties: &mut TelemetryProperties, key: &str, value: impl serd
 
 fn arc_error(error: impl Error + Send + Sync + 'static) -> FullCompactionError {
     Arc::new(error)
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("task panicked")
+        .to_owned()
 }
 
 fn loop_value_error(error: LoopValue) -> FullCompactionError {

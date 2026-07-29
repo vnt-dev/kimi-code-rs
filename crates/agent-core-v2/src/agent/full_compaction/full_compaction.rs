@@ -21,6 +21,7 @@ use crate::{
     hooks::OrderedHookSlot,
     kosong::contract::request_trace::LlmRequestTrace,
 };
+use async_trait::async_trait;
 use futures_util::future::{BoxFuture, Shared};
 
 use super::{CompactionResult, CompactionSource};
@@ -106,9 +107,11 @@ impl Default for AgentFullCompactionHooks {
     }
 }
 
+#[async_trait]
 pub trait AgentFullCompactionServiceContract: Disposable + Send + Sync {
     fn compacting(&self) -> Option<FullCompactionTask>;
     fn begin(&self, input: FullCompactionInput) -> Result<bool, FullCompactionError>;
+    async fn shutdown(&self) {}
     fn hooks(&self) -> &AgentFullCompactionHooks;
     fn on_did_finish_compaction(&self) -> Event<FullCompactionTask>;
 }

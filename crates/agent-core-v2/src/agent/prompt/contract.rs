@@ -126,6 +126,7 @@ pub trait AgentPromptServiceContract: Disposable + Send + Sync {
     async fn retry(&self) -> PromptServiceResult<Option<TurnHandle>>;
     fn undo(&self, count: f64) -> PromptServiceResult<usize>;
     fn clear(&self) -> PromptServiceResult<()>;
+    async fn shutdown(&self) {}
     fn hooks(&self) -> &AgentPromptHooks;
 }
 
