@@ -1291,11 +1291,7 @@ impl AgentLoopService {
             finish_reason,
             stop_turn: false,
         };
-        if let Err(error) = self.hooks.on_did_finish_step.run(&mut context, None).await
-            && (is_abort_error(error.as_ref()) || signal.aborted())
-        {
-            return Err(LoopValue::Error(Arc::from(error)));
-        }
+        run_after_step_hooks(&self.hooks, &mut context).await?;
         Ok(context.stop_turn)
     }
 
@@ -1678,6 +1674,17 @@ fn loop_error(error: impl Error + Send + Sync + 'static) -> LoopValue {
     LoopValue::Error(Arc::new(error))
 }
 
+async fn run_after_step_hooks(
+    hooks: &AgentLoopHooks,
+    context: &mut AfterStepContext,
+) -> Result<(), LoopValue> {
+    hooks
+        .on_did_finish_step
+        .run(context, None)
+        .await
+        .map_err(|error| LoopValue::Error(Arc::from(error)))
+}
+
 fn string_error(message: impl Into<String>) -> LoopValue {
     loop_error(std::io::Error::other(message.into()))
 }
@@ -1810,7 +1817,10 @@ pub fn register_agent_loop_service() {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
+    use crate::kosong::contract::usage::empty_usage;
 
     #[tokio::test]
     async fn loop_promises_are_shared_and_settle_once() {
@@ -1852,5 +1862,54 @@ mod tests {
             "max_tokens"
         );
         assert_eq!(normalize_finish_reason(FinishReason::Filtered), "filtered");
+    }
+
+    #[tokio::test]
+    async fn non_abort_after_step_hook_errors_are_propagated() {
+        let hooks = AgentLoopHooks::default();
+        let later_hook_ran = Arc::new(AtomicBool::new(false));
+        hooks
+            .on_did_finish_step
+            .register(
+                "failing",
+                Arc::new(|_, _| {
+                    Box::pin(async {
+                        Err(Box::new(std::io::Error::other("after-step failed"))
+                            as crate::_base::lifecycle::lifecycle_machine::BoxError)
+                    })
+                }),
+                Default::default(),
+            )
+            .unwrap();
+        let later_hook_ran_for_hook = Arc::clone(&later_hook_ran);
+        hooks
+            .on_did_finish_step
+            .register(
+                "later",
+                Arc::new(move |context, next| {
+                    let later_hook_ran = Arc::clone(&later_hook_ran_for_hook);
+                    Box::pin(async move {
+                        later_hook_ran.store(true, Ordering::SeqCst);
+                        next(context).await
+                    })
+                }),
+                Default::default(),
+            )
+            .unwrap();
+        let mut context = AfterStepContext {
+            turn_id: 1,
+            step: 1,
+            signal: AbortController::new().signal(),
+            usage: empty_usage(),
+            finish_reason: FinishReason::ToolCalls,
+            stop_turn: false,
+        };
+
+        let error = run_after_step_hooks(&hooks, &mut context)
+            .await
+            .expect_err("non-abort hook errors must fail the step");
+
+        assert_eq!(error.to_string(), "after-step failed");
+        assert!(!later_hook_ran.load(Ordering::SeqCst));
     }
 }
