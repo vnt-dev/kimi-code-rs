@@ -89,6 +89,7 @@ import type {
   AgentContentPart,
   AgentInteraction,
   AgentInteractionsEvent,
+  AgentUsageStatus,
   ApprovalPayload,
   AuthStatus,
   CompactionEvent,
@@ -107,6 +108,7 @@ import type {
   ProtocolMessage,
   QuestionPayload,
   QuestionResponse,
+  TokenUsage,
   ToolUpdate,
 } from "./types";
 
@@ -357,6 +359,63 @@ function formatContext(value: number): string {
 
 function formatTokenCount(value: number): string {
   return Math.max(0, Math.round(value)).toLocaleString("en-US");
+}
+
+function formatCompactTokenCount(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Math.max(0, Math.round(value)));
+}
+
+function inputTokenUsage(usage?: TokenUsage): number {
+  if (!usage) return 0;
+  return (
+    usage.inputOther +
+    usage.inputCacheRead +
+    usage.inputCacheCreation
+  );
+}
+
+function formatCacheHitRate(usage?: TokenUsage): string {
+  if (!usage) return "—";
+  const totalInput = inputTokenUsage(usage);
+  if (totalInput <= 0) return "0%";
+  return `${Math.round((usage.inputCacheRead / totalInput) * 100)}%`;
+}
+
+function TokenUsageBreakdown({
+  label,
+  usage,
+}: {
+  label: string;
+  usage?: TokenUsage;
+}) {
+  return (
+    <div className="token-usage-breakdown">
+      <strong>{label}</strong>
+      <div>
+        <span>
+          <small>总输入</small>
+          <b>{usage ? formatTokenCount(inputTokenUsage(usage)) : "—"}</b>
+        </span>
+        <span>
+          <small>输出</small>
+          <b>{usage ? formatTokenCount(usage.output) : "—"}</b>
+        </span>
+      </div>
+      <div>
+        <span>
+          <small>缓存输入</small>
+          <b>{usage ? formatTokenCount(usage.inputCacheRead) : "—"}</b>
+        </span>
+        <span>
+          <small>缓存命中率</small>
+          <b>{formatCacheHitRate(usage)}</b>
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function conciseError(error: unknown): string {
@@ -753,6 +812,9 @@ export default function App() {
   const [contextUsages, setContextUsages] = useState<
     Record<string, ContextUsage>
   >({});
+  const [agentUsages, setAgentUsages] = useState<
+    Record<string, AgentUsageStatus>
+  >({});
   const [messageDurations, setMessageDurations] = useState<
     Record<string, Record<string, number>>
   >({});
@@ -844,6 +906,9 @@ export default function App() {
   const activeContextUsage = activeConversation
     ? contextUsages[activeConversation.id]
     : undefined;
+  const activeAgentUsage = activeConversation
+    ? agentUsages[activeConversation.id]
+    : undefined;
   const activePlan = activeConversation
     ? plans[activeConversation.id]
     : undefined;
@@ -860,13 +925,17 @@ export default function App() {
     noticeTimer.current = window.setTimeout(() => setNotice(undefined), 3600);
   };
 
-  const refreshModeState = async (scope: {
+  const refreshAgentState = async (scope: {
     sessionId: string;
     agentId: string;
   }): Promise<void> => {
     const agent = createAgentClient(scope);
-    const plan = await agent.getPlan();
+    const [plan, usage] = await Promise.all([agent.getPlan(), agent.getUsage()]);
     setPlans((current) => ({ ...current, [scope.sessionId]: plan }));
+    setAgentUsages((current) => ({
+      ...current,
+      [scope.sessionId]: usage,
+    }));
   };
 
   const releaseAgentSubscription = (sessionId: string): void => {
@@ -1082,7 +1151,7 @@ export default function App() {
           ),
         }));
         setActiveAgentScope(scope);
-        await refreshModeState(scope);
+        await refreshAgentState(scope);
       })
       .catch((error) => {
         if (!disposed) showNotice(conciseError(error));
@@ -1182,6 +1251,16 @@ export default function App() {
               }));
             })
             .catch((error) => showNotice(conciseError(error)));
+        }
+        if (
+          payload.event.type === "agent.status.updated" &&
+          payload.event.usage &&
+          typeof payload.event.usage === "object"
+        ) {
+          setAgentUsages((current) => ({
+            ...current,
+            [payload.sessionId]: payload.event.usage as AgentUsageStatus,
+          }));
         }
         if (
           payload.event.type === "agent.status.updated" ||
@@ -1334,6 +1413,7 @@ export default function App() {
     setInteractions((current) => omitSessionKeys(current, ids));
     setCompactions((current) => omitSessionKeys(current, ids));
     setContextUsages((current) => omitSessionKeys(current, ids));
+    setAgentUsages((current) => omitSessionKeys(current, ids));
     setMessageDurations((current) => omitSessionKeys(current, ids));
     setPlans((current) => omitSessionKeys(current, ids));
     setInFlightTurns((current) => omitSessionKeys(current, ids));
@@ -1664,7 +1744,7 @@ export default function App() {
       } else {
         await agent.enterPlan();
       }
-      await refreshModeState(activeAgentScope);
+      await refreshAgentState(activeAgentScope);
     } catch (error) {
       showNotice(conciseError(error));
     } finally {
@@ -1677,7 +1757,7 @@ export default function App() {
     setModeBusy(true);
     try {
       await createAgentClient(activeAgentScope).clearPlan();
-      await refreshModeState(activeAgentScope);
+      await refreshAgentState(activeAgentScope);
     } catch (error) {
       showNotice(conciseError(error));
     } finally {
@@ -1715,6 +1795,7 @@ export default function App() {
       setAccountUsageBusy(false);
       setAccountUsageError(undefined);
       setContextUsages({});
+      setAgentUsages({});
       setMessageDurations({});
       setProfileOpen(false);
       showNotice("已退出登录");
@@ -2707,6 +2788,8 @@ export default function App() {
                     {selectedModel && (
                       <ContextUsageIndicator
                         usage={activeContextUsage}
+                        agentUsage={activeAgentUsage}
+                        models={models}
                         maxContextTokens={selectedModel.contextLength}
                       />
                     )}
@@ -3136,9 +3219,13 @@ function WindowTitleBar({
 
 function ContextUsageIndicator({
   usage,
+  agentUsage,
+  models,
   maxContextTokens,
 }: {
   usage?: ContextUsage;
+  agentUsage?: AgentUsageStatus;
+  models: Model[];
   maxContextTokens: number;
 }) {
   const contextTokens = Math.max(0, usage?.contextTokens ?? 0);
@@ -3148,6 +3235,10 @@ function ContextUsageIndicator({
   const progress = Math.min(1, Math.max(0, ratio));
   const percent = effectiveMax > 0 ? Math.round(ratio * 100) : undefined;
   const level = ratio >= 0.85 ? "critical" : ratio >= 0.7 ? "warning" : "";
+  const modelUsages = Object.entries(agentUsage?.byModel ?? {});
+  const hasTokenUsage = Boolean(
+    agentUsage?.currentTurn || agentUsage?.total || modelUsages.length,
+  );
 
   return (
     <div
@@ -3174,14 +3265,84 @@ function ContextUsageIndicator({
         </svg>
       </span>
       <div className="context-usage-tooltip" role="tooltip">
-        <strong>上下文窗口</strong>
-        <span className="context-usage-summary">
-          {percent === undefined ? "使用量未知" : `${percent}% 已用`}
-        </span>
-        <span>
-          已用 {formatTokenCount(contextTokens)} tokens，共{" "}
-          {effectiveMax > 0 ? formatTokenCount(effectiveMax) : "未知"}
-        </span>
+        <section className="agent-token-usage" aria-label="Token 用量">
+          <div className="usage-section-heading">
+            <strong>Token 用量</strong>
+            <small>
+              {modelUsages.length > 0
+                ? `${modelUsages.length} 个模型`
+                : "当前 Agent"}
+            </small>
+          </div>
+          {hasTokenUsage ? (
+            <>
+              <TokenUsageBreakdown
+                label="本轮"
+                usage={agentUsage?.currentTurn}
+              />
+              <TokenUsageBreakdown
+                label="会话累计"
+                usage={agentUsage?.total}
+              />
+              {modelUsages.length > 0 && (
+                <div className="token-usage-models">
+                  <strong>按模型</strong>
+                  {modelUsages.slice(0, 3).map(([model, modelUsage]) => {
+                    const totalInput = inputTokenUsage(modelUsage);
+                    const modelDisplayName =
+                      models.find(
+                        (candidate) =>
+                          candidate.id === model || candidate.model === model,
+                      )?.displayName ?? model;
+                    return (
+                      <div
+                        key={model}
+                        title={`${modelDisplayName}：缓存输入 ${formatTokenCount(
+                          modelUsage.inputCacheRead,
+                        )}，总输入 ${formatTokenCount(
+                          totalInput,
+                        )}，输出 ${formatTokenCount(
+                          modelUsage.output,
+                        )}，缓存命中率 ${formatCacheHitRate(modelUsage)}`}
+                      >
+                        <span>
+                          <i>{modelDisplayName}</i>
+                          <b>命中率 {formatCacheHitRate(modelUsage)}</b>
+                        </span>
+                        <small>
+                          缓存输入{" "}
+                          {formatCompactTokenCount(modelUsage.inputCacheRead)}
+                          <em>/</em>总输入{" "}
+                          {formatCompactTokenCount(totalInput)}
+                          <em>/</em>输出{" "}
+                          {formatCompactTokenCount(modelUsage.output)}
+                        </small>
+                      </div>
+                    );
+                  })}
+                  {modelUsages.length > 3 && (
+                    <small>另有 {modelUsages.length - 3} 个模型</small>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <span className="token-usage-empty">暂无用量记录</span>
+          )}
+        </section>
+        <span className="context-usage-divider" aria-hidden="true" />
+        <section className="context-window-usage" aria-label="上下文窗口">
+          <div className="usage-section-heading">
+            <strong>上下文窗口</strong>
+          </div>
+          <span className="context-usage-summary">
+            {percent === undefined ? "使用量未知" : `${percent}% 已用`}
+          </span>
+          <span>
+            已用 {formatTokenCount(contextTokens)} tokens，共{" "}
+            {effectiveMax > 0 ? formatTokenCount(effectiveMax) : "未知"}
+          </span>
+        </section>
       </div>
     </div>
   );

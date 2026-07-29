@@ -355,6 +355,19 @@ export interface ContextUsage {
   usageRatio: number;
 }
 
+export interface TokenUsage {
+  inputOther: number;
+  output: number;
+  inputCacheRead: number;
+  inputCacheCreation: number;
+}
+
+export interface AgentUsageStatus {
+  byModel?: Record<string, TokenUsage>;
+  total?: TokenUsage;
+  currentTurn?: TokenUsage;
+}
+
 export interface AgentContextUsageEvent {
   conversationId: string;
   usage: ContextUsage;

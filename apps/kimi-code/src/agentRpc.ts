@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentConfig,
   AgentPromptPart,
+  AgentUsageStatus,
   PermissionMode,
   PlanData,
   PreparedSession,
@@ -116,6 +117,9 @@ export function createAgentClient(scope: AgentScope) {
     },
     getPlan() {
       return callAgentRpc<PlanData | null>(scope, "getPlan");
+    },
+    getUsage() {
+      return callAgentRpc<AgentUsageStatus>(scope, "getUsage");
     },
   };
 }
