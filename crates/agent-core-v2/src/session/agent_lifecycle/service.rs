@@ -583,7 +583,7 @@ impl AgentLifecycleService {
             child
                 .get(AGENT_CONTEXT_MEMORY_SERVICE_ID)
                 .map_err(|error| LifecycleError::new(error.to_string()))?
-                .append(messages)
+                .append(messages.to_vec())
                 .map_err(|error| LifecycleError::new(error.to_string()))?;
         }
         Ok(child)

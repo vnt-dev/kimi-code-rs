@@ -196,13 +196,22 @@ impl WireService {
     where
         S: Clone + Send + Sync + 'static,
     {
+        self.read_model(model, Clone::clone)
+    }
+
+    // Runs a short synchronous read while the model state is locked. Callers
+    // must not re-enter WireService from the callback.
+    pub(crate) fn read_model<S, R>(&self, model: &ModelDef<S>, read: impl FnOnce(&S) -> R) -> R
+    where
+        S: Send + Sync + 'static,
+    {
         let mut runtime = self.runtime.lock().unwrap();
         let instance = ensure_model(&mut runtime.models, model.erased());
-        instance
+        let state = instance
             .state
             .downcast_ref::<S>()
-            .expect("model ID always maps to its defining state type")
-            .clone()
+            .expect("model ID always maps to its defining state type");
+        read(state)
     }
 
     // Original: dispatch(). Reentrant calls enqueue and are drained after the

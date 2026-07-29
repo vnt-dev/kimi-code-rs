@@ -864,8 +864,8 @@ mod tests {
     }
 
     impl AgentContextMemoryServiceContract for RecordingContext {
-        fn get(&self) -> Vec<ContextMessage> {
-            self.messages.lock().unwrap().clone()
+        fn get(&self) -> crate::agent::context_memory::ContextMemorySnapshot {
+            self.messages.lock().unwrap().clone().into()
         }
 
         fn append(&self, messages: Vec<ContextMessage>) -> Result<(), ContextMemoryServiceError> {

@@ -38,8 +38,8 @@ use crate::{
             ContextInjectionContent, ContextInjectionProvider,
         },
         context_memory::{
-            AGENT_CONTEXT_MEMORY_SERVICE_ID, AgentContextMemoryServiceContract, ContextMessage,
-            PromptOrigin,
+            AGENT_CONTEXT_MEMORY_SERVICE_ID, AgentContextMemoryServiceContract,
+            ContextMemorySnapshot, ContextMessage, PromptOrigin,
         },
         loop_::{AGENT_LOOP_SERVICE_ID, AgentLoopServiceContract},
         scope_context::{AGENT_SCOPE_CONTEXT_ID, AgentScopeContext},
@@ -156,7 +156,7 @@ pub struct AgentTaskService {
 
 pub trait AgentTaskRuntimeEffects: Send + Sync {
     fn task_config(&self) -> Option<super::AgentTaskConfig>;
-    fn context_snapshot(&self) -> Vec<ContextMessage>;
+    fn context_snapshot(&self) -> ContextMemorySnapshot;
     fn record_task_started(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()>;
     fn record_task_terminated(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()>;
     fn enqueue_notification(
@@ -197,7 +197,7 @@ impl AgentTaskRuntimeEffects for DefaultAgentTaskRuntimeEffects {
         resolve_agent_task_config(&self.config)
     }
 
-    fn context_snapshot(&self) -> Vec<ContextMessage> {
+    fn context_snapshot(&self) -> ContextMemorySnapshot {
         self.context.get()
     }
 
@@ -2050,8 +2050,8 @@ mod tests {
             })
         }
 
-        fn context_snapshot(&self) -> Vec<ContextMessage> {
-            self.context.lock().unwrap().clone()
+        fn context_snapshot(&self) -> ContextMemorySnapshot {
+            self.context.lock().unwrap().clone().into()
         }
 
         fn record_task_started(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()> {

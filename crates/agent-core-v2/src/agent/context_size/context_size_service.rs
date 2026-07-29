@@ -396,8 +396,8 @@ mod tests {
         context.append(vec![context_message("hello")]).unwrap();
         let input = context
             .get()
-            .into_iter()
-            .map(|message| message.message)
+            .iter()
+            .map(|message| message.message.clone())
             .collect::<Vec<_>>();
         size.measured(
             &input,

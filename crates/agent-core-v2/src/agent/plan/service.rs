@@ -471,8 +471,8 @@ mod tests {
     struct EmptyContext;
 
     impl AgentContextMemoryServiceContract for EmptyContext {
-        fn get(&self) -> Vec<crate::agent::context_memory::ContextMessage> {
-            Vec::new()
+        fn get(&self) -> crate::agent::context_memory::ContextMemorySnapshot {
+            Vec::new().into()
         }
 
         fn append(

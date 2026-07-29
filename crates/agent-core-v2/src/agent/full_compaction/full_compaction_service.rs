@@ -376,17 +376,11 @@ impl AgentFullCompactionService {
     }
 
     fn estimate_current_request_tokens(&self) -> f64 {
-        self.estimate_request_tokens(
-            &self
-                .context
-                .get()
-                .into_iter()
-                .map(|message| message.message)
-                .collect::<Vec<_>>(),
-        )
+        let context = self.context.get();
+        self.estimate_request_tokens(context.iter().map(|message| &message.message))
     }
 
-    fn estimate_request_tokens(&self, messages: &[Message]) -> f64 {
+    fn estimate_request_tokens<'a>(&self, messages: impl IntoIterator<Item = &'a Message>) -> f64 {
         (estimate_tokens(&self.profile.get_system_prompt())
             + estimate_tokens_for_tools(
                 &self

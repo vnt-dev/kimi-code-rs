@@ -113,8 +113,8 @@ mod tests {
     struct MemoryContext(Mutex<Vec<ContextMessage>>);
 
     impl AgentContextMemoryServiceContract for MemoryContext {
-        fn get(&self) -> Vec<ContextMessage> {
-            self.0.lock().unwrap().clone()
+        fn get(&self) -> crate::agent::context_memory::ContextMemorySnapshot {
+            self.0.lock().unwrap().clone().into()
         }
 
         fn append(&self, messages: Vec<ContextMessage>) -> Result<(), ContextMemoryServiceError> {

@@ -103,7 +103,7 @@ impl MessageLegacyService {
 
         let transcript = self.read_transcript(&agent).await?;
         let context_messages = agent.get(AGENT_CONTEXT_MEMORY_SERVICE_ID)?.get();
-        let merged = merge_live_tail(transcript, context_messages);
+        let merged = merge_live_tail(transcript, &context_messages);
         let entries = rehydrate(&agent, merged.messages).await?;
         project_messages(session_id, &summary, entries, &merged.times)
     }
@@ -186,7 +186,7 @@ struct MergedHistory {
 
 fn merge_live_tail(
     transcript: ContextTranscript,
-    context_messages: Vec<ContextMessage>,
+    context_messages: &[ContextMessage],
 ) -> MergedHistory {
     if context_messages.len() as f64 <= transcript.folded_length {
         return MergedHistory {
@@ -196,11 +196,11 @@ fn merge_live_tail(
     }
 
     let tail_start = transcript.folded_length.max(0.0).trunc() as usize;
-    let tail = context_messages.into_iter().skip(tail_start);
+    let tail = context_messages.iter().skip(tail_start);
     let mut messages = transcript.entries;
     let mut times = transcript.times;
     for message in tail {
-        messages.push(message);
+        messages.push(message.clone());
         times.push(None);
     }
     MergedHistory { messages, times }
@@ -407,8 +407,8 @@ mod tests {
     }
 
     impl AgentContextMemoryServiceContract for Context {
-        fn get(&self) -> Vec<ContextMessage> {
-            self.messages.clone()
+        fn get(&self) -> crate::agent::context_memory::ContextMemorySnapshot {
+            self.messages.clone().into()
         }
 
         fn append(&self, _: Vec<ContextMessage>) -> Result<(), ContextMemoryServiceError> {

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -116,7 +118,7 @@ pub enum LoopRecordedEvent {
 // the public history remains a plain ContextMessage slice.
 #[derive(Clone, Debug, Default)]
 pub struct LoopEventFold {
-    messages: Vec<ContextMessage>,
+    messages: Arc<Vec<ContextMessage>>,
     open_step_uuid: Option<String>,
     pending: IndexSet<String>,
     deferred: Vec<ContextMessage>,
@@ -125,7 +127,7 @@ pub struct LoopEventFold {
 impl LoopEventFold {
     pub fn new(messages: Vec<ContextMessage>) -> Self {
         Self {
-            messages,
+            messages: Arc::new(messages),
             ..Self::default()
         }
     }
@@ -134,22 +136,22 @@ impl LoopEventFold {
         &self.messages
     }
 
-    pub fn into_messages(self) -> Vec<ContextMessage> {
-        self.messages
+    pub fn messages_snapshot(&self) -> Arc<Vec<ContextMessage>> {
+        Arc::clone(&self.messages)
     }
 
     pub(crate) fn messages_mut(&mut self) -> &mut [ContextMessage] {
-        &mut self.messages
+        Arc::make_mut(&mut self.messages).as_mut_slice()
     }
 
     pub(crate) fn pop_message(&mut self) -> Option<ContextMessage> {
-        self.messages.pop()
+        Arc::make_mut(&mut self.messages).pop()
     }
 
     // Original: loopEventFold.ts, foldAppendMessage().
     pub fn fold_append_message(&mut self, message: ContextMessage) {
         if self.pending.is_empty() {
-            self.messages.push(message);
+            Arc::make_mut(&mut self.messages).push(message);
         } else {
             self.deferred.push(message);
         }
@@ -164,7 +166,7 @@ impl LoopEventFold {
                     context_message(Message::new(Role::Assistant, Vec::new(), Vec::new()));
                 assistant.message.partial = Some(true);
                 self.open_step_uuid = Some(uuid);
-                self.messages.push(assistant);
+                Arc::make_mut(&mut self.messages).push(assistant);
             }
             LoopRecordedEvent::StepEnd { .. } => {
                 self.open_step_uuid = None;
@@ -209,7 +211,7 @@ impl LoopEventFold {
                 let mut message = context_message(create_tool_message(&tool_call_id, output));
                 message.is_error = result.is_error;
                 message.note = result.note;
-                self.messages.push(message);
+                Arc::make_mut(&mut self.messages).push(message);
                 self.flush_deferred();
             }
         }
@@ -224,7 +226,7 @@ impl LoopEventFold {
 
     fn update_open_assistant(&mut self, update: impl FnOnce(&mut ContextMessage)) {
         if let Some(index) = self.find_open_assistant_index() {
-            update(&mut self.messages[index]);
+            update(&mut Arc::make_mut(&mut self.messages)[index]);
         }
     }
 
@@ -238,9 +240,9 @@ impl LoopEventFold {
         if open.message.tool_calls.is_empty()
             && open.message.content.iter().all(is_vacuous_content_part)
         {
-            self.messages.remove(index);
+            Arc::make_mut(&mut self.messages).remove(index);
         } else {
-            self.messages[index].message.partial = None;
+            Arc::make_mut(&mut self.messages)[index].message.partial = None;
         }
     }
 
@@ -255,15 +257,16 @@ impl LoopEventFold {
         if self.pending.is_empty() {
             return;
         }
+        let messages = Arc::make_mut(&mut self.messages);
         for tool_call_id in std::mem::take(&mut self.pending) {
-            self.messages.push(interrupted_tool_message(&tool_call_id));
+            messages.push(interrupted_tool_message(&tool_call_id));
         }
         self.flush_deferred();
     }
 
     fn flush_deferred(&mut self) {
         if self.pending.is_empty() && !self.deferred.is_empty() {
-            self.messages.append(&mut self.deferred);
+            Arc::make_mut(&mut self.messages).append(&mut self.deferred);
         }
     }
 }

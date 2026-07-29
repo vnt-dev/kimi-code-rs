@@ -63,8 +63,43 @@ pub struct ContextCompactionResult {
     pub dropped_count: Option<f64>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ContextMemorySnapshot(Arc<Vec<ContextMessage>>);
+
+impl ContextMemorySnapshot {
+    fn from_shared(messages: Arc<Vec<ContextMessage>>) -> Self {
+        Self(messages)
+    }
+}
+
+impl From<Vec<ContextMessage>> for ContextMemorySnapshot {
+    fn from(messages: Vec<ContextMessage>) -> Self {
+        Self(Arc::new(messages))
+    }
+}
+
+impl FromIterator<ContextMessage> for ContextMemorySnapshot {
+    fn from_iter<T: IntoIterator<Item = ContextMessage>>(iter: T) -> Self {
+        Vec::from_iter(iter).into()
+    }
+}
+
+impl Deref for ContextMemorySnapshot {
+    type Target = [ContextMessage];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_slice()
+    }
+}
+
+impl AsRef<[ContextMessage]> for ContextMemorySnapshot {
+    fn as_ref(&self) -> &[ContextMessage] {
+        self
+    }
+}
+
 pub trait AgentContextMemoryServiceContract: Send + Sync {
-    fn get(&self) -> Vec<ContextMessage>;
+    fn get(&self) -> ContextMemorySnapshot;
     fn append(&self, messages: Vec<ContextMessage>) -> Result<(), ContextMemoryServiceError>;
     fn append_loop_event(&self, event: LoopRecordedEvent) -> Result<(), ContextMemoryServiceError>;
     fn clear(&self) -> Result<(), ContextMemoryServiceError>;
@@ -179,10 +214,13 @@ pub fn register_agent_context_memory_service() {
 }
 
 impl AgentContextMemoryServiceContract for AgentContextMemoryService {
-    // Original: contextMemoryService.ts, get(). The snapshot is a defensive
-    // owned copy, corresponding to the source's frozen readonly model array.
-    fn get(&self) -> Vec<ContextMessage> {
-        self.wire.get_model(&CONTEXT_MODEL).into_messages()
+    // Original: contextMemoryService.ts, get(). The snapshot shares immutable
+    // storage with the model and remains stable through copy-on-write updates.
+    fn get(&self) -> ContextMemorySnapshot {
+        ContextMemorySnapshot::from_shared(
+            self.wire
+                .read_model(&CONTEXT_MODEL, |state| state.messages_snapshot()),
+        )
     }
 
     // Original: contextMemoryService.ts, append().
@@ -434,6 +472,24 @@ mod tests {
         message.id = Some("msg_existing".into());
         service.append(vec![message]).unwrap();
         assert_eq!(service.get()[0].id.as_deref(), Some("msg_existing"));
+        service.wire.flush().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn context_snapshots_share_storage_and_remain_stable_after_writes() {
+        let (service, _) = service();
+        service.append(vec![user("one")]).unwrap();
+
+        let first = service.get();
+        let same_history = service.get();
+        assert!(Arc::ptr_eq(&first.0, &same_history.0));
+
+        service.append(vec![user("two")]).unwrap();
+        let updated = service.get();
+        assert_eq!(first.len(), 1);
+        assert_eq!(updated.len(), 2);
+        assert!(!Arc::ptr_eq(&first.0, &updated.0));
+
         service.wire.flush().await.unwrap();
     }
 }

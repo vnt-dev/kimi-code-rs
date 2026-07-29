@@ -576,7 +576,7 @@ impl AgentRpcServiceContract for AgentRpcService {
 
     async fn get_context(&self, _payload: EmptyPayload) -> AgentRpcResult<AgentContextData> {
         Ok(AgentContextData {
-            history: self.context.get(),
+            history: self.context.get().to_vec(),
             token_count: self.context_size.get(None, None).measured,
         })
     }
