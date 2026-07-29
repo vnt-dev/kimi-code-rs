@@ -1950,6 +1950,292 @@ select:focus-visible {
   color: #c78383;
 }
 
+.subagent-panel {
+  border-top: 1px solid rgba(139, 124, 246, 0.1);
+  background:
+    linear-gradient(90deg, rgba(139, 124, 246, 0.045), transparent 55%),
+    #111116;
+}
+
+.subagent-panel.active {
+  border-top-color: rgba(139, 124, 246, 0.18);
+}
+
+.subagent-panel-summary {
+  display: flex;
+  width: 100%;
+  min-height: 31px;
+  padding: 6px 10px;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  color: #85818f;
+  background: transparent;
+  cursor: pointer;
+  font-size: 9.5px;
+  text-align: left;
+}
+
+.subagent-panel.active .subagent-panel-summary > svg:first-child {
+  color: #9e92e9;
+}
+
+.subagent-panel-summary strong {
+  color: #aaa5b7;
+  font-family: "DM Mono", monospace;
+  font-size: 8.5px;
+  font-weight: 500;
+}
+
+.subagent-panel-summary small {
+  margin-left: auto;
+  color: #6f6c78;
+  font-size: 8.5px;
+}
+
+.subagent-panel.active .subagent-panel-summary small {
+  color: #988ce6;
+}
+
+.subagent-progress-dots {
+  display: inline-flex;
+  max-width: 100px;
+  align-items: center;
+  gap: 3px;
+}
+
+.subagent-progress-dots i {
+  width: 4px;
+  height: 4px;
+  flex: 0 0 4px;
+  border-radius: 50%;
+  background: #4d4d57;
+  transition:
+    background-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.subagent-progress-dots i.running {
+  background: #9e92e9;
+  box-shadow: 0 0 0 3px rgba(139, 124, 246, 0.08);
+  animation: subagent-pulse 1.25s ease-in-out infinite;
+}
+
+.subagent-progress-dots i.suspended {
+  background: #c49a63;
+}
+
+.subagent-progress-dots i.completed {
+  background: #68b995;
+}
+
+.subagent-progress-dots i.failed {
+  background: #c78383;
+}
+
+.subagent-progress-dots i.stopped {
+  background: #656570;
+}
+
+@keyframes subagent-pulse {
+  50% {
+    opacity: 0.52;
+    transform: scale(0.78);
+  }
+}
+
+.subagent-list {
+  display: flex;
+  padding: 2px 8px 8px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subagent-row {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  border-radius: 7px;
+  background: rgba(8, 8, 11, 0.4);
+  animation: content-in 140ms ease-out both;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+
+.subagent-row.running {
+  border-color: rgba(139, 124, 246, 0.13);
+  background: rgba(139, 124, 246, 0.025);
+}
+
+.subagent-row.failed {
+  border-color: rgba(212, 120, 120, 0.16);
+}
+
+.subagent-row-summary {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 39px;
+  padding: 6px 7px;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.subagent-row-summary:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.subagent-row-summary:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.subagent-status-icon {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  place-items: center;
+  border-radius: 50%;
+  color: #777782;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.subagent-status-icon.queued::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #656570;
+  content: "";
+}
+
+.subagent-status-icon.running::before {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(139, 124, 246, 0.22);
+  border-top-color: #9e92e9;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  content: "";
+}
+
+.subagent-status-icon.suspended {
+  color: #c49a63;
+  background: rgba(196, 154, 99, 0.08);
+}
+
+.subagent-status-icon.completed {
+  color: #68b995;
+  background: rgba(74, 194, 143, 0.08);
+}
+
+.subagent-status-icon.failed {
+  color: #c78383;
+  background: rgba(212, 120, 120, 0.08);
+}
+
+.subagent-status-icon.stopped {
+  color: #777782;
+}
+
+.subagent-row-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.subagent-row-copy strong {
+  overflow: hidden;
+  color: #9b98a4;
+  font-size: 9.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-row-copy small {
+  overflow: hidden;
+  color: #5f5f69;
+  font-family: "DM Mono", monospace;
+  font-size: 7.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-row-state {
+  flex: 0 0 auto;
+  color: #696974;
+  font-size: 8px;
+}
+
+.subagent-row-state.running {
+  color: #988ce6;
+}
+
+.subagent-row-state.suspended {
+  color: #c49a63;
+}
+
+.subagent-row-state.completed {
+  color: #68b995;
+}
+
+.subagent-row-state.failed {
+  color: #c78383;
+}
+
+.subagent-row-detail {
+  display: flex;
+  padding: 0 7px 7px 30px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subagent-row-detail pre {
+  max-height: 180px;
+  margin: 0;
+  padding: 7px 8px;
+  overflow: auto;
+  border-left: 1px solid rgba(139, 124, 246, 0.14);
+  border-radius: 0 5px 5px 0;
+  color: #85838d;
+  background: rgba(0, 0, 0, 0.2);
+  font-family: inherit;
+  font-size: 9px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.subagent-row-detail pre.error {
+  border-left-color: rgba(212, 120, 120, 0.25);
+  color: #c78383;
+}
+
+.subagent-metrics {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.subagent-metrics span {
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #686572;
+  background: rgba(255, 255, 255, 0.025);
+  font-family: "DM Mono", monospace;
+  font-size: 7.5px;
+}
+
 .live-tool-detail {
   display: flex;
   padding: 10px;
@@ -4569,12 +4855,16 @@ select:focus-visible {
   .live-step,
   .live-tool-card,
   .live-text,
+  .subagent-row,
+  .subagent-progress-dots i.running,
   .todo-progress-anchor {
     animation: none;
   }
 
   .collapsible,
   .collapsible.open,
+  .subagent-progress-dots i,
+  .subagent-row,
   .todo-popover,
   .todo-progress-pill,
   .todo-list-item {

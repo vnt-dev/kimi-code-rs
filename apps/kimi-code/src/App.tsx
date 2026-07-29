@@ -84,6 +84,15 @@ import {
   thinkingLevelDescription,
   thinkingLevelsForModel,
 } from "./modelControls";
+import {
+  isSubagentEvent,
+  mergeSessionSubagentEvent,
+  subagentRunsWithSwarmItems,
+  type SessionSubagentRuns,
+  type SubagentRun,
+  type SubagentRunStatus,
+  type SubagentRunsByTool,
+} from "./subagentEvents";
 import type {
   AccountUsage,
   AgentChatEvent,
@@ -960,6 +969,7 @@ export default function App() {
   const [sessionTodos, setSessionTodos] = useState<Record<string, TodoItem[]>>(
     {},
   );
+  const [subagentRuns, setSubagentRuns] = useState<SessionSubagentRuns>({});
   const [modeBusy, setModeBusy] = useState(false);
   const [removalTarget, setRemovalTarget] = useState<RemovalTarget>();
   const [removalBusy, setRemovalBusy] = useState(false);
@@ -1009,6 +1019,9 @@ export default function App() {
   const permissionMode = activeConversation?.permissionMode ?? "manual";
   const activeTurn = activeConversation
     ? inFlightTurns[activeConversation.id]
+    : undefined;
+  const activeSubagentRuns = activeConversation
+    ? subagentRuns[activeConversation.id]
     : undefined;
   const activeHistory =
     history?.conversationId === activeConversation?.id ? history : undefined;
@@ -1364,6 +1377,16 @@ export default function App() {
             });
           }
         }
+        if (isSubagentEvent(payload.event)) {
+          const subagentEvent = payload.event;
+          setSubagentRuns((current) =>
+            mergeSessionSubagentEvent(
+              current,
+              payload.sessionId,
+              subagentEvent,
+            ),
+          );
+        }
         if (payload.event.type.startsWith("compaction.")) {
           const phase = payload.event.type.slice("compaction.".length);
           if (
@@ -1655,6 +1678,7 @@ export default function App() {
     setMessageDurations((current) => omitSessionKeys(current, ids));
     setPlans((current) => omitSessionKeys(current, ids));
     setSessionTodos((current) => omitSessionKeys(current, ids));
+    setSubagentRuns((current) => omitSessionKeys(current, ids));
     setInFlightTurns((current) => omitSessionKeys(current, ids));
     setHistory((current) =>
       current && ids.has(current.conversationId) ? undefined : current,
@@ -2036,6 +2060,7 @@ export default function App() {
       setContextUsages({});
       setAgentUsages({});
       setSessionTodos({});
+      setSubagentRuns({});
       setMessageDurations({});
       setProfileOpen(false);
       showNotice("已退出登录");
@@ -2789,6 +2814,7 @@ export default function App() {
                       key={message.id}
                       message={message}
                       toolResults={historyToolPresentation.results}
+                      subagentRuns={activeSubagentRuns}
                       durationMs={
                         messageDurations[activeConversation.id]?.[message.id]
                       }
@@ -2796,7 +2822,12 @@ export default function App() {
                       onCopy={copyMessage}
                     />
                   ))}
-                  {activeTurn && <LiveTurnView turn={activeTurn} />}
+                  {activeTurn && (
+                    <LiveTurnView
+                      turn={activeTurn}
+                      subagentRuns={activeSubagentRuns}
+                    />
+                  )}
                   {activeCompaction && (
                     <CompactionNotice event={activeCompaction} />
                   )}
@@ -4222,7 +4253,13 @@ function Welcome({
   );
 }
 
-function LiveTurnView({ turn }: { turn: InFlightTurn }) {
+function LiveTurnView({
+  turn,
+  subagentRuns,
+}: {
+  turn: InFlightTurn;
+  subagentRuns?: SubagentRunsByTool;
+}) {
   const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
   const streaming = isTurnRunning(turn);
 
@@ -4288,7 +4325,13 @@ function LiveTurnView({ turn }: { turn: InFlightTurn }) {
                     />
                   );
                 }
-                return <LiveToolBlock tool={block} key={block.toolCallId} />;
+                return (
+                  <LiveToolBlock
+                    tool={block}
+                    subagents={subagentRuns?.[block.toolCallId] ?? []}
+                    key={block.toolCallId}
+                  />
+                );
               })}
               {step.interruption && (
                 <div className="live-step-interruption">{step.interruption}</div>
@@ -4432,8 +4475,10 @@ function LiveAssistantContent({
 
 function LiveToolBlock({
   tool,
+  subagents,
 }: {
   tool: Extract<LiveBlock, { kind: "tool" }>;
+  subagents: readonly SubagentRun[];
 }) {
   const active = tool.status === "streaming" || tool.status === "running";
   const [open, setOpen] = useState(active);
@@ -4452,6 +4497,7 @@ function LiveToolBlock({
     (tool.argumentsText
       ? parseStructuredValue(tool.argumentsText)
       : undefined);
+  const displayedSubagents = subagentRunsWithSwarmItems(subagents, input);
   return (
     <div className={`live-tool-card ${tool.status}`}>
       <button
@@ -4468,6 +4514,9 @@ function LiveToolBlock({
         <span>{tool.name ?? "准备工具调用"}</span>
         <small>{liveToolStatusLabel(tool.status)}</small>
       </button>
+      {displayedSubagents.length > 0 && (
+        <SubagentPanel subagents={displayedSubagents} parentActive={active} />
+      )}
       <Collapsible className="tool-card-collapse" open={open}>
         <div className="live-tool-detail">
           {tool.description && <p>{tool.description}</p>}
@@ -4493,6 +4542,224 @@ function LiveToolBlock({
                 {structuredValue(tool.output)}
               </pre>
             </section>
+          )}
+        </div>
+      </Collapsible>
+    </div>
+  );
+}
+
+type DisplaySubagentStatus = SubagentRunStatus | "stopped";
+
+function displayedSubagentStatus(
+  subagent: SubagentRun,
+  parentActive: boolean,
+): DisplaySubagentStatus {
+  if (
+    !parentActive &&
+    (subagent.status === "queued" ||
+      subagent.status === "running" ||
+      subagent.status === "suspended")
+  ) {
+    return "stopped";
+  }
+  return subagent.status;
+}
+
+function subagentStatusLabel(status: DisplaySubagentStatus): string {
+  switch (status) {
+    case "queued":
+      return "等待中";
+    case "running":
+      return "执行中";
+    case "suspended":
+      return "等待重试";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "失败";
+    case "stopped":
+      return "已停止";
+  }
+}
+
+function subagentPanelSummary(statuses: DisplaySubagentStatus[]): string {
+  const running = statuses.filter((status) => status === "running").length;
+  const suspended = statuses.filter(
+    (status) => status === "suspended",
+  ).length;
+  const queued = statuses.filter((status) => status === "queued").length;
+  const failed = statuses.filter((status) => status === "failed").length;
+  if (running > 0) return `${running} 个执行中`;
+  if (suspended > 0) return `${suspended} 个等待重试`;
+  if (queued > 0) return `${queued} 个等待中`;
+  if (failed > 0) return `${failed} 个失败`;
+  if (statuses.some((status) => status === "stopped")) return "已停止";
+  return "全部完成";
+}
+
+function SubagentStatusIcon({ status }: { status: DisplaySubagentStatus }) {
+  return (
+    <span
+      className={`subagent-status-icon ${status}`}
+      aria-label={subagentStatusLabel(status)}
+    >
+      {status === "completed" ? (
+        <Check size={10} />
+      ) : status === "failed" ? (
+        <X size={10} />
+      ) : status === "suspended" ? (
+        <MoreHorizontal size={10} />
+      ) : status === "stopped" ? (
+        <Square size={7} />
+      ) : null}
+    </span>
+  );
+}
+
+function SubagentPanel({
+  subagents,
+  parentActive,
+}: {
+  subagents: readonly SubagentRun[];
+  parentActive: boolean;
+}) {
+  const statuses = subagents.map((subagent) =>
+    displayedSubagentStatus(subagent, parentActive),
+  );
+  const active = statuses.some(
+    (status) =>
+      status === "queued" ||
+      status === "running" ||
+      status === "suspended",
+  );
+  const finished = statuses.filter(
+    (status) =>
+      status === "completed" ||
+      status === "failed" ||
+      status === "stopped",
+  ).length;
+  const [open, setOpen] = useState(active);
+  const userToggled = useRef(false);
+
+  useEffect(() => {
+    if (!userToggled.current) setOpen(active);
+  }, [active]);
+
+  return (
+    <section
+      className={`subagent-panel ${active ? "active" : "settled"}`}
+      aria-label="子代理执行进度"
+    >
+      <button
+        type="button"
+        className="subagent-panel-summary"
+        aria-expanded={open}
+        onClick={() => {
+          userToggled.current = true;
+          setOpen((value) => !value);
+        }}
+      >
+        <Bot size={13} />
+        <span>子代理</span>
+        <strong>
+          {finished}/{subagents.length}
+        </strong>
+        <span className="subagent-progress-dots" aria-hidden="true">
+          {statuses.map((status, index) => (
+            <i className={status} key={`${status}-${index}`} />
+          ))}
+        </span>
+        <small>{subagentPanelSummary(statuses)}</small>
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+      </button>
+      <Collapsible className="subagent-list-collapse" open={open}>
+        <div className="subagent-list" aria-live="polite">
+          {subagents.map((subagent, index) => (
+            <SubagentRow
+              key={subagent.subagentId}
+              subagent={subagent}
+              status={statuses[index]}
+            />
+          ))}
+        </div>
+      </Collapsible>
+    </section>
+  );
+}
+
+function SubagentRow({
+  subagent,
+  status,
+}: {
+  subagent: SubagentRun;
+  status: DisplaySubagentStatus;
+}) {
+  const hasDetail =
+    Boolean(subagent.resultSummary) ||
+    Boolean(subagent.error) ||
+    subagent.usage !== undefined ||
+    subagent.contextTokens !== undefined;
+  const [open, setOpen] = useState(false);
+  const tokenTotal = subagent.usage
+    ? inputTokenUsage(subagent.usage) + subagent.usage.output
+    : undefined;
+  const shortId =
+    subagent.subagentId.length > 18
+      ? `${subagent.subagentId.slice(0, 8)}…${subagent.subagentId.slice(-5)}`
+      : subagent.subagentId;
+
+  return (
+    <div className={`subagent-row ${status}`}>
+      <button
+        type="button"
+        className="subagent-row-summary"
+        aria-expanded={hasDetail ? open : undefined}
+        disabled={!hasDetail}
+        onClick={() => hasDetail && setOpen((value) => !value)}
+      >
+        <SubagentStatusIcon status={status} />
+        <span className="subagent-row-copy">
+          <strong>
+            {subagent.description ||
+              `子代理 ${subagent.swarmIndex ?? subagent.subagentName}`}
+          </strong>
+          <small>
+            {subagent.swarmIndex !== undefined &&
+              `#${subagent.swarmIndex} · `}
+            {subagent.subagentName} ·{" "}
+            <span title={subagent.subagentId}>{shortId}</span>
+            {subagent.runInBackground && " · 后台"}
+          </small>
+        </span>
+        <span className={`subagent-row-state ${status}`}>
+          {subagentStatusLabel(status)}
+        </span>
+        {hasDetail &&
+          (open ? <ChevronDown size={11} /> : <ChevronRight size={11} />)}
+      </button>
+      <Collapsible className="subagent-row-collapse" open={open && hasDetail}>
+        <div className="subagent-row-detail">
+          {subagent.resultSummary && (
+            <pre>{subagent.resultSummary}</pre>
+          )}
+          {subagent.error && (
+            <pre className={status === "failed" ? "error" : ""}>
+              {subagent.error}
+            </pre>
+          )}
+          {(tokenTotal !== undefined ||
+            subagent.contextTokens !== undefined) && (
+            <div className="subagent-metrics">
+              {tokenTotal !== undefined && (
+                <span>Token {formatCompactTokenCount(tokenTotal)}</span>
+              )}
+              {subagent.contextTokens !== undefined && (
+                <span>
+                  上下文 {formatCompactTokenCount(subagent.contextTokens)}
+                </span>
+              )}
+            </div>
           )}
         </div>
       </Collapsible>
@@ -4557,12 +4824,14 @@ function ToolStatusIcon({
 const MessageView = memo(function MessageView({
   message,
   toolResults,
+  subagentRuns,
   durationMs,
   copied,
   onCopy,
 }: {
   message: RenderMessage;
   toolResults: Map<string, ToolResultContent>;
+  subagentRuns?: SubagentRunsByTool;
   durationMs?: number;
   copied: boolean;
   onCopy: (message: ProtocolMessage) => void;
@@ -4611,6 +4880,7 @@ const MessageView = memo(function MessageView({
           <StructuredMessageContent
             parts={structured}
             toolResults={toolResults}
+            subagentRuns={subagentRuns}
           />
         </div>
       </article>
@@ -4669,6 +4939,7 @@ const MessageView = memo(function MessageView({
           <StructuredMessageContent
             parts={structured}
             toolResults={toolResults}
+            subagentRuns={subagentRuns}
           />
         </div>
         {message.status !== "streaming" &&
@@ -4839,9 +5110,11 @@ function PromptAttachmentContent({
 function HistoryToolCard({
   tool,
   result,
+  subagents,
 }: {
   tool: Extract<MessageContent, { type: "tool_use" }>;
   result?: ToolResultContent;
+  subagents: readonly SubagentRun[];
 }) {
   const [open, setOpen] = useState(false);
   const status = result
@@ -4849,6 +5122,10 @@ function HistoryToolCard({
       ? "error"
       : "completed"
     : "incomplete";
+  const displayedSubagents = subagentRunsWithSwarmItems(
+    subagents,
+    tool.input,
+  );
 
   return (
     <div className={`history-tool-card ${status}`}>
@@ -4865,6 +5142,12 @@ function HistoryToolCard({
           {result ? (result.is_error ? "失败" : "已完成") : "未完成"}
         </small>
       </button>
+      {displayedSubagents.length > 0 && (
+        <SubagentPanel
+          subagents={displayedSubagents}
+          parentActive={false}
+        />
+      )}
       <Collapsible className="tool-card-collapse" open={open}>
         <div className="history-tool-detail">
           <section className="tool-detail-section">
@@ -4888,9 +5171,11 @@ function HistoryToolCard({
 function StructuredMessageContent({
   parts,
   toolResults,
+  subagentRuns,
 }: {
   parts: MessageContent[];
   toolResults: Map<string, ToolResultContent>;
+  subagentRuns?: SubagentRunsByTool;
 }) {
   if (parts.length === 0) return null;
   return (
@@ -4903,6 +5188,7 @@ function StructuredMessageContent({
               <HistoryToolCard
                 tool={part}
                 result={result}
+                subagents={subagentRuns?.[part.tool_call_id] ?? []}
                 key={`${part.tool_call_id}-${index}`}
               />
             );

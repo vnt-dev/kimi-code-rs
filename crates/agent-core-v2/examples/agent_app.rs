@@ -195,6 +195,7 @@ async fn run_app(
                     origin: Some(PromptOrigin::User),
                     is_error: None,
                     note: None,
+                    attachments: vec![],
                 },
             })
             .await?;

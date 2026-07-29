@@ -58,20 +58,7 @@ pub fn emit_agent_run_spawned(
     if let Ok(bus) = requester.get(EVENT_BUS_SERVICE_ID) {
         bus.publish(DomainEvent::new(
             "subagent.spawned",
-            serde_json::Map::from_iter([
-                ("subagentId".into(), Value::String(target_agent_id.into())),
-                (
-                    "subagentName".into(),
-                    Value::String(meta.profile_name.clone()),
-                ),
-                (
-                    "parentToolCallId".into(),
-                    Value::String(meta.parent_tool_call_id.clone().unwrap_or_default()),
-                ),
-                ("parentAgentId".into(), Value::String(requester.id().into())),
-                ("callerAgentId".into(), Value::String(requester.id().into())),
-                ("runInBackground".into(), Value::Bool(run_in_background)),
-            ]),
+            subagent_spawned_fields(requester.id(), target_agent_id, meta, run_in_background),
         ));
     }
     if let Ok(telemetry) = requester.get(TELEMETRY_SERVICE_ID) {
@@ -103,6 +90,41 @@ pub fn emit_agent_run_spawned(
             ])),
         );
     }
+}
+
+fn subagent_spawned_fields(
+    requester_id: &str,
+    target_agent_id: &str,
+    meta: &AgentRunSpawnedMeta,
+    run_in_background: bool,
+) -> serde_json::Map<String, Value> {
+    let mut fields = serde_json::Map::from_iter([
+        ("subagentId".into(), Value::String(target_agent_id.into())),
+        (
+            "subagentName".into(),
+            Value::String(meta.profile_name.clone()),
+        ),
+        (
+            "parentToolCallId".into(),
+            Value::String(meta.parent_tool_call_id.clone().unwrap_or_default()),
+        ),
+        ("parentAgentId".into(), Value::String(requester_id.into())),
+        ("callerAgentId".into(), Value::String(requester_id.into())),
+        ("runInBackground".into(), Value::Bool(run_in_background)),
+    ]);
+    if let Some(parent_tool_call_uuid) = &meta.parent_tool_call_uuid {
+        fields.insert(
+            "parentToolCallUuid".into(),
+            Value::String(parent_tool_call_uuid.clone()),
+        );
+    }
+    if let Some(description) = &meta.description {
+        fields.insert("description".into(), Value::String(description.clone()));
+    }
+    if let Some(swarm_index) = meta.swarm_index {
+        fields.insert("swarmIndex".into(), Value::from(swarm_index));
+    }
+    fields
 }
 
 pub async fn mirror_agent_run(
@@ -225,4 +247,41 @@ fn should_suppress_failure(
             .is_some_and(is_provider_rate_limit_error)
             || is_abort_error(error)
             || options.signal.aborted())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spawned_event_fields_match_the_typescript_wire_shape() {
+        let fields = subagent_spawned_fields(
+            "main",
+            "agent-1",
+            &AgentRunSpawnedMeta {
+                profile_name: "researcher".into(),
+                parent_tool_call_id: Some("call-1".into()),
+                parent_tool_call_uuid: Some("uuid-1".into()),
+                description: Some("查询上海天气".into()),
+                swarm_index: Some(2),
+                run_in_background: Some(true),
+            },
+            true,
+        );
+
+        assert_eq!(
+            Value::Object(fields),
+            serde_json::json!({
+                "subagentId": "agent-1",
+                "subagentName": "researcher",
+                "parentToolCallId": "call-1",
+                "parentToolCallUuid": "uuid-1",
+                "parentAgentId": "main",
+                "callerAgentId": "main",
+                "description": "查询上海天气",
+                "swarmIndex": 2,
+                "runInBackground": true,
+            })
+        );
+    }
 }
