@@ -364,6 +364,7 @@ fn context_message(text: String, origin: PromptOrigin) -> ContextMessage {
         origin: Some(origin),
         is_error: None,
         note: None,
+        attachments: Vec::new(),
     }
 }
 

@@ -977,6 +977,7 @@ impl AgentGoalService {
             }),
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         };
         let request = MessageStepRequest::new(
             message,
@@ -2203,6 +2204,7 @@ mod tests {
             }),
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         }));
     }
 

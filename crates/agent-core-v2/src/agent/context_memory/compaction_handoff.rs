@@ -193,6 +193,7 @@ fn context_user_message(text: &str, origin: PromptOrigin) -> ContextMessage {
         origin: Some(origin),
         is_error: None,
         note: None,
+        attachments: Vec::new(),
     }
 }
 
@@ -416,6 +417,7 @@ fn replace_message_text(message: &ContextMessage, text: &str) -> ContextMessage 
         text: text.to_owned(),
     }];
     replaced.message.tool_calls.clear();
+    replaced.attachments.clear();
     replaced
 }
 

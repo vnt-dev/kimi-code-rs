@@ -204,6 +204,7 @@ impl AgentContextInjectorService {
                             origin: Some(origin),
                             is_error: None,
                             note: None,
+                            attachments: Vec::new(),
                         }])?;
                     }
                 }
@@ -341,6 +342,7 @@ mod tests {
             origin,
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         }
     }
     #[test]

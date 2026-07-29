@@ -957,6 +957,7 @@ fn context_message(content: Vec<ContentPart>, origin: PromptOrigin) -> ContextMe
         origin: Some(origin),
         is_error: None,
         note: None,
+        attachments: Vec::new(),
     }
 }
 

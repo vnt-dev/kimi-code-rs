@@ -1,7 +1,9 @@
 use std::error::Error;
 
 use kimi_code_agent_core_v2::{
-    _base::errors::errors::Error2, agent::rpc::*, app::desktop_client::KimiCodeDesktopClient,
+    _base::errors::errors::Error2,
+    agent::rpc::*,
+    app::{desktop_client::KimiCodeDesktopClient, file::FileError},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -87,7 +89,10 @@ impl RpcError {
     }
 
     fn core(error: &(dyn Error + 'static)) -> Self {
-        if let Some(error) = error.downcast_ref::<Error2>() {
+        let coded = error
+            .downcast_ref::<Error2>()
+            .or_else(|| error.downcast_ref::<FileError>().map(FileError::error));
+        if let Some(error) = coded {
             Self {
                 code: error.code.clone(),
                 message: error.message.clone(),
@@ -208,7 +213,9 @@ pub async fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::AgentRpcMethod;
+    use kimi_code_agent_core_v2::app::file::file_not_found_error;
+
+    use super::{AgentRpcMethod, RpcError};
 
     #[test]
     fn rpc_method_names_match_the_typescript_facade() {
@@ -224,5 +231,13 @@ mod tests {
             serde_json::from_str::<AgentRpcMethod>("\"activatePluginCommand\"").unwrap(),
             AgentRpcMethod::ActivatePluginCommand
         ));
+    }
+
+    #[test]
+    fn uploaded_file_errors_keep_their_domain_code() {
+        let error = file_not_found_error("f_missing");
+        let projected = RpcError::core(&error);
+        assert_eq!(projected.code, "file.not_found");
+        assert_eq!(projected.details.unwrap()["fileId"], "f_missing");
     }
 }

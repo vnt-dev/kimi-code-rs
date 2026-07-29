@@ -141,6 +141,7 @@ mod tests {
             }),
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         }
     }
 

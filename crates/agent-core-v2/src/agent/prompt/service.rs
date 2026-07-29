@@ -213,6 +213,7 @@ impl AgentPromptService {
                                 origin,
                                 is_error: None,
                                 note: None,
+                                attachments: Vec::new(),
                             };
                             let _ = inject_runtime(runtime, message).await;
                         }
@@ -333,9 +334,17 @@ impl AgentPromptServiceContract for AgentPromptService {
             });
             (active_id, selected)
         };
-        let content = selected
+        let selected_messages = selected
             .iter()
-            .flat_map(|record| record.snapshot().message.message.content)
+            .map(|record| record.snapshot().message)
+            .collect::<Vec<_>>();
+        let content = selected_messages
+            .iter()
+            .flat_map(|message| message.message.content.clone())
+            .collect();
+        let attachments = selected_messages
+            .into_iter()
+            .flat_map(|message| message.attachments)
             .collect();
         let message = ContextMessage {
             message: Message::new(Role::User, content, Vec::new()),
@@ -344,6 +353,7 @@ impl AgentPromptServiceContract for AgentPromptService {
             origin: Some(PromptOrigin::User),
             is_error: None,
             note: None,
+            attachments,
         };
         let content = message.message.content.clone();
         let turn = enqueue_steer(

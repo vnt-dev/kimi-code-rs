@@ -63,6 +63,7 @@ use crate::{
                 DomainEventPayload, EVENT_BUS_SERVICE_ID, EventBusHandle, TypedEventBusExt,
             },
         },
+        file::{FILE_SERVICE_ID, FileServiceHandle},
         plugin::{PLUGIN_SERVICE_ID, PluginServiceHandle, expand_command_arguments},
         telemetry::{TELEMETRY_SERVICE_ID, TelemetryProperties, TelemetryServiceHandle},
     },
@@ -85,8 +86,8 @@ use super::{
     RegisterToolPayload, RunShellCommandPayload, SetActiveToolsPayload, SetModelPayload,
     SetModelResult, SetPermissionPayload, SetThinkingPayload, ShellCommandResult, SteerPayload,
     StopTaskPayload, UndoHistoryPayload, UnregisterToolPayload, apply_prompt_metadata_update,
-    prompt_metadata_text_from_payload, prompt_metadata_text_from_plugin_command,
-    prompt_metadata_text_from_skill,
+    prompt_metadata_text_from_content_parts, prompt_metadata_text_from_plugin_command,
+    prompt_metadata_text_from_skill, resolve_prompt_attachments,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -130,6 +131,7 @@ pub struct AgentRpcService {
     event_service: EventServiceHandle,
     plugins: PluginServiceHandle,
     metadata: SessionMetadataHandle,
+    files: FileServiceHandle,
     session_context: SessionContext,
     btw: SessionBtwServiceHandle,
     scope_context: AgentScopeContext,
@@ -163,6 +165,7 @@ impl AgentRpcService {
         event_service: EventServiceHandle,
         plugins: PluginServiceHandle,
         metadata: SessionMetadataHandle,
+        files: FileServiceHandle,
         session_context: SessionContext,
         btw: SessionBtwServiceHandle,
         scope_context: AgentScopeContext,
@@ -193,6 +196,7 @@ impl AgentRpcService {
             event_service,
             plugins,
             metadata,
+            files,
             session_context,
             btw,
             scope_context,
@@ -236,14 +240,24 @@ impl AgentRpcServiceContract for AgentRpcService {
             return Err(error);
         }
 
-        let metadata_text = prompt_metadata_text_from_payload(&payload);
+        let resolved = resolve_prompt_attachments(
+            payload.input,
+            self.files.0.as_ref(),
+            &self.session_context.session_dir,
+        )
+        .await?;
+        let metadata_text = prompt_metadata_text_from_content_parts(&resolved.content);
         self.update_prompt_metadata(metadata_text.as_deref())
             .await?;
         let handle = self
             .prompt_service
             .enqueue(PromptInput {
                 id: None,
-                message: user_message(payload.input, Some(PromptOrigin::User)),
+                message: user_message_with_attachments(
+                    resolved.content,
+                    resolved.attachments,
+                    Some(PromptOrigin::User),
+                ),
             })
             .await?;
         if handle.snapshot().state == PromptState::Pending {
@@ -621,6 +635,14 @@ impl AgentRpcServiceContract for AgentRpcService {
 }
 
 fn user_message(content: Vec<ContentPart>, origin: Option<PromptOrigin>) -> ContextMessage {
+    user_message_with_attachments(content, Vec::new(), origin)
+}
+
+fn user_message_with_attachments(
+    content: Vec<ContentPart>,
+    attachments: Vec<crate::agent::context_memory::ContextFileAttachment>,
+    origin: Option<PromptOrigin>,
+) -> ContextMessage {
     ContextMessage {
         message: Message::new(Role::User, content, Vec::new()),
         id: None,
@@ -628,6 +650,7 @@ fn user_message(content: Vec<ContentPart>, origin: Option<PromptOrigin>) -> Cont
         origin,
         is_error: None,
         note: None,
+        attachments,
     }
 }
 
@@ -674,6 +697,7 @@ pub fn register_agent_rpc_service() {
                 (*accessor.get(EVENT_SERVICE_ID)?).clone(),
                 (*accessor.get(PLUGIN_SERVICE_ID)?).clone(),
                 (*accessor.get(SESSION_METADATA_ID)?).clone(),
+                (*accessor.get(FILE_SERVICE_ID)?).clone(),
                 (*accessor.get(SESSION_CONTEXT_ID)?).clone(),
                 (*accessor.get(SESSION_BTW_SERVICE_ID)?).clone(),
                 (*accessor.get(AGENT_SCOPE_CONTEXT_ID)?).clone(),

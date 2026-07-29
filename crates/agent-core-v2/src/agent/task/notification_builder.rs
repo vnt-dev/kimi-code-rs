@@ -403,6 +403,7 @@ mod tests {
             }),
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         };
         let request = task_notification_step_request(message.clone());
         assert_eq!(request.kind(), "task_notification");
@@ -452,6 +453,7 @@ mod tests {
             origin: Some(origin.clone()),
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         };
 
         let mut from_wire = TaskNotificationDelivery::default();

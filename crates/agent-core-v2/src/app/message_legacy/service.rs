@@ -656,6 +656,7 @@ mod tests {
             origin: None,
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         }
     }
 

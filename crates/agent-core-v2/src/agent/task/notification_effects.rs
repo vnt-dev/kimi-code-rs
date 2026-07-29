@@ -86,6 +86,7 @@ fn notification_message(built: &AgentTaskNotificationBuildContext) -> ContextMes
         origin: Some(built.origin.clone()),
         is_error: None,
         note: None,
+        attachments: Vec::new(),
     }
 }
 

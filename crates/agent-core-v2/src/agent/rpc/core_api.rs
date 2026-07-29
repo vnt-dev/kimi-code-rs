@@ -88,6 +88,34 @@ pub enum PromptPart {
 
 pub type PromptInput = Vec<PromptPart>;
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type")]
+pub enum PromptFilePart {
+    #[serde(rename = "file")]
+    File {
+        file_id: String,
+        name: String,
+        media_type: String,
+        size: u64,
+    },
+}
+
+/// Prompt wire input accepts the provider-neutral content parts used today
+/// plus an uploaded-file reference. File parts are resolved before they enter
+/// the model/provider message contract.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum PromptInputPart {
+    Content(ContentPart),
+    File(PromptFilePart),
+}
+
+impl From<ContentPart> for PromptInputPart {
+    fn from(value: ContentPart) -> Self {
+        Self::Content(value)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct EmptyPayload {}
 
@@ -234,7 +262,7 @@ pub struct SessionSummary {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptPayload {
-    pub input: Vec<ContentPart>,
+    pub input: Vec<PromptInputPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_tools: Option<Vec<String>>,
 }
@@ -807,6 +835,41 @@ mod tests {
                 "audioUrl": {"url": "audio"}
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn prompt_payload_accepts_uploaded_file_parts_without_changing_content_part() {
+        let payload = serde_json::from_value::<PromptPayload>(json!({
+            "input": [
+                {"type": "text", "text": "inspect this"},
+                {
+                    "type": "file",
+                    "file_id": "f_1",
+                    "name": "data.xlsx",
+                    "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "size": 42
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            &payload.input[0],
+            PromptInputPart::Content(ContentPart::Text { text }) if text == "inspect this"
+        ));
+        assert!(matches!(
+            &payload.input[1],
+            PromptInputPart::File(PromptFilePart::File {
+                file_id,
+                name,
+                size: 42,
+                ..
+            }) if file_id == "f_1" && name == "data.xlsx"
+        ));
+        assert_eq!(
+            serde_json::to_value(payload).unwrap()["input"][1]["type"],
+            "file"
         );
     }
 

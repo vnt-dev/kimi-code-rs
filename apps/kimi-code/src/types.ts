@@ -180,7 +180,13 @@ export type AgentContentPart =
 export type AgentPromptPart = Extract<
   AgentContentPart,
   { type: "text" | "image_url" | "audio_url" | "video_url" }
->;
+> | {
+  type: "file";
+  file_id: string;
+  name: string;
+  media_type: string;
+  size: number;
+};
 
 export type AgentChatEvent =
   | {

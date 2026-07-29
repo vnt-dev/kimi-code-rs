@@ -93,6 +93,7 @@ impl AgentSystemReminderServiceContract for AgentSystemReminderService {
             origin: Some(origin),
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         };
         self.context.append(vec![message.clone()])?;
         Ok(message)

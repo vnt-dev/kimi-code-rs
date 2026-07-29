@@ -216,6 +216,7 @@ mod tests {
                 origin: None,
                 is_error: None,
                 note: None,
+                attachments: Vec::new(),
             })
         }
     }
@@ -227,6 +228,7 @@ mod tests {
             origin: Some(PromptOrigin::User),
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         }
     }
     #[test]

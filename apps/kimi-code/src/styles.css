@@ -3064,6 +3064,25 @@ select:focus-visible {
   justify-content: center;
 }
 
+.prompt-attachment.file {
+  width: 128px;
+}
+
+.prompt-file-preview {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  place-content: center;
+  gap: 5px;
+  color: #8d8d98;
+  text-align: center;
+}
+
+.prompt-file-preview small {
+  color: #64646e;
+  font-size: 8px;
+}
+
 .prompt-attachment img,
 .prompt-attachment video {
   width: 100%;

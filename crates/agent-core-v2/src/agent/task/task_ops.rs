@@ -214,6 +214,7 @@ mod tests {
                 }),
                 is_error: None,
                 note: None,
+                attachments: Vec::new(),
             },
         };
         let ordinary_message = ContextAppendMessagePayload {

@@ -16,6 +16,7 @@ use kimi_code_agent_core_v2::{
             DesktopManagedUsage, DesktopMessagePage, DesktopModel, DesktopPrepareSessionRequest,
             DesktopPreparedSession, DesktopWorkspace, KimiCodeDesktopClient,
         },
+        file::FileMeta,
         session_index::SessionSummary,
     },
 };
@@ -109,6 +110,19 @@ async fn list_models(
     refresh: Option<bool>,
 ) -> Result<Vec<DesktopModel>, String> {
     state.client.list_models(refresh.unwrap_or(false)).await
+}
+
+#[tauri::command]
+async fn upload_file(
+    state: State<'_, AppState>,
+    filename: String,
+    media_type: String,
+    bytes: Vec<u8>,
+) -> Result<FileMeta, String> {
+    state
+        .client
+        .upload_file(&filename, &media_type, bytes)
+        .await
 }
 
 #[tauri::command]
@@ -288,6 +302,7 @@ pub fn run() {
             login,
             logout,
             list_models,
+            upload_file,
             set_default_model,
             list_workspaces,
             create_or_touch_workspace,

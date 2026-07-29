@@ -14,7 +14,10 @@ use crate::{
     session::session_metadata::{SessionMetaPatch, SessionMetadataContract, SessionMetadataError},
 };
 
-use super::core_api::{ActivatePluginCommandPayload, ActivateSkillPayload, PromptPayload};
+use super::core_api::{
+    ActivatePluginCommandPayload, ActivateSkillPayload, PromptFilePart, PromptInputPart,
+    PromptPayload,
+};
 
 pub const MAX_TITLE_LENGTH: usize = 200;
 pub const MAX_LAST_PROMPT_LENGTH: usize = 4000;
@@ -52,7 +55,18 @@ pub fn is_untitled(title: Option<&str>) -> bool {
     title.is_none_or(|title| trim_js_whitespace(title).is_empty() || title == "New Session")
 }
 pub fn prompt_metadata_text_from_payload(payload: &PromptPayload) -> Option<String> {
-    prompt_metadata_text_from_content_parts(&payload.input)
+    let text = payload
+        .input
+        .iter()
+        .filter_map(|part| match part {
+            PromptInputPart::Content(part) => prompt_part_text(part),
+            PromptInputPart::File(PromptFilePart::File { name, .. }) => {
+                Some(format!("[file: {name}]"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    sanitize_and_truncate_prompt_text(&text, MAX_LAST_PROMPT_LENGTH)
 }
 pub fn prompt_metadata_text_from_content_parts(parts: &[ContentPart]) -> Option<String> {
     let text = parts
@@ -401,7 +415,10 @@ sk-abcdefghijkl
                         id: None,
                     },
                 },
-            ],
+            ]
+            .into_iter()
+            .map(PromptInputPart::from)
+            .collect(),
             disabled_tools: Some(vec!["WriteFile".into()]),
         };
 
@@ -409,8 +426,16 @@ sk-abcdefghijkl
             prompt_metadata_text_from_payload(&payload).as_deref(),
             Some("hello world [image] [audio] [video]")
         );
+        let content = payload
+            .input
+            .iter()
+            .filter_map(|part| match part {
+                PromptInputPart::Content(part) => Some(part.clone()),
+                PromptInputPart::File(_) => None,
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
-            prompt_metadata_text_from_content_parts(&payload.input),
+            prompt_metadata_text_from_content_parts(&content),
             prompt_metadata_text_from_payload(&payload)
         );
         assert_eq!(prompt_metadata_text_from_content_parts(&[]), None);

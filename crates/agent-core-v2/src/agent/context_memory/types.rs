@@ -150,6 +150,20 @@ pub enum PromptOrigin {
 
 pub const USER_PROMPT_ORIGIN: PromptOrigin = PromptOrigin::User;
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ContextFileAttachment {
+    pub file_id: String,
+    pub name: String,
+    pub media_type: String,
+    pub size: u64,
+    /// Exact model-facing text part that represents this attachment.
+    ///
+    /// Protocol projection replaces this text with a structured `file`
+    /// content item, while provider projection continues to see the path
+    /// notice as ordinary text.
+    pub model_text: String,
+}
+
 // Original:
 //   packages/agent-core-v2/src/agent/contextMemory/types.ts
 //   ContextMessage
@@ -168,6 +182,8 @@ pub struct ContextMessage {
     pub is_error: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ContextFileAttachment>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -257,6 +273,7 @@ mod tests {
             origin: Some(PromptOrigin::User),
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         };
 
         let value = serde_json::to_value(&context_message).unwrap();

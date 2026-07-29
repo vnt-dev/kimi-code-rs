@@ -219,22 +219,32 @@ interface InFlightTurn {
   historyBoundaryId?: string;
 }
 
-type PromptAttachmentKind = "image" | "audio" | "video";
+type PromptAttachmentKind = "image" | "audio" | "video" | "file";
 
 interface PromptAttachment {
   id: string;
   name: string;
-  dataUrl: string;
+  dataUrl?: string;
   kind: PromptAttachmentKind;
+  fileId?: string;
+  mediaType: string;
+  size: number;
+}
+
+interface UploadedFileMeta {
+  id: string;
+  name: string;
+  media_type: string;
+  size: number;
 }
 
 function promptAttachmentKind(
   mimeType: string,
-): PromptAttachmentKind | undefined {
+): PromptAttachmentKind {
   if (PROMPT_IMAGE_TYPES.has(mimeType)) return "image";
   if (PROMPT_AUDIO_TYPES.has(mimeType)) return "audio";
   if (PROMPT_VIDEO_TYPES.has(mimeType)) return "video";
-  return undefined;
+  return "file";
 }
 
 function readFileAsDataUrl(file: Blob): Promise<string> {
@@ -267,11 +277,25 @@ function canvasToBlob(
 
 async function preparePromptAttachment(file: File): Promise<PromptAttachment> {
   const kind = promptAttachmentKind(file.type);
-  if (!kind) {
-    throw new Error(`不支持 ${file.name} 的媒体格式`);
-  }
   if (file.size > MAX_PROMPT_ATTACHMENT_BYTES) {
     throw new Error(`${file.name} 超过 20 MB`);
+  }
+
+  if (kind === "file") {
+    const mediaType = file.type || "application/octet-stream";
+    const uploaded = await invoke<UploadedFileMeta>("upload_file", {
+      filename: file.name || "attachment",
+      mediaType,
+      bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
+    });
+    return {
+      id: uploaded.id,
+      fileId: uploaded.id,
+      name: uploaded.name,
+      mediaType: uploaded.media_type,
+      size: uploaded.size,
+      kind,
+    };
   }
 
   let payload: Blob = file;
@@ -305,8 +329,33 @@ async function preparePromptAttachment(file: File): Promise<PromptAttachment> {
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     name: file.name || `clipboard-${kind}`,
     dataUrl: await readFileAsDataUrl(payload),
+    mediaType: payload.type || file.type || "application/octet-stream",
+    size: payload.size,
     kind,
   };
+}
+
+async function snapshotPastedFiles(files: readonly File[]): Promise<File[]> {
+  // Clipboard-backed File objects on Windows WebView can become unreadable
+  // after the paste event returns. Start every read while the event is still
+  // active and detach the bytes into ordinary in-memory File objects.
+  const snapshots = files.map(async (file) => {
+    if (file.size > MAX_PROMPT_ATTACHMENT_BYTES) {
+      throw new Error(`${file.name} 超过 20 MB`);
+    }
+    try {
+      const bytes = await file.arrayBuffer();
+      return new File([bytes], file.name || "attachment", {
+        type: file.type || "application/octet-stream",
+        lastModified: file.lastModified,
+      });
+    } catch {
+      throw new Error(
+        `无法读取剪贴板中的文件 ${file.name || "attachment"}，请使用附件按钮重新选择`,
+      );
+    }
+  });
+  return Promise.all(snapshots);
 }
 
 interface AgentSubscription {
@@ -355,6 +404,12 @@ function formatContext(value: number): string {
   if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
   if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
   return `${value}`;
+}
+
+function formatBytes(value: number): string {
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.ceil(value / 1024)} KB`;
+  return `${value} B`;
 }
 
 function formatTokenCount(value: number): string {
@@ -1917,25 +1972,34 @@ export default function App() {
   const handleAttachmentInput = (
     event: ChangeEvent<HTMLInputElement>,
   ): void => {
+    const input = event.currentTarget;
     const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
-    void addPromptAttachments(files);
+    // Keep the input selection alive until every File has been read. Clearing
+    // it first can invalidate WebView-backed handles.
+    void addPromptAttachments(files).finally(() => {
+      input.value = "";
+    });
   };
 
   const handlePromptPaste = (
     event: ClipboardEvent<HTMLTextAreaElement>,
   ): void => {
-    const media = Array.from(event.clipboardData.items)
-      .filter(
-        (item) =>
-          item.kind === "file" &&
-          (item.type.startsWith("image/") ||
-            item.type.startsWith("audio/") ||
-            item.type.startsWith("video/")),
-      )
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
-    if (media.length > 0) void addPromptAttachments(media);
+    const directFiles = Array.from(event.clipboardData.files);
+    const files =
+      directFiles.length > 0
+        ? directFiles
+        : Array.from(event.clipboardData.items)
+            .filter((item) => item.kind === "file")
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => file !== null);
+    if (files.length === 0) return;
+
+    event.preventDefault();
+    // Calling snapshotPastedFiles here starts all arrayBuffer reads before
+    // this handler returns and the clipboard releases its virtual files.
+    void snapshotPastedFiles(files)
+      .then((snapshots) => addPromptAttachments(snapshots))
+      .catch((error) => showNotice(conciseError(error)));
   };
 
   const sendPrompt = async (override?: string): Promise<void> => {
@@ -1989,14 +2053,30 @@ export default function App() {
     const input: AgentPromptPart[] = [
       ...(text ? [{ type: "text" as const, text }] : []),
       ...attachments.map((attachment): AgentPromptPart => {
-        const media = { url: attachment.dataUrl, id: attachment.id };
         switch (attachment.kind) {
           case "image":
-            return { type: "image_url", imageUrl: media };
+            return {
+              type: "image_url",
+              imageUrl: { url: attachment.dataUrl!, id: attachment.id },
+            };
           case "audio":
-            return { type: "audio_url", audioUrl: media };
+            return {
+              type: "audio_url",
+              audioUrl: { url: attachment.dataUrl!, id: attachment.id },
+            };
           case "video":
-            return { type: "video_url", videoUrl: media };
+            return {
+              type: "video_url",
+              videoUrl: { url: attachment.dataUrl!, id: attachment.id },
+            };
+          case "file":
+            return {
+              type: "file",
+              file_id: attachment.fileId!,
+              name: attachment.name,
+              media_type: attachment.mediaType,
+              size: attachment.size,
+            };
         }
       }),
     ];
@@ -2640,12 +2720,17 @@ export default function App() {
                             controls
                             preload="metadata"
                           />
-                        ) : (
+                        ) : attachment.kind === "video" ? (
                           <video
                             src={attachment.dataUrl}
                             controls
                             preload="metadata"
                           />
+                        ) : (
+                          <div className="prompt-file-preview">
+                            <FileCode2 size={24} />
+                            <small>{formatBytes(attachment.size)}</small>
+                          </div>
                         )}
                         <figcaption title={attachment.name}>
                           {attachment.name}
@@ -2672,7 +2757,6 @@ export default function App() {
                   ref={attachmentInputRef}
                   className="prompt-attachment-input"
                   type="file"
-                  accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/mp4,video/mp4,video/mpeg,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/3gpp"
                   multiple
                   onChange={handleAttachmentInput}
                 />
@@ -2697,8 +2781,8 @@ export default function App() {
                     <button
                       className="toolbar-icon attachment-button"
                       type="button"
-                      title="添加图片、音频或视频"
-                      aria-label="添加媒体附件"
+                      title="添加图片、音频、视频或文件"
+                      aria-label="添加附件"
                       onClick={() => attachmentInputRef.current?.click()}
                       disabled={
                         !selectedModel ||
@@ -4458,18 +4542,26 @@ function PromptAttachmentContent({
           case "image":
             return (
               <MessageImage
-                src={attachment.dataUrl}
+                src={attachment.dataUrl!}
                 alt={attachment.name}
                 key={attachment.id}
               />
             );
           case "audio":
             return (
-              <MessageAudio src={attachment.dataUrl} key={attachment.id} />
+              <MessageAudio src={attachment.dataUrl!} key={attachment.id} />
             );
           case "video":
             return (
-              <MessageVideo src={attachment.dataUrl} key={attachment.id} />
+              <MessageVideo src={attachment.dataUrl!} key={attachment.id} />
+            );
+          case "file":
+            return (
+              <div className="history-file" key={attachment.id}>
+                <FileCode2 size={13} />
+                <span>{attachment.name}</span>
+                <small>{formatBytes(attachment.size)}</small>
+              </div>
             );
         }
       })}

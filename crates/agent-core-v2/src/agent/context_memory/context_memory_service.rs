@@ -411,6 +411,7 @@ mod tests {
             origin: Some(super::super::types::PromptOrigin::User),
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         }
     }
 

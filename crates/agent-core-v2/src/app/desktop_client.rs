@@ -53,6 +53,7 @@ use crate::{
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         config::{CONFIG_SERVICE_ID, ConfigTarget},
         event::event_bus::EVENT_BUS_SERVICE_ID,
+        file::{FILE_SERVICE_ID, FileByteStream, FileMeta, FileServiceError, SaveOptions},
         message_legacy::{
             MESSAGE_LEGACY_SERVICE_ID, MessageListQuery, PageResponse as MessagePageResponse,
         },
@@ -445,6 +446,36 @@ impl KimiCodeDesktopClient {
             .set_default_model(model)
             .await
             .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn upload_file(
+        &self,
+        filename: &str,
+        media_type: &str,
+        data: Vec<u8>,
+    ) -> Result<FileMeta, String> {
+        let files = self
+            .app
+            .get(FILE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let source: FileByteStream = Box::pin(futures_util::stream::once(async move {
+            Ok::<_, FileServiceError>(data)
+        }));
+        files
+            .save(
+                source,
+                filename,
+                Some(SaveOptions {
+                    mime_type: Some(if media_type.trim().is_empty() {
+                        "application/octet-stream".into()
+                    } else {
+                        media_type.into()
+                    }),
+                    ..SaveOptions::default()
+                }),
+            )
+            .await
             .map_err(|error| error.to_string())
     }
 

@@ -710,6 +710,7 @@ fn context_message(role: Role, text: String, origin: PromptOrigin) -> ContextMes
         origin: Some(origin),
         is_error: None,
         note: None,
+        attachments: Vec::new(),
     }
 }
 

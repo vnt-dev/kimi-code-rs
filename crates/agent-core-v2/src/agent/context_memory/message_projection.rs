@@ -53,6 +53,23 @@ fn map_content_part(part: &ContentPart) -> MessageContent {
     }
 }
 
+fn map_message_content(message: &ContextMessage, part: &ContentPart) -> MessageContent {
+    if let ContentPart::Text { text } = part
+        && let Some(file) = message
+            .attachments
+            .iter()
+            .find(|attachment| attachment.model_text == *text)
+    {
+        return MessageContent::File {
+            file_id: file.file_id.clone(),
+            name: file.name.clone(),
+            media_type: file.media_type.clone(),
+            size: file.size,
+        };
+    }
+    map_content_part(part)
+}
+
 // Original: messageProjection.ts, buildProtocolContent().
 fn build_protocol_content(
     message: &ContextMessage,
@@ -63,7 +80,7 @@ fn build_protocol_content(
                 .message
                 .content
                 .iter()
-                .map(map_content_part)
+                .map(|part| map_message_content(message, part))
                 .collect());
         };
         let has_media_part = message.message.content.iter().any(|part| {
@@ -100,7 +117,7 @@ fn build_protocol_content(
         .message
         .content
         .iter()
-        .map(map_content_part)
+        .map(|part| map_message_content(message, part))
         .collect::<Vec<_>>();
     if message.message.role == Role::Assistant {
         content.extend(message.message.tool_calls.iter().map(|call| {
@@ -184,6 +201,7 @@ mod tests {
             origin: None,
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -206,6 +224,38 @@ mod tests {
                 "origin".into(),
                 json!({ "kind": "user" })
             )]))
+        );
+    }
+
+    #[test]
+    fn projects_model_attachment_notice_as_structured_file_content() {
+        let notice = "Attached file \"data.xml\" (application/xml, 8 bytes): \
+                      C:\\session\\attachments\\f_1-data.xml — open it with the Read tool";
+        let mut message = context_message(
+            Role::User,
+            vec![ContentPart::Text {
+                text: notice.into(),
+            }],
+        );
+        message
+            .attachments
+            .push(crate::agent::context_memory::ContextFileAttachment {
+                file_id: "f_1".into(),
+                name: "data.xml".into(),
+                media_type: "application/xml".into(),
+                size: 8,
+                model_text: notice.into(),
+            });
+
+        let projected = to_protocol_message("session_1", 0, &message, 0, None).unwrap();
+        assert_eq!(
+            projected.content,
+            vec![MessageContent::File {
+                file_id: "f_1".into(),
+                name: "data.xml".into(),
+                media_type: "application/xml".into(),
+                size: 8,
+            }]
         );
     }
 

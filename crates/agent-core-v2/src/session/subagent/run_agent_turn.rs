@@ -136,6 +136,7 @@ fn user_message(text: String) -> ContextMessage {
         origin: Some(agent_run_prompt_origin()),
         is_error: None,
         note: None,
+        attachments: Vec::new(),
     }
 }
 
@@ -387,6 +388,7 @@ mod tests {
             origin: None,
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         }
     }
 

@@ -1609,6 +1609,7 @@ mod tests {
             origin,
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         }
     }
 

@@ -602,6 +602,7 @@ mod tests {
             origin,
             is_error: None,
             note: None,
+            attachments: Vec::new(),
         };
         let summary = message(Some(PromptOrigin::CompactionSummary));
         let ordinary = message(Some(PromptOrigin::User));

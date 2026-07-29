@@ -236,6 +236,7 @@ impl AgentLlmRequesterService {
                         origin: None,
                         is_error: None,
                         note: None,
+                        attachments: Vec::new(),
                     })
                     .collect()
             })

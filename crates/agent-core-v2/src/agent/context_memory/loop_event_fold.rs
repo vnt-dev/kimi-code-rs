@@ -279,6 +279,7 @@ fn context_message(message: Message) -> ContextMessage {
         origin: None,
         is_error: None,
         note: None,
+        attachments: Vec::new(),
     }
 }
 

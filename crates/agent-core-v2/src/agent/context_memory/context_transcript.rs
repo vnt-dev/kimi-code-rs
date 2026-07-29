@@ -333,6 +333,7 @@ impl ContextTranscriptReducer {
 
 fn transcript_projection(message: ContextMessage) -> ContextMessage {
     let id = message.id;
+    let attachments = message.attachments;
     let mut projected = context_message(
         message.message.role,
         message.message.content,
@@ -342,6 +343,7 @@ fn transcript_projection(message: ContextMessage) -> ContextMessage {
         message.origin,
     );
     projected.id = id;
+    projected.attachments = attachments;
     projected
 }
 
@@ -362,6 +364,7 @@ fn context_message(
         origin,
         is_error,
         note: None,
+        attachments: Vec::new(),
     }
 }
 

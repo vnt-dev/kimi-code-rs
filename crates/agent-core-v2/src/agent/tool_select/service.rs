@@ -303,6 +303,7 @@ impl AgentToolSelectServiceContract for AgentToolSelectService {
                 }),
                 is_error: None,
                 note: None,
+                attachments: Vec::new(),
             }]);
             self.pending
                 .lock()
