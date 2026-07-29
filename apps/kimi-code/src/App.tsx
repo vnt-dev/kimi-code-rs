@@ -6,6 +6,8 @@ import {
   type ChangeEvent,
   type ReactNode,
   isValidElement,
+  memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -117,6 +119,8 @@ const MAX_PROMPT_ATTACHMENTS = 8;
 const MAX_PROMPT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_IMAGE_DIMENSION = 2048;
 const IMAGE_COMPRESSION_THRESHOLD = 4 * 1024 * 1024;
+const MAX_LIVE_TOOL_UPDATES = 50;
+const LIVE_TURN_HANDOFF_MS = 200;
 const PROMPT_IMAGE_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -217,6 +221,11 @@ interface InFlightTurn {
   steps: LiveStep[];
   error?: string;
   historyBoundaryId?: string;
+}
+
+interface QueuedAgentChatEvent {
+  sessionId: string;
+  event: AgentChatEvent;
 }
 
 type PromptAttachmentKind = "image" | "audio" | "video" | "file";
@@ -537,24 +546,28 @@ function updateLiveTool(
   toolCallId: string,
   update: (tool: Extract<LiveBlock, { kind: "tool" }>) => LiveBlock,
 ): InFlightTurn {
-  const steps = turn.steps.map((step) => ({
-    ...step,
-    blocks: [...step.blocks],
-  }));
-  for (let stepIndex = steps.length - 1; stepIndex >= 0; stepIndex -= 1) {
-    const blockIndex = steps[stepIndex].blocks.findIndex(
+  for (
+    let stepIndex = turn.steps.length - 1;
+    stepIndex >= 0;
+    stepIndex -= 1
+  ) {
+    const step = turn.steps[stepIndex];
+    const blockIndex = step.blocks.findIndex(
       (block) => block.kind === "tool" && block.toolCallId === toolCallId,
     );
     if (blockIndex >= 0) {
-      const block = steps[stepIndex].blocks[blockIndex];
+      const block = step.blocks[blockIndex];
       if (block.kind === "tool") {
-        steps[stepIndex].blocks[blockIndex] = update(block);
+        const blocks = [...step.blocks];
+        blocks[blockIndex] = update(block);
+        const steps = [...turn.steps];
+        steps[stepIndex] = { ...step, blocks };
+        return { ...turn, steps };
       }
-      return { ...turn, steps };
     }
   }
 
-  return withCurrentStep({ ...turn, steps }, (step) => ({
+  return withCurrentStep(turn, (step) => ({
     ...step,
     blocks: [
       ...step.blocks,
@@ -673,7 +686,10 @@ function reduceAgentChatEvent(
       return updateLiveTool(next, event.toolCallId, (tool) => ({
         ...tool,
         status: "running",
-        updates: [...tool.updates, event.update],
+        updates: [
+          ...tool.updates.slice(-(MAX_LIVE_TOOL_UPDATES - 1)),
+          event.update,
+        ],
       }));
     case "tool.result":
       return updateLiveTool(next, event.toolCallId, (tool) => ({
@@ -683,6 +699,73 @@ function reduceAgentChatEvent(
         isError: event.isError,
       }));
   }
+}
+
+function appendQueuedAgentChatEvent(
+  events: AgentChatEvent[],
+  event: AgentChatEvent,
+): void {
+  const previous = events.at(-1);
+  if (
+    previous?.type === "assistant.delta" &&
+    event.type === "assistant.delta" &&
+    previous.turnId === event.turnId
+  ) {
+    events[events.length - 1] = {
+      ...event,
+      delta: previous.delta + event.delta,
+    };
+    return;
+  }
+  if (
+    previous?.type === "thinking.delta" &&
+    event.type === "thinking.delta" &&
+    previous.turnId === event.turnId
+  ) {
+    events[events.length - 1] = {
+      ...event,
+      delta: previous.delta + event.delta,
+    };
+    return;
+  }
+  if (
+    previous?.type === "tool.call.delta" &&
+    event.type === "tool.call.delta" &&
+    previous.turnId === event.turnId &&
+    previous.toolCallId === event.toolCallId
+  ) {
+    events[events.length - 1] = {
+      ...event,
+      name: event.name ?? previous.name,
+      argumentsPart:
+        (previous.argumentsPart ?? "") + (event.argumentsPart ?? ""),
+    };
+    return;
+  }
+  events.push(event);
+}
+
+function reduceQueuedAgentChatEvents(
+  current: Record<string, InFlightTurn>,
+  queue: QueuedAgentChatEvent[],
+): Record<string, InFlightTurn> {
+  const eventsBySession = new Map<string, AgentChatEvent[]>();
+  for (const queued of queue) {
+    const events = eventsBySession.get(queued.sessionId) ?? [];
+    appendQueuedAgentChatEvent(events, queued.event);
+    eventsBySession.set(queued.sessionId, events);
+  }
+
+  let next = current;
+  for (const [sessionId, events] of eventsBySession) {
+    const turn = current[sessionId];
+    if (!turn) continue;
+    const reduced = events.reduce(reduceAgentChatEvent, turn);
+    if (reduced === turn) continue;
+    if (next === current) next = { ...current };
+    next[sessionId] = reduced;
+  }
+  return next;
 }
 
 const CHAT_EVENT_TYPES = new Set([
@@ -865,8 +948,11 @@ export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messageStackRef = useRef<HTMLDivElement>(null);
   const followLatestMessageRef = useRef(true);
   const lastChatScrollTopRef = useRef(0);
+  const lastChatScrollHeightRef = useRef(0);
+  const chatScrollFrameRef = useRef<number | undefined>(undefined);
   const profileRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
   const accountUsageRequest = useRef(0);
@@ -875,6 +961,8 @@ export default function App() {
   const pendingAgentSubscriptions = useRef<
     Map<string, PendingAgentSubscription>
   >(new Map());
+  const queuedAgentChatEvents = useRef<QueuedAgentChatEvent[]>([]);
+  const agentChatEventFrame = useRef<number | undefined>(undefined);
 
   const { project: activeProject, conversation: activeConversation } = useMemo(
     () => getActive(desktop),
@@ -1222,15 +1310,22 @@ export default function App() {
       (event) => {
         const payload = event.payload;
         if (isAgentChatEvent(payload.event)) {
-          const chatEvent = payload.event;
-          setInFlightTurns((current) => {
-            const turn = current[payload.sessionId];
-            if (!turn) return current;
-            return {
-              ...current,
-              [payload.sessionId]: reduceAgentChatEvent(turn, chatEvent),
-            };
+          queuedAgentChatEvents.current.push({
+            sessionId: payload.sessionId,
+            event: payload.event,
           });
+          if (agentChatEventFrame.current === undefined) {
+            agentChatEventFrame.current = window.requestAnimationFrame(() => {
+              agentChatEventFrame.current = undefined;
+              const queue = queuedAgentChatEvents.current;
+              queuedAgentChatEvents.current = [];
+              if (queue.length > 0) {
+                setInFlightTurns((current) =>
+                  reduceQueuedAgentChatEvents(current, queue),
+                );
+              }
+            });
+          }
         }
         if (payload.event.type.startsWith("compaction.")) {
           const phase = payload.event.type.slice("compaction.".length);
@@ -1322,6 +1417,11 @@ export default function App() {
       },
     );
     return () => {
+      if (agentChatEventFrame.current !== undefined) {
+        window.cancelAnimationFrame(agentChatEventFrame.current);
+        agentChatEventFrame.current = undefined;
+      }
+      queuedAgentChatEvents.current = [];
       void unlistenDevice.then((unlisten) => unlisten());
       void unlistenBrowserError.then((unlisten) => unlisten());
       void unlistenChatEvent.then((unlisten) => unlisten());
@@ -1425,35 +1525,67 @@ export default function App() {
     if (scroll) {
       scroll.scrollTop = scroll.scrollHeight;
       lastChatScrollTopRef.current = scroll.scrollTop;
+      lastChatScrollHeightRef.current = scroll.scrollHeight;
     }
   }, [activeConversation?.id, activeHistory?.loading]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const scroll = scrollRef.current;
-    if (
-      !scroll ||
-      activeHistory?.loading ||
-      !followLatestMessageRef.current
-    ) {
-      return;
-    }
-    scroll.scrollTop = scroll.scrollHeight;
-    lastChatScrollTopRef.current = scroll.scrollTop;
-  }, [activeTurn?.steps, activeCompaction?.phase]);
+    const content = messageStackRef.current;
+    if (!scroll || !content || activeHistory?.loading) return;
+
+    const scheduleScrollToLatest = (): void => {
+      if (
+        !followLatestMessageRef.current ||
+        chatScrollFrameRef.current !== undefined
+      ) {
+        return;
+      }
+      chatScrollFrameRef.current = window.requestAnimationFrame(() => {
+        chatScrollFrameRef.current = undefined;
+        if (!followLatestMessageRef.current) return;
+        scroll.scrollTop = scroll.scrollHeight;
+        lastChatScrollTopRef.current = scroll.scrollTop;
+        lastChatScrollHeightRef.current = scroll.scrollHeight;
+      });
+    };
+
+    const observer = new ResizeObserver(scheduleScrollToLatest);
+    observer.observe(content);
+    scheduleScrollToLatest();
+    return () => {
+      observer.disconnect();
+      if (chatScrollFrameRef.current !== undefined) {
+        window.cancelAnimationFrame(chatScrollFrameRef.current);
+        chatScrollFrameRef.current = undefined;
+      }
+    };
+  }, [
+    activeConversation?.id,
+    activeHistory?.loading,
+    hasVisibleMessages,
+  ]);
 
   const handleChatScroll = (): void => {
     const scroll = scrollRef.current;
     if (!scroll) return;
     const scrollingUp =
       scroll.scrollTop < lastChatScrollTopRef.current - 1;
+    const contentHeightChanged =
+      Math.abs(scroll.scrollHeight - lastChatScrollHeightRef.current) > 1;
     lastChatScrollTopRef.current = scroll.scrollTop;
+    lastChatScrollHeightRef.current = scroll.scrollHeight;
     if (scrollingUp) {
       followLatestMessageRef.current = false;
       return;
     }
     const distanceFromBottom =
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
-    followLatestMessageRef.current = distanceFromBottom <= 48;
+    if (distanceFromBottom <= 48) {
+      followLatestMessageRef.current = true;
+    } else if (!contentHeightChanged) {
+      followLatestMessageRef.current = false;
+    }
   };
 
   useEffect(() => {
@@ -2043,6 +2175,7 @@ export default function App() {
       }),
     ];
 
+    followLatestMessageRef.current = true;
     setCompactions((current) => {
       if (!(conversationId in current)) return current;
       const next = { ...current };
@@ -2130,17 +2263,21 @@ export default function App() {
       return;
     }
     let active = true;
+    let handoffTimer: number | undefined;
     void refreshHistory(conversationId, activeTurn).then((refreshed) => {
       if (!active || !refreshed) return;
-      setInFlightTurns((current) => {
-        if (!(conversationId in current)) return current;
-        const next = { ...current };
-        delete next[conversationId];
-        return next;
-      });
+      handoffTimer = window.setTimeout(() => {
+        setInFlightTurns((current) => {
+          if (!(conversationId in current)) return current;
+          const next = { ...current };
+          delete next[conversationId];
+          return next;
+        });
+      }, LIVE_TURN_HANDOFF_MS);
     });
     return () => {
       active = false;
+      if (handoffTimer !== undefined) window.clearTimeout(handoffTimer);
     };
   }, [activeConversation?.id, activeTurn?.status]);
 
@@ -2224,11 +2361,11 @@ export default function App() {
     }
   };
 
-  const copyMessage = async (message: ProtocolMessage): Promise<void> => {
+  const copyMessage = useCallback(async (message: ProtocolMessage): Promise<void> => {
     await navigator.clipboard.writeText(messageCopyText(message));
     setCopiedMessage(message.id);
     window.setTimeout(() => setCopiedMessage(undefined), 1400);
-  };
+  }, []);
 
   const respondToInteraction = async (
     interaction: AgentInteraction,
@@ -2578,7 +2715,7 @@ export default function App() {
                   onSuggestion={(value) => void sendPrompt(value)}
                 />
               ) : (
-                <div className="message-stack">
+                <div className="message-stack" ref={messageStackRef}>
                   {activeHistory?.hasMore && (
                     <button
                       type="button"
@@ -2608,7 +2745,7 @@ export default function App() {
                         messageDurations[activeConversation.id]?.[message.id]
                       }
                       copied={copiedMessage === message.id}
-                      onCopy={() => void copyMessage(message)}
+                      onCopy={copyMessage}
                     />
                   ))}
                   {activeTurn && <LiveTurnView turn={activeTurn} />}
@@ -3982,6 +4119,7 @@ function Welcome({
 
 function LiveTurnView({ turn }: { turn: InFlightTurn }) {
   const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
+  const streaming = isTurnRunning(turn);
 
   return (
     <>
@@ -4017,21 +4155,31 @@ function LiveTurnView({ turn }: { turn: InFlightTurn }) {
               {step.blocks.map((block, index) => {
                 if (block.kind === "text") {
                   return (
-                    <div className="markdown-body live-text" key={index}>
-                      <MarkdownMessage content={block.content} />
+                    <div
+                      className="markdown-body live-text"
+                      key={`${block.kind}-${index}`}
+                    >
+                      <StreamingMarkdownMessage
+                        active={streaming && step.status === "running"}
+                        content={block.content}
+                      />
                     </div>
                   );
                 }
                 if (block.kind === "thinking") {
                   return (
-                    <LiveThinkingBlock content={block.content} key={index} />
+                    <LiveThinkingBlock
+                      content={block.content}
+                      key={`${block.kind}-${index}`}
+                    />
                   );
                 }
                 if (block.kind === "content") {
                   return (
                     <LiveAssistantContent
+                      active={streaming && step.status === "running"}
                       content={block.content}
-                      key={index}
+                      key={`${block.kind}-${index}`}
                     />
                   );
                 }
@@ -4107,26 +4255,57 @@ function liveTurnStatusLabel(status: LiveTurnStatus): string {
   }
 }
 
-function LiveThinkingBlock({ content }: { content: string }) {
-  const [open, setOpen] = useState(false);
+function Collapsible({
+  open,
+  className = "",
+  children,
+}: {
+  open: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
-    <div className="thinking-block live-thinking">
-      <button onClick={() => setOpen((value) => !value)}>
-        <BrainCircuit size={14} />
-        <span>思考过程</span>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-      </button>
-      {open && <p>{content}</p>}
+    <div
+      className={`collapsible ${open ? "open" : ""} ${className}`.trim()}
+      aria-hidden={!open}
+    >
+      <div className="collapsible-inner">{children}</div>
     </div>
   );
 }
 
-function LiveAssistantContent({ content }: { content: AgentContentPart }) {
+function LiveThinkingBlock({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="thinking-block live-thinking">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <BrainCircuit size={14} />
+        <span>思考过程</span>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+      </button>
+      <Collapsible className="thinking-collapse" open={open}>
+        <p>{content}</p>
+      </Collapsible>
+    </div>
+  );
+}
+
+function LiveAssistantContent({
+  content,
+  active,
+}: {
+  content: AgentContentPart;
+  active: boolean;
+}) {
   switch (content.type) {
     case "text":
       return (
         <div className="markdown-body live-text">
-          <MarkdownMessage content={content.text} />
+          <StreamingMarkdownMessage active={active} content={content.text} />
         </div>
       );
     case "think":
@@ -4151,12 +4330,12 @@ function LiveToolBlock({
 }: {
   tool: Extract<LiveBlock, { kind: "tool" }>;
 }) {
-  const [open, setOpen] = useState(
-    tool.status === "streaming" || tool.status === "running",
-  );
+  const active = tool.status === "streaming" || tool.status === "running";
+  const [open, setOpen] = useState(active);
+  const userToggled = useRef(false);
   useEffect(() => {
-    setOpen(tool.status === "streaming" || tool.status === "running");
-  }, [tool.status]);
+    if (!userToggled.current) setOpen(active);
+  }, [active]);
   const progress = tool.updates.at(-1);
   const updateLog = tool.updates
     .filter((update) => update.text)
@@ -4169,44 +4348,50 @@ function LiveToolBlock({
       ? parseStructuredValue(tool.argumentsText)
       : undefined);
   return (
-    <details
-      className={`live-tool-card ${tool.status}`}
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary>
+    <div className={`live-tool-card ${tool.status}`}>
+      <button
+        type="button"
+        className="tool-card-summary"
+        aria-expanded={open}
+        onClick={() => {
+          userToggled.current = true;
+          setOpen((value) => !value);
+        }}
+      >
         <ToolStatusIcon status={tool.status} />
         <Wrench size={13} />
         <span>{tool.name ?? "准备工具调用"}</span>
         <small>{liveToolStatusLabel(tool.status)}</small>
-      </summary>
-      <div className="live-tool-detail">
-        {tool.description && <p>{tool.description}</p>}
-        {input !== undefined && (
-          <section className="tool-detail-section">
-            <span>参数</span>
-            <pre>{structuredValue(input)}</pre>
-          </section>
-        )}
-        {updateLog && <pre className="live-tool-update-log">{updateLog}</pre>}
-        {progress && (progress.percent !== undefined || !updateLog) && (
-          <div className="live-tool-progress">
-            <span>{progress.text ?? progress.kind}</span>
-            {progress.percent !== undefined && (
-              <strong>{Math.round(progress.percent)}%</strong>
-            )}
-          </div>
-        )}
-        {tool.output !== undefined && (
-          <section className="tool-detail-section">
-            <span>结果</span>
-            <pre className={tool.isError ? "error" : ""}>
-              {structuredValue(tool.output)}
-            </pre>
-          </section>
-        )}
-      </div>
-    </details>
+      </button>
+      <Collapsible className="tool-card-collapse" open={open}>
+        <div className="live-tool-detail">
+          {tool.description && <p>{tool.description}</p>}
+          {input !== undefined && (
+            <section className="tool-detail-section">
+              <span>参数</span>
+              <pre>{structuredValue(input)}</pre>
+            </section>
+          )}
+          {updateLog && <pre className="live-tool-update-log">{updateLog}</pre>}
+          {progress && (progress.percent !== undefined || !updateLog) && (
+            <div className="live-tool-progress">
+              <span>{progress.text ?? progress.kind}</span>
+              {progress.percent !== undefined && (
+                <strong>{Math.round(progress.percent)}%</strong>
+              )}
+            </div>
+          )}
+          {tool.output !== undefined && (
+            <section className="tool-detail-section">
+              <span>结果</span>
+              <pre className={tool.isError ? "error" : ""}>
+                {structuredValue(tool.output)}
+              </pre>
+            </section>
+          )}
+        </div>
+      </Collapsible>
+    </div>
   );
 }
 
@@ -4264,7 +4449,7 @@ function ToolStatusIcon({
   );
 }
 
-function MessageView({
+const MessageView = memo(function MessageView({
   message,
   toolResults,
   durationMs,
@@ -4275,9 +4460,10 @@ function MessageView({
   toolResults: Map<string, ToolResultContent>;
   durationMs?: number;
   copied: boolean;
-  onCopy: () => void;
+  onCopy: (message: ProtocolMessage) => void;
 }) {
   const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const text = messageText(message);
   const thinking = messageThinking(message);
   const structured = messageStructuredContent(message);
@@ -4289,15 +4475,23 @@ function MessageView({
 
   if (originKind === "compaction_summary") {
     return (
-      <details className="history-summary">
-        <summary>
+      <div className="history-summary">
+        <button
+          type="button"
+          className="history-summary-trigger"
+          aria-expanded={summaryOpen}
+          onClick={() => setSummaryOpen((value) => !value)}
+        >
           <BrainCircuit size={14} />
           上下文已压缩
-        </summary>
-        <div className="markdown-body">
-          <MarkdownMessage content={text} />
-        </div>
-      </details>
+          {summaryOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </button>
+        <Collapsible open={summaryOpen}>
+          <div className="markdown-body">
+            <MarkdownMessage content={text} />
+          </div>
+        </Collapsible>
+      </div>
     );
   }
 
@@ -4343,12 +4537,18 @@ function MessageView({
         </div>
         {thinking && (
           <div className="thinking-block">
-            <button onClick={() => setThinkingOpen((value) => !value)}>
+            <button
+              type="button"
+              aria-expanded={thinkingOpen}
+              onClick={() => setThinkingOpen((value) => !value)}
+            >
               <BrainCircuit size={14} />
               <span>思考过程</span>
               {thinkingOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             </button>
-            {thinkingOpen && <p>{thinking}</p>}
+            <Collapsible className="thinking-collapse" open={thinkingOpen}>
+              <p>{thinking}</p>
+            </Collapsible>
           </div>
         )}
         <div className="markdown-body">
@@ -4369,7 +4569,7 @@ function MessageView({
         {message.status !== "streaming" &&
           messageCopyText(message).length > 0 && (
             <div className="message-actions">
-              <button onClick={onCopy}>
+              <button onClick={() => onCopy(message)}>
                 {copied ? <Check size={14} /> : <Copy size={14} />}
                 {copied ? "已复制" : "复制"}
               </button>
@@ -4381,7 +4581,7 @@ function MessageView({
       </div>
     </article>
   );
-}
+});
 
 function messageText(message: ProtocolMessage): string {
   return message.content
@@ -4531,6 +4731,55 @@ function PromptAttachmentContent({
   );
 }
 
+function HistoryToolCard({
+  tool,
+  result,
+}: {
+  tool: Extract<MessageContent, { type: "tool_use" }>;
+  result?: ToolResultContent;
+}) {
+  const [open, setOpen] = useState(false);
+  const status = result
+    ? result.is_error
+      ? "error"
+      : "completed"
+    : "incomplete";
+
+  return (
+    <div className={`history-tool-card ${status}`}>
+      <button
+        type="button"
+        className="tool-card-summary"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <ToolStatusIcon status={status} />
+        <Wrench size={13} />
+        <span>{tool.tool_name}</span>
+        <small>
+          {result ? (result.is_error ? "失败" : "已完成") : "未完成"}
+        </small>
+      </button>
+      <Collapsible className="tool-card-collapse" open={open}>
+        <div className="history-tool-detail">
+          <section className="tool-detail-section">
+            <span>参数</span>
+            <pre>{structuredValue(tool.input)}</pre>
+          </section>
+          {result && (
+            <section className="tool-detail-section">
+              <span>结果</span>
+              <pre className={result.is_error ? "error" : ""}>
+                {structuredValue(result.output)}
+              </pre>
+            </section>
+          )}
+        </div>
+      </Collapsible>
+    </div>
+  );
+}
+
 function StructuredMessageContent({
   parts,
   toolResults,
@@ -4545,43 +4794,12 @@ function StructuredMessageContent({
         switch (part.type) {
           case "tool_use": {
             const result = toolResults.get(part.tool_call_id);
-            const status = result
-              ? result.is_error
-                ? "error"
-                : "completed"
-              : "incomplete";
             return (
-              <details
-                className={`history-tool-card ${status}`}
+              <HistoryToolCard
+                tool={part}
+                result={result}
                 key={`${part.tool_call_id}-${index}`}
-              >
-                <summary>
-                  <ToolStatusIcon status={status} />
-                  <Wrench size={13} />
-                  <span>{part.tool_name}</span>
-                  <small>
-                    {result
-                      ? result.is_error
-                        ? "失败"
-                        : "已完成"
-                      : "未完成"}
-                  </small>
-                </summary>
-                <div className="history-tool-detail">
-                  <section className="tool-detail-section">
-                    <span>参数</span>
-                    <pre>{structuredValue(part.input)}</pre>
-                  </section>
-                  {result && (
-                    <section className="tool-detail-section">
-                      <span>结果</span>
-                      <pre className={result.is_error ? "error" : ""}>
-                        {structuredValue(result.output)}
-                      </pre>
-                    </section>
-                  )}
-                </div>
-              </details>
+              />
             );
           }
           case "tool_result":
@@ -4650,7 +4868,11 @@ function MarkdownCodeBlock({ children }: { children: ReactNode }) {
   );
 }
 
-function MarkdownMessage({ content }: { content: string }) {
+const MarkdownMessage = memo(function MarkdownMessage({
+  content,
+}: {
+  content: string;
+}) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -4684,6 +4906,32 @@ function MarkdownMessage({ content }: { content: string }) {
       {content}
     </ReactMarkdown>
   );
+});
+
+function StreamingMarkdownMessage({
+  content,
+  active,
+}: {
+  content: string;
+  active: boolean;
+}) {
+  const latestContent = useRef(content);
+  latestContent.current = content;
+  const [displayedContent, setDisplayedContent] = useState(content);
+
+  useLayoutEffect(() => {
+    if (!active) setDisplayedContent(content);
+  }, [active, content]);
+
+  useEffect(() => {
+    if (!active) return;
+    const interval = window.setInterval(() => {
+      setDisplayedContent(latestContent.current);
+    }, 80);
+    return () => window.clearInterval(interval);
+  }, [active]);
+
+  return <MarkdownMessage content={displayedContent} />;
 }
 
 function ProjectLanding({

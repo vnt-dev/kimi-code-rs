@@ -1569,6 +1569,18 @@ select:focus-visible {
 
 .message {
   margin-bottom: 34px;
+  animation: message-in 160ms ease-out both;
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .compaction-notice {
@@ -1758,6 +1770,34 @@ select:focus-visible {
   white-space: pre-wrap;
 }
 
+.collapsible {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    grid-template-rows 180ms ease,
+    opacity 130ms ease,
+    visibility 0s linear 180ms;
+}
+
+.collapsible.open {
+  grid-template-rows: 1fr;
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transition:
+    grid-template-rows 180ms ease,
+    opacity 150ms ease,
+    visibility 0s;
+}
+
+.collapsible-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .live-user-message {
   margin-bottom: 28px;
 }
@@ -1789,6 +1829,7 @@ select:focus-visible {
   min-width: 0;
   flex-direction: column;
   gap: 10px;
+  animation: message-in 150ms ease-out both;
 }
 
 .live-step + .live-step {
@@ -1799,6 +1840,19 @@ select:focus-visible {
 
 .live-text + .live-text {
   margin-top: 2px;
+}
+
+.live-text {
+  animation: content-in 120ms ease-out both;
+}
+
+@keyframes content-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .live-thinking {
@@ -1821,6 +1875,7 @@ select:focus-visible {
   border-radius: 9px;
   color: #898994;
   background: #131318;
+  animation: message-in 140ms ease-out both;
 }
 
 .live-tool-card.running,
@@ -1832,13 +1887,18 @@ select:focus-visible {
   border-color: rgba(212, 120, 120, 0.25);
 }
 
-.live-tool-card summary {
+.tool-card-summary {
   display: flex;
+  width: 100%;
   padding: 8px 10px;
   align-items: center;
   gap: 7px;
+  border: 0;
+  color: inherit;
+  background: transparent;
   cursor: pointer;
   font-size: 10px;
+  text-align: left;
 }
 
 .tool-status-icon {
@@ -1875,18 +1935,18 @@ select:focus-visible {
   background: rgba(255, 255, 255, 0.035);
 }
 
-.live-tool-card summary small {
+.live-tool-card .tool-card-summary small {
   margin-left: auto;
   color: #666671;
   font-size: 8.5px;
 }
 
-.live-tool-card.running summary small,
-.live-tool-card.streaming summary small {
+.live-tool-card.running .tool-card-summary small,
+.live-tool-card.streaming .tool-card-summary small {
   color: #988ce6;
 }
 
-.live-tool-card.error summary small {
+.live-tool-card.error .tool-card-summary small {
   color: #c78383;
 }
 
@@ -1974,12 +2034,22 @@ select:focus-visible {
   background: rgba(139, 124, 246, 0.035);
 }
 
-.history-summary summary {
+.history-summary-trigger {
   display: flex;
+  width: 100%;
+  padding: 0;
   align-items: center;
   gap: 7px;
+  border: 0;
+  color: inherit;
+  background: transparent;
   cursor: pointer;
   font-size: 10px;
+  text-align: left;
+}
+
+.history-summary-trigger svg:last-child {
+  margin-left: auto;
 }
 
 .history-summary .markdown-body {
@@ -2009,26 +2079,17 @@ select:focus-visible {
   border-color: rgba(212, 120, 120, 0.24);
 }
 
-.history-tool-card summary {
-  display: flex;
-  padding: 8px 10px;
-  align-items: center;
-  gap: 7px;
-  cursor: pointer;
-  font-size: 10px;
-}
-
-.history-tool-card summary small {
+.history-tool-card .tool-card-summary small {
   margin-left: auto;
   color: #666671;
   font-size: 8.5px;
 }
 
-.history-tool-card.completed summary small {
+.history-tool-card.completed .tool-card-summary small {
   color: #68b995;
 }
 
-.history-tool-card.error summary small {
+.history-tool-card.error .tool-card-summary small {
   color: #c78383;
 }
 
@@ -4257,5 +4318,19 @@ select:focus-visible {
 
   .approval-actions button {
     flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message,
+  .live-step,
+  .live-tool-card,
+  .live-text {
+    animation: none;
+  }
+
+  .collapsible,
+  .collapsible.open {
+    transition: none;
   }
 }
