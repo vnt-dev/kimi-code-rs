@@ -3,6 +3,9 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use futures_util::future::BoxFuture;
 use tokio::{process::Command, sync::OnceCell};
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 pub type IsFile = Arc<dyn Fn(String) -> BoxFuture<'static, bool> + Send + Sync>;
 pub type ExecFileText =
     Arc<dyn Fn(String, Vec<String>, Duration) -> BoxFuture<'static, Option<String>> + Send + Sync>;
@@ -294,7 +297,11 @@ pub async fn exec_file_text(
     args: &[String],
     timeout: Duration,
 ) -> Option<String> {
-    let output = tokio::time::timeout(timeout, Command::new(file).args(args).output())
+    let mut command = Command::new(file);
+    command.args(args);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = tokio::time::timeout(timeout, command.output())
         .await
         .ok()?
         .ok()?;

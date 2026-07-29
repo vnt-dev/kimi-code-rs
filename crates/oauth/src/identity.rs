@@ -8,10 +8,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use indexmap::IndexMap;
 
 pub const KIMI_CODE_PLATFORM: &str = "kimi_code_cli";
 pub const KIMI_CODE_CUSTOM_HEADERS_ENV: &str = "KIMI_CODE_CUSTOM_HEADERS";
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KimiHostIdentity {
@@ -308,13 +314,15 @@ fn node_architecture() -> &'static str {
 }
 
 fn command_stdout_with_timeout(command: &str, arguments: &[&str]) -> Option<String> {
-    let mut child = Command::new(command)
+    let mut process = Command::new(command);
+    process
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    process.creation_flags(CREATE_NO_WINDOW);
+    let mut child = process.spawn().ok()?;
     let deadline = Instant::now() + Duration::from_secs(1);
     let success = loop {
         match child.try_wait() {
