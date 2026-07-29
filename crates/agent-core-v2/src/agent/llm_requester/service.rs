@@ -3,6 +3,7 @@
 //! Original: `packages/agent-core-v2/src/agent/llmRequester/llmRequesterService.ts`.
 
 use std::{
+    collections::HashMap,
     error::Error,
     sync::{Arc, Mutex},
 };
@@ -28,7 +29,7 @@ use crate::{
         },
         context_size::{AGENT_CONTEXT_SIZE_SERVICE_ID, AgentContextSizeServiceHandle},
         fault_injection::{FAULT_INJECTION_SERVICE_ID, FaultInjectionServiceHandle, FaultKind},
-        profile::{AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle},
+        profile::{AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle, ProfileModelContext},
         tool_registry::{AGENT_TOOL_REGISTRY_SERVICE_ID, AgentToolRegistryServiceHandle},
         tool_select::{AGENT_TOOL_SELECT_SERVICE_ID, AgentToolSelectServiceHandle},
         usage::{AGENT_USAGE_SERVICE_ID, AgentUsageServiceHandle},
@@ -53,6 +54,31 @@ use super::{
     AgentLlmRequestTask, AgentLlmRequesterServiceContract, AgentLlmRequesterServiceHandle,
     PreparedTurnRequestConfig,
 };
+
+type TurnRequestConfig = (ProfileModelContext, ModelRequestParams, String);
+
+#[derive(Default)]
+struct TurnConfigCache {
+    configs: Arc<Mutex<HashMap<i64, TurnRequestConfig>>>,
+}
+
+impl TurnConfigCache {
+    fn clone_for_task(&self) -> Self {
+        Self {
+            configs: Arc::clone(&self.configs),
+        }
+    }
+
+    fn get(&self, id: i64) -> Option<TurnRequestConfig> {
+        self.configs.lock().unwrap().get(&id).cloned()
+    }
+
+    fn insert(&self, id: i64, config: TurnRequestConfig) {
+        let mut configs = self.configs.lock().unwrap();
+        configs.retain(|key, _| *key >= id);
+        configs.insert(id, config);
+    }
+}
 
 struct AbortSignalBridge {
     token: CancellationToken,
@@ -96,16 +122,7 @@ pub struct AgentLlmRequesterService {
     usage: AgentUsageServiceHandle,
     catalog: ModelCatalogHandle,
     fault: FaultInjectionServiceHandle,
-    turn_configs: Mutex<
-        std::collections::HashMap<
-            i64,
-            (
-                crate::agent::profile::ProfileModelContext,
-                ModelRequestParams,
-                String,
-            ),
-        >,
-    >,
+    turn_configs: TurnConfigCache,
 }
 
 impl AgentLlmRequesterService {
@@ -131,22 +148,12 @@ impl AgentLlmRequesterService {
             usage,
             catalog,
             fault,
-            turn_configs: Mutex::new(Default::default()),
+            turn_configs: TurnConfigCache::default(),
         }
     }
 
-    fn turn_config(
-        &self,
-        id: i64,
-    ) -> Result<
-        (
-            crate::agent::profile::ProfileModelContext,
-            ModelRequestParams,
-            String,
-        ),
-        AgentLlmRequestError,
-    > {
-        if let Some(config) = self.turn_configs.lock().unwrap().get(&id).cloned() {
+    fn turn_config(&self, id: i64) -> Result<TurnRequestConfig, AgentLlmRequestError> {
+        if let Some(config) = self.turn_configs.get(id) {
             return Ok(config);
         }
         let config = (
@@ -158,9 +165,7 @@ impl AgentLlmRequesterService {
                 .map_err(AgentLlmRequestError::from)?,
             self.profile.get_system_prompt(),
         );
-        let mut configs = self.turn_configs.lock().unwrap();
-        configs.retain(|key, _| *key >= id);
-        configs.insert(id, config.clone());
+        self.turn_configs.insert(id, config.clone());
         Ok(config)
     }
 
@@ -437,17 +442,18 @@ impl AgentLlmRequesterServiceContract for AgentLlmRequesterService {
 
 impl AgentLlmRequesterService {
     fn clone_for_task(&self) -> Self {
-        Self::new(
-            self.context.clone(),
-            self.projector.clone(),
-            self.context_size.clone(),
-            self.tools.clone(),
-            self.tool_select.clone(),
-            self.profile.clone(),
-            self.usage.clone(),
-            self.catalog.clone(),
-            self.fault.clone(),
-        )
+        Self {
+            context: self.context.clone(),
+            projector: self.projector.clone(),
+            context_size: self.context_size.clone(),
+            tools: self.tools.clone(),
+            tool_select: self.tool_select.clone(),
+            profile: self.profile.clone(),
+            usage: self.usage.clone(),
+            catalog: self.catalog.clone(),
+            fault: self.fault.clone(),
+            turn_configs: self.turn_configs.clone_for_task(),
+        }
     }
 }
 
@@ -533,5 +539,33 @@ mod tests {
             find_provider_error(&translated),
             Some(ChatProviderError::ApiRequestTooLarge { .. })
         ));
+    }
+
+    #[test]
+    fn task_clones_reuse_prepared_turn_config() {
+        let service_cache = TurnConfigCache::default();
+        let task_cache = service_cache.clone_for_task();
+        service_cache.insert(
+            7,
+            (
+                ProfileModelContext {
+                    model_alias: "frozen-model".into(),
+                    model_capabilities: crate::kosong::contract::capability::UNKNOWN_CAPABILITY
+                        .clone(),
+                    max_output_size: None,
+                    always_thinking: None,
+                    thinking_level: crate::kosong::contract::provider::ThinkingEffort::from("high"),
+                    reserved_context_size: None,
+                    compaction_trigger_ratio: None,
+                },
+                ModelRequestParams::default(),
+                "frozen system prompt".into(),
+            ),
+        );
+
+        let config = task_cache.get(7).expect("task clone must see turn config");
+        assert_eq!(config.0.model_alias, "frozen-model");
+        assert_eq!(config.0.thinking_level.as_str(), "high");
+        assert_eq!(config.2, "frozen system prompt");
     }
 }
