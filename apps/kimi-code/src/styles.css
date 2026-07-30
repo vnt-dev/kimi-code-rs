@@ -1264,6 +1264,7 @@ select:focus-visible {
   min-width: 0;
   flex: 1;
   flex-direction: column;
+  container-type: inline-size;
   background: #1e1f22;
 }
 
@@ -1356,6 +1357,149 @@ select:focus-visible {
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #45484f transparent;
+}
+
+.conversation-outline {
+  position: absolute;
+  top: calc(50% - 32px);
+  left: max(8px, calc(50% - 452px));
+  z-index: 5;
+  display: flex;
+  max-height: min(52vh, 440px);
+  transform: translateY(-50%);
+  opacity: 0.56;
+  transition: opacity 160ms ease;
+}
+
+.conversation-outline:hover,
+.conversation-outline:focus-within {
+  opacity: 1;
+}
+
+.conversation-outline-scroll {
+  display: flex;
+  padding: 8px 0;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.conversation-outline-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.conversation-outline-row {
+  position: relative;
+  display: flex;
+  width: 28px;
+  height: 11px;
+  min-height: 11px;
+  padding: 0;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.conversation-outline-row:focus-visible {
+  outline: none;
+}
+
+.conversation-outline-tick {
+  display: block;
+  width: var(--outline-tick-width, 6px);
+  height: 1px;
+  border-radius: 99px;
+  background: var(--subtle);
+  opacity: 0.56;
+  transition:
+    width 120ms ease,
+    height 120ms ease,
+    opacity 120ms ease,
+    background 120ms ease;
+}
+
+.conversation-outline-row:hover .conversation-outline-tick,
+.conversation-outline-row:focus-visible .conversation-outline-tick,
+.conversation-outline-row.active .conversation-outline-tick {
+  width: 20px;
+  height: 2px;
+  background: var(--text);
+  opacity: 0.82;
+}
+
+.conversation-outline-row:hover .conversation-outline-tick,
+.conversation-outline-row:focus-visible .conversation-outline-tick {
+  opacity: 1;
+}
+
+.conversation-outline-card {
+  position: absolute;
+  top: 50%;
+  left: 34px;
+  display: block;
+  width: 320px;
+  padding: 12px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--surface-translucent);
+  box-shadow: var(--floating-shadow);
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(5px, -50%);
+  text-align: left;
+  pointer-events: none;
+  backdrop-filter: blur(16px);
+  transition:
+    opacity 120ms ease,
+    transform 160ms ease,
+    visibility 120ms ease;
+}
+
+.conversation-outline-card.visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(0, -50%);
+}
+
+.conversation-outline-card strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.conversation-outline-preview {
+  display: grid;
+  margin-top: 6px;
+  gap: 4px;
+}
+
+.conversation-outline-preview > span,
+.conversation-outline-empty {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-outline-empty {
+  margin-top: 6px;
+  color: var(--subtle);
+}
+
+@container (max-width: 960px) {
+  .conversation-outline {
+    display: none;
+  }
 }
 
 .welcome {
