@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentConfig,
   AgentPromptPart,
+  AgentTaskInfo,
   AgentUsageStatus,
   PermissionMode,
   PlanData,
@@ -125,6 +126,12 @@ export function createAgentClient(scope: AgentScope) {
     },
     getUsage() {
       return callAgentRpc<AgentUsageStatus>(scope, "getUsage");
+    },
+    getTasks(options: { activeOnly?: boolean; limit?: number } = {}) {
+      return callAgentRpc<AgentTaskInfo[]>(scope, "getTasks", options);
+    },
+    getTaskOutput(taskId: string, tail = 16_384) {
+      return callAgentRpc<string>(scope, "getTaskOutput", { taskId, tail });
     },
   };
 }

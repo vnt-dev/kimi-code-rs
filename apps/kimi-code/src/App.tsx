@@ -115,9 +115,11 @@ import type {
   AgentContentPart,
   AgentInteraction,
   AgentInteractionsEvent,
+  AgentTaskInfo,
   AgentUsageStatus,
   ApprovalPayload,
   AuthStatus,
+  BackgroundTaskView,
   CompactionEvent,
   ContextUsage,
   DesktopState,
@@ -145,6 +147,9 @@ const MAX_PROMPT_IMAGE_DIMENSION = 2048;
 const IMAGE_COMPRESSION_THRESHOLD = 4 * 1024 * 1024;
 const MAX_LIVE_TOOL_UPDATES = 50;
 const LIVE_TURN_HANDOFF_MS = 200;
+const BACKGROUND_TASK_LIST_LIMIT = 50;
+const BACKGROUND_TASK_OUTPUT_TAIL = 16_384;
+const BACKGROUND_TASK_DETAIL_TAIL = 65_536;
 const MAIN_AGENT_ID = "main";
 const PROMPT_IMAGE_TYPES = new Set([
   "image/png",
@@ -901,6 +906,57 @@ function readTodoItems(value: unknown): TodoItem[] | undefined {
   return todos;
 }
 
+const AGENT_TASK_STATUSES = new Set([
+  "running",
+  "completed",
+  "failed",
+  "timed_out",
+  "killed",
+  "lost",
+]);
+
+function readAgentTaskInfo(
+  value: unknown,
+  fallbackStatus?: AgentTaskInfo["status"],
+): AgentTaskInfo | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.taskId !== "string" ||
+    typeof record.kind !== "string"
+  ) {
+    return undefined;
+  }
+  const status = AGENT_TASK_STATUSES.has(String(record.status))
+    ? (record.status as AgentTaskInfo["status"])
+    : fallbackStatus;
+  if (!status) return undefined;
+
+  return {
+    ...(record as unknown as AgentTaskInfo),
+    taskId: record.taskId,
+    kind: record.kind,
+    status,
+    description:
+      typeof record.description === "string"
+        ? record.description
+        : typeof record.command === "string"
+          ? record.command
+          : record.taskId,
+    startedAt:
+      typeof record.startedAt === "number" ? record.startedAt : Date.now(),
+  };
+}
+
+function isTaskLifecycleEventType(type: string): boolean {
+  return (
+    type === "task.started" ||
+    type === "task.terminated" ||
+    type === "background.task.started" ||
+    type === "background.task.terminated"
+  );
+}
+
 function messageOriginKind(message: ProtocolMessage): string | undefined {
   const origin = message.metadata?.origin;
   return origin && typeof origin === "object" && "kind" in origin
@@ -1134,6 +1190,9 @@ export default function App() {
   const [sessionTodos, setSessionTodos] = useState<Record<string, TodoItem[]>>(
     {},
   );
+  const [backgroundTasks, setBackgroundTasks] = useState<
+    Record<string, BackgroundTaskView[]>
+  >({});
   const [subagentRuns, setSubagentRuns] = useState<SessionSubagentRuns>({});
   const [subagentLiveTurns, setSubagentLiveTurns] =
     useState<SubagentLiveTurns>({});
@@ -1167,6 +1226,7 @@ export default function App() {
   const noticeTimer = useRef<number | undefined>(undefined);
   const accountUsageRequest = useRef(0);
   const historyRequests = useRef<Record<string, number>>({});
+  const backgroundTaskRequests = useRef<Record<string, number>>({});
   const agentSubscriptions = useRef<Map<string, AgentSubscription>>(new Map());
   const pendingAgentSubscriptions = useRef<
     Map<string, PendingAgentSubscription>
@@ -1299,6 +1359,15 @@ export default function App() {
   const activeTodos = activeConversation
     ? (sessionTodos[activeConversation.id] ?? [])
     : [];
+  const activeBackgroundTasks = activeConversation
+    ? (backgroundTasks[activeConversation.id] ?? []).filter(
+        (task) => task.kind === "process" && task.detached !== false,
+      )
+    : [];
+  const activeRunningTaskKey = activeBackgroundTasks
+    .filter((task) => task.status === "running")
+    .map((task) => task.taskId)
+    .join("\u0000");
 
   const updateDesktop = (
     recipe: (current: DesktopState) => DesktopState,
@@ -1311,6 +1380,103 @@ export default function App() {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     noticeTimer.current = window.setTimeout(() => setNotice(undefined), 3600);
   };
+
+  const loadBackgroundTaskOutput = useCallback(
+    async (
+      scope: { sessionId: string; agentId: string },
+      taskId: string,
+      tail = BACKGROUND_TASK_OUTPUT_TAIL,
+    ): Promise<void> => {
+      setBackgroundTasks((current) => ({
+        ...current,
+        [scope.sessionId]: (current[scope.sessionId] ?? []).map((task) =>
+          task.taskId === taskId
+            ? { ...task, outputLoading: true, outputError: undefined }
+            : task,
+        ),
+      }));
+      try {
+        const output = await createAgentClient(scope).getTaskOutput(taskId, tail);
+        setBackgroundTasks((current) => ({
+          ...current,
+          [scope.sessionId]: (current[scope.sessionId] ?? []).map((task) =>
+            task.taskId === taskId
+              ? {
+                  ...task,
+                  output,
+                  outputLoading: false,
+                  outputError: undefined,
+                }
+              : task,
+          ),
+        }));
+      } catch (error) {
+        setBackgroundTasks((current) => ({
+          ...current,
+          [scope.sessionId]: (current[scope.sessionId] ?? []).map((task) =>
+            task.taskId === taskId
+              ? {
+                  ...task,
+                  outputLoading: false,
+                  outputError: conciseError(error),
+                }
+              : task,
+          ),
+        }));
+      }
+    },
+    [],
+  );
+
+  const refreshBackgroundTasks = useCallback(
+    async (scope: { sessionId: string; agentId: string }): Promise<void> => {
+      const request = (backgroundTaskRequests.current[scope.sessionId] ?? 0) + 1;
+      backgroundTaskRequests.current[scope.sessionId] = request;
+      const tasks = await createAgentClient(scope).getTasks({
+        activeOnly: false,
+        limit: BACKGROUND_TASK_LIST_LIMIT,
+      });
+      if (request !== backgroundTaskRequests.current[scope.sessionId]) return;
+
+      const sortedTasks = [...tasks].sort(
+        (left, right) => right.startedAt - left.startedAt,
+      );
+      setBackgroundTasks((current) => {
+        const previous = new Map(
+          (current[scope.sessionId] ?? []).map((task) => [task.taskId, task]),
+        );
+        return {
+          ...current,
+          [scope.sessionId]: sortedTasks.map((task) => {
+            const cached = previous.get(task.taskId);
+            return {
+              ...task,
+              output: cached?.output,
+              outputLoading: cached?.outputLoading,
+              outputError: cached?.outputError,
+            };
+          }),
+        };
+      });
+
+      const visibleTasks = sortedTasks.filter(
+        (task) =>
+          task.kind === "process" &&
+          task.detached !== false &&
+          task.status === "running",
+      );
+      void Promise.all(
+        visibleTasks.map((task) =>
+          loadBackgroundTaskOutput(
+            scope,
+            task.taskId,
+            BACKGROUND_TASK_OUTPUT_TAIL,
+          ),
+        ),
+      );
+    },
+    [loadBackgroundTaskOutput],
+  );
 
   const refreshAgentState = async (scope: {
     sessionId: string;
@@ -1565,6 +1731,9 @@ export default function App() {
         }));
         setActiveAgentScope(scope);
         await refreshAgentState(scope);
+        void refreshBackgroundTasks(scope).catch(() => {
+          // Sessions without task state simply have no background task pill.
+        });
       })
       .catch((error) => {
         if (!disposed) showNotice(conciseError(error));
@@ -1578,6 +1747,22 @@ export default function App() {
     activeProject?.path,
     auth.loggedIn,
     models.length,
+    refreshBackgroundTasks,
+  ]);
+
+  useEffect(() => {
+    if (!activeAgentScope || !activeRunningTaskKey) return;
+    const timer = window.setInterval(() => {
+      void refreshBackgroundTasks(activeAgentScope).catch(() => {
+        // The lifecycle event or next poll will retry a transient failure.
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [
+    activeAgentScope?.agentId,
+    activeAgentScope?.sessionId,
+    activeRunningTaskKey,
+    refreshBackgroundTasks,
   ]);
 
   useEffect(
@@ -1642,6 +1827,56 @@ export default function App() {
               subagentEvent,
             ),
           );
+        }
+        if (
+          isMainAgentEvent &&
+          isTaskLifecycleEventType(payload.event.type)
+        ) {
+          const started =
+            payload.event.type === "task.started" ||
+            payload.event.type === "background.task.started";
+          const info = readAgentTaskInfo(
+            payload.event.info,
+            started ? "running" : undefined,
+          );
+          if (info) {
+            setBackgroundTasks((current) => {
+              const tasks = current[payload.sessionId] ?? [];
+              const previous = tasks.find(
+                (task) => task.taskId === info.taskId,
+              );
+              const nextTask: BackgroundTaskView = {
+                ...previous,
+                ...info,
+              };
+              const nextTasks = [
+                nextTask,
+                ...tasks.filter((task) => task.taskId !== info.taskId),
+              ].sort((left, right) => right.startedAt - left.startedAt);
+              return {
+                ...current,
+                [payload.sessionId]: nextTasks,
+              };
+            });
+          }
+          const taskScope = {
+            sessionId: payload.sessionId,
+            agentId: payload.agentId,
+          };
+          void refreshBackgroundTasks(taskScope).catch(() => {
+            // The event payload already supplied the lifecycle update.
+          });
+          if (
+            info?.kind === "process" &&
+            info.detached !== false &&
+            !started
+          ) {
+            void loadBackgroundTaskOutput(
+              taskScope,
+              info.taskId,
+              BACKGROUND_TASK_DETAIL_TAIL,
+            );
+          }
         }
         if (
           isMainAgentEvent &&
@@ -2026,6 +2261,7 @@ export default function App() {
     if (ids.size === 0) return;
     for (const sessionId of ids) {
       delete historyRequests.current[sessionId];
+      delete backgroundTaskRequests.current[sessionId];
       releaseAgentSubscription(sessionId);
     }
     setInteractions((current) => omitSessionKeys(current, ids));
@@ -2035,6 +2271,7 @@ export default function App() {
     setMessageDurations((current) => omitSessionKeys(current, ids));
     setPlans((current) => omitSessionKeys(current, ids));
     setSessionTodos((current) => omitSessionKeys(current, ids));
+    setBackgroundTasks((current) => omitSessionKeys(current, ids));
     setSubagentRuns((current) => omitSessionKeys(current, ids));
     setSubagentLiveTurns((current) => omitSessionKeys(current, ids));
     setInFlightTurns((current) => omitSessionKeys(current, ids));
@@ -3175,8 +3412,27 @@ export default function App() {
                   }
                 />
               ) : null}
-              {activeTodos.some((todo) => todo.status !== "done") && (
-                <TodoProgress todos={activeTodos} />
+              {(activeBackgroundTasks.length > 0 ||
+                activeTodos.some((todo) => todo.status !== "done")) && (
+                <div className="composer-progress-row">
+                  {activeBackgroundTasks.length > 0 && (
+                    <BackgroundTaskProgress
+                      tasks={activeBackgroundTasks}
+                      onLoadOutput={(taskId) =>
+                        activeAgentScope
+                          ? loadBackgroundTaskOutput(
+                              activeAgentScope,
+                              taskId,
+                              BACKGROUND_TASK_DETAIL_TAIL,
+                            )
+                          : Promise.resolve()
+                      }
+                    />
+                  )}
+                  {activeTodos.some((todo) => todo.status !== "done") && (
+                    <TodoProgress todos={activeTodos} />
+                  )}
+                </div>
               )}
               <form className="composer" onSubmit={handleSubmit}>
                 {promptAttachments.length > 0 && (
@@ -4077,6 +4333,159 @@ function TodoProgress({ todos }: { todos: readonly TodoItem[] }) {
   );
 }
 
+function backgroundTaskStatusLabel(status: AgentTaskInfo["status"]): string {
+  switch (status) {
+    case "running":
+      return "运行中";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "失败";
+    case "timed_out":
+      return "已超时";
+    case "killed":
+      return "已终止";
+    case "lost":
+      return "已丢失";
+  }
+}
+
+function backgroundTaskElapsed(task: AgentTaskInfo): string {
+  const end = task.status === "running" ? Date.now() : task.endedAt;
+  if (typeof end !== "number") return "";
+  const duration = Math.max(0, end - task.startedAt);
+  const seconds = Math.floor(duration / 1000);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes < 60) {
+    return remainder > 0
+      ? `${minutes}分${remainder}秒`
+      : `${minutes}分钟`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}小时${minutes % 60}分`;
+}
+
+function BackgroundTaskProgress({
+  tasks,
+  onLoadOutput,
+}: {
+  tasks: readonly BackgroundTaskView[];
+  onLoadOutput: (taskId: string) => Promise<void>;
+}) {
+  const [expandedTaskId, setExpandedTaskId] = useState<string>();
+  const running = tasks.filter((task) => task.status === "running").length;
+  const failed = tasks.filter((task) =>
+    ["failed", "timed_out", "lost"].includes(task.status),
+  ).length;
+  const allDone = running === 0 && failed === 0;
+
+  const toggleTask = (task: BackgroundTaskView): void => {
+    if (expandedTaskId === task.taskId) {
+      setExpandedTaskId(undefined);
+      return;
+    }
+    setExpandedTaskId(task.taskId);
+    void onLoadOutput(task.taskId);
+  };
+
+  return (
+    <div
+      className={`background-task-anchor ${allDone ? "complete" : ""}`}
+      tabIndex={0}
+      aria-label={`后台任务 ${tasks.length} 个，悬停查看详情`}
+    >
+      <div
+        className="background-task-popover"
+        role="dialog"
+        aria-label="后台任务"
+      >
+        <div className="background-task-popover-heading">
+          <strong>后台任务</strong>
+          <span>
+            {running > 0
+              ? `${running} 个运行中`
+              : failed > 0
+                ? `${failed} 个异常`
+                : `${tasks.length} 个已完成`}
+          </span>
+        </div>
+        <ul className="background-task-list">
+          {tasks.map((task) => {
+            const expanded = expandedTaskId === task.taskId;
+            const elapsed = backgroundTaskElapsed(task);
+            return (
+              <li
+                className={`background-task-item ${task.status} ${
+                  expanded ? "expanded" : ""
+                }`}
+                key={task.taskId}
+              >
+                <button
+                  className="background-task-summary"
+                  type="button"
+                  aria-expanded={expanded}
+                  onClick={() => toggleTask(task)}
+                >
+                  <span
+                    className={`background-task-status-mark ${task.status}`}
+                    aria-hidden="true"
+                  >
+                    {task.status === "running" ? (
+                      <span className="spinner" />
+                    ) : task.status === "completed" ? (
+                      <Check size={10} strokeWidth={2.5} />
+                    ) : (
+                      <X size={10} strokeWidth={2.5} />
+                    )}
+                  </span>
+                  <span className="background-task-copy">
+                    <strong>
+                      {task.description || task.command || task.taskId}
+                    </strong>
+                    <small>
+                      {backgroundTaskStatusLabel(task.status)}
+                      {elapsed ? ` · ${elapsed}` : ""}
+                    </small>
+                  </span>
+                  <ChevronRight
+                    className="background-task-chevron"
+                    size={13}
+                    aria-hidden="true"
+                  />
+                </button>
+                {expanded && (
+                  <div className="background-task-detail">
+                    <span>命令</span>
+                    <pre className="background-task-command">
+                      <code>{task.command || task.description}</code>
+                    </pre>
+                    <span>输出</span>
+                    <pre className="background-task-output">
+                      <code>
+                        {task.output ||
+                          (task.outputLoading
+                            ? "正在读取输出…"
+                            : task.outputError || "暂无输出")}
+                      </code>
+                    </pre>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+      <div className="background-task-pill" aria-hidden="true">
+        <TerminalSquare size={13} />
+        <span>后台任务 {tasks.length}</span>
+        {running > 0 && <span className="background-task-running-dot" />}
+      </div>
+    </div>
+  );
+}
+
 function CompactionNotice({ event }: { event: CompactionEvent }) {
   const completed = event.phase === "completed";
   const cancelled = event.phase === "cancelled";
@@ -4371,6 +4780,27 @@ function PlanReviewCard({
   const [feedback, setFeedback] = useState("");
   const options =
     display.options && display.options.length >= 2 ? display.options : [];
+  const [selectedLabel, setSelectedLabel] = useState<string | undefined>(
+    () => options[0]?.label,
+  );
+  const trimmedFeedback = feedback.trim();
+  const needsRevision = trimmedFeedback.length > 0;
+  const canExecute = options.length === 0 || selectedLabel !== undefined;
+
+  const submitReview = (): void => {
+    if (needsRevision) {
+      onRespond({
+        decision: "rejected",
+        selectedLabel: "Revise",
+        feedback: trimmedFeedback,
+      });
+      return;
+    }
+    onRespond({
+      decision: "approved",
+      selectedLabel: selectedLabel ?? "Approve",
+    });
+  };
 
   return (
     <section className="interaction-card plan-review-card" aria-live="polite">
@@ -4390,22 +4820,29 @@ function PlanReviewCard({
       {options.length > 0 && (
         <div className="plan-review-options">
           <span>选择实施方案</span>
-          {options.map((option) => (
-            <button
-              type="button"
-              key={option.label}
-              disabled={busy}
-              onClick={() =>
-                onRespond({
-                  decision: "approved",
-                  selectedLabel: option.label,
-                })
-              }
-            >
-              <strong>{option.label}</strong>
-              {option.description && <small>{option.description}</small>}
-            </button>
-          ))}
+          <div className="plan-review-option-list" role="radiogroup">
+            {options.map((option) => (
+              <label
+                className={`plan-review-option ${
+                  selectedLabel === option.label ? "selected" : ""
+                } ${busy ? "disabled" : ""}`}
+                key={option.label}
+              >
+                <input
+                  type="radio"
+                  name={`plan-review-${interaction.id}`}
+                  value={option.label}
+                  checked={selectedLabel === option.label}
+                  disabled={busy}
+                  onChange={() => setSelectedLabel(option.label)}
+                />
+                <span className="plan-review-option-copy">
+                  <strong>{option.label}</strong>
+                  {option.description && <small>{option.description}</small>}
+                </span>
+              </label>
+            ))}
+          </div>
         </div>
       )}
       <label className="plan-review-feedback">
@@ -4431,31 +4868,21 @@ function PlanReviewCard({
         </button>
         <button
           type="button"
-          className="interaction-secondary"
-          disabled={busy || !feedback.trim()}
-          onClick={() =>
-            onRespond({
-              decision: "rejected",
-              selectedLabel: "Revise",
-              feedback: feedback.trim(),
-            })
+          className={
+            needsRevision ? "interaction-secondary" : "interaction-primary"
           }
+          disabled={busy || (!needsRevision && !canExecute)}
+          onClick={submitReview}
         >
-          退回修改
+          {busy ? (
+            <span className="spinner light" />
+          ) : needsRevision ? (
+            <RefreshCw size={14} />
+          ) : (
+            <Check size={14} />
+          )}
+          {needsRevision ? "返回修改" : "执行方案"}
         </button>
-        {options.length === 0 && (
-          <button
-            type="button"
-            className="interaction-primary"
-            disabled={busy}
-            onClick={() =>
-              onRespond({ decision: "approved", selectedLabel: "Approve" })
-            }
-          >
-            {busy ? <span className="spinner light" /> : <Check size={14} />}
-            批准并继续
-          </button>
-        )}
       </div>
     </section>
   );

@@ -119,6 +119,39 @@ export interface TodoItem {
   status: TodoStatus;
 }
 
+export type AgentTaskStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "killed"
+  | "lost";
+
+export interface AgentTaskInfo {
+  taskId: string;
+  description: string;
+  status: AgentTaskStatus;
+  kind: string;
+  detached?: boolean;
+  startedAt: number;
+  endedAt?: number | null;
+  stopReason?: string;
+  timeoutMs?: number;
+  command?: string;
+  pid?: number;
+  exitCode?: number | null;
+  agentId?: string;
+  subagentType?: string;
+  questionCount?: number;
+  toolCallId?: string;
+}
+
+export interface BackgroundTaskView extends AgentTaskInfo {
+  output?: string;
+  outputLoading?: boolean;
+  outputError?: string;
+}
+
 export interface AuthStatus {
   loggedIn: boolean;
   provider: string;

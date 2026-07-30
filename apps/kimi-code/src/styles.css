@@ -3148,7 +3148,26 @@ select:focus-visible {
   background: #34363b;
 }
 
-.todo-progress-anchor {
+.composer-progress-row {
+  display: flex;
+  width: min(850px, 100%);
+  min-height: 34px;
+  margin: 0 auto 8px;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8px;
+}
+
+.composer-progress-row .todo-progress-anchor,
+.composer-progress-row .background-task-anchor {
+  width: auto;
+  max-width: 430px;
+  margin: 0;
+  flex: 1 1 0;
+}
+
+.todo-progress-anchor,
+.background-task-anchor {
   position: relative;
   display: flex;
   width: min(850px, 100%);
@@ -3161,7 +3180,8 @@ select:focus-visible {
   animation: todo-progress-in 180ms ease-out;
 }
 
-.todo-progress-anchor::before {
+.todo-progress-anchor::before,
+.background-task-anchor::before {
   position: absolute;
   bottom: 100%;
   left: 50%;
@@ -3171,12 +3191,14 @@ select:focus-visible {
   transform: translateX(-50%);
 }
 
-.todo-progress-anchor:focus-visible .todo-progress-pill {
+.todo-progress-anchor:focus-visible .todo-progress-pill,
+.background-task-anchor:focus-visible .background-task-pill {
   outline: 2px solid rgba(139, 124, 246, 0.7);
   outline-offset: 2px;
 }
 
-.todo-progress-pill {
+.todo-progress-pill,
+.background-task-pill {
   display: flex;
   height: 32px;
   min-width: 108px;
@@ -3203,13 +3225,43 @@ select:focus-visible {
 }
 
 .todo-progress-anchor:hover .todo-progress-pill,
-.todo-progress-anchor:focus-within .todo-progress-pill {
+.todo-progress-anchor:focus-within .todo-progress-pill,
+.background-task-anchor:hover .background-task-pill,
+.background-task-anchor:focus-within .background-task-pill {
   transform: translateY(-1px);
   border-color: rgba(139, 124, 246, 0.32);
   color: #b1aabc;
   background:
     linear-gradient(135deg, rgba(139, 124, 246, 0.09), transparent 62%),
     rgba(57, 59, 64, 0.98);
+}
+
+.background-task-pill {
+  border-color: var(--accent-border);
+  color: var(--muted);
+  background: var(--surface-2);
+  font-size: 11px;
+  cursor: default;
+}
+
+.background-task-anchor:hover .background-task-pill,
+.background-task-anchor:focus-within .background-task-pill {
+  border-color: var(--line-strong);
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.background-task-pill > svg {
+  color: var(--accent);
+}
+
+.background-task-running-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  animation: background-task-pulse 1.4s ease-in-out infinite;
 }
 
 .todo-progress-ring,
@@ -3377,6 +3429,222 @@ select:focus-visible {
 .todo-list-item.done .todo-status-mark {
   border-color: rgba(84, 207, 154, 0.42);
   background: rgba(84, 207, 154, 0.075);
+}
+
+.background-task-popover {
+  position: absolute;
+  bottom: calc(100% + 1px);
+  left: 50%;
+  width: min(520px, calc(200% + 8px));
+  max-height: min(470px, 62vh);
+  padding: 11px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  visibility: hidden;
+  opacity: 0;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--floating-shadow);
+  pointer-events: none;
+  transform: translate(-50%, 8px) scale(0.985);
+  transform-origin: bottom center;
+  transition:
+    opacity 150ms ease,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s linear 180ms;
+}
+
+.background-task-anchor:hover .background-task-popover,
+.background-task-anchor:focus-within .background-task-popover {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0) scale(1);
+  transition-delay: 70ms, 70ms, 0s;
+}
+
+.background-task-popover-heading {
+  display: flex;
+  min-height: 25px;
+  padding: 0 3px 7px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+}
+
+.background-task-popover-heading strong {
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.background-task-popover-heading span {
+  color: var(--muted);
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+}
+
+.background-task-list {
+  display: grid;
+  max-height: min(410px, 54vh);
+  margin: 7px 0 0;
+  padding: 0 2px;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+  gap: 3px;
+}
+
+.background-task-item {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.background-task-item:hover,
+.background-task-item.expanded {
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+
+.background-task-summary {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 7px 8px;
+  grid-template-columns: 16px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.background-task-summary:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: -2px;
+}
+
+.background-task-status-mark {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--muted);
+}
+
+.background-task-status-mark .spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+  border-color: var(--accent-soft);
+  border-top-color: var(--accent);
+}
+
+.background-task-status-mark.completed {
+  border-color: color-mix(in srgb, var(--green) 48%, transparent);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 9%, transparent);
+}
+
+.background-task-status-mark.failed,
+.background-task-status-mark.timed_out,
+.background-task-status-mark.lost {
+  border-color: color-mix(in srgb, var(--danger) 48%, transparent);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.background-task-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.background-task-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 540;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-task-copy small {
+  color: var(--muted);
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+}
+
+.background-task-chevron {
+  color: var(--subtle);
+  transition: transform 150ms ease;
+}
+
+.background-task-item.expanded .background-task-chevron {
+  transform: rotate(90deg);
+}
+
+.background-task-detail {
+  display: grid;
+  min-width: 0;
+  padding: 0 8px 9px 32px;
+  gap: 5px;
+}
+
+.background-task-detail > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.background-task-detail pre {
+  max-width: 100%;
+  margin: 0 0 3px;
+  padding: 8px 9px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface-deep);
+  font-family: "DM Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+}
+
+.background-task-command {
+  max-height: 92px;
+}
+
+.background-task-output {
+  min-height: 42px;
+  max-height: 220px;
+}
+
+@keyframes background-task-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 @keyframes todo-progress-in {
@@ -3622,7 +3890,7 @@ select:focus-visible {
 }
 
 .interaction-card-actions button,
-.plan-review-options button {
+.plan-review-option {
   border: 1px solid var(--line);
   border-radius: 7px;
   cursor: pointer;
@@ -3660,7 +3928,7 @@ select:focus-visible {
 }
 
 .interaction-card-actions button:disabled,
-.plan-review-options button:disabled {
+.plan-review-option.disabled {
   cursor: default;
   opacity: 0.48;
 }
@@ -3709,39 +3977,78 @@ select:focus-visible {
 }
 
 .plan-review-options {
-  display: grid;
+  display: flex;
   margin-top: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  flex-direction: column;
   gap: 6px;
 }
 
-.plan-review-options > span {
-  grid-column: 1 / -1;
+.plan-review-option-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
 }
 
-.plan-review-options button {
-  display: flex;
-  min-height: 44px;
-  padding: 7px 9px;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
+.plan-review-option {
+  display: grid;
+  min-width: 0;
+  min-height: 52px;
+  padding: 9px 11px;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
   color: #aaa4b6;
   background: rgba(139, 124, 246, 0.045);
   text-align: left;
 }
 
-.plan-review-options button:hover:not(:disabled) {
+.plan-review-option:hover:not(.disabled),
+.plan-review-option.selected {
   border-color: rgba(139, 124, 246, 0.32);
   color: #d4cafc;
   background: rgba(139, 124, 246, 0.09);
 }
 
-.plan-review-options button strong {
+.plan-review-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  appearance: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  outline: none;
+  background: var(--surface-deep);
+  cursor: pointer;
+}
+
+.plan-review-option input:checked {
+  border-color: var(--accent);
+  background:
+    radial-gradient(circle, var(--accent) 0 3px, transparent 3.5px),
+    var(--surface-deep);
+}
+
+.plan-review-option input:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: 2px;
+}
+
+.plan-review-option input:disabled {
+  cursor: default;
+}
+
+.plan-review-option-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.plan-review-option strong {
   font-size: 9.5px;
 }
 
-.plan-review-options button small {
+.plan-review-option small {
   color: #77717f;
   font-size: 8px;
 }
@@ -3813,7 +4120,7 @@ select:focus-visible {
   font-size: 10.5px;
 }
 
-.plan-review-card .plan-review-options button {
+.plan-review-card .plan-review-option {
   min-height: 52px;
   padding: 9px 11px;
   border-color: #42454c;
@@ -3821,17 +4128,18 @@ select:focus-visible {
   background: #2b2d30;
 }
 
-.plan-review-card .plan-review-options button:hover:not(:disabled) {
+.plan-review-card .plan-review-option:hover:not(.disabled),
+.plan-review-card .plan-review-option.selected {
   border-color: #625b8c;
   color: #f0ecff;
   background: #34363b;
 }
 
-.plan-review-card .plan-review-options button strong {
+.plan-review-card .plan-review-option strong {
   font-size: 11.5px;
 }
 
-.plan-review-card .plan-review-options button small {
+.plan-review-card .plan-review-option small {
   color: #adafb6;
   font-size: 10.5px;
   line-height: 1.45;
@@ -5292,6 +5600,18 @@ select:focus-visible {
     padding-left: 14px;
   }
 
+  .background-task-popover {
+    left: 0;
+    width: min(calc(200% + 8px), calc(100vw - 28px));
+    transform: translate(0, 8px) scale(0.985);
+    transform-origin: bottom left;
+  }
+
+  .background-task-anchor:hover .background-task-popover,
+  .background-task-anchor:focus-within .background-task-popover {
+    transform: translate(0, 0) scale(1);
+  }
+
   .mode-status-stack {
     grid-template-columns: 1fr;
   }
@@ -5327,7 +5647,9 @@ select:focus-visible {
   .live-text,
   .subagent-row,
   .subagent-progress-dots i.running,
-  .todo-progress-anchor {
+  .todo-progress-anchor,
+  .background-task-anchor,
+  .background-task-running-dot {
     animation: none;
   }
 
@@ -5337,7 +5659,11 @@ select:focus-visible {
   .subagent-row,
   .todo-popover,
   .todo-progress-pill,
-  .todo-list-item {
+  .todo-list-item,
+  .background-task-popover,
+  .background-task-pill,
+  .background-task-item,
+  .background-task-chevron {
     transition: none;
   }
 }
@@ -6093,7 +6419,7 @@ input:focus-visible {
 .mode-status-actions button,
 .question-options > button,
 .interaction-card-actions button,
-.plan-review-options button,
+.plan-review-option,
 .approval-actions button,
 .dialog-secondary,
 .dialog-danger {
@@ -6108,7 +6434,7 @@ input:focus-visible {
 .message-actions button:hover,
 .mode-status-actions button:hover:not(:disabled),
 .interaction-card-actions button:hover:not(:disabled),
-.plan-review-options button:hover:not(:disabled),
+.plan-review-option:hover:not(.disabled),
 .approval-actions button:hover:not(:disabled),
 .dialog-secondary:hover:not(:disabled) {
   border-color: var(--line-strong);
@@ -6149,7 +6475,7 @@ input:focus-visible {
 }
 
 .mode-status-card.plan .mode-status-actions button,
-.plan-review-card .plan-review-options button,
+.plan-review-card .plan-review-option,
 .plan-review-card .interaction-card-actions button {
   border-color: var(--line);
   color: var(--text);
@@ -6157,11 +6483,26 @@ input:focus-visible {
 }
 
 .mode-status-card.plan .mode-status-actions button:hover:not(:disabled),
-.plan-review-card .plan-review-options button:hover:not(:disabled),
+.plan-review-card .plan-review-option:hover:not(.disabled),
+.plan-review-card .plan-review-option.selected,
 .plan-review-card .interaction-card-actions button:hover:not(:disabled) {
   border-color: var(--line-strong);
   color: var(--text);
   background: var(--surface-3);
+}
+
+.plan-review-card .plan-review-actions .interaction-primary {
+  border-color: var(--accent);
+  color: #ffffff;
+  background: var(--accent);
+}
+
+.plan-review-card
+  .plan-review-actions
+  .interaction-primary:hover:not(:disabled) {
+  border-color: var(--accent-2);
+  color: #ffffff;
+  background: var(--accent-2);
 }
 
 .question-other input,
@@ -6194,7 +6535,7 @@ input:focus-visible {
 .plan-review-card .plan-review-path,
 .plan-review-card .plan-review-options > span,
 .plan-review-card .plan-review-feedback > span,
-.plan-review-card .plan-review-options button small {
+.plan-review-card .plan-review-option small {
   color: var(--muted);
 }
 
