@@ -771,42 +771,52 @@ impl KimiCodeDesktopClient {
         Ok(subscriptions)
     }
 
-    pub async fn list_messages(
-        &self,
-        conversation_id: &str,
-        before_id: Option<String>,
-        page_size: Option<usize>,
-    ) -> Result<DesktopMessagePage, String> {
+    pub async fn list_messages(&self, conversation_id: &str) -> Result<DesktopMessagePage, String> {
         let messages = self
             .app
             .get(MESSAGE_LEGACY_SERVICE_ID)
             .map_err(|error| error.to_string())?;
-        let page = messages
-            .list(
-                conversation_id,
-                MessageListQuery {
-                    before_id,
-                    page_size,
-                    ..MessageListQuery::default()
-                },
-            )
-            .await;
+        let mut items = Vec::new();
+        let mut before_id = None;
 
-        match page {
-            Ok(MessagePageResponse { items, has_more }) => {
-                Ok(DesktopMessagePage { items, has_more })
+        loop {
+            let page = messages
+                .list(
+                    conversation_id,
+                    MessageListQuery {
+                        before_id,
+                        page_size: Some(100),
+                        ..MessageListQuery::default()
+                    },
+                )
+                .await;
+
+            match page {
+                Ok(MessagePageResponse {
+                    items: page_items,
+                    has_more,
+                }) => {
+                    before_id = page_items.last().map(|message| message.id.clone());
+                    items.extend(page_items);
+                    if !has_more || before_id.is_none() {
+                        return Ok(DesktopMessagePage {
+                            items,
+                            has_more: false,
+                        });
+                    }
+                }
+                Err(error)
+                    if error
+                        .downcast_ref::<Error2>()
+                        .is_some_and(|error| error.code == "session.not_found") =>
+                {
+                    return Ok(DesktopMessagePage {
+                        items: Vec::new(),
+                        has_more: false,
+                    });
+                }
+                Err(error) => return Err(error.to_string()),
             }
-            Err(error)
-                if error
-                    .downcast_ref::<Error2>()
-                    .is_some_and(|error| error.code == "session.not_found") =>
-            {
-                Ok(DesktopMessagePage {
-                    items: Vec::new(),
-                    has_more: false,
-                })
-            }
-            Err(error) => Err(error.to_string()),
         }
     }
 

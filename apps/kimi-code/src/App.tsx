@@ -138,7 +138,6 @@ import type {
   ToolUpdate,
 } from "./types";
 
-const HISTORY_PAGE_SIZE = 50;
 const MAX_PROMPT_ATTACHMENTS = 8;
 const MAX_PROMPT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_IMAGE_DIMENSION = 2048;
@@ -178,9 +177,7 @@ type RenderMessage = ProtocolMessage & {
 interface ConversationHistory {
   conversationId: string;
   items: ProtocolMessage[];
-  hasMore: boolean;
   loading: boolean;
-  loadingMore: boolean;
   error?: string;
 }
 
@@ -512,14 +509,11 @@ function conciseError(error: unknown): string {
   return cleaned.length > 300 ? `${cleaned.slice(0, 297)}...` : cleaned;
 }
 
-function fetchMessagePage(
+function fetchConversationHistory(
   conversationId: string,
-  beforeId?: string,
 ): Promise<MessagePage> {
   return invoke<MessagePage>("list_conversation_messages", {
     sessionId: conversationId,
-    beforeId,
-    pageSize: HISTORY_PAGE_SIZE,
   });
 }
 
@@ -1691,11 +1685,9 @@ export default function App() {
     setHistory({
       conversationId,
       items: [],
-      hasMore: false,
       loading: true,
-      loadingMore: false,
     });
-    void fetchMessagePage(conversationId)
+    void fetchConversationHistory(conversationId)
       .then((page) => {
         if (
           !active ||
@@ -1706,9 +1698,7 @@ export default function App() {
         setHistory({
           conversationId,
           items: [...page.items].reverse(),
-          hasMore: page.has_more,
           loading: false,
-          loadingMore: false,
         });
         setInFlightTurns((current) => {
           const turn = current[conversationId];
@@ -1734,9 +1724,7 @@ export default function App() {
         setHistory({
           conversationId,
           items: [],
-          hasMore: false,
           loading: false,
-          loadingMore: false,
           error: conciseError(error),
         });
       });
@@ -2280,7 +2268,7 @@ export default function App() {
     const request = (historyRequests.current[conversationId] ?? 0) + 1;
     historyRequests.current[conversationId] = request;
     try {
-      const page = await fetchMessagePage(conversationId);
+      const page = await fetchConversationHistory(conversationId);
       if (request !== historyRequests.current[conversationId]) return false;
       const items = [...page.items].reverse();
       const durationMs = completedTurn?.durationMs;
@@ -2301,9 +2289,7 @@ export default function App() {
           ? {
               conversationId,
               items,
-              hasMore: page.has_more,
               loading: false,
-              loadingMore: false,
             }
           : current,
       );
@@ -2313,7 +2299,7 @@ export default function App() {
       const message = conciseError(error);
       setHistory((current) =>
         current?.conversationId === conversationId
-          ? { ...current, loading: false, loadingMore: false, error: message }
+          ? { ...current, loading: false, error: message }
           : current,
       );
       showNotice(message);
@@ -2557,63 +2543,6 @@ export default function App() {
       if (handoffTimer !== undefined) window.clearTimeout(handoffTimer);
     };
   }, [activeConversation?.id, activeTurn?.status]);
-
-  const loadOlderMessages = async (): Promise<void> => {
-    if (
-      !activeHistory ||
-      activeHistory.loading ||
-      activeHistory.loadingMore ||
-      !activeHistory.hasMore ||
-      activeHistory.items.length === 0
-    ) {
-      return;
-    }
-
-    const conversationId = activeHistory.conversationId;
-    const beforeId = activeHistory.items[0].id;
-    const request = (historyRequests.current[conversationId] ?? 0) + 1;
-    historyRequests.current[conversationId] = request;
-    const scroll = scrollRef.current;
-    const previousHeight = scroll?.scrollHeight ?? 0;
-    setHistory((current) =>
-      current?.conversationId === conversationId
-        ? { ...current, loadingMore: true, error: undefined }
-        : current,
-    );
-
-    try {
-      const page = await fetchMessagePage(conversationId, beforeId);
-      if (request !== historyRequests.current[conversationId]) return;
-      const older = [...page.items].reverse();
-      setHistory((current) => {
-        if (current?.conversationId !== conversationId) return current;
-        const loadedIds = new Set(current.items.map((message) => message.id));
-        return {
-          ...current,
-          items: [
-            ...older.filter((message) => !loadedIds.has(message.id)),
-            ...current.items,
-          ],
-          hasMore: page.has_more,
-          loadingMore: false,
-        };
-      });
-      window.requestAnimationFrame(() => {
-        if (scroll) {
-          scroll.scrollTop += scroll.scrollHeight - previousHeight;
-        }
-      });
-    } catch (error) {
-      if (request !== historyRequests.current[conversationId]) return;
-      const message = conciseError(error);
-      setHistory((current) =>
-        current?.conversationId === conversationId
-          ? { ...current, loadingMore: false, error: message }
-          : current,
-      );
-      showNotice(message);
-    }
-  };
 
   const handleSubmit = (event: FormEvent): void => {
     event.preventDefault();
@@ -3009,23 +2938,6 @@ export default function App() {
                 />
               ) : (
                 <div className="message-stack" ref={messageStackRef}>
-                  {activeHistory?.hasMore && (
-                    <button
-                      type="button"
-                      className="history-load-more"
-                      disabled={activeHistory.loadingMore}
-                      onClick={() => void loadOlderMessages()}
-                    >
-                      {activeHistory.loadingMore ? (
-                        <>
-                          <span className="spinner" />
-                          正在加载…
-                        </>
-                      ) : (
-                        "加载更早消息"
-                      )}
-                    </button>
-                  )}
                   {activeHistory?.error && (
                     <div className="history-error">{activeHistory.error}</div>
                   )}
@@ -5219,7 +5131,27 @@ const HistoryTurnView = memo(function HistoryTurnView({
   copiedMessageId?: string;
   onCopy: (message: ProtocolMessage) => void;
 }) {
+  const [processOpen, setProcessOpen] = useState(false);
   const finalResponse = finalResponseMessage(turn.responses);
+  const processResponses = finalResponse
+    ? turn.responses.filter((message) => message.id !== finalResponse.id)
+    : [];
+  const hasCollapsedProcess =
+    finalResponse !== undefined && processResponses.length > 0;
+  const recordedDuration = finalResponse
+    ? messageDurations[finalResponse.id]
+    : undefined;
+  const inferredDuration =
+    finalResponse && turn.user
+      ? Date.parse(finalResponse.created_at) - Date.parse(turn.user.created_at)
+      : undefined;
+  const responseDuration =
+    recordedDuration ??
+    (inferredDuration !== undefined &&
+    Number.isFinite(inferredDuration) &&
+    inferredDuration >= 0
+      ? inferredDuration
+      : undefined);
 
   return (
     <section className="conversation-turn">
@@ -5234,15 +5166,60 @@ const HistoryTurnView = memo(function HistoryTurnView({
       {turn.responses.length > 0 && (
         <article className="message assistant-message">
           <div className="assistant-body">
-            {turn.responses.map((message) => (
-              <AssistantMessagePart
-                key={message.id}
-                message={message}
-                toolResults={toolResults}
-                subagentRuns={subagentRuns}
-                subagentLiveTurns={subagentLiveTurns}
-              />
-            ))}
+            {hasCollapsedProcess ? (
+              <>
+                <button
+                  type="button"
+                  className="turn-process-toggle"
+                  aria-expanded={processOpen}
+                  onClick={() => setProcessOpen((value) => !value)}
+                >
+                  <span>
+                    已处理
+                    {responseDuration !== undefined
+                      ? ` ${formatElapsedDuration(responseDuration)}`
+                      : ""}
+                  </span>
+                  {processOpen ? (
+                    <ChevronDown size={14} />
+                  ) : (
+                    <ChevronRight size={14} />
+                  )}
+                </button>
+                <Collapsible
+                  open={processOpen}
+                  className="turn-process-collapsible"
+                >
+                  <div className="turn-process-messages">
+                    {processResponses.map((message) => (
+                      <AssistantMessagePart
+                        key={message.id}
+                        message={message}
+                        toolResults={toolResults}
+                        subagentRuns={subagentRuns}
+                        subagentLiveTurns={subagentLiveTurns}
+                      />
+                    ))}
+                  </div>
+                </Collapsible>
+                <AssistantMessagePart
+                  message={finalResponse}
+                  toolResults={toolResults}
+                  subagentRuns={subagentRuns}
+                  subagentLiveTurns={subagentLiveTurns}
+                />
+              </>
+            ) : (
+              turn.responses.map((message) => (
+                <AssistantMessagePart
+                  key={message.id}
+                  message={message}
+                  toolResults={toolResults}
+                  subagentRuns={subagentRuns}
+                  subagentLiveTurns={subagentLiveTurns}
+                />
+              ))
+            )}
             {finalResponse && (
               <div className="message-actions">
                 <button onClick={() => onCopy(finalResponse)}>
@@ -5256,10 +5233,11 @@ const HistoryTurnView = memo(function HistoryTurnView({
               </div>
             )}
             {finalResponse &&
-              messageDurations[finalResponse.id] !== undefined && (
+              !hasCollapsedProcess &&
+              recordedDuration !== undefined && (
                 <AssistantResponseStatus
                   running={false}
-                  durationMs={messageDurations[finalResponse.id]}
+                  durationMs={recordedDuration}
                 />
               )}
           </div>

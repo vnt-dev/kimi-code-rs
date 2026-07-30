@@ -1536,33 +1536,6 @@ select:focus-visible {
   color: #c78383;
 }
 
-.history-load-more {
-  display: flex;
-  min-width: 126px;
-  height: 32px;
-  margin: -19px auto 32px;
-  padding: 0 14px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  color: #85858f;
-  background: #313338;
-  cursor: pointer;
-  font-size: 10px;
-}
-
-.history-load-more:hover:not(:disabled) {
-  border-color: rgba(139, 124, 246, 0.28);
-  color: #aaa1ed;
-}
-
-.history-load-more:disabled {
-  cursor: default;
-  opacity: 0.65;
-}
-
 .history-error {
   margin: -18px auto 28px;
   color: #c78383;
@@ -1762,6 +1735,34 @@ select:focus-visible {
 
 .assistant-message-part + .assistant-message-part {
   margin-top: 14px;
+}
+
+.turn-process-toggle {
+  display: flex;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 0 0 9px;
+  align-items: center;
+  gap: 3px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+}
+
+.turn-process-toggle:hover {
+  color: var(--text);
+}
+
+.turn-process-toggle svg {
+  flex: 0 0 auto;
+}
+
+.turn-process-messages {
+  padding-bottom: 14px;
 }
 
 .thinking-summary {
@@ -5419,8 +5420,7 @@ input:focus-visible {
 .toolbar-icon,
 .toolbar-select-trigger,
 .mode-toolbar-button,
-.connection-pill,
-.history-load-more {
+.connection-pill {
   border-color: transparent;
   color: var(--muted);
   background: transparent;
@@ -5431,8 +5431,7 @@ input:focus-visible {
 .toolbar-icon:hover,
 .toolbar-select-trigger:hover:not(:disabled),
 .toolbar-select.open .toolbar-select-trigger,
-.mode-toolbar-button:hover:not(:disabled),
-.history-load-more:hover:not(:disabled) {
+.mode-toolbar-button:hover:not(:disabled) {
   border-color: transparent;
   color: var(--text);
   background: var(--control-hover);
@@ -5793,6 +5792,7 @@ input:focus-visible {
 
 .history-loading,
 .history-summary-trigger,
+.turn-process-toggle,
 .live-turn-status,
 .live-text,
 .live-thinking,
