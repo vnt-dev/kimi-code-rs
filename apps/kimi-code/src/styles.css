@@ -2047,9 +2047,13 @@ select:focus-visible {
 
 .subagent-list {
   display: flex;
+  max-height: min(58vh, 560px);
   padding: 2px 8px 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
   flex-direction: column;
   gap: 4px;
+  scrollbar-gutter: stable;
 }
 
 .subagent-row {
@@ -2172,6 +2176,19 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.subagent-row-activity {
+  overflow: hidden;
+  color: #777384;
+  font-size: 8.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-row.running .subagent-row-activity {
+  color: #9186d3;
+}
+
 .subagent-row-state {
   flex: 0 0 auto;
   color: #696974;
@@ -2196,9 +2213,88 @@ select:focus-visible {
 
 .subagent-row-detail {
   display: flex;
-  padding: 0 7px 7px 30px;
+  padding: 1px 7px 7px 30px;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+}
+
+.subagent-live-timeline {
+  display: flex;
+  max-height: 320px;
+  padding: 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  flex-direction: column;
+  border: 1px solid rgba(139, 124, 246, 0.1);
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, rgba(139, 124, 246, 0.025), transparent 55%),
+    rgba(4, 4, 7, 0.28);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.subagent-live-step {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  animation: content-in 120ms ease-out both;
+}
+
+.subagent-live-step + .subagent-live-step {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.subagent-live-timeline .markdown-body {
+  color: #a19eaa;
+  font-size: 10px;
+  line-height: 1.65;
+}
+
+.subagent-live-timeline .thinking-block {
+  margin-bottom: 2px;
+}
+
+.subagent-live-timeline .live-tool-card {
+  border-radius: 7px;
+  background: rgba(13, 13, 18, 0.8);
+}
+
+.subagent-live-timeline .tool-card-summary {
+  padding: 7px 8px;
+}
+
+.subagent-live-placeholder {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #686572;
+  font-size: 9px;
+}
+
+.subagent-live-placeholder .spinner {
+  width: 10px;
+  height: 10px;
+}
+
+.subagent-result-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subagent-result-summary > span {
+  color: #5f5b69;
+  font-size: 8px;
+}
+
+.subagent-result-summary > pre {
+  width: 100%;
 }
 
 .subagent-row-detail pre {

@@ -131,6 +131,7 @@ const MAX_PROMPT_IMAGE_DIMENSION = 2048;
 const IMAGE_COMPRESSION_THRESHOLD = 4 * 1024 * 1024;
 const MAX_LIVE_TOOL_UPDATES = 50;
 const LIVE_TURN_HANDOFF_MS = 200;
+const MAIN_AGENT_ID = "main";
 const PROMPT_IMAGE_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -235,8 +236,11 @@ interface InFlightTurn {
 
 interface QueuedAgentChatEvent {
   sessionId: string;
+  agentId: string;
   event: AgentChatEvent;
 }
+
+type SubagentLiveTurns = Record<string, Record<string, InFlightTurn>>;
 
 type PromptAttachmentKind = "image" | "audio" | "video" | "file";
 
@@ -778,6 +782,62 @@ function reduceQueuedAgentChatEvents(
   return next;
 }
 
+function newSubagentTurn(event: AgentChatEvent): InFlightTurn {
+  return newInFlightTurn(
+    event.type === "turn.started" ? event.prompt ?? "" : "",
+    [],
+  );
+}
+
+function reduceQueuedSubagentChatEvents(
+  current: SubagentLiveTurns,
+  queue: QueuedAgentChatEvent[],
+): SubagentLiveTurns {
+  const grouped = new Map<
+    string,
+    {
+      sessionId: string;
+      agentId: string;
+      events: AgentChatEvent[];
+    }
+  >();
+  for (const queued of queue) {
+    const key = `${queued.sessionId}\u0000${queued.agentId}`;
+    const entry = grouped.get(key) ?? {
+      sessionId: queued.sessionId,
+      agentId: queued.agentId,
+      events: [],
+    };
+    appendQueuedAgentChatEvent(entry.events, queued.event);
+    grouped.set(key, entry);
+  }
+
+  let next = current;
+  for (const { sessionId, agentId, events } of grouped.values()) {
+    const sessionTurns = next[sessionId] ?? {};
+    const previous = sessionTurns[agentId];
+    let reduced = previous;
+    for (const event of events) {
+      if (
+        !reduced ||
+        (event.type === "turn.started" &&
+          reduced.turnId !== undefined &&
+          reduced.turnId !== event.turnId)
+      ) {
+        reduced = newSubagentTurn(event);
+      }
+      reduced = reduceAgentChatEvent(reduced, event);
+    }
+    if (!reduced || reduced === previous) continue;
+    if (next === current) next = { ...current };
+    next[sessionId] = {
+      ...sessionTurns,
+      [agentId]: reduced,
+    };
+  }
+  return next;
+}
+
 const CHAT_EVENT_TYPES = new Set([
   "turn.started",
   "turn.ended",
@@ -970,6 +1030,8 @@ export default function App() {
     {},
   );
   const [subagentRuns, setSubagentRuns] = useState<SessionSubagentRuns>({});
+  const [subagentLiveTurns, setSubagentLiveTurns] =
+    useState<SubagentLiveTurns>({});
   const [modeBusy, setModeBusy] = useState(false);
   const [removalTarget, setRemovalTarget] = useState<RemovalTarget>();
   const [removalBusy, setRemovalBusy] = useState(false);
@@ -1022,6 +1084,9 @@ export default function App() {
     : undefined;
   const activeSubagentRuns = activeConversation
     ? subagentRuns[activeConversation.id]
+    : undefined;
+  const activeSubagentLiveTurns = activeConversation
+    ? subagentLiveTurns[activeConversation.id]
     : undefined;
   const activeHistory =
     history?.conversationId === activeConversation?.id ? history : undefined;
@@ -1359,9 +1424,11 @@ export default function App() {
       "agent-event",
       (event) => {
         const payload = event.payload;
+        const isMainAgentEvent = payload.agentId === MAIN_AGENT_ID;
         if (isAgentChatEvent(payload.event)) {
           queuedAgentChatEvents.current.push({
             sessionId: payload.sessionId,
+            agentId: payload.agentId,
             event: payload.event,
           });
           if (agentChatEventFrame.current === undefined) {
@@ -1370,9 +1437,22 @@ export default function App() {
               const queue = queuedAgentChatEvents.current;
               queuedAgentChatEvents.current = [];
               if (queue.length > 0) {
-                setInFlightTurns((current) =>
-                  reduceQueuedAgentChatEvents(current, queue),
+                const mainEvents = queue.filter(
+                  (queued) => queued.agentId === MAIN_AGENT_ID,
                 );
+                const subagentEvents = queue.filter(
+                  (queued) => queued.agentId !== MAIN_AGENT_ID,
+                );
+                if (mainEvents.length > 0) {
+                  setInFlightTurns((current) =>
+                    reduceQueuedAgentChatEvents(current, mainEvents),
+                  );
+                }
+                if (subagentEvents.length > 0) {
+                  setSubagentLiveTurns((current) =>
+                    reduceQueuedSubagentChatEvents(current, subagentEvents),
+                  );
+                }
               }
             });
           }
@@ -1387,7 +1467,10 @@ export default function App() {
             ),
           );
         }
-        if (payload.event.type.startsWith("compaction.")) {
+        if (
+          isMainAgentEvent &&
+          payload.event.type.startsWith("compaction.")
+        ) {
           const phase = payload.event.type.slice("compaction.".length);
           if (
             phase === "started" ||
@@ -1424,7 +1507,7 @@ export default function App() {
             }));
           }
         }
-        if (payload.event.type === "todo.updated") {
+        if (isMainAgentEvent && payload.event.type === "todo.updated") {
           const todos = readTodoItems(payload.event.todos);
           if (todos) {
             setSessionTodos((current) => ({
@@ -1435,6 +1518,7 @@ export default function App() {
         }
         if (
           payload.event.type === "agent.status.updated" &&
+          isMainAgentEvent &&
           typeof payload.event.planMode === "boolean"
         ) {
           void createAgentClient({
@@ -1452,6 +1536,7 @@ export default function App() {
         }
         if (
           payload.event.type === "agent.status.updated" &&
+          isMainAgentEvent &&
           payload.event.usage &&
           typeof payload.event.usage === "object"
         ) {
@@ -1461,8 +1546,9 @@ export default function App() {
           }));
         }
         if (
-          payload.event.type === "agent.status.updated" ||
-          payload.event.type === "context.spliced"
+          isMainAgentEvent &&
+          (payload.event.type === "agent.status.updated" ||
+            payload.event.type === "context.spliced")
         ) {
           void invoke<ContextUsage | null>("conversation_context_usage", {
             sessionId: payload.sessionId,
@@ -1679,6 +1765,7 @@ export default function App() {
     setPlans((current) => omitSessionKeys(current, ids));
     setSessionTodos((current) => omitSessionKeys(current, ids));
     setSubagentRuns((current) => omitSessionKeys(current, ids));
+    setSubagentLiveTurns((current) => omitSessionKeys(current, ids));
     setInFlightTurns((current) => omitSessionKeys(current, ids));
     setHistory((current) =>
       current && ids.has(current.conversationId) ? undefined : current,
@@ -2061,6 +2148,7 @@ export default function App() {
       setAgentUsages({});
       setSessionTodos({});
       setSubagentRuns({});
+      setSubagentLiveTurns({});
       setMessageDurations({});
       setProfileOpen(false);
       showNotice("已退出登录");
@@ -2815,6 +2903,7 @@ export default function App() {
                       message={message}
                       toolResults={historyToolPresentation.results}
                       subagentRuns={activeSubagentRuns}
+                      subagentLiveTurns={activeSubagentLiveTurns}
                       durationMs={
                         messageDurations[activeConversation.id]?.[message.id]
                       }
@@ -2826,6 +2915,7 @@ export default function App() {
                     <LiveTurnView
                       turn={activeTurn}
                       subagentRuns={activeSubagentRuns}
+                      subagentLiveTurns={activeSubagentLiveTurns}
                     />
                   )}
                   {activeCompaction && (
@@ -4256,9 +4346,11 @@ function Welcome({
 function LiveTurnView({
   turn,
   subagentRuns,
+  subagentLiveTurns,
 }: {
   turn: InFlightTurn;
   subagentRuns?: SubagentRunsByTool;
+  subagentLiveTurns?: Record<string, InFlightTurn>;
 }) {
   const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
   const streaming = isTurnRunning(turn);
@@ -4329,6 +4421,8 @@ function LiveTurnView({
                   <LiveToolBlock
                     tool={block}
                     subagents={subagentRuns?.[block.toolCallId] ?? []}
+                    subagentRuns={subagentRuns}
+                    subagentLiveTurns={subagentLiveTurns}
                     key={block.toolCallId}
                   />
                 );
@@ -4476,9 +4570,13 @@ function LiveAssistantContent({
 function LiveToolBlock({
   tool,
   subagents,
+  subagentRuns,
+  subagentLiveTurns,
 }: {
   tool: Extract<LiveBlock, { kind: "tool" }>;
   subagents: readonly SubagentRun[];
+  subagentRuns?: SubagentRunsByTool;
+  subagentLiveTurns?: Record<string, InFlightTurn>;
 }) {
   const active = tool.status === "streaming" || tool.status === "running";
   const [open, setOpen] = useState(active);
@@ -4515,7 +4613,12 @@ function LiveToolBlock({
         <small>{liveToolStatusLabel(tool.status)}</small>
       </button>
       {displayedSubagents.length > 0 && (
-        <SubagentPanel subagents={displayedSubagents} parentActive={active} />
+        <SubagentPanel
+          subagents={displayedSubagents}
+          liveTurns={subagentLiveTurns}
+          nestedRuns={subagentRuns}
+          parentActive={active}
+        />
       )}
       <Collapsible className="tool-card-collapse" open={open}>
         <div className="live-tool-detail">
@@ -4619,9 +4722,13 @@ function SubagentStatusIcon({ status }: { status: DisplaySubagentStatus }) {
 
 function SubagentPanel({
   subagents,
+  liveTurns,
+  nestedRuns,
   parentActive,
 }: {
   subagents: readonly SubagentRun[];
+  liveTurns?: Record<string, InFlightTurn>;
+  nestedRuns?: SubagentRunsByTool;
   parentActive: boolean;
 }) {
   const statuses = subagents.map((subagent) =>
@@ -4680,6 +4787,9 @@ function SubagentPanel({
               key={subagent.subagentId}
               subagent={subagent}
               status={statuses[index]}
+              liveTurn={liveTurns?.[subagent.subagentId]}
+              liveTurns={liveTurns}
+              nestedRuns={nestedRuns}
             />
           ))}
         </div>
@@ -4691,19 +4801,35 @@ function SubagentPanel({
 function SubagentRow({
   subagent,
   status,
+  liveTurn,
+  liveTurns,
+  nestedRuns,
 }: {
   subagent: SubagentRun;
   status: DisplaySubagentStatus;
+  liveTurn?: InFlightTurn;
+  liveTurns?: Record<string, InFlightTurn>;
+  nestedRuns?: SubagentRunsByTool;
 }) {
   const hasDetail =
+    liveTurn !== undefined ||
     Boolean(subagent.resultSummary) ||
     Boolean(subagent.error) ||
     subagent.usage !== undefined ||
     subagent.contextTokens !== undefined;
-  const [open, setOpen] = useState(false);
+  const active =
+    status === "queued" ||
+    status === "running" ||
+    status === "suspended";
+  const [open, setOpen] = useState(active);
+  const userToggled = useRef(false);
+  useEffect(() => {
+    if (!userToggled.current) setOpen(active);
+  }, [active]);
   const tokenTotal = subagent.usage
     ? inputTokenUsage(subagent.usage) + subagent.usage.output
     : undefined;
+  const activity = subagentLiveActivity(liveTurn);
   const shortId =
     subagent.subagentId.length > 18
       ? `${subagent.subagentId.slice(0, 8)}…${subagent.subagentId.slice(-5)}`
@@ -4716,7 +4842,11 @@ function SubagentRow({
         className="subagent-row-summary"
         aria-expanded={hasDetail ? open : undefined}
         disabled={!hasDetail}
-        onClick={() => hasDetail && setOpen((value) => !value)}
+        onClick={() => {
+          if (!hasDetail) return;
+          userToggled.current = true;
+          setOpen((value) => !value);
+        }}
       >
         <SubagentStatusIcon status={status} />
         <span className="subagent-row-copy">
@@ -4731,6 +4861,7 @@ function SubagentRow({
             <span title={subagent.subagentId}>{shortId}</span>
             {subagent.runInBackground && " · 后台"}
           </small>
+          {activity && <span className="subagent-row-activity">{activity}</span>}
         </span>
         <span className={`subagent-row-state ${status}`}>
           {subagentStatusLabel(status)}
@@ -4740,13 +4871,26 @@ function SubagentRow({
       </button>
       <Collapsible className="subagent-row-collapse" open={open && hasDetail}>
         <div className="subagent-row-detail">
+          {liveTurn && (
+            <SubagentLiveTimeline
+              turn={liveTurn}
+              liveTurns={liveTurns}
+              nestedRuns={nestedRuns}
+            />
+          )}
           {subagent.resultSummary && (
-            <pre>{subagent.resultSummary}</pre>
+            <section className="subagent-result-summary">
+              <span>最终摘要</span>
+              <pre>{subagent.resultSummary}</pre>
+            </section>
           )}
           {subagent.error && (
-            <pre className={status === "failed" ? "error" : ""}>
-              {subagent.error}
-            </pre>
+            <section className="subagent-result-summary">
+              <span>{status === "failed" ? "错误" : "状态说明"}</span>
+              <pre className={status === "failed" ? "error" : ""}>
+                {subagent.error}
+              </pre>
+            </section>
           )}
           {(tokenTotal !== undefined ||
             subagent.contextTokens !== undefined) && (
@@ -4763,6 +4907,120 @@ function SubagentRow({
           )}
         </div>
       </Collapsible>
+    </div>
+  );
+}
+
+function subagentLiveActivity(turn?: InFlightTurn): string | undefined {
+  if (!turn) return undefined;
+  for (let stepIndex = turn.steps.length - 1; stepIndex >= 0; stepIndex -= 1) {
+    const blocks = turn.steps[stepIndex].blocks;
+    for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex -= 1) {
+      const block = blocks[blockIndex];
+      if (block.kind === "tool") {
+        return block.status === "running" || block.status === "streaming"
+          ? `正在执行 ${block.name ?? "工具"}`
+          : `${block.name ?? "工具"}已结束`;
+      }
+      if (block.kind === "thinking") return "正在思考";
+      if (
+        block.kind === "text" ||
+        (block.kind === "content" && block.content.type === "text")
+      ) {
+        return isTurnRunning(turn) ? "正在生成回复" : "回复已生成";
+      }
+    }
+  }
+  return isTurnRunning(turn) ? "正在启动" : "任务已结束";
+}
+
+function SubagentLiveTimeline({
+  turn,
+  liveTurns,
+  nestedRuns,
+}: {
+  turn: InFlightTurn;
+  liveTurns?: Record<string, InFlightTurn>;
+  nestedRuns?: SubagentRunsByTool;
+}) {
+  const scroll = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
+  const streaming = isTurnRunning(turn);
+  const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
+
+  useLayoutEffect(() => {
+    if (!followLatest.current || !scroll.current) return;
+    scroll.current.scrollTop = scroll.current.scrollHeight;
+  }, [turn]);
+
+  return (
+    <div
+      className="subagent-live-timeline"
+      ref={scroll}
+      onScroll={(event) => {
+        const target = event.currentTarget;
+        followLatest.current =
+          target.scrollHeight - target.scrollTop - target.clientHeight <= 24;
+      }}
+    >
+      {turn.steps.map((step) => (
+        <section
+          className={`subagent-live-step ${step.status}`}
+          key={step.stepId ?? step.step}
+        >
+          {step.blocks.map((block, index) => {
+            if (block.kind === "text") {
+              return (
+                <div
+                  className="markdown-body live-text"
+                  key={`${block.kind}-${index}`}
+                >
+                  <StreamingMarkdownMessage
+                    active={streaming && step.status === "running"}
+                    content={block.content}
+                  />
+                </div>
+              );
+            }
+            if (block.kind === "thinking") {
+              return (
+                <LiveThinkingBlock
+                  content={block.content}
+                  key={`${block.kind}-${index}`}
+                />
+              );
+            }
+            if (block.kind === "content") {
+              return (
+                <LiveAssistantContent
+                  active={streaming && step.status === "running"}
+                  content={block.content}
+                  key={`${block.kind}-${index}`}
+                />
+              );
+            }
+            return (
+              <LiveToolBlock
+                tool={block}
+                subagents={nestedRuns?.[block.toolCallId] ?? []}
+                subagentRuns={nestedRuns}
+                subagentLiveTurns={liveTurns}
+                key={block.toolCallId}
+              />
+            );
+          })}
+          {step.interruption && (
+            <div className="live-step-interruption">{step.interruption}</div>
+          )}
+        </section>
+      ))}
+      {!hasBlocks && streaming && (
+        <div className="subagent-live-placeholder">
+          <span className="spinner" />
+          等待子代理输出…
+        </div>
+      )}
+      {turn.error && <div className="live-turn-error">{turn.error}</div>}
     </div>
   );
 }
@@ -4825,6 +5083,7 @@ const MessageView = memo(function MessageView({
   message,
   toolResults,
   subagentRuns,
+  subagentLiveTurns,
   durationMs,
   copied,
   onCopy,
@@ -4832,6 +5091,7 @@ const MessageView = memo(function MessageView({
   message: RenderMessage;
   toolResults: Map<string, ToolResultContent>;
   subagentRuns?: SubagentRunsByTool;
+  subagentLiveTurns?: Record<string, InFlightTurn>;
   durationMs?: number;
   copied: boolean;
   onCopy: (message: ProtocolMessage) => void;
@@ -4881,6 +5141,7 @@ const MessageView = memo(function MessageView({
             parts={structured}
             toolResults={toolResults}
             subagentRuns={subagentRuns}
+            subagentLiveTurns={subagentLiveTurns}
           />
         </div>
       </article>
@@ -4940,6 +5201,7 @@ const MessageView = memo(function MessageView({
             parts={structured}
             toolResults={toolResults}
             subagentRuns={subagentRuns}
+            subagentLiveTurns={subagentLiveTurns}
           />
         </div>
         {message.status !== "streaming" &&
@@ -5111,10 +5373,14 @@ function HistoryToolCard({
   tool,
   result,
   subagents,
+  subagentRuns,
+  subagentLiveTurns,
 }: {
   tool: Extract<MessageContent, { type: "tool_use" }>;
   result?: ToolResultContent;
   subagents: readonly SubagentRun[];
+  subagentRuns?: SubagentRunsByTool;
+  subagentLiveTurns?: Record<string, InFlightTurn>;
 }) {
   const [open, setOpen] = useState(false);
   const status = result
@@ -5145,6 +5411,8 @@ function HistoryToolCard({
       {displayedSubagents.length > 0 && (
         <SubagentPanel
           subagents={displayedSubagents}
+          liveTurns={subagentLiveTurns}
+          nestedRuns={subagentRuns}
           parentActive={false}
         />
       )}
@@ -5172,10 +5440,12 @@ function StructuredMessageContent({
   parts,
   toolResults,
   subagentRuns,
+  subagentLiveTurns,
 }: {
   parts: MessageContent[];
   toolResults: Map<string, ToolResultContent>;
   subagentRuns?: SubagentRunsByTool;
+  subagentLiveTurns?: Record<string, InFlightTurn>;
 }) {
   if (parts.length === 0) return null;
   return (
@@ -5189,6 +5459,8 @@ function StructuredMessageContent({
                 tool={part}
                 result={result}
                 subagents={subagentRuns?.[part.tool_call_id] ?? []}
+                subagentRuns={subagentRuns}
+                subagentLiveTurns={subagentLiveTurns}
                 key={`${part.tool_call_id}-${index}`}
               />
             );

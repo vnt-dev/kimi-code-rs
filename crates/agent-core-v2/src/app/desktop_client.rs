@@ -4,9 +4,10 @@
 //! configuration, streamed output, and host-mediated interactions.
 
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -29,7 +30,7 @@ use crate::{
     _base::{
         di::{
             lifecycle::{DisposableHandle, DisposableStore},
-            scope::Scope,
+            scope::{Scope, ScopeHandle},
         },
         errors::errors::Error2,
     },
@@ -678,7 +679,7 @@ impl KimiCodeDesktopClient {
         &self,
         session_id: &str,
         agent_id: &str,
-        on_event: Arc<dyn Fn(Value) + Send + Sync>,
+        on_event: Arc<dyn Fn(String, Value) + Send + Sync>,
         on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
     ) -> Result<DisposableHandle, String> {
         let sessions = self
@@ -701,22 +702,53 @@ impl KimiCodeDesktopClient {
         };
 
         let subscriptions = Arc::new(DisposableStore::new());
-        let event_bus = agent
-            .get(EVENT_BUS_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let on_agent_event = Arc::clone(&on_event);
-        subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
-            on_agent_event(event.clone().into_value());
-        })));
+        if agent_id == MAIN_AGENT_ID {
+            let lifecycle = session
+                .get(AGENT_LIFECYCLE_SERVICE_ID)
+                .map_err(|error| error.to_string())?;
+            let attached = Arc::new(Mutex::new(HashSet::new()));
+            let subscriptions_for_create = Arc::clone(&subscriptions);
+            let attached_for_create = Arc::clone(&attached);
+            let on_event_for_create = Arc::clone(&on_event);
+            subscriptions.add(lifecycle.on_did_create().subscribe(move |handle| {
+                let _ = attach_desktop_agent_events(
+                    &subscriptions_for_create,
+                    &attached_for_create,
+                    handle,
+                    &on_event_for_create,
+                );
+            }));
+            let attached_for_dispose = Arc::clone(&attached);
+            subscriptions.add(
+                lifecycle
+                    .on_did_dispose()
+                    .subscribe(move |disposed_agent_id| {
+                        attached_for_dispose
+                            .lock()
+                            .unwrap()
+                            .remove(disposed_agent_id);
+                    }),
+            );
+            for handle in lifecycle.list(None) {
+                attach_desktop_agent_events(&subscriptions, &attached, &handle, &on_event)?;
+            }
+        } else {
+            let attached = Mutex::new(HashSet::new());
+            attach_desktop_agent_events(&subscriptions, &attached, &agent, &on_event)?;
+        }
 
         let todo = session
             .get(SESSION_TODO_SERVICE_ID)
             .map_err(|error| error.to_string())?;
+        let todo_agent_id = agent_id.to_owned();
         subscriptions.add(todo.on_did_change().subscribe(move |todos| {
-            on_event(serde_json::json!({
-                "type": "todo.updated",
-                "todos": todos,
-            }));
+            on_event(
+                todo_agent_id.clone(),
+                serde_json::json!({
+                    "type": "todo.updated",
+                    "todos": todos,
+                }),
+            );
         }));
 
         let interaction = session
@@ -1059,6 +1091,33 @@ fn context_usage_from_size(context: ContextSize, max_context_tokens: u64) -> Des
     }
 }
 
+fn attach_desktop_agent_events(
+    subscriptions: &DisposableStore,
+    attached: &Mutex<HashSet<String>>,
+    agent: &ScopeHandle,
+    on_event: &Arc<dyn Fn(String, Value) + Send + Sync>,
+) -> Result<(), String> {
+    let agent_id = agent.id().to_owned();
+    {
+        let mut attached = attached.lock().unwrap();
+        if !attached.insert(agent_id.clone()) {
+            return Ok(());
+        }
+    }
+    let event_bus = match agent.get(EVENT_BUS_SERVICE_ID) {
+        Ok(event_bus) => event_bus,
+        Err(error) => {
+            attached.lock().unwrap().remove(&agent_id);
+            return Err(error.to_string());
+        }
+    };
+    let on_event = Arc::clone(on_event);
+    subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
+        on_event(agent_id.clone(), event.clone().into_value());
+    })));
+    Ok(())
+}
+
 fn map_desktop_interactions(interactions: Vec<Interaction>) -> Vec<DesktopInteraction> {
     interactions
         .into_iter()
@@ -1078,6 +1137,8 @@ fn map_desktop_interactions(interactions: Vec<Interaction>) -> Vec<DesktopIntera
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use serde_json::json;
 
     use super::{
@@ -1089,7 +1150,12 @@ mod tests {
             context_size::ContextSize, loop_::AssistantDeltaEvent,
             permission_policy::PermissionMode,
         },
+        app::{
+            event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID},
+            session_lifecycle::SESSION_LIFECYCLE_SERVICE_ID,
+        },
         kosong::model::ModelCatalogItem,
+        session::agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, CreateAgentOptions, MAIN_AGENT_ID},
     };
 
     #[test]
@@ -1205,6 +1271,69 @@ mod tests {
                 .is_some_and(|models| models.contains_key("kimi-code/second"))
         );
 
+        drop(client);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn main_subscription_multiplexes_new_subagent_events() {
+        let root = std::env::temp_dir().join(format!(
+            "kimi-desktop-subagent-events-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let home = root.join("home");
+        let work_dir = root.join("workspace");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let client = KimiCodeDesktopClient::new(&home, "test").unwrap();
+        client
+            .configure_models(&[managed_model("first")])
+            .await
+            .unwrap();
+        let prepared = client
+            .prepare_session(DesktopPrepareSessionRequest {
+                session_id: None,
+                work_dir: work_dir.to_string_lossy().into_owned(),
+                model: Some("kimi-code/first".into()),
+                thinking: Some("high".into()),
+                permission: Some(PermissionMode::Yolo),
+            })
+            .await
+            .unwrap();
+        let received = Arc::new(Mutex::new(Vec::<(String, serde_json::Value)>::new()));
+        let received_for_events = Arc::clone(&received);
+        let subscription = client
+            .subscribe_agent_events(
+                &prepared.session_id,
+                MAIN_AGENT_ID,
+                Arc::new(move |agent_id, event| {
+                    received_for_events.lock().unwrap().push((agent_id, event));
+                }),
+                Arc::new(|_| {}),
+            )
+            .await
+            .unwrap();
+
+        let sessions = client.app.get(SESSION_LIFECYCLE_SERVICE_ID).unwrap();
+        let session = sessions.get(&prepared.session_id).unwrap();
+        let lifecycle = session.get(AGENT_LIFECYCLE_SERVICE_ID).unwrap();
+        let child = lifecycle
+            .create(CreateAgentOptions {
+                agent_id: Some("child-live".into()),
+                ..CreateAgentOptions::default()
+            })
+            .await
+            .unwrap();
+        child
+            .get(EVENT_BUS_SERVICE_ID)
+            .unwrap()
+            .publish(DomainEvent::new("test.child-live", serde_json::Map::new()));
+
+        assert!(received.lock().unwrap().iter().any(|(agent_id, event)| {
+            agent_id == "child-live" && event["type"] == "test.child-live"
+        }));
+
+        subscription.dispose().unwrap();
         drop(client);
         let _ = std::fs::remove_dir_all(root);
     }

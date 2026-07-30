@@ -215,7 +215,6 @@ async fn subscribe_agent_events(
         .to_string();
     let app_for_event = app.clone();
     let session_for_event = session_id.clone();
-    let agent_for_event = agent_id.clone();
     let app_for_interactions = app.clone();
     let session_for_interactions = session_id.clone();
     let subscription = state
@@ -223,12 +222,12 @@ async fn subscribe_agent_events(
         .subscribe_agent_events(
             &session_id,
             &agent_id,
-            Arc::new(move |event| {
+            Arc::new(move |event_agent_id, event| {
                 let _ = app_for_event.emit(
                     "agent-event",
                     AgentEvent {
                         session_id: session_for_event.clone(),
-                        agent_id: agent_for_event.clone(),
+                        agent_id: event_agent_id,
                         event,
                     },
                 );
