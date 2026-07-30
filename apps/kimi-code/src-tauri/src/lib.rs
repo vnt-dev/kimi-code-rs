@@ -280,6 +280,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let client = KimiCodeDesktopClient::bootstrap(env!("CARGO_PKG_VERSION"))
                 .map_err(|error| format!("failed to initialize Kimi Code agent core: {error}"))?;

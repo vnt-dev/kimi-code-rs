@@ -3,7 +3,7 @@ name: Release Windows
 on:
   push:
     tags:
-      - "*"
+      - "v*"
 
 permissions:
   contents: write
@@ -36,10 +36,20 @@ jobs:
         working-directory: apps/kimi-code
         run: pnpm install --frozen-lockfile
 
+      - name: Verify tag matches app version
+        shell: pwsh
+        run: |
+          $config = Get-Content apps/kimi-code/src-tauri/tauri.conf.json | ConvertFrom-Json
+          $expectedTag = "v$($config.version)"
+          if ("${{ github.ref_name }}" -ne $expectedTag) {
+            throw "Tag ${{ github.ref_name }} does not match app version $expectedTag"
+          }
+
       - name: Build and publish Kimi Code
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           projectPath: apps/kimi-code
           tagName: ${{ github.ref_name }}

@@ -6885,6 +6885,7 @@ input:focus-visible {
 }
 
 .settings-dialog {
+  position: relative;
   display: flex;
   width: min(760px, calc(100vw - 32px));
   height: min(680px, calc(100vh - 64px));
@@ -6898,6 +6899,44 @@ input:focus-visible {
   box-shadow: var(--dialog-shadow);
   outline: none;
   animation: settings-dialog-in 180ms ease-out;
+}
+
+.settings-toast {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  z-index: 1;
+  display: flex;
+  max-width: calc(100% - 40px);
+  min-height: 38px;
+  padding: 9px 10px 9px 12px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
+  font-size: 13px;
+}
+
+.settings-toast button {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-toast button:hover {
+  color: var(--text);
+  background: var(--control-hover);
 }
 
 .settings-dialog-header {
@@ -7043,6 +7082,88 @@ input:focus-visible {
   color: var(--text);
   background: var(--segment-active);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+}
+
+.settings-version {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.settings-version-number {
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-update-button {
+  display: inline-flex;
+  min-height: 32px;
+  padding: 0 12px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--segment-surface);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-update-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--control-hover);
+}
+
+.settings-update-button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.settings-update-button .spinning {
+  animation: settings-update-spin 800ms linear infinite;
+}
+
+.settings-update-status {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.settings-update-status p {
+  max-height: 180px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  overflow-y: auto;
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--control-hover);
+  white-space: pre-wrap;
+}
+
+.settings-update-progress {
+  height: 4px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.settings-update-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 160ms ease;
+}
+
+@keyframes settings-update-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes settings-fade-in {

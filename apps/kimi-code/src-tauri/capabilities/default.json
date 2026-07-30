@@ -11,6 +11,8 @@
     "core:window:allow-toggle-maximize",
     "dialog:allow-open",
     "opener:allow-open-url",
-    "opener:allow-default-urls"
+    "opener:allow-default-urls",
+    "process:allow-restart",
+    "updater:default"
   ]
 }

@@ -4045,6 +4045,7 @@ export default function App() {
 
       {settingsOpen && (
         <SettingsDialog
+          appVersion={appVersion}
           colorScheme={colorScheme}
           onColorSchemeChange={updateColorScheme}
           onClose={closeSettings}

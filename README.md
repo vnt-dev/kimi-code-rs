@@ -89,6 +89,41 @@ pnpm tauri build
 Installers and bundles are written under `target/release/bundle` when Cargo
 uses the workspace's default target directory.
 
+## Releasing and application updates
+
+The desktop client checks the latest GitHub Release through Tauri Updater. The
+release workflow builds signed Windows installers and uploads `latest.json`
+when a `v*` tag is pushed.
+
+The updater signing private key is generated locally at
+`.tauri/kimi-code.key`. This directory is ignored by Git. Back up the key in a
+secure location: losing it prevents existing installations from accepting
+future updates.
+
+Before the first release, add the private key to the repository's GitHub
+Actions secrets:
+
+```powershell
+Get-Content .tauri\kimi-code.key -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY
+```
+
+For every release, keep the version in these files synchronized:
+
+- `apps/kimi-code/package.json`
+- `apps/kimi-code/src-tauri/Cargo.toml`
+- `apps/kimi-code/src-tauri/tauri.conf.json`
+
+Then commit the version change and push the matching tag:
+
+```powershell
+git tag v0.1.3
+git push origin v0.1.3
+```
+
+The workflow rejects a tag that does not match `tauri.conf.json`. Clients
+without the updater feature must install the first updater-enabled release
+manually; application updates work automatically after that.
+
 ## Development
 
 Build the frontend:
