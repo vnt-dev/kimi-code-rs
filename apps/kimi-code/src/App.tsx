@@ -4152,7 +4152,6 @@ function PlanReviewCard({
           <small>计划已完成</small>
           <strong>审核计划并选择下一步</strong>
         </div>
-        <span className="approval-tool">{payload.toolName}</span>
       </div>
       <div className="plan-review-content">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{display.plan}</ReactMarkdown>
