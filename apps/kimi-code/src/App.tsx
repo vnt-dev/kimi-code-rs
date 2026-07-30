@@ -83,6 +83,7 @@ import {
   thinkingLevelDescription,
   thinkingLevelsForModel,
 } from "./modelControls";
+import { resolveMarkdownExternalUrl } from "./markdownLinks";
 import {
   isSubagentEvent,
   mergeSessionSubagentEvent,
@@ -4129,7 +4130,7 @@ function PlanReviewCard({
         </div>
       </div>
       <div className="plan-review-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{display.plan}</ReactMarkdown>
+        <MarkdownMessage content={display.plan} />
       </div>
       {display.path && <code className="plan-review-path">{display.path}</code>}
       {options.length > 0 && (
@@ -5531,9 +5532,26 @@ const MarkdownMessage = memo(function MarkdownMessage({
             </div>
           );
         },
-        a({ children, ...props }) {
+        a({ children, href, ...props }) {
+          const externalUrl = resolveMarkdownExternalUrl(href);
           return (
-            <a {...props} target="_blank" rel="noreferrer">
+            <a
+              {...props}
+              href={externalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(event) => {
+                if (!externalUrl) {
+                  event.preventDefault();
+                  return;
+                }
+                if (!isTauri()) return;
+                event.preventDefault();
+                void openUrl(externalUrl).catch((error) => {
+                  console.error("failed to open Markdown link", error);
+                });
+              }}
+            >
               {children}
             </a>
           );
