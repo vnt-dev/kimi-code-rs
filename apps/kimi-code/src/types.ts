@@ -230,6 +230,11 @@ export type AgentPromptPart = Extract<
 
 export type AgentChatEvent =
   | {
+      type: "prompt.steered";
+      activePromptId: string;
+      promptIds: string[];
+    }
+  | {
       type: "turn.started";
       turnId: number;
       origin: unknown;

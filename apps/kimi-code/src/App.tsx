@@ -5,6 +5,7 @@ import {
   type MouseEvent,
   type ClipboardEvent,
   type ChangeEvent,
+  Fragment,
   type ReactNode,
   isValidElement,
   memo,
@@ -72,6 +73,7 @@ import {
   removeWorkspace,
   setDefaultModel,
   subscribeAgentEvents,
+  type AgentPromptSubmitStatus,
   unsubscribeAgentEvents,
 } from "./agentRpc";
 import {
@@ -249,6 +251,7 @@ interface LiveStep {
 interface InFlightTurn {
   prompt: string;
   attachments: readonly PromptAttachment[];
+  steeredPrompts: readonly LiveSteeredPrompt[];
   createdAt: string;
   turnId?: number;
   status: LiveTurnStatus;
@@ -276,6 +279,21 @@ interface PromptAttachment {
   fileId?: string;
   mediaType: string;
   size: number;
+}
+
+interface QueuedPrompt {
+  id: string;
+  text: string;
+  attachments: readonly PromptAttachment[];
+  createdAt: string;
+  steering?: boolean;
+}
+
+interface LiveSteeredPrompt {
+  promptId: string;
+  message?: QueuedPrompt;
+  anchorStepKey?: string;
+  afterBlockIndex?: number;
 }
 
 interface UploadedFileMeta {
@@ -380,6 +398,48 @@ async function preparePromptAttachment(file: File): Promise<PromptAttachment> {
     size: payload.size,
     kind,
   };
+}
+
+function buildAgentPromptInput(
+  text: string,
+  attachments: readonly PromptAttachment[],
+): AgentPromptPart[] {
+  return [
+    ...(text ? [{ type: "text" as const, text }] : []),
+    ...attachments.map((attachment): AgentPromptPart => {
+      switch (attachment.kind) {
+        case "image":
+          return {
+            type: "image_url",
+            imageUrl: { url: attachment.dataUrl!, id: attachment.id },
+          };
+        case "audio":
+          return {
+            type: "audio_url",
+            audioUrl: { url: attachment.dataUrl!, id: attachment.id },
+          };
+        case "video":
+          return {
+            type: "video_url",
+            videoUrl: { url: attachment.dataUrl!, id: attachment.id },
+          };
+        case "file":
+          return {
+            type: "file",
+            file_id: attachment.fileId!,
+            name: attachment.name,
+            media_type: attachment.mediaType,
+            size: attachment.size,
+          };
+      }
+    }),
+  ];
+}
+
+function newQueuedPromptId(): string {
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 interface AgentSubscription {
@@ -538,6 +598,7 @@ function newInFlightTurn(
   return {
     prompt,
     attachments,
+    steeredPrompts: [],
     createdAt: new Date().toISOString(),
     status: "queued",
     steps: [],
@@ -547,6 +608,30 @@ function newInFlightTurn(
 
 function isTurnRunning(turn?: InFlightTurn): boolean {
   return turn?.status === "queued" || turn?.status === "running";
+}
+
+function liveStepKey(step: number, stepId?: string): string {
+  return stepId ?? `step-${step}`;
+}
+
+function liveTurnStatusFromSubmit(
+  status: AgentPromptSubmitStatus,
+): LiveTurnStatus {
+  switch (status) {
+    case "queued":
+      return "queued";
+    case "running":
+    case "steered":
+      return "running";
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    case "blocked":
+      return "blocked";
+  }
 }
 
 function withCurrentStep(
@@ -570,7 +655,14 @@ function appendLiveContent(
   return withCurrentStep(turn, (step) => {
     const blocks = [...step.blocks];
     const last = blocks.at(-1);
-    if (last?.kind === kind) {
+    const lastIndex = blocks.length - 1;
+    const stepKey = liveStepKey(step.step, step.stepId);
+    const hasSteeredBoundary = turn.steeredPrompts.some(
+      (item) =>
+        item.anchorStepKey === stepKey &&
+        item.afterBlockIndex === lastIndex,
+    );
+    if (last?.kind === kind && !hasSteeredBoundary) {
       blocks[blocks.length - 1] = {
         ...last,
         content: last.content + content,
@@ -627,6 +719,25 @@ function reduceAgentChatEvent(
   turn: InFlightTurn,
   event: AgentChatEvent,
 ): InFlightTurn {
+  if (event.type === "prompt.steered") {
+    const known = new Set(turn.steeredPrompts.map((item) => item.promptId));
+    const currentStep = turn.steps.at(-1);
+    const placement = currentStep
+      ? {
+          anchorStepKey: liveStepKey(currentStep.step, currentStep.stepId),
+          afterBlockIndex: currentStep.blocks.length - 1,
+        }
+      : {};
+    const additions = event.promptIds
+      .filter((promptId) => !known.has(promptId))
+      .map((promptId) => ({ promptId, ...placement }));
+    return additions.length > 0
+      ? {
+          ...turn,
+          steeredPrompts: [...turn.steeredPrompts, ...additions],
+        }
+      : turn;
+  }
   if (turn.turnId !== undefined && turn.turnId !== event.turnId) return turn;
   const next =
     turn.turnId === undefined ? { ...turn, turnId: event.turnId } : turn;
@@ -651,6 +762,12 @@ function reduceAgentChatEvent(
             : next.error,
       };
     case "turn.step.started": {
+      const anchorStepKey = liveStepKey(event.step, event.stepId);
+      const steeredPrompts = next.steeredPrompts.map((item) =>
+        item.anchorStepKey === undefined
+          ? { ...item, anchorStepKey, afterBlockIndex: -1 }
+          : item,
+      );
       const index = next.steps.findIndex(
         (step) =>
           (event.stepId && step.stepId === event.stepId) ||
@@ -660,6 +777,7 @@ function reduceAgentChatEvent(
         return {
           ...next,
           status: "running",
+          steeredPrompts,
           steps: [
             ...next.steps,
             {
@@ -673,7 +791,7 @@ function reduceAgentChatEvent(
       }
       const steps = [...next.steps];
       steps[index] = { ...steps[index], status: "running" };
-      return { ...next, status: "running", steps };
+      return { ...next, status: "running", steeredPrompts, steps };
     }
     case "turn.step.completed": {
       const steps = next.steps.map((step) =>
@@ -801,7 +919,20 @@ function reduceQueuedAgentChatEvents(
   for (const [sessionId, events] of eventsBySession) {
     const turn = current[sessionId];
     if (!turn) continue;
-    const reduced = events.reduce(reduceAgentChatEvent, turn);
+    const reduced = events.reduce((active, event) => {
+      if (
+        event.type === "turn.started" &&
+        active.turnId !== undefined &&
+        active.turnId !== event.turnId &&
+        !isTurnRunning(active)
+      ) {
+        return reduceAgentChatEvent(
+          newInFlightTurn(event.prompt ?? "", []),
+          event,
+        );
+      }
+      return reduceAgentChatEvent(active, event);
+    }, turn);
     if (reduced === turn) continue;
     if (next === current) next = { ...current };
     next[sessionId] = reduced;
@@ -866,6 +997,7 @@ function reduceQueuedSubagentChatEvents(
 }
 
 const CHAT_EVENT_TYPES = new Set([
+  "prompt.steered",
   "turn.started",
   "turn.ended",
   "turn.step.started",
@@ -1154,6 +1286,9 @@ export default function App() {
   const [promptAttachments, setPromptAttachments] = useState<
     PromptAttachment[]
   >([]);
+  const [queuedPrompts, setQueuedPrompts] = useState<
+    Record<string, QueuedPrompt[]>
+  >({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
@@ -1233,6 +1368,7 @@ export default function App() {
   >(new Map());
   const queuedAgentChatEvents = useRef<QueuedAgentChatEvent[]>([]);
   const agentChatEventFrame = useRef<number | undefined>(undefined);
+  const drainingQueuedPrompts = useRef(new Set<string>());
 
   const { project: activeProject, conversation: activeConversation } = useMemo(
     () => getActive(desktop),
@@ -1254,6 +1390,9 @@ export default function App() {
   const activeTurn = activeConversation
     ? inFlightTurns[activeConversation.id]
     : undefined;
+  const activeQueuedPrompts = activeConversation
+    ? queuedPrompts[activeConversation.id] ?? []
+    : [];
   const activeSubagentRuns = activeConversation
     ? subagentRuns[activeConversation.id]
     : undefined;
@@ -1327,8 +1466,13 @@ export default function App() {
     return items;
   }, [activeTurn, historyConversationTurns, liveOutlineTurnId]);
   const hasVisibleMessages =
-    historyToolPresentation.messages.length > 0 || activeTurn !== undefined;
+    historyToolPresentation.messages.length > 0 ||
+    activeTurn !== undefined ||
+    activeQueuedPrompts.length > 0;
   const isStreaming = isTurnRunning(activeTurn);
+  const composerHasContent =
+    prompt.trim().length > 0 || promptAttachments.length > 0;
+  const showStopButton = isStreaming && !composerHasContent;
   const isHistoryLoading =
     activeConversation !== undefined &&
     (activeHistory === undefined || activeHistory.loading);
@@ -2274,6 +2418,7 @@ export default function App() {
     setBackgroundTasks((current) => omitSessionKeys(current, ids));
     setSubagentRuns((current) => omitSessionKeys(current, ids));
     setSubagentLiveTurns((current) => omitSessionKeys(current, ids));
+    setQueuedPrompts((current) => omitSessionKeys(current, ids));
     setInFlightTurns((current) => omitSessionKeys(current, ids));
     setHistoryByConversation((current) => omitSessionKeys(current, ids));
     if (activeConversation && ids.has(activeConversation.id)) {
@@ -2642,6 +2787,7 @@ export default function App() {
       setSessionTodos({});
       setSubagentRuns({});
       setSubagentLiveTurns({});
+      setQueuedPrompts({});
       setMessageDurations({});
       setProfileOpen(false);
       showNotice("已退出登录");
@@ -2751,15 +2897,23 @@ export default function App() {
     if (media.length > 0) void addPromptAttachments(media);
   };
 
-  const sendPrompt = async (override?: string): Promise<void> => {
+  const sendPrompt = async (
+    override?: string,
+    queuedAttachments?: readonly PromptAttachment[],
+  ): Promise<void> => {
     const text = (override ?? prompt).trim();
+    const attachments = [
+      ...(queuedAttachments === undefined
+        ? promptAttachments
+        : queuedAttachments),
+    ];
     if (
-      (!text && promptAttachments.length === 0) ||
+      (!text && attachments.length === 0) ||
       !activeProject ||
       !activeConversation ||
-      isStreaming ||
       modelBusy ||
-      isHistoryLoading
+      isHistoryLoading ||
+      hasBlockingInteraction
     ) {
       return;
     }
@@ -2772,14 +2926,14 @@ export default function App() {
       return;
     }
     if (
-      promptAttachments.some((attachment) => attachment.kind === "image") &&
+      attachments.some((attachment) => attachment.kind === "image") &&
       !selectedModel.supportsImage
     ) {
       showNotice("当前模型不支持图片输入");
       return;
     }
     if (
-      promptAttachments.some((attachment) => attachment.kind === "video") &&
+      attachments.some((attachment) => attachment.kind === "video") &&
       !selectedModel.supportsVideo
     ) {
       showNotice("当前模型不支持视频输入");
@@ -2792,43 +2946,48 @@ export default function App() {
       showNotice("会话正在准备，请稍后再试");
       return;
     }
+
+    if (isStreaming) {
+      const queued: QueuedPrompt = {
+        id: newQueuedPromptId(),
+        text,
+        attachments,
+        createdAt: new Date().toISOString(),
+      };
+      setQueuedPrompts((current) => ({
+        ...current,
+        [conversationId]: [...(current[conversationId] ?? []), queued],
+      }));
+      updateDesktop((current) => ({
+        ...current,
+        projects: current.projects.map((project) =>
+          project.id !== activeProject.id
+            ? project
+            : {
+                ...project,
+                conversations: project.conversations.map((conversation) =>
+                  conversation.id === conversationId
+                    ? { ...conversation, updatedAt: Date.now() }
+                    : conversation,
+                ),
+              },
+        ),
+      }));
+      if (queuedAttachments === undefined) {
+        resetPrompt();
+        setPromptAttachments([]);
+      }
+      followLatestMessageRef.current = true;
+      return;
+    }
+
     const title =
       activeConversation.title === "新对话"
-        ? (text || `媒体对话（${promptAttachments.length} 个附件）`)
+        ? (text || `媒体对话（${attachments.length} 个附件）`)
             .replace(/\s+/g, " ")
             .slice(0, 28)
         : activeConversation.title;
-    const attachments = [...promptAttachments];
-    const input: AgentPromptPart[] = [
-      ...(text ? [{ type: "text" as const, text }] : []),
-      ...attachments.map((attachment): AgentPromptPart => {
-        switch (attachment.kind) {
-          case "image":
-            return {
-              type: "image_url",
-              imageUrl: { url: attachment.dataUrl!, id: attachment.id },
-            };
-          case "audio":
-            return {
-              type: "audio_url",
-              audioUrl: { url: attachment.dataUrl!, id: attachment.id },
-            };
-          case "video":
-            return {
-              type: "video_url",
-              videoUrl: { url: attachment.dataUrl!, id: attachment.id },
-            };
-          case "file":
-            return {
-              type: "file",
-              file_id: attachment.fileId!,
-              name: attachment.name,
-              media_type: attachment.mediaType,
-              size: attachment.size,
-            };
-        }
-      }),
-    ];
+    const input = buildAgentPromptInput(text, attachments);
 
     followLatestMessageRef.current = true;
     setCompactions((current) => {
@@ -2865,25 +3024,39 @@ export default function App() {
             },
       ),
     }));
-    resetPrompt();
-    setPromptAttachments([]);
+    if (queuedAttachments === undefined) {
+      resetPrompt();
+      setPromptAttachments([]);
+    }
 
     try {
-      const launched = await createAgentClient(activeAgentScope).prompt(input);
-      if (!launched) {
-        setInFlightTurns((current) => {
-          const turn = current[conversationId];
-          if (!turn) return current;
-          return {
-            ...current,
-            [conversationId]: {
-              ...turn,
-              status: "blocked",
-              durationMs: Math.max(0, Date.now() - Date.parse(turn.createdAt)),
-            },
-          };
-        });
-      }
+      const submitted = await createAgentClient(activeAgentScope).prompt(input);
+      setInFlightTurns((current) => {
+        const turn = current[conversationId];
+        if (!turn) return current;
+        const status = liveTurnStatusFromSubmit(submitted.status);
+        if (
+          submitted.turnId !== undefined &&
+          turn.turnId === submitted.turnId &&
+          !isTurnRunning(turn) &&
+          (status === "queued" || status === "running")
+        ) {
+          return current;
+        }
+        return {
+          ...current,
+          [conversationId]: {
+            ...turn,
+            turnId: submitted.turnId ?? turn.turnId,
+            status,
+            durationMs:
+              isTurnRunning({ ...turn, status })
+                ? turn.durationMs
+                : (turn.durationMs ??
+                  Math.max(0, Date.now() - Date.parse(turn.createdAt))),
+          },
+        };
+      });
     } catch (error) {
       const message = conciseError(error);
       setInFlightTurns((current) => {
@@ -2902,6 +3075,103 @@ export default function App() {
       showNotice(message);
     }
 
+  };
+
+  const removeQueuedPrompt = (queuedPromptId: string): void => {
+    if (!activeConversation) return;
+    const conversationId = activeConversation.id;
+    setQueuedPrompts((current) => ({
+      ...current,
+      [conversationId]: (current[conversationId] ?? []).filter(
+        (item) => item.id !== queuedPromptId || item.steering,
+      ),
+    }));
+  };
+
+  const steerQueuedPrompt = async (queuedPromptId: string): Promise<void> => {
+    if (!activeConversation || !activeAgentScope || !isStreaming) return;
+    const conversationId = activeConversation.id;
+    const queued = activeQueuedPrompts.find(
+      (item) => item.id === queuedPromptId,
+    );
+    if (!queued || queued.steering) return;
+
+    setQueuedPrompts((current) => ({
+      ...current,
+      [conversationId]: (current[conversationId] ?? []).map((item) =>
+        item.id === queuedPromptId ? { ...item, steering: true } : item,
+      ),
+    }));
+
+    try {
+      const submitted = await createAgentClient(activeAgentScope).steer(
+        buildAgentPromptInput(queued.text, queued.attachments),
+      );
+      if (submitted.status === "steered") {
+        setInFlightTurns((current) => {
+          const turn = current[conversationId];
+          if (!turn) return current;
+          const placement = turn.steeredPrompts.find(
+            (item) => item.promptId === submitted.promptId,
+          );
+          return {
+            ...current,
+            [conversationId]: {
+              ...turn,
+              steeredPrompts: placement
+                ? turn.steeredPrompts.map((item) =>
+                    item.promptId === submitted.promptId
+                      ? {
+                          ...item,
+                          message: { ...queued, steering: false },
+                        }
+                      : item,
+                  )
+                : [
+                    ...turn.steeredPrompts,
+                    {
+                      promptId: submitted.promptId,
+                      message: { ...queued, steering: false },
+                    },
+                  ],
+            },
+          };
+        });
+      } else {
+        const turn = newInFlightTurn(
+          queued.text,
+          queued.attachments,
+          activeHistory?.items.at(-1)?.id,
+        );
+        setInFlightTurns((current) => ({
+          ...current,
+          [conversationId]: {
+            ...turn,
+            turnId: submitted.turnId,
+            status: liveTurnStatusFromSubmit(submitted.status),
+          },
+        }));
+      }
+      setQueuedPrompts((current) => ({
+        ...current,
+        [conversationId]: (current[conversationId] ?? []).filter(
+          (item) => item.id !== queuedPromptId,
+        ),
+      }));
+      showNotice(
+        submitted.status === "steered"
+          ? "消息已立即执行"
+          : "当前回合已结束，消息已作为下一回合执行",
+      );
+    } catch (error) {
+      setQueuedPrompts((current) => ({
+        ...current,
+        [conversationId]: (current[conversationId] ?? []).map((item) =>
+          item.id === queuedPromptId ? { ...item, steering: false } : item,
+        ),
+      }));
+      showNotice(conciseError(error));
+    }
   };
 
   useEffect(() => {
@@ -2935,6 +3205,42 @@ export default function App() {
       if (handoffTimer !== undefined) window.clearTimeout(handoffTimer);
     };
   }, [activeConversation?.id, activeTurn?.status]);
+
+  useEffect(() => {
+    const conversationId = activeConversation?.id;
+    const queued = activeQueuedPrompts[0];
+    if (
+      !conversationId ||
+      !queued ||
+      activeTurn !== undefined ||
+      activeAgentScope?.sessionId !== conversationId ||
+      isHistoryLoading ||
+      modelBusy ||
+      hasBlockingInteraction ||
+      drainingQueuedPrompts.current.has(queued.id)
+    ) {
+      return;
+    }
+
+    drainingQueuedPrompts.current.add(queued.id);
+    setQueuedPrompts((current) => ({
+      ...current,
+      [conversationId]: (current[conversationId] ?? []).filter(
+        (item) => item.id !== queued.id,
+      ),
+    }));
+    void sendPrompt(queued.text, queued.attachments).finally(() => {
+      drainingQueuedPrompts.current.delete(queued.id);
+    });
+  }, [
+    activeAgentScope?.sessionId,
+    activeConversation?.id,
+    activeQueuedPrompts[0]?.id,
+    activeTurn,
+    hasBlockingInteraction,
+    isHistoryLoading,
+    modelBusy,
+  ]);
 
   const handleSubmit = (event: FormEvent): void => {
     event.preventDefault();
@@ -3362,6 +3668,16 @@ export default function App() {
                       subagentLiveTurns={activeSubagentLiveTurns}
                     />
                   )}
+                  {activeQueuedPrompts.length > 0 && (
+                    <QueuedPromptList
+                      prompts={activeQueuedPrompts}
+                      canSteer={isStreaming}
+                      onRemove={removeQueuedPrompt}
+                      onSteer={(queuedPromptId) =>
+                        void steerQueuedPrompt(queuedPromptId)
+                      }
+                    />
+                  )}
                   {activeCompaction && (
                     <CompactionNotice event={activeCompaction} />
                   )}
@@ -3518,12 +3834,14 @@ export default function App() {
                   placeholder={
                     activePlan
                       ? "计划模式：描述需要分析和规划的任务…"
+                      : isStreaming
+                        ? "继续输入；发送后将加入队列…"
                       : auth.loggedIn
                       ? "告诉 Kimi 你想完成什么…"
                       : "登录后开始与 Kimi Code 对话…"
                   }
                   rows={1}
-                  disabled={isStreaming || modelBusy || hasBlockingInteraction}
+                  disabled={modelBusy || hasBlockingInteraction}
                 />
                 <div className="composer-toolbar">
                   <div className="composer-options">
@@ -3535,7 +3853,6 @@ export default function App() {
                       onClick={() => attachmentInputRef.current?.click()}
                       disabled={
                         !selectedModel ||
-                        isStreaming ||
                         modelBusy ||
                         promptAttachments.length >= MAX_PROMPT_ATTACHMENTS
                       }
@@ -3660,19 +3977,20 @@ export default function App() {
                     )}
                   </div>
                   <div className="send-zone">
-                    <span>Enter 发送</span>
+                    <span>{isStreaming ? "Enter 加入队列" : "Enter 发送"}</span>
                     <button
                       className="send-button"
-                      type={isStreaming ? "button" : "submit"}
+                      type={showStopButton ? "button" : "submit"}
                       onClick={
-                        isStreaming ? () => void cancelActiveTurn() : undefined
+                        showStopButton
+                          ? () => void cancelActiveTurn()
+                          : undefined
                       }
                       disabled={
-                        isStreaming
+                        showStopButton
                           ? !activeAgentScope
                           : hasBlockingInteraction ||
-                            (!prompt.trim() &&
-                              promptAttachments.length === 0) ||
+                            !composerHasContent ||
                             isHistoryLoading ||
                             modelBusy ||
                             !activeAgentScope ||
@@ -3685,9 +4003,9 @@ export default function App() {
                             ) &&
                               !selectedModel?.supportsVideo)
                       }
-                      title="发送"
+                      title={showStopButton ? "停止" : isStreaming ? "加入队列" : "发送"}
                     >
-                      {isStreaming ? <X size={17} /> : <ArrowUp size={18} />}
+                      {showStopButton ? <X size={17} /> : <ArrowUp size={18} />}
                     </button>
                   </div>
                 </div>
@@ -5100,57 +5418,84 @@ function LiveTurnView({
       </article>
       <article className={`message assistant-message live-turn ${turn.status}`}>
         <div className="assistant-body">
-          {turn.steps.map((step) => (
-            <section
-              className={`live-step ${step.status}`}
-              key={step.stepId ?? step.step}
-            >
-              {step.blocks.map((block, index) => {
-                if (block.kind === "text") {
-                  return (
-                    <div
-                      className="markdown-body live-text"
-                      key={`${block.kind}-${index}`}
-                    >
-                      <StreamingMarkdownMessage
+          {turn.steps.map((step) => {
+            const stepKey = liveStepKey(step.step, step.stepId);
+            const steeredPrompts = turn.steeredPrompts.filter(
+              (item) => item.anchorStepKey === stepKey,
+            );
+            return (
+              <section
+                className={`live-step ${step.status}`}
+                key={stepKey}
+              >
+                {steeredPrompts
+                  .filter((item) => item.afterBlockIndex === -1)
+                  .map((item) => (
+                    <LiveSteeredPromptView item={item} key={item.promptId} />
+                  ))}
+                {step.blocks.map((block, index) => {
+                  let blockView: ReactNode;
+                  if (block.kind === "text") {
+                    blockView = (
+                      <div className="markdown-body live-text">
+                        <StreamingMarkdownMessage
+                          active={streaming && step.status === "running"}
+                          content={block.content}
+                        />
+                      </div>
+                    );
+                  } else if (block.kind === "thinking") {
+                    blockView = (
+                      <LiveThinkingBlock content={block.content} />
+                    );
+                  } else if (block.kind === "content") {
+                    blockView = (
+                      <LiveAssistantContent
                         active={streaming && step.status === "running"}
                         content={block.content}
                       />
-                    </div>
-                  );
-                }
-                if (block.kind === "thinking") {
+                    );
+                  } else {
+                    blockView = (
+                      <LiveToolBlock
+                        tool={block}
+                        subagents={subagentRuns?.[block.toolCallId] ?? []}
+                        subagentRuns={subagentRuns}
+                        subagentLiveTurns={subagentLiveTurns}
+                      />
+                    );
+                  }
+                  const blockKey =
+                    block.kind === "tool"
+                      ? block.toolCallId
+                      : `${block.kind}-${index}`;
                   return (
-                    <LiveThinkingBlock
-                      content={block.content}
-                      key={`${block.kind}-${index}`}
-                    />
+                    <Fragment key={blockKey}>
+                      {blockView}
+                      {steeredPrompts
+                        .filter((item) => item.afterBlockIndex === index)
+                        .map((item) => (
+                          <LiveSteeredPromptView
+                            item={item}
+                            key={item.promptId}
+                          />
+                        ))}
+                    </Fragment>
                   );
-                }
-                if (block.kind === "content") {
-                  return (
-                    <LiveAssistantContent
-                      active={streaming && step.status === "running"}
-                      content={block.content}
-                      key={`${block.kind}-${index}`}
-                    />
-                  );
-                }
-                return (
-                  <LiveToolBlock
-                    tool={block}
-                    subagents={subagentRuns?.[block.toolCallId] ?? []}
-                    subagentRuns={subagentRuns}
-                    subagentLiveTurns={subagentLiveTurns}
-                    key={block.toolCallId}
-                  />
-                );
-              })}
-              {step.interruption && (
-                <div className="live-step-interruption">{step.interruption}</div>
-              )}
-            </section>
-          ))}
+                })}
+                {step.interruption && (
+                  <div className="live-step-interruption">
+                    {step.interruption}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+          {turn.steeredPrompts
+            .filter((item) => item.anchorStepKey === undefined)
+            .map((item) => (
+              <LiveSteeredPromptView item={item} key={item.promptId} />
+            ))}
           {!hasBlocks &&
             (turn.status === "queued" || turn.status === "running") && (
               <div className="typing">
@@ -5166,6 +5511,87 @@ function LiveTurnView({
           />
         </div>
       </article>
+    </section>
+  );
+}
+
+function LiveSteeredPromptView({ item }: { item: LiveSteeredPrompt }) {
+  const message = item.message;
+  if (!message) return null;
+  return (
+    <div className="live-steered-message user-message">
+      <div className="message-meta">
+        <time>{formatTime(message.createdAt)}</time>
+      </div>
+      <div className="user-bubble">
+        {message.text}
+        <PromptAttachmentContent attachments={message.attachments} />
+      </div>
+    </div>
+  );
+}
+
+function QueuedPromptList({
+  prompts,
+  canSteer,
+  onRemove,
+  onSteer,
+}: {
+  prompts: readonly QueuedPrompt[];
+  canSteer: boolean;
+  onRemove: (queuedPromptId: string) => void;
+  onSteer: (queuedPromptId: string) => void;
+}) {
+  return (
+    <section className="queued-prompt-stack" aria-label="排队中的消息">
+      <header>
+        <span>
+          <MessageSquareText size={13} />
+          队列 · {prompts.length}
+        </span>
+        <small>当前回合结束后自动逐条发送</small>
+      </header>
+      {prompts.map((prompt, index) => (
+        <article className="queued-prompt" key={prompt.id}>
+          <div className="queued-prompt-content">
+            {prompt.text ? (
+              <span>{prompt.text}</span>
+            ) : (
+              <span className="queued-prompt-placeholder">
+                附件 ×{prompt.attachments.length}
+              </span>
+            )}
+            <PromptAttachmentContent attachments={prompt.attachments} />
+          </div>
+          <footer>
+            <span className={index === 0 ? "next" : ""}>
+              {index === 0 ? "下一条" : `#${index + 1}`}
+            </span>
+            <div>
+              <button
+                type="button"
+                disabled={!canSteer || prompt.steering}
+                title={canSteer ? "立即执行" : "等待当前回合启动后可立即执行"}
+                aria-label="立即执行排队消息"
+                onClick={() => onSteer(prompt.id)}
+              >
+                {prompt.steering ? <span className="spinner" /> : <ArrowUp size={13} />}
+                立即执行
+              </button>
+              <button
+                type="button"
+                disabled={prompt.steering}
+                title="撤回"
+                aria-label="撤回排队消息"
+                onClick={() => onRemove(prompt.id)}
+              >
+                <X size={13} />
+                撤回
+              </button>
+            </div>
+          </footer>
+        </article>
+      ))}
     </section>
   );
 }

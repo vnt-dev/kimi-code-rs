@@ -41,8 +41,8 @@ use crate::{
             AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle, ProfileData, ProfileUpdateData,
         },
         prompt::{
-            AGENT_PROMPT_SERVICE_ID, AgentPromptServiceHandle, PromptInput, PromptState,
-            errors::REQUEST_INVALID,
+            AGENT_PROMPT_SERVICE_ID, AgentPromptServiceHandle, PromptHandle, PromptInput,
+            PromptState, errors::REQUEST_INVALID,
         },
         scope_context::{AGENT_SCOPE_CONTEXT_ID, AgentScopeContext},
         shell_command::{
@@ -83,12 +83,13 @@ use super::{
     AgentRpcResult, AgentRpcServiceContract, AgentRpcServiceHandle, AgentRpcToolInfo,
     BeginCompactionPayload, CancelPayload, CancelPlanPayload, CancelShellCommandPayload,
     CreateGoalPayload, DetachTaskPayload, EmptyPayload, EnterSwarmPayload, GetTaskOutputPayload,
-    GetTasksPayload, PromptLaunchResult, PromptMetadataUpdateTarget, PromptPayload,
-    RegisterToolPayload, RunShellCommandPayload, SetActiveToolsPayload, SetModelPayload,
-    SetModelResult, SetPermissionPayload, SetThinkingPayload, ShellCommandResult, SteerPayload,
-    StopTaskPayload, UndoHistoryPayload, UnregisterToolPayload, apply_prompt_metadata_update,
-    prompt_metadata_text_from_content_parts, prompt_metadata_text_from_plugin_command,
-    prompt_metadata_text_from_skill, resolve_prompt_attachments,
+    GetTasksPayload, PromptMetadataUpdateTarget, PromptPayload, PromptSubmitResult,
+    PromptSubmitStatus, RegisterToolPayload, RunShellCommandPayload, SetActiveToolsPayload,
+    SetModelPayload, SetModelResult, SetPermissionPayload, SetThinkingPayload, ShellCommandResult,
+    SteerPayload, StopTaskPayload, UndoHistoryPayload, UnregisterToolPayload,
+    apply_prompt_metadata_update, prompt_metadata_text_from_content_parts,
+    prompt_metadata_text_from_plugin_command, prompt_metadata_text_from_skill,
+    resolve_prompt_attachments,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -228,7 +229,7 @@ impl AgentRpcService {
 
 #[async_trait]
 impl AgentRpcServiceContract for AgentRpcService {
-    async fn prompt(&self, payload: PromptPayload) -> AgentRpcResult<Option<PromptLaunchResult>> {
+    async fn prompt(&self, payload: PromptPayload) -> AgentRpcResult<PromptSubmitResult> {
         if let Some(disabled_tools) = payload.disabled_tools.clone()
             && let Err(error) = self
                 .tool_policy
@@ -264,13 +265,12 @@ impl AgentRpcServiceContract for AgentRpcService {
                 ),
             })
             .await?;
-        if handle.snapshot().state == PromptState::Pending {
-            return Ok(None);
-        }
-        Ok(handle
-            .launched()
-            .await
-            .map(|turn| PromptLaunchResult { turn_id: turn.id() }))
+        let turn_id = if handle.snapshot().state == PromptState::Pending {
+            None
+        } else {
+            handle.launched().await.map(|turn| turn.id())
+        };
+        Ok(prompt_submit_result(&handle, turn_id))
     }
 
     async fn run_shell_command(
@@ -297,7 +297,7 @@ impl AgentRpcServiceContract for AgentRpcService {
         Ok(())
     }
 
-    async fn steer(&self, payload: SteerPayload) -> AgentRpcResult<Option<PromptLaunchResult>> {
+    async fn steer(&self, payload: SteerPayload) -> AgentRpcResult<PromptSubmitResult> {
         self.track(
             "input_steer",
             TelemetryProperties::from_iter([(
@@ -305,21 +305,38 @@ impl AgentRpcServiceContract for AgentRpcService {
                 Some(Value::from(payload.input.len() as u64)),
             )]),
         );
+        let resolved = resolve_prompt_attachments(
+            payload.input,
+            self.files.0.as_ref(),
+            &self.session_context.session_dir,
+        )
+        .await?;
+        let metadata_text = prompt_metadata_text_from_content_parts(&resolved.content);
+        self.update_prompt_metadata(metadata_text.as_deref())
+            .await?;
         let queued = self
             .prompt_service
             .enqueue(PromptInput {
                 id: None,
-                message: user_message(payload.input, None),
+                message: user_message_with_attachments(
+                    resolved.content,
+                    resolved.attachments,
+                    Some(PromptOrigin::User),
+                ),
             })
             .await?;
-        let steered = self.prompt_service.steer(&[queued.snapshot().id]).await?;
-        Ok(match steered.first() {
-            Some(handle) => handle
-                .launched()
-                .await
-                .map(|turn| PromptLaunchResult { turn_id: turn.id() }),
-            None => None,
-        })
+        if queued.snapshot().state == PromptState::Pending
+            && let Err(error) = self.prompt_service.steer(&[queued.snapshot().id]).await
+            && queued.snapshot().state == PromptState::Pending
+        {
+            return Err(error);
+        }
+        let turn_id = if queued.snapshot().state == PromptState::Pending {
+            None
+        } else {
+            queued.launched().await.map(|turn| turn.id())
+        };
+        Ok(prompt_submit_result(&queued, turn_id))
     }
 
     async fn cancel(&self, payload: CancelPayload) -> AgentRpcResult<()> {
@@ -659,6 +676,23 @@ fn user_message_with_attachments(
         is_error: None,
         note: None,
         attachments,
+    }
+}
+
+fn prompt_submit_result(handle: &PromptHandle, turn_id: Option<i64>) -> PromptSubmitResult {
+    let snapshot = handle.snapshot();
+    PromptSubmitResult {
+        prompt_id: snapshot.id,
+        turn_id,
+        status: match snapshot.state {
+            PromptState::Pending => PromptSubmitStatus::Queued,
+            PromptState::Running => PromptSubmitStatus::Running,
+            PromptState::Steered => PromptSubmitStatus::Steered,
+            PromptState::Completed => PromptSubmitStatus::Completed,
+            PromptState::Failed => PromptSubmitStatus::Failed,
+            PromptState::Cancelled => PromptSubmitStatus::Cancelled,
+            PromptState::Blocked => PromptSubmitStatus::Blocked,
+        },
     }
 }
 

@@ -63,6 +63,21 @@ export type AgentRpcMethod =
 
 type RpcPayload = Record<string, unknown>;
 
+export type AgentPromptSubmitStatus =
+  | "queued"
+  | "running"
+  | "steered"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "blocked";
+
+export interface AgentPromptSubmitResult {
+  promptId: string;
+  turnId?: number;
+  status: AgentPromptSubmitStatus;
+}
+
 export async function callAgentRpc<T>(
   scope: AgentScope,
   method: AgentRpcMethod,
@@ -80,7 +95,15 @@ export async function callAgentRpc<T>(
 export function createAgentClient(scope: AgentScope) {
   return {
     prompt(input: string | readonly AgentPromptPart[]) {
-      return callAgentRpc<{ turnId: number } | null>(scope, "prompt", {
+      return callAgentRpc<AgentPromptSubmitResult>(scope, "prompt", {
+        input:
+          typeof input === "string"
+            ? [{ type: "text", text: input }]
+            : [...input],
+      });
+    },
+    steer(input: string | readonly AgentPromptPart[]) {
+      return callAgentRpc<AgentPromptSubmitResult>(scope, "steer", {
         input:
           typeof input === "string"
             ? [{ type: "text", text: input }]

@@ -42,13 +42,13 @@ pub struct AgentRpcToolInfo {
 
 #[async_trait]
 pub trait AgentRpcServiceContract: Send + Sync {
-    async fn prompt(&self, payload: PromptPayload) -> AgentRpcResult<Option<PromptLaunchResult>>;
+    async fn prompt(&self, payload: PromptPayload) -> AgentRpcResult<PromptSubmitResult>;
     async fn run_shell_command(
         &self,
         payload: RunShellCommandPayload,
     ) -> AgentRpcResult<ShellCommandResult>;
     async fn cancel_shell_command(&self, payload: CancelShellCommandPayload) -> AgentRpcResult<()>;
-    async fn steer(&self, payload: SteerPayload) -> AgentRpcResult<Option<PromptLaunchResult>>;
+    async fn steer(&self, payload: SteerPayload) -> AgentRpcResult<PromptSubmitResult>;
     async fn cancel(&self, payload: CancelPayload) -> AgentRpcResult<()>;
     async fn undo_history(&self, payload: UndoHistoryPayload) -> AgentRpcResult<u64>;
     async fn set_thinking(&self, payload: SetThinkingPayload) -> AgentRpcResult<()>;

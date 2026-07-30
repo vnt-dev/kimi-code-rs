@@ -294,7 +294,7 @@ pub struct CancelShellCommandPayload {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SteerPayload {
-    pub input: Vec<ContentPart>,
+    pub input: Vec<PromptInputPart>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -559,9 +559,24 @@ pub struct RemoveKimiProviderPayload {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptSubmitStatus {
+    Queued,
+    Running,
+    Steered,
+    Completed,
+    Failed,
+    Cancelled,
+    Blocked,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PromptLaunchResult {
-    pub turn_id: i64,
+pub struct PromptSubmitResult {
+    pub prompt_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<i64>,
+    pub status: PromptSubmitStatus,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -683,10 +698,10 @@ pub struct ResumeSessionResult {
 }
 
 pub trait AgentApi {
-    fn prompt(&self, payload: PromptPayload) -> Option<PromptLaunchResult>;
+    fn prompt(&self, payload: PromptPayload) -> PromptSubmitResult;
     fn run_shell_command(&self, payload: RunShellCommandPayload) -> ShellCommandResult;
     fn cancel_shell_command(&self, payload: CancelShellCommandPayload);
-    fn steer(&self, payload: SteerPayload) -> Option<PromptLaunchResult>;
+    fn steer(&self, payload: SteerPayload) -> PromptSubmitResult;
     fn cancel(&self, payload: CancelPayload);
     fn undo_history(&self, payload: UndoHistoryPayload) -> u64;
     fn set_thinking(&self, payload: SetThinkingPayload);
@@ -872,6 +887,29 @@ mod tests {
             serde_json::to_value(payload).unwrap()["input"][1]["type"],
             "file"
         );
+
+        let steer = serde_json::from_value::<SteerPayload>(json!({
+            "input": [
+                {"type": "text", "text": "do this now"},
+                {
+                    "type": "file",
+                    "file_id": "f_2",
+                    "name": "notes.txt",
+                    "media_type": "text/plain",
+                    "size": 12
+                }
+            ]
+        }))
+        .unwrap();
+        assert!(matches!(
+            &steer.input[1],
+            PromptInputPart::File(PromptFilePart::File {
+                file_id,
+                name,
+                size: 12,
+                ..
+            }) if file_id == "f_2" && name == "notes.txt"
+        ));
     }
 
     #[test]
@@ -893,8 +931,17 @@ mod tests {
             })
         );
         assert_eq!(
-            serde_json::to_value(PromptLaunchResult { turn_id: 7 }).unwrap(),
-            json!({"turnId": 7})
+            serde_json::to_value(PromptSubmitResult {
+                prompt_id: "prompt-1".into(),
+                turn_id: Some(7),
+                status: PromptSubmitStatus::Running,
+            })
+            .unwrap(),
+            json!({
+                "promptId": "prompt-1",
+                "turnId": 7,
+                "status": "running"
+            })
         );
     }
 
