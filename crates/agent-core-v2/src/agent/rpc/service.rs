@@ -331,11 +331,7 @@ impl AgentRpcServiceContract for AgentRpcService {
         {
             return Err(error);
         }
-        let turn_id = if queued.snapshot().state == PromptState::Pending {
-            None
-        } else {
-            queued.launched().await.map(|turn| turn.id())
-        };
+        let turn_id = queued.launched().await.map(|turn| turn.id());
         Ok(prompt_submit_result(&queued, turn_id))
     }
 
