@@ -1,5 +1,7 @@
 # Kimi Code for Rust
 
+[中文文档](README.zh-CN.md)
+
 Kimi Code for Rust is a native desktop coding agent built with Rust, Tauri,
 React, and TypeScript. The desktop client uses `kimi-code-agent-core-v2` for
 authentication, model discovery, agent execution, tool interactions, and
