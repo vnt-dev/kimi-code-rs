@@ -1098,7 +1098,9 @@ export default function App() {
   const [modeBusy, setModeBusy] = useState(false);
   const [removalTarget, setRemovalTarget] = useState<RemovalTarget>();
   const [removalBusy, setRemovalBusy] = useState(false);
-  const [history, setHistory] = useState<ConversationHistory>();
+  const [historyByConversation, setHistoryByConversation] = useState<
+    Record<string, ConversationHistory>
+  >({});
   const [inFlightTurns, setInFlightTurns] = useState<
     Record<string, InFlightTurn>
   >({});
@@ -1154,8 +1156,9 @@ export default function App() {
   const activeSubagentLiveTurns = activeConversation
     ? subagentLiveTurns[activeConversation.id]
     : undefined;
-  const activeHistory =
-    history?.conversationId === activeConversation?.id ? history : undefined;
+  const activeHistory = activeConversation
+    ? historyByConversation[activeConversation.id]
+    : undefined;
   const visibleHistoryMessages = useMemo(
     () =>
       (activeHistory
@@ -1674,32 +1677,35 @@ export default function App() {
 
   useEffect(() => {
     const conversationId = activeConversation?.id;
-    if (!conversationId) {
-      setHistory(undefined);
-      return;
-    }
+    if (!conversationId) return;
 
-    let active = true;
     const request = (historyRequests.current[conversationId] ?? 0) + 1;
     historyRequests.current[conversationId] = request;
-    setHistory({
-      conversationId,
-      items: [],
-      loading: true,
-    });
+    setHistoryByConversation((current) =>
+      current[conversationId]
+        ? current
+        : {
+            ...current,
+            [conversationId]: {
+              conversationId,
+              items: [],
+              loading: true,
+            },
+          },
+    );
     void fetchConversationHistory(conversationId)
       .then((page) => {
-        if (
-          !active ||
-          request !== historyRequests.current[conversationId]
-        ) {
+        if (request !== historyRequests.current[conversationId]) {
           return;
         }
-        setHistory({
-          conversationId,
-          items: [...page.items].reverse(),
-          loading: false,
-        });
+        setHistoryByConversation((current) => ({
+          ...current,
+          [conversationId]: {
+            conversationId,
+            items: [...page.items].reverse(),
+            loading: false,
+          },
+        }));
         setInFlightTurns((current) => {
           const turn = current[conversationId];
           if (
@@ -1715,23 +1721,19 @@ export default function App() {
         });
       })
       .catch((error) => {
-        if (
-          !active ||
-          request !== historyRequests.current[conversationId]
-        ) {
+        if (request !== historyRequests.current[conversationId]) {
           return;
         }
-        setHistory({
-          conversationId,
-          items: [],
-          loading: false,
-          error: conciseError(error),
-        });
+        setHistoryByConversation((current) => ({
+          ...current,
+          [conversationId]: {
+            conversationId,
+            items: current[conversationId]?.items ?? [],
+            loading: false,
+            error: conciseError(error),
+          },
+        }));
       });
-
-    return () => {
-      active = false;
-    };
   }, [activeConversation?.id]);
 
   useEffect(() => {
@@ -1884,9 +1886,7 @@ export default function App() {
     setSubagentRuns((current) => omitSessionKeys(current, ids));
     setSubagentLiveTurns((current) => omitSessionKeys(current, ids));
     setInFlightTurns((current) => omitSessionKeys(current, ids));
-    setHistory((current) =>
-      current && ids.has(current.conversationId) ? undefined : current,
-    );
+    setHistoryByConversation((current) => omitSessionKeys(current, ids));
     if (activeConversation && ids.has(activeConversation.id)) {
       resetPrompt();
       setPromptAttachments([]);
@@ -2284,24 +2284,27 @@ export default function App() {
           }));
         }
       }
-      setHistory((current) =>
-        current?.conversationId === conversationId
-          ? {
-              conversationId,
-              items,
-              loading: false,
-            }
-          : current,
-      );
+      setHistoryByConversation((current) => ({
+        ...current,
+        [conversationId]: {
+          conversationId,
+          items,
+          loading: false,
+        },
+      }));
       return true;
     } catch (error) {
       if (request !== historyRequests.current[conversationId]) return false;
       const message = conciseError(error);
-      setHistory((current) =>
-        current?.conversationId === conversationId
-          ? { ...current, loading: false, error: message }
-          : current,
-      );
+      setHistoryByConversation((current) => ({
+        ...current,
+        [conversationId]: {
+          conversationId,
+          items: current[conversationId]?.items ?? [],
+          loading: false,
+          error: message,
+        },
+      }));
       showNotice(message);
       return false;
     }
@@ -2922,7 +2925,7 @@ export default function App() {
               ref={scrollRef}
               onScroll={handleChatScroll}
             >
-              {activeHistory?.loading ? (
+              {isHistoryLoading ? (
                 <div className="history-loading">
                   <span className="spinner" />
                   正在读取会话历史…

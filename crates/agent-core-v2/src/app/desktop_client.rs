@@ -785,7 +785,7 @@ impl KimiCodeDesktopClient {
                     conversation_id,
                     MessageListQuery {
                         before_id,
-                        page_size: Some(100),
+                        page_size: Some(1000),
                         ..MessageListQuery::default()
                     },
                 )
