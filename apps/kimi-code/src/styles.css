@@ -2226,16 +2226,19 @@ select:focus-visible {
 
 .subagent-list {
   display: flex;
-  max-height: min(58vh, 560px);
+  min-height: 0;
+  max-height: min(46vh, 480px);
   padding: 2px 8px 8px;
   overflow-x: hidden;
   overflow-y: auto;
   flex-direction: column;
   gap: 4px;
+  overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 
 .subagent-row {
+  flex: 0 0 auto;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.045);
   border-radius: 7px;
@@ -2399,18 +2402,13 @@ select:focus-visible {
 
 .subagent-live-timeline {
   display: flex;
-  max-height: 320px;
   padding: 8px;
-  overflow-x: hidden;
-  overflow-y: auto;
   flex-direction: column;
   border: 1px solid rgba(139, 124, 246, 0.1);
   border-radius: 7px;
   background:
     linear-gradient(135deg, rgba(139, 124, 246, 0.025), transparent 55%),
     rgba(38, 40, 46, 0.82);
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
 }
 
 .subagent-live-step {
@@ -2489,6 +2487,11 @@ select:focus-visible {
   font-size: 9px;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.subagent-result-summary > pre {
+  max-height: none;
+  overflow: visible;
 }
 
 .subagent-row-detail pre.error {

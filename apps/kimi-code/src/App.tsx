@@ -5022,10 +5022,16 @@ function SubagentPanel({
   ).length;
   const [open, setOpen] = useState(active);
   const userToggled = useRef(false);
+  const listScroll = useRef<HTMLDivElement>(null);
+  const followLatestList = useRef(true);
 
   useEffect(() => {
     if (!userToggled.current) setOpen(active);
   }, [active]);
+  useLayoutEffect(() => {
+    if (!open || !followLatestList.current || !listScroll.current) return;
+    listScroll.current.scrollTop = listScroll.current.scrollHeight;
+  }, [liveTurns, subagents]);
 
   return (
     <section
@@ -5055,7 +5061,17 @@ function SubagentPanel({
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
       </button>
       <Collapsible className="subagent-list-collapse" open={open}>
-        <div className="subagent-list" aria-live="polite">
+        <div
+          className="subagent-list"
+          aria-live="polite"
+          ref={listScroll}
+          onScroll={(event) => {
+            const target = event.currentTarget;
+            followLatestList.current =
+              target.scrollHeight - target.scrollTop - target.clientHeight <=
+              24;
+          }}
+        >
           {subagents.map((subagent, index) => (
             <SubagentRow
               key={subagent.subagentId}
@@ -5217,26 +5233,11 @@ function SubagentLiveTimeline({
   liveTurns?: Record<string, InFlightTurn>;
   nestedRuns?: SubagentRunsByTool;
 }) {
-  const scroll = useRef<HTMLDivElement>(null);
-  const followLatest = useRef(true);
   const streaming = isTurnRunning(turn);
   const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
 
-  useLayoutEffect(() => {
-    if (!followLatest.current || !scroll.current) return;
-    scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [turn]);
-
   return (
-    <div
-      className="subagent-live-timeline"
-      ref={scroll}
-      onScroll={(event) => {
-        const target = event.currentTarget;
-        followLatest.current =
-          target.scrollHeight - target.scrollTop - target.clientHeight <= 24;
-      }}
-    >
+    <div className="subagent-live-timeline">
       {turn.steps.map((step) => (
         <section
           className={`subagent-live-step ${step.status}`}
