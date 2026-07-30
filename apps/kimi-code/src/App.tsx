@@ -49,6 +49,7 @@ import {
   PanelLeftOpen,
   Plus,
   RefreshCw,
+  Settings as SettingsIcon,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -90,6 +91,13 @@ import {
   recordPromptInput,
   undoPromptEdit,
 } from "./promptUndo";
+import {
+  applyColorScheme,
+  loadColorScheme,
+  saveColorScheme,
+  type ColorScheme,
+} from "./appearance";
+import SettingsDialog from "./SettingsDialog";
 import {
   isSubagentEvent,
   mergeSessionSubagentEvent,
@@ -1007,6 +1015,9 @@ export default function App() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [deviceCode, setDeviceCode] = useState<DeviceCode>();
   const [profileOpen, setProfileOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [colorScheme, setColorScheme] =
+    useState<ColorScheme>(loadColorScheme);
   const [appVersion, setAppVersion] = useState<string>();
   const [accountUsage, setAccountUsage] = useState<AccountUsage>();
   const [accountUsageBusy, setAccountUsageBusy] = useState(false);
@@ -1287,6 +1298,24 @@ export default function App() {
     setProfileOpen(opening);
     if (opening) void loadAccountUsage();
   };
+
+  const openSettings = (): void => {
+    setProfileOpen(false);
+    setSettingsOpen(true);
+  };
+
+  const closeSettings = useCallback((): void => {
+    setSettingsOpen(false);
+  }, []);
+
+  const updateColorScheme = (nextColorScheme: ColorScheme): void => {
+    setColorScheme(nextColorScheme);
+    saveColorScheme(nextColorScheme);
+  };
+
+  useLayoutEffect(() => {
+    applyColorScheme(colorScheme);
+  }, [colorScheme]);
 
   useEffect(() => {
     let active = true;
@@ -2845,6 +2874,7 @@ export default function App() {
                   busy={accountUsageBusy}
                   error={accountUsageError}
                   onRefresh={() => void loadAccountUsage()}
+                  onOpenSettings={openSettings}
                   onSignOut={() => void signOut()}
                 />
               )}
@@ -3306,6 +3336,14 @@ export default function App() {
         />
       )}
 
+      {settingsOpen && (
+        <SettingsDialog
+          colorScheme={colorScheme}
+          onColorSchemeChange={updateColorScheme}
+          onClose={closeSettings}
+        />
+      )}
+
       {notice && (
         <div className="toast" role="status">
           <span>{notice}</span>
@@ -3324,6 +3362,7 @@ function AccountUsagePopover({
   busy,
   error,
   onRefresh,
+  onOpenSettings,
   onSignOut,
 }: {
   appVersion?: string;
@@ -3331,6 +3370,7 @@ function AccountUsagePopover({
   busy: boolean;
   error?: string;
   onRefresh: () => void;
+  onOpenSettings: () => void;
   onSignOut: () => void;
 }) {
   const rows = usage
@@ -3411,6 +3451,14 @@ function AccountUsagePopover({
       </div>
 
       <div className="profile-popover-footer">
+        <button
+          className="profile-settings"
+          type="button"
+          onClick={onOpenSettings}
+        >
+          <SettingsIcon size={14} />
+          设置
+        </button>
         <button className="profile-signout" type="button" onClick={onSignOut}>
           <LogOut size={14} />
           退出登录
