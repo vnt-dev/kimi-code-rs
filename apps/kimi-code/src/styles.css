@@ -1577,6 +1577,18 @@ select:focus-visible {
   animation: message-in 160ms ease-out both;
 }
 
+.conversation-turn {
+  margin-bottom: 34px;
+}
+
+.conversation-turn > .message {
+  margin-bottom: 0;
+}
+
+.conversation-turn > .user-message {
+  margin-bottom: 22px;
+}
+
 @keyframes message-in {
   from {
     opacity: 0;
@@ -1714,9 +1726,7 @@ select:focus-visible {
 }
 
 .assistant-message {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 13px;
+  display: block;
 }
 
 .assistant-rail {
@@ -1747,7 +1757,23 @@ select:focus-visible {
 
 .assistant-body {
   min-width: 0;
-  padding-top: 5px;
+  padding-top: 0;
+}
+
+.assistant-message-part + .assistant-message-part {
+  margin-top: 14px;
+}
+
+.thinking-summary {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.assistant-message-part:first-child > .thinking-summary:first-child {
+  margin-top: 0;
 }
 
 .thinking-block {
@@ -1842,8 +1868,8 @@ select:focus-visible {
 
 .live-step + .live-step {
   margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.045);
+  padding-top: 0;
+  border-top: 0;
 }
 
 .live-text + .live-text {

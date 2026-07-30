@@ -389,6 +389,12 @@ interface HistoryToolPresentation {
   results: Map<string, ToolResultContent>;
 }
 
+interface HistoryConversationTurn {
+  id: string;
+  user?: RenderMessage;
+  responses: RenderMessage[];
+}
+
 const PROMPT_SUGGESTIONS = [
   {
     icon: <FileCode2 size={17} />,
@@ -985,6 +991,52 @@ function mergeHistoryToolResults(
   return { messages: mergedMessages, results };
 }
 
+function groupHistoryMessages(
+  messages: ProtocolMessage[],
+): HistoryConversationTurn[] {
+  const turns: HistoryConversationTurn[] = [];
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      turns.push({
+        id: message.prompt_id ?? message.id,
+        user: message,
+        responses: [],
+      });
+      continue;
+    }
+
+    let turn = turns.at(-1);
+    if (!turn) {
+      turn = {
+        id: message.prompt_id ?? message.id,
+        responses: [],
+      };
+      turns.push(turn);
+    }
+    turn.responses.push(message);
+  }
+
+  return turns;
+}
+
+function finalResponseMessage(
+  messages: RenderMessage[],
+): RenderMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      message.role === "assistant" &&
+      message.status !== "streaming" &&
+      messageOriginKind(message) !== "compaction_summary" &&
+      messageText(message).trim().length > 0
+    ) {
+      return message;
+    }
+  }
+  return undefined;
+}
+
 function omitSessionKeys<T>(
   current: Record<string, T>,
   sessionIds: ReadonlySet<string>,
@@ -1127,6 +1179,10 @@ export default function App() {
   const historyToolPresentation = useMemo(
     () => mergeHistoryToolResults(visibleHistoryMessages),
     [visibleHistoryMessages],
+  );
+  const historyConversationTurns = useMemo(
+    () => groupHistoryMessages(historyToolPresentation.messages),
+    [historyToolPresentation.messages],
   );
   const hasVisibleMessages =
     historyToolPresentation.messages.length > 0 || activeTurn !== undefined;
@@ -2596,7 +2652,9 @@ export default function App() {
   };
 
   const copyMessage = useCallback(async (message: ProtocolMessage): Promise<void> => {
-    await navigator.clipboard.writeText(messageCopyText(message));
+    const text = messageText(message).trim();
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
     setCopiedMessage(message.id);
     window.setTimeout(() => setCopiedMessage(undefined), 1400);
   }, []);
@@ -2971,17 +3029,17 @@ export default function App() {
                   {activeHistory?.error && (
                     <div className="history-error">{activeHistory.error}</div>
                   )}
-                  {historyToolPresentation.messages.map((message) => (
-                    <MessageView
-                      key={message.id}
-                      message={message}
+                  {historyConversationTurns.map((turn) => (
+                    <HistoryTurnView
+                      key={turn.id}
+                      turn={turn}
                       toolResults={historyToolPresentation.results}
                       subagentRuns={activeSubagentRuns}
                       subagentLiveTurns={activeSubagentLiveTurns}
-                      durationMs={
-                        messageDurations[activeConversation.id]?.[message.id]
+                      messageDurations={
+                        messageDurations[activeConversation.id] ?? {}
                       }
-                      copied={copiedMessage === message.id}
+                      copiedMessageId={copiedMessage}
                       onCopy={copyMessage}
                     />
                   ))}
@@ -4452,7 +4510,7 @@ function LiveTurnView({
   const streaming = isTurnRunning(turn);
 
   return (
-    <>
+    <section className="conversation-turn live-conversation-turn">
       <article className="message user-message live-user-message">
         <div className="message-meta">
           <time>{formatTime(turn.createdAt)}</time>
@@ -4463,20 +4521,7 @@ function LiveTurnView({
         </div>
       </article>
       <article className={`message assistant-message live-turn ${turn.status}`}>
-        <div className="assistant-rail">
-          <span className="assistant-avatar">
-            <Sparkles size={15} />
-          </span>
-          <i />
-        </div>
         <div className="assistant-body">
-          <div className="message-meta">
-            <span>Kimi</span>
-            <time>{formatTime(turn.createdAt)}</time>
-            <span className={`live-turn-status ${turn.status}`}>
-              {liveTurnStatusLabel(turn.status)}
-            </span>
-          </div>
           {turn.steps.map((step) => (
             <section
               className={`live-step ${step.status}`}
@@ -4543,7 +4588,7 @@ function LiveTurnView({
           />
         </div>
       </article>
-    </>
+    </section>
   );
 }
 
@@ -4576,23 +4621,6 @@ function AssistantResponseStatus({
   );
 }
 
-function liveTurnStatusLabel(status: LiveTurnStatus): string {
-  switch (status) {
-    case "queued":
-      return "等待中";
-    case "running":
-      return "进行中";
-    case "completed":
-      return "已完成";
-    case "cancelled":
-      return "已取消";
-    case "failed":
-      return "失败";
-    case "blocked":
-      return "已阻止";
-  }
-}
-
 function Collapsible({
   open,
   className = "",
@@ -4612,24 +4640,23 @@ function Collapsible({
   );
 }
 
+function lastThinkingSentence(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  const sentences = normalized
+    .split(/(?<=[。！？!?])\s*|(?<=\.)\s+(?=[A-Z\u3400-\u9fff])/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  return sentences.at(-1) ?? normalized;
+}
+
+function ThinkingSummary({ content }: { content: string }) {
+  const summary = lastThinkingSentence(content);
+  return summary ? <p className="thinking-summary">{summary}</p> : null;
+}
+
 function LiveThinkingBlock({ content }: { content: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="thinking-block live-thinking">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <BrainCircuit size={14} />
-        <span>思考过程</span>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-      </button>
-      <Collapsible className="thinking-collapse" open={open}>
-        <p>{content}</p>
-      </Collapsible>
-    </div>
-  );
+  return <ThinkingSummary content={content} />;
 }
 
 function LiveAssistantContent({
@@ -5175,35 +5202,121 @@ function ToolStatusIcon({
   );
 }
 
-const MessageView = memo(function MessageView({
+const HistoryTurnView = memo(function HistoryTurnView({
+  turn,
+  toolResults,
+  subagentRuns,
+  subagentLiveTurns,
+  messageDurations,
+  copiedMessageId,
+  onCopy,
+}: {
+  turn: HistoryConversationTurn;
+  toolResults: Map<string, ToolResultContent>;
+  subagentRuns?: SubagentRunsByTool;
+  subagentLiveTurns?: Record<string, InFlightTurn>;
+  messageDurations: Record<string, number>;
+  copiedMessageId?: string;
+  onCopy: (message: ProtocolMessage) => void;
+}) {
+  const finalResponse = finalResponseMessage(turn.responses);
+
+  return (
+    <section className="conversation-turn">
+      {turn.user && (
+        <UserMessageView
+          message={turn.user}
+          toolResults={toolResults}
+          subagentRuns={subagentRuns}
+          subagentLiveTurns={subagentLiveTurns}
+        />
+      )}
+      {turn.responses.length > 0 && (
+        <article className="message assistant-message">
+          <div className="assistant-body">
+            {turn.responses.map((message) => (
+              <AssistantMessagePart
+                key={message.id}
+                message={message}
+                toolResults={toolResults}
+                subagentRuns={subagentRuns}
+                subagentLiveTurns={subagentLiveTurns}
+              />
+            ))}
+            {finalResponse && (
+              <div className="message-actions">
+                <button onClick={() => onCopy(finalResponse)}>
+                  {copiedMessageId === finalResponse.id ? (
+                    <Check size={14} />
+                  ) : (
+                    <Copy size={14} />
+                  )}
+                  {copiedMessageId === finalResponse.id ? "已复制" : "复制"}
+                </button>
+              </div>
+            )}
+            {finalResponse &&
+              messageDurations[finalResponse.id] !== undefined && (
+                <AssistantResponseStatus
+                  running={false}
+                  durationMs={messageDurations[finalResponse.id]}
+                />
+              )}
+          </div>
+        </article>
+      )}
+    </section>
+  );
+});
+
+function UserMessageView({
   message,
   toolResults,
   subagentRuns,
   subagentLiveTurns,
-  durationMs,
-  copied,
-  onCopy,
 }: {
   message: RenderMessage;
   toolResults: Map<string, ToolResultContent>;
   subagentRuns?: SubagentRunsByTool;
   subagentLiveTurns?: Record<string, InFlightTurn>;
-  durationMs?: number;
-  copied: boolean;
-  onCopy: (message: ProtocolMessage) => void;
 }) {
-  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const text = messageText(message);
+  const structured = messageStructuredContent(message);
+  return (
+    <article className="message user-message">
+      <div className="message-meta">
+        <time>{formatTime(message.created_at)}</time>
+      </div>
+      <div className="user-bubble">
+        {text}
+        <StructuredMessageContent
+          parts={structured}
+          toolResults={toolResults}
+          subagentRuns={subagentRuns}
+          subagentLiveTurns={subagentLiveTurns}
+        />
+      </div>
+    </article>
+  );
+}
+
+function AssistantMessagePart({
+  message,
+  toolResults,
+  subagentRuns,
+  subagentLiveTurns,
+}: {
+  message: RenderMessage;
+  toolResults: Map<string, ToolResultContent>;
+  subagentRuns?: SubagentRunsByTool;
+  subagentLiveTurns?: Record<string, InFlightTurn>;
+}) {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const text = messageText(message);
   const thinking = messageThinking(message);
   const structured = messageStructuredContent(message);
-  const origin = message.metadata?.origin;
-  const originKind =
-    origin && typeof origin === "object" && "kind" in origin
-      ? String(origin.kind)
-      : undefined;
 
-  if (originKind === "compaction_summary") {
+  if (messageOriginKind(message) === "compaction_summary") {
     return (
       <div className="history-summary">
         <button
@@ -5225,74 +5338,14 @@ const MessageView = memo(function MessageView({
     );
   }
 
-  if (message.role === "user") {
-    return (
-      <article className="message user-message">
-        <div className="message-meta">
-          <time>{formatTime(message.created_at)}</time>
-        </div>
-        <div className="user-bubble">
-          {text}
-          <StructuredMessageContent
-            parts={structured}
-            toolResults={toolResults}
-            subagentRuns={subagentRuns}
-            subagentLiveTurns={subagentLiveTurns}
-          />
-        </div>
-      </article>
-    );
-  }
+  if (!thinking && !text && structured.length === 0) return null;
 
-  const author =
-    message.role === "tool"
-      ? "工具"
-      : message.role === "system"
-        ? "系统"
-        : "Kimi";
   return (
-    <article className={`message assistant-message ${message.status ?? ""}`}>
-      <div className="assistant-rail">
-        <span className="assistant-avatar">
-          {message.role === "assistant" ? (
-            <Sparkles size={15} />
-          ) : (
-            <TerminalSquare size={15} />
-          )}
-        </span>
-        <i />
-      </div>
-      <div className="assistant-body">
-        <div className="message-meta">
-          <span>{author}</span>
-          <time>{formatTime(message.created_at)}</time>
-        </div>
-        {thinking && (
-          <div className="thinking-block">
-            <button
-              type="button"
-              aria-expanded={thinkingOpen}
-              onClick={() => setThinkingOpen((value) => !value)}
-            >
-              <BrainCircuit size={14} />
-              <span>思考过程</span>
-              {thinkingOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-            </button>
-            <Collapsible className="thinking-collapse" open={thinkingOpen}>
-              <p>{thinking}</p>
-            </Collapsible>
-          </div>
-        )}
+    <div className={`assistant-message-part ${message.status ?? ""}`}>
+      {thinking && <ThinkingSummary content={thinking} />}
+      {(text || structured.length > 0) && (
         <div className="markdown-body">
-          {text ? (
-            <MarkdownMessage content={text} />
-          ) : structured.length > 0 ? null : (
-            <div className="typing">
-              <i />
-              <i />
-              <i />
-            </div>
-          )}
+          {text && <MarkdownMessage content={text} />}
           <StructuredMessageContent
             parts={structured}
             toolResults={toolResults}
@@ -5300,22 +5353,10 @@ const MessageView = memo(function MessageView({
             subagentLiveTurns={subagentLiveTurns}
           />
         </div>
-        {message.status !== "streaming" &&
-          messageCopyText(message).length > 0 && (
-            <div className="message-actions">
-              <button onClick={() => onCopy(message)}>
-                {copied ? <Check size={14} /> : <Copy size={14} />}
-                {copied ? "已复制" : "复制"}
-              </button>
-            </div>
-          )}
-        {message.role === "assistant" && durationMs !== undefined && (
-          <AssistantResponseStatus running={false} durationMs={durationMs} />
-        )}
-      </div>
-    </article>
+      )}
+    </div>
   );
-});
+}
 
 function messageText(message: ProtocolMessage): string {
   return message.content
@@ -5364,30 +5405,6 @@ function structuredValue(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function messageCopyText(message: ProtocolMessage): string {
-  return message.content
-    .map((part) => {
-      switch (part.type) {
-        case "text":
-          return part.text;
-        case "thinking":
-          return part.thinking;
-        case "tool_use":
-          return `${part.tool_name}\n${structuredValue(part.input)}`;
-        case "tool_result":
-          return structuredValue(part.output);
-        case "image":
-        case "audio":
-        case "video":
-          return part.source.kind === "url" ? part.source.url : "";
-        case "file":
-          return part.name;
-      }
-    })
-    .filter(Boolean)
-    .join("\n\n");
 }
 
 function mediaSourceUrl(
