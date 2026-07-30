@@ -1352,6 +1352,7 @@ select:focus-visible {
 .chat-scroll {
   min-height: 0;
   flex: 1;
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #45484f transparent;
@@ -1516,6 +1517,7 @@ select:focus-visible {
 
 .message-stack {
   width: min(820px, calc(100% - 64px));
+  min-width: 0;
   margin: 0 auto;
   padding: 44px 0 80px;
 }
@@ -1569,6 +1571,8 @@ select:focus-visible {
 }
 
 .message {
+  min-width: 0;
+  max-width: 100%;
   margin-bottom: 34px;
   animation: message-in 160ms ease-out both;
 }
@@ -1693,6 +1697,7 @@ select:focus-visible {
 }
 
 .user-bubble {
+  min-width: 0;
   max-width: min(620px, 85%);
   padding: 11px 15px;
   border: 1px solid rgba(139, 124, 246, 0.15);
@@ -1703,6 +1708,8 @@ select:focus-visible {
     #313338;
   font-size: 12.5px;
   line-height: 1.7;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   white-space: pre-wrap;
 }
 
@@ -2547,9 +2554,13 @@ select:focus-visible {
 }
 
 .markdown-body {
+  min-width: 0;
+  max-width: 100%;
   color: #cacad1;
   font-size: 12.5px;
   line-height: 1.78;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown-body > :first-child {
@@ -2612,6 +2623,8 @@ select:focus-visible {
   background: #393b40;
   font-family: "DM Mono", monospace;
   font-size: 0.88em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .code-wrap {
