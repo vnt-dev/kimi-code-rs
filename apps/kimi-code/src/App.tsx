@@ -85,6 +85,12 @@ import {
 } from "./modelControls";
 import { resolveMarkdownExternalUrl } from "./markdownLinks";
 import {
+  canUndoPromptEdit,
+  createPromptUndoHistory,
+  recordPromptInput,
+  undoPromptEdit,
+} from "./promptUndo";
+import {
   isSubagentEvent,
   mergeSessionSubagentEvent,
   subagentRunsWithSwarmItems,
@@ -1044,6 +1050,9 @@ export default function App() {
     agentId: string;
   }>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const promptUndoHistoryRef = useRef(createPromptUndoHistory());
+  const promptUndoConversationRef = useRef<string | undefined>(undefined);
+  const promptCompositionRef = useRef(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageStackRef = useRef<HTMLDivElement>(null);
@@ -1750,6 +1759,41 @@ export default function App() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
   }, [prompt]);
 
+  useEffect(() => {
+    const conversationId = activeConversation?.id;
+    if (conversationId === promptUndoConversationRef.current) return;
+    promptUndoConversationRef.current = conversationId;
+    promptCompositionRef.current = false;
+    promptUndoHistoryRef.current = createPromptUndoHistory(prompt);
+  }, [activeConversation?.id]);
+
+  const resetPrompt = (value = ""): void => {
+    promptCompositionRef.current = false;
+    promptUndoHistoryRef.current = createPromptUndoHistory(value);
+    setPrompt(value);
+  };
+
+  const updatePrompt = (value: string, isComposing = false): void => {
+    const history = recordPromptInput(promptUndoHistoryRef.current, value, {
+      isComposing,
+    });
+    promptUndoHistoryRef.current = history;
+    setPrompt(value);
+  };
+
+  const undoPrompt = (): void => {
+    const history = undoPromptEdit(promptUndoHistoryRef.current);
+    if (history === promptUndoHistoryRef.current) return;
+    promptUndoHistoryRef.current = history;
+    setPrompt(history.current);
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(history.current.length, history.current.length);
+    });
+  };
+
   const forgetSessionState = (sessionIds: string[]): void => {
     const ids = new Set(sessionIds);
     if (ids.size === 0) return;
@@ -1771,7 +1815,7 @@ export default function App() {
       current && ids.has(current.conversationId) ? undefined : current,
     );
     if (activeConversation && ids.has(activeConversation.id)) {
-      setPrompt("");
+      resetPrompt();
       setPromptAttachments([]);
       setResolvingInteraction(undefined);
     }
@@ -1929,7 +1973,7 @@ export default function App() {
             : item,
         ),
       }));
-      setPrompt("");
+      resetPrompt();
       setPromptAttachments([]);
     } catch (error) {
       showNotice(conciseError(error));
@@ -2358,7 +2402,7 @@ export default function App() {
             },
       ),
     }));
-    setPrompt("");
+    resetPrompt();
     setPromptAttachments([]);
 
     try {
@@ -2503,6 +2547,19 @@ export default function App() {
   const handlePromptKeyDown = (
     event: KeyboardEvent<HTMLTextAreaElement>,
   ): void => {
+    if (event.nativeEvent.isComposing || promptCompositionRef.current) return;
+    if (
+      event.key.toLowerCase() === "z" &&
+      (event.ctrlKey || event.metaKey) &&
+      !event.altKey &&
+      !event.shiftKey
+    ) {
+      event.preventDefault();
+      if (canUndoPromptEdit(promptUndoHistoryRef.current)) {
+        undoPrompt();
+      }
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void sendPrompt();
@@ -3020,7 +3077,23 @@ export default function App() {
                 <textarea
                   ref={textareaRef}
                   value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
+                  onChange={(event) =>
+                    updatePrompt(
+                      event.target.value,
+                      promptCompositionRef.current ||
+                        (event.nativeEvent as InputEvent).isComposing,
+                    )
+                  }
+                  onCompositionStart={() => {
+                    promptCompositionRef.current = true;
+                  }}
+                  onCompositionEnd={() => {
+                    promptCompositionRef.current = false;
+                    window.requestAnimationFrame(() => {
+                      const textarea = textareaRef.current;
+                      if (textarea) updatePrompt(textarea.value);
+                    });
+                  }}
                   onKeyDown={handlePromptKeyDown}
                   onPaste={handlePromptPaste}
                   placeholder={
