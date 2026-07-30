@@ -55,7 +55,6 @@ import {
   Square,
   SquarePen,
   TerminalSquare,
-  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -2102,19 +2101,6 @@ export default function App() {
     }
   };
 
-  const clearActivePlan = async (): Promise<void> => {
-    if (!activeAgentScope || !activePlan || modeBusy) return;
-    setModeBusy(true);
-    try {
-      await createAgentClient(activeAgentScope).clearPlan();
-      await refreshAgentState(activeAgentScope);
-    } catch (error) {
-      showNotice(conciseError(error));
-    } finally {
-      setModeBusy(false);
-    }
-  };
-
   const startLogin = async (): Promise<void> => {
     setLoginOpen(true);
     setLoginBusy(true);
@@ -2932,7 +2918,6 @@ export default function App() {
                   busy={modeBusy}
                   planLocked={isStreaming}
                   onExitPlan={() => void togglePlanMode()}
-                  onClearPlan={() => void clearActivePlan()}
                 />
               )}
               {activeQuestion && (
@@ -3740,13 +3725,11 @@ function AgentModeStatus({
   busy,
   planLocked,
   onExitPlan,
-  onClearPlan,
 }: {
   plan: PlanData | null;
   busy: boolean;
   planLocked: boolean;
   onExitPlan: () => void;
-  onClearPlan: () => void;
 }) {
   const planPreview =
     plan?.content
@@ -3769,14 +3752,6 @@ function AgentModeStatus({
             <span className="mode-status-detail">{planPreview}</span>
           </span>
           <span className="mode-status-actions">
-            <button
-              type="button"
-              onClick={onClearPlan}
-              disabled={busy || planLocked}
-              title="清空计划内容"
-            >
-              <Trash2 size={13} />
-            </button>
             <button
               type="button"
               onClick={onExitPlan}
