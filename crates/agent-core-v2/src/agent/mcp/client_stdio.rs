@@ -39,6 +39,11 @@ use crate::{
     },
 };
 
+/// `CREATE_NO_WINDOW` (`0x08000000`) keeps console subprocesses spawned from
+/// the windowless desktop shell from flashing a console window.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 pub const STDERR_BUFFER_CAPACITY: usize = 4 * 1024;
 
 pub type UnexpectedCloseListener = Arc<dyn Fn(UnexpectedCloseReason) + Send + Sync>;
@@ -200,6 +205,8 @@ impl StdioMcpClient {
         if let Some(cwd) = &self.cwd {
             command.current_dir(cwd);
         }
+        #[cfg(windows)]
+        command.creation_flags(CREATE_NO_WINDOW);
         let (transport, stderr) = TokioChildProcess::builder(command)
             .stderr(Stdio::piped())
             .spawn()

@@ -40,6 +40,11 @@ use crate::{
 
 const RUNNING: i32 = i32::MIN;
 
+/// `CREATE_NO_WINDOW` (`0x08000000`) keeps console subprocesses spawned from
+/// the windowless desktop shell from flashing a console window.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 pub struct LocalHostProcess {
     pid: i64,
     exit_code: Arc<AtomicI32>,
@@ -277,6 +282,8 @@ fn build_command(
     if let Some(environment) = &options.env {
         process.envs(environment);
     }
+    #[cfg(windows)]
+    process.creation_flags(CREATE_NO_WINDOW);
     process
 }
 
@@ -374,11 +381,14 @@ async fn kill_process_tree(pid: i64, signal: ProcessSignal) -> Result<(), HostPr
 
 #[cfg(windows)]
 async fn kill_process_tree(pid: i64, signal: ProcessSignal) -> Result<(), HostProcessError> {
-    let output = Command::new("taskkill")
+    let mut taskkill = Command::new("taskkill");
+    taskkill
         .args(["/T", "/F", "/PID", &pid.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW);
+    let output = taskkill
         .output()
         .await
         .map_err(|error| kill_error(pid, signal_name(signal), error))?;
