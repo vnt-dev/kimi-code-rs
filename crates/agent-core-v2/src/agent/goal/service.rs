@@ -28,14 +28,14 @@ use crate::{
         context_injector::{AGENT_CONTEXT_INJECTOR_SERVICE_ID, AgentContextInjectorServiceHandle},
         context_memory::{ContextAppendMessagePayload, ContextMessage, PromptOrigin},
         goal::{
-            AGENT_GOAL_SERVICE_ID, AgentGoalServiceContract, AgentGoalServiceHandle,
-            CreateGoalInput, CreateGoalPayload, EmptyGoalPayload, GOAL_ALREADY_EXISTS,
-            GOAL_BUDGET_BLOCK_PREFIX, GOAL_MODEL, GOAL_NOT_FOUND, GOAL_NOT_RESUMABLE,
-            GOAL_OBJECTIVE_EMPTY, GOAL_OBJECTIVE_TOO_LONG, GOAL_STATUS_INVALID,
+            AGENT_GOAL_SERVICE_ID, AgentGoalServiceContract, AgentGoalServiceHandle, CLEAR_GOAL,
+            CREATE_GOAL, CreateGoalInput, CreateGoalPayload, EmptyGoalPayload, FORK_GOAL,
+            GOAL_ALREADY_EXISTS, GOAL_BUDGET_BLOCK_PREFIX, GOAL_MODEL, GOAL_NOT_FOUND,
+            GOAL_NOT_RESUMABLE, GOAL_OBJECTIVE_EMPTY, GOAL_OBJECTIVE_TOO_LONG, GOAL_STATUS_INVALID,
             GOAL_UNSUPPORTED_AGENT, GoalActor, GoalBudgetLimits, GoalChange, GoalChangeKind,
             GoalChangeStats, GoalReasonInput, GoalServiceError, GoalServiceResult, GoalSnapshot,
             GoalState, GoalStatus, GoalToolResult, ResumeGoalInput, SetGoalBudgetLimitsInput,
-            UpdateGoalPayload, clear_goal, compute_budget_report, create_goal,
+            UPDATE_GOAL, UpdateGoalPayload, clear_goal, compute_budget_report, create_goal,
             ensure_goal_errors_registered, goal_budget_block_reason, has_step_budget_remaining,
             is_goal_mutation_tool, matches_goal, update_goal,
         },
@@ -217,8 +217,7 @@ impl AgentGoalService {
         agent_context: AgentScopeContext,
     ) -> GoalServiceResult<Arc<Self>> {
         ensure_goal_errors_registered();
-        LazyLock::force(&GOAL_MODEL);
-        LazyLock::force(&GOAL_FORK_NOTICE_MODEL);
+        register_goal_wire_types();
         let service = Arc::new(Self {
             wire,
             event_bus,
@@ -1664,6 +1663,8 @@ impl GoalReader for GoalServiceReader {
 }
 
 pub fn register_agent_goal_service() {
+    register_goal_wire_types();
+
     register_scoped_service(
         LifecycleScope::Agent,
         AGENT_GOAL_SERVICE_ID,
@@ -1689,6 +1690,18 @@ pub fn register_agent_goal_service() {
         InstantiationType::Eager,
         "goal",
     );
+}
+
+fn register_goal_wire_types() {
+    // TypeScript registers the Goal descriptors and cross reducers as module
+    // import side effects. Rust's LazyLock definitions must be forced before
+    // WireService.restore() encounters records written by either runtime.
+    LazyLock::force(&GOAL_MODEL);
+    LazyLock::force(&CREATE_GOAL);
+    LazyLock::force(&UPDATE_GOAL);
+    LazyLock::force(&CLEAR_GOAL);
+    LazyLock::force(&FORK_GOAL);
+    LazyLock::force(&GOAL_FORK_NOTICE_MODEL);
 }
 
 fn cleanup_pending(service: &Weak<AgentGoalService>, pending: &PendingContinuation) {
@@ -1886,22 +1899,27 @@ mod tests {
     };
 
     #[derive(Default)]
-    struct MemoryLog;
+    struct MemoryLog(Mutex<Vec<Value>>);
 
     #[async_trait]
     impl AppendLogStoreService for MemoryLog {
-        fn append_value(&self, _: &str, _: &str, _: Value, _: AppendLogOptions) {}
+        fn append_value(&self, _: &str, _: &str, value: Value, _: AppendLogOptions) {
+            self.0.lock().unwrap().push(value);
+        }
 
         fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
-            Box::pin(stream::empty())
+            Box::pin(stream::iter(
+                self.0.lock().unwrap().clone().into_iter().map(Ok),
+            ))
         }
 
         async fn rewrite_values(
             &self,
             _: &str,
             _: &str,
-            _: Vec<Value>,
+            records: Vec<Value>,
         ) -> Result<(), AppendLogError> {
+            *self.0.lock().unwrap() = records;
             Ok(())
         }
 
@@ -2102,7 +2120,7 @@ mod tests {
         let event_bus = Arc::new(EventBusService::new());
         let wire = WireServiceHandle(Arc::new(WireService::new(
             "goal-test",
-            AppendLogStoreHandle(Arc::new(MemoryLog)),
+            AppendLogStoreHandle(Arc::new(MemoryLog::default())),
             Arc::new(IdentityBlobs),
             event_bus.clone(),
         )));
@@ -2138,6 +2156,56 @@ mod tests {
         service.self_weak.set(Arc::downgrade(&service)).unwrap();
         service.disposables.add(registration);
         (service, context, events)
+    }
+
+    #[test]
+    fn runtime_registration_installs_all_goal_ops_before_restore() {
+        register_goal_wire_types();
+
+        for op_type in ["goal.create", "goal.update", "goal.clear", "forked"] {
+            assert!(
+                crate::wire::op::registered_op(op_type).is_some(),
+                "{op_type} must be replayable before goal service instantiation"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_replays_forked_to_clear_goal_and_schedule_notice() {
+        register_goal_wire_types();
+        let records = vec![
+            Value::Object(
+                crate::wire::record::create_wire_metadata_record_at(1).into_wire_record(),
+            ),
+            serde_json::json!({
+                "type": "goal.create",
+                "goalId": "source-goal",
+                "objective": "finish source task",
+                "time": 2
+            }),
+            serde_json::json!({
+                "type": "forked",
+                "time": 3
+            }),
+        ];
+        let log = Arc::new(MemoryLog(Mutex::new(records)));
+        let wire = WireService::new(
+            "goal-fork-restore-test",
+            AppendLogStoreHandle(log),
+            Arc::new(IdentityBlobs),
+            Arc::new(EventBusService::new()),
+        );
+
+        wire.restore().await.unwrap();
+
+        assert_eq!(wire.get_model(&GOAL_MODEL), None);
+        assert_eq!(
+            wire.get_model(&GOAL_FORK_NOTICE_MODEL),
+            GoalForkNoticeState {
+                goal_present: false,
+                reminder_pending: true,
+            }
+        );
     }
 
     #[test]
