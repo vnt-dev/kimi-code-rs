@@ -78,6 +78,10 @@ pub fn uses_max_completion_tokens(model: &str) -> bool {
 }
 
 // Original: openai-legacy.ts, completionTokenKwargs()
+//
+// Rust adaptation: JSON.stringify emits whole doubles without a fractional
+// part, so whole token counts serialize as JSON integers here. Strict
+// gateways declare max_tokens as an unsigned integer and reject `131072.0`.
 pub fn completion_token_kwargs(
     model: &str,
     max_completion_tokens: f64,
@@ -87,7 +91,15 @@ pub fn completion_token_kwargs(
     } else {
         "max_tokens"
     };
-    Map::from_iter([(key.to_owned(), Value::from(max_completion_tokens))])
+    Map::from_iter([(key.to_owned(), token_count_value(max_completion_tokens))])
+}
+
+fn token_count_value(tokens: f64) -> Value {
+    if tokens.is_finite() && tokens.fract() == 0.0 && tokens >= 0.0 && tokens <= u64::MAX as f64 {
+        Value::from(tokens as u64)
+    } else {
+        Value::from(tokens)
+    }
 }
 
 // Original: openai-legacy.ts, normalizeGenerationKwargs()
@@ -1147,14 +1159,18 @@ mod tests {
         }
         assert_eq!(
             completion_token_kwargs("o1", 8192.0),
-            json!({"max_completion_tokens":8192.0})
+            json!({"max_completion_tokens":8192})
                 .as_object()
                 .unwrap()
                 .clone()
         );
         assert_eq!(
             completion_token_kwargs("gpt-4o", 4096.0),
-            json!({"max_tokens":4096.0}).as_object().unwrap().clone()
+            json!({"max_tokens":4096}).as_object().unwrap().clone()
+        );
+        assert_eq!(
+            completion_token_kwargs("gpt-4o", 4096.5),
+            json!({"max_tokens":4096.5}).as_object().unwrap().clone()
         );
     }
 
@@ -1337,7 +1353,7 @@ mod tests {
         assert_eq!(resolved.kwargs["prompt_cache_key"], "session");
         assert_eq!(resolved.kwargs["temperature"], 0.4);
         assert_eq!(resolved.kwargs["top_p"], 0.8);
-        assert_eq!(resolved.kwargs["max_tokens"], 5.0);
+        assert_eq!(resolved.kwargs["max_tokens"], 5);
         assert_eq!(resolved.reasoning_effort.as_deref(), Some("medium"));
 
         let hooks = OpenAiChatHooks {
