@@ -4705,7 +4705,10 @@ button.message-skill-chip:hover {
   bottom: calc(100% + 8px);
   left: 0;
   z-index: 25;
+  display: flex;
   padding: 6px;
+  flex-direction: column;
+  gap: 2px;
   border: 1px solid var(--line-strong);
   border-radius: 11px;
   background: var(--dialog-surface);

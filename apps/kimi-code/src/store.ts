@@ -9,7 +9,9 @@ import type {
 
 const ACCENTS = ["#8b7cf6", "#5aa9ff", "#47c7a2", "#f0a45d", "#df719d"];
 
-function toConversation(session: SessionSummary): Conversation {
+export function conversationFromSummary(
+  session: SessionSummary,
+): Conversation {
   return {
     id: session.id,
     title: session.title || session.lastPrompt || "新对话",
@@ -29,7 +31,7 @@ function toProject(
     path: workspace.root,
     accent: ACCENTS[index % ACCENTS.length],
     expanded: true,
-    conversations: sessions.map(toConversation),
+    conversations: sessions.map(conversationFromSummary),
   };
 }
 

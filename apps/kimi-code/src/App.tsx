@@ -69,6 +69,7 @@ import {
   archiveSession,
   createAgentClient,
   createOrTouchWorkspace,
+  forkSession,
   getSkillContent,
   listSkills,
   listWorkspaceSessions,
@@ -81,6 +82,7 @@ import {
 } from "./agentRpc";
 import {
   conversationFromSession,
+  conversationFromSummary,
   getActive,
   loadDesktopState,
   projectFromWorkspace,
@@ -150,6 +152,7 @@ import type {
 
 const MAX_PROMPT_ATTACHMENTS = 8;
 const MAX_PROMPT_SKILLS = 8;
+const SLASH_COMMAND_COUNT = 2;
 const MAX_PROMPT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_IMAGE_DIMENSION = 2048;
 const IMAGE_COMPRESSION_THRESHOLD = 4 * 1024 * 1024;
@@ -1453,6 +1456,7 @@ export default function App() {
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashMenuActiveIndex, setSlashMenuActiveIndex] = useState(0);
   const [compactionCommandBusy, setCompactionCommandBusy] = useState(false);
+  const [forkCommandBusy, setForkCommandBusy] = useState(false);
   const [queuedPrompts, setQueuedPrompts] = useState<
     Record<string, QueuedPrompt[]>
   >({});
@@ -1693,7 +1697,16 @@ export default function App() {
     activeAgentScope !== undefined &&
     !isStreaming &&
     activeCompaction?.phase !== "started" &&
-    !compactionCommandBusy;
+    !compactionCommandBusy &&
+    !forkCommandBusy;
+  const canRunFork =
+    activeProject !== undefined &&
+    activeConversation !== undefined &&
+    activeAgentScope?.sessionId === activeConversation.id &&
+    !isStreaming &&
+    activeCompaction?.phase !== "started" &&
+    !compactionCommandBusy &&
+    !forkCommandBusy;
   const activeAgentUsage = activeConversation
     ? agentUsages[activeConversation.id]
     : undefined;
@@ -3683,6 +3696,80 @@ export default function App() {
     }
   };
 
+  const runForkCommand = async (): Promise<void> => {
+    const project = activeProject;
+    const source = activeConversation;
+    if (
+      !project ||
+      !source ||
+      activeAgentScope?.sessionId !== source.id
+    ) {
+      showNotice("会话正在准备，请稍后再试");
+      return;
+    }
+    if (isStreaming) {
+      showNotice("任务执行期间不能复制会话");
+      return;
+    }
+    if (
+      activeCompaction?.phase === "started" ||
+      compactionCommandBusy ||
+      forkCommandBusy
+    ) {
+      showNotice("上下文压缩期间不能复制会话");
+      return;
+    }
+
+    const nextPrompt = prompt.startsWith("/") ? prompt.slice(1) : prompt;
+    resetPrompt(nextPrompt);
+    setForkCommandBusy(true);
+    try {
+      const forkedId = await forkSession(source.id);
+      const sessions = await listWorkspaceSessions(project.id).catch(
+        () => [],
+      );
+      const summary = sessions.find((session) => session.id === forkedId);
+      const forkedConversation = {
+        ...(summary
+          ? conversationFromSummary(summary)
+          : {
+              ...conversationFromSession(forkedId),
+              title: `Fork: ${source.title}`,
+            }),
+        modelId: source.modelId,
+        thinkingLevel: source.thinkingLevel,
+        permissionMode: source.permissionMode,
+      };
+
+      updateDesktop((current) => ({
+        ...current,
+        activeProjectId: project.id,
+        activeConversationId: forkedId,
+        projects: current.projects.map((item) =>
+          item.id === project.id
+            ? {
+                ...item,
+                expanded: true,
+                conversations: [
+                  forkedConversation,
+                  ...item.conversations.filter(
+                    (conversation) => conversation.id !== forkedId,
+                  ),
+                ],
+              }
+            : item,
+        ),
+      }));
+      followLatestMessageRef.current = true;
+      showNotice("已复制并切换到新会话");
+    } catch (error) {
+      showNotice(conciseError(error));
+    } finally {
+      setForkCommandBusy(false);
+      window.requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+  };
+
   const handlePromptKeyDown = (
     event: KeyboardEvent<HTMLTextAreaElement>,
   ): void => {
@@ -3697,7 +3784,13 @@ export default function App() {
       (event.key === "ArrowDown" || event.key === "ArrowUp")
     ) {
       event.preventDefault();
-      setSlashMenuActiveIndex(0);
+      setSlashMenuActiveIndex((current) => {
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        return (
+          (current + delta + SLASH_COMMAND_COUNT) %
+          SLASH_COMMAND_COUNT
+        );
+      });
       return;
     }
     if (
@@ -3706,7 +3799,11 @@ export default function App() {
       !event.shiftKey
     ) {
       event.preventDefault();
-      void runCompactionCommand();
+      if (slashMenuActiveIndex === 0) {
+        void runCompactionCommand();
+      } else {
+        void runForkCommand();
+      }
       return;
     }
     if (
@@ -4269,6 +4366,27 @@ export default function App() {
                             : `压缩此任务的上下文（已占用 ${activeContextPercent}%）`}
                       </small>
                     </button>
+                    <button
+                      className={
+                        slashMenuActiveIndex === 1 ? "selected" : undefined
+                      }
+                      id="slash-command-fork"
+                      type="button"
+                      role="menuitem"
+                      disabled={!canRunFork}
+                      onMouseEnter={() => setSlashMenuActiveIndex(1)}
+                      onClick={() => void runForkCommand()}
+                    >
+                      <span className="slash-command-icon" aria-hidden="true">
+                        {forkCommandBusy ? (
+                          <span className="spinner" />
+                        ) : (
+                          <Copy size={14} />
+                        )}
+                      </span>
+                      <strong>复制</strong>
+                      <small>从当前会话复制出一个新会话</small>
+                    </button>
                   </div>
                 )}
                 {promptAttachments.length > 0 && (
@@ -4396,8 +4514,10 @@ export default function App() {
                     slashMenuOpen ? "slash-command-menu" : undefined
                   }
                   aria-activedescendant={
-                    slashMenuOpen && slashMenuActiveIndex === 0
-                      ? "slash-command-compact"
+                    slashMenuOpen
+                      ? slashMenuActiveIndex === 0
+                        ? "slash-command-compact"
+                        : "slash-command-fork"
                       : undefined
                   }
                   placeholder={

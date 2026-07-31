@@ -205,6 +205,10 @@ export function listWorkspaceSessions(
   return invoke<SessionSummary[]>("list_workspace_sessions", { workspaceId });
 }
 
+export function forkSession(sessionId: string): Promise<string> {
+  return invoke<string>("fork_session", { sessionId });
+}
+
 export function archiveSession(sessionId: string): Promise<void> {
   return invoke<void>("archive_session", { sessionId });
 }

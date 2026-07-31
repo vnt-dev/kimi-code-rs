@@ -59,7 +59,9 @@ use crate::{
             MESSAGE_LEGACY_SERVICE_ID, MessageListQuery, PageResponse as MessagePageResponse,
         },
         session_index::SessionSummary,
-        session_lifecycle::{CreateSessionOptions, SESSION_LIFECYCLE_SERVICE_ID},
+        session_lifecycle::{
+            CreateSessionOptions, ForkSessionOptions, SESSION_LIFECYCLE_SERVICE_ID,
+        },
         skill_catalog::{SkillSource as CatalogSkillSource, is_user_activatable_skill_type},
         workspace_registry::{
             WORKSPACE_QUERY_SERVICE_ID, WORKSPACE_REGISTRY_SERVICE_ID, Workspace,
@@ -76,6 +78,7 @@ use crate::{
     session::{
         agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID, ensure_main_agent},
         interaction::{Interaction, InteractionKind, SESSION_INTERACTION_SERVICE_ID},
+        session_context::SESSION_CONTEXT_ID,
         skill_catalog::SESSION_SKILL_CATALOG_ID,
         todo::SESSION_TODO_SERVICE_ID,
     },
@@ -560,6 +563,29 @@ impl KimiCodeDesktopClient {
             .list_recent_sessions(workspace_id)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    pub async fn fork_session(&self, session_id: &str) -> Result<String, String> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Err("A session id is required.".to_owned());
+        }
+
+        let sessions = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let forked = sessions
+            .fork(ForkSessionOptions {
+                source_session_id: session_id.to_owned(),
+                ..ForkSessionOptions::default()
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        let context = forked
+            .get(SESSION_CONTEXT_ID)
+            .map_err(|error| error.to_string())?;
+        Ok(context.session_id.clone())
     }
 
     pub async fn list_session_skills(&self, session_id: &str) -> Result<Vec<DesktopSkill>, String> {

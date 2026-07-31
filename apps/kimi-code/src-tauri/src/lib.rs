@@ -182,6 +182,11 @@ async fn list_workspace_sessions(
 }
 
 #[tauri::command]
+async fn fork_session(state: State<'_, AppState>, session_id: String) -> Result<String, String> {
+    state.client.fork_session(&session_id).await
+}
+
+#[tauri::command]
 async fn archive_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     state.client.archive_session(&session_id).await
 }
@@ -327,6 +332,7 @@ pub fn run() {
             create_or_touch_workspace,
             remove_workspace,
             list_workspace_sessions,
+            fork_session,
             archive_session,
             prepare_session,
             conversation_context_usage,
