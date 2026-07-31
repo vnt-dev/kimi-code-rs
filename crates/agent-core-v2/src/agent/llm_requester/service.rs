@@ -3,13 +3,15 @@
 //! Original: `packages/agent-core-v2/src/agent/llmRequester/llmRequesterService.ts`.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     error::Error,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, future::FutureExt};
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -26,6 +28,7 @@ use crate::{
         context_memory::{AGENT_CONTEXT_MEMORY_SERVICE_ID, AgentContextMemoryServiceHandle},
         context_projector::{
             AGENT_CONTEXT_PROJECTOR_SERVICE_ID, AgentContextProjectorServiceHandle,
+            MediaStripSnapshot,
         },
         context_size::{AGENT_CONTEXT_SIZE_SERVICE_ID, AgentContextSizeServiceHandle},
         fault_injection::{FAULT_INJECTION_SERVICE_ID, FaultInjectionServiceHandle, FaultKind},
@@ -34,28 +37,71 @@ use crate::{
         tool_select::{AGENT_TOOL_SELECT_SERVICE_ID, AgentToolSelectServiceHandle},
         usage::{AGENT_USAGE_SERVICE_ID, AgentUsageServiceHandle},
     },
+    app::config::{CONFIG_SERVICE_ID, ConfigServiceHandle},
     kosong::{
         contract::{
             errors::{ApiStatusData, ChatProviderError},
+            message::Message,
+            provider::ThinkingEffort,
             request_trace::LlmRequestTrace,
             tool::Tool,
             usage::empty_usage,
         },
         model::{
-            MODEL_CATALOG_SERVICE_ID, ModelCatalogHandle, ModelRequestEvent, ModelRequestInput,
-            ModelRequestParams,
+            MODEL_CATALOG_SERVICE_ID, Model, ModelCatalogHandle, ModelRequestEvent,
+            ModelRequestInput, ModelRequestParams,
+            completion_budget::{
+                ResolveCompletionBudgetArgs, completion_budget_params, resolve_completion_budget,
+            },
+            contract::{MODELS_SECTION, ModelsSection},
+            effective_max_completion_tokens,
+            thinking::{THINKING_SECTION, ThinkingConfig, resolve_thinking_keep},
+            types::ModelOverrides,
         },
     },
+    wire::contract::{WIRE_SERVICE_ID, WireServiceHandle},
 };
 
 use super::{
     AGENT_LLM_REQUESTER_SERVICE_ID, AgentLlmRequestError, AgentLlmRequestFinish,
-    AgentLlmRequestOverrides, AgentLlmRequestPartHandler, AgentLlmRequestSource,
-    AgentLlmRequestTask, AgentLlmRequesterServiceContract, AgentLlmRequesterServiceHandle,
-    PreparedTurnRequestConfig,
+    AgentLlmRequestLogFields, AgentLlmRequestOverrides, AgentLlmRequestPartHandler,
+    AgentLlmRequestSource, AgentLlmRequestTask, AgentLlmRequesterServiceContract,
+    AgentLlmRequesterServiceHandle, LLM_REQUEST, LLM_REQUEST_TRACE_MODEL, LLM_TOOLS_SNAPSHOT,
+    LlmRequestKind, LlmRequestPayload, LlmRequestProjection, LlmRequestToolSchema,
+    LlmToolsSnapshotPayload, PreparedTurnRequestConfig, llm_request, llm_tools_snapshot,
 };
 
 type TurnRequestConfig = (ProfileModelContext, ModelRequestParams, String);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RequestProjection {
+    Normal,
+    Strict,
+    MediaDegraded,
+    MediaStripped,
+}
+
+impl RequestProjection {
+    fn as_field(self) -> Option<&'static str> {
+        match self {
+            Self::Normal => None,
+            Self::Strict => Some("strict"),
+            Self::MediaDegraded => Some("media-degraded"),
+            Self::MediaStripped => Some("media-stripped"),
+        }
+    }
+}
+
+struct LlmRequestRecordInput<'a> {
+    model: &'a Model,
+    model_alias: &'a str,
+    thinking_effort: &'a ThinkingEffort,
+    params: &'a ModelRequestParams,
+    system_prompt: &'a str,
+    tools: &'a [Tool],
+    messages: &'a [Message],
+    fields: &'a AgentLlmRequestLogFields,
+}
 
 #[derive(Default)]
 struct TurnConfigCache {
@@ -122,7 +168,11 @@ pub struct AgentLlmRequesterService {
     usage: AgentUsageServiceHandle,
     catalog: ModelCatalogHandle,
     fault: FaultInjectionServiceHandle,
+    config: ConfigServiceHandle,
+    wire: WireServiceHandle,
     turn_configs: TurnConfigCache,
+    media_degraded_turns: Arc<Mutex<HashSet<i64>>>,
+    media_stripped_turns: Arc<Mutex<HashMap<i64, MediaStripSnapshot>>>,
 }
 
 impl AgentLlmRequesterService {
@@ -137,6 +187,8 @@ impl AgentLlmRequesterService {
         usage: AgentUsageServiceHandle,
         catalog: ModelCatalogHandle,
         fault: FaultInjectionServiceHandle,
+        config: ConfigServiceHandle,
+        wire: WireServiceHandle,
     ) -> Self {
         Self {
             context,
@@ -148,7 +200,11 @@ impl AgentLlmRequesterService {
             usage,
             catalog,
             fault,
+            config,
+            wire,
             turn_configs: TurnConfigCache::default(),
+            media_degraded_turns: Arc::new(Mutex::new(HashSet::new())),
+            media_stripped_turns: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -190,6 +246,105 @@ impl AgentLlmRequesterService {
             .collect()
     }
 
+    fn model_overrides(&self) -> ModelOverrides {
+        self.config
+            .get("modelOverrides")
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default()
+    }
+
+    fn thinking_config(&self) -> ThinkingConfig {
+        self.config
+            .get(THINKING_SECTION)
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default()
+    }
+
+    fn model_beta_api(&self, model_alias: &str) -> Option<bool> {
+        self.config
+            .get(MODELS_SECTION)
+            .and_then(|value| serde_json::from_value::<ModelsSection>(value).ok())
+            .and_then(|models| models.get(model_alias).and_then(|model| model.beta_api))
+    }
+
+    fn media_strip_snapshot_for_turn(
+        &self,
+        source: Option<&AgentLlmRequestSource>,
+    ) -> Option<MediaStripSnapshot> {
+        let turn_id = source_turn_id(source)?;
+        self.media_stripped_turns
+            .lock()
+            .unwrap()
+            .get(&turn_id)
+            .cloned()
+    }
+
+    fn is_media_degraded_recovery_turn(&self, source: Option<&AgentLlmRequestSource>) -> bool {
+        source_turn_id(source)
+            .is_some_and(|turn_id| self.media_degraded_turns.lock().unwrap().contains(&turn_id))
+    }
+
+    fn mark_media_degraded_recovery_turn(&self, source: Option<&AgentLlmRequestSource>) {
+        let Some(turn_id) = source_turn_id(source) else {
+            return;
+        };
+        let mut turns = self.media_degraded_turns.lock().unwrap();
+        turns.retain(|candidate| *candidate >= turn_id);
+        turns.insert(turn_id);
+    }
+
+    fn mark_media_stripped_recovery_turn(
+        &self,
+        snapshot: MediaStripSnapshot,
+        source: Option<&AgentLlmRequestSource>,
+    ) {
+        let Some(turn_id) = source_turn_id(source) else {
+            return;
+        };
+        let mut turns = self.media_stripped_turns.lock().unwrap();
+        turns.retain(|candidate, _| *candidate >= turn_id);
+        turns.insert(turn_id, snapshot);
+    }
+
+    fn record_request(&self, input: LlmRequestRecordInput<'_>) -> Result<(), AgentLlmRequestError> {
+        let tools = tool_signature(provider_visible_tools(input.tools));
+        let tools_json = serde_json::to_string(&tools)
+            .map_err(|error| Arc::new(error) as AgentLlmRequestError)?;
+        let tools_hash = fingerprint(&tools_json);
+
+        let model_overrides = self.model_overrides();
+        let thinking_config = self.thinking_config();
+        let system_prompt_hash = fingerprint(input.system_prompt);
+        let system_prompt = (input.system_prompt != self.profile.get_system_prompt())
+            .then(|| input.system_prompt.to_owned());
+        let payload = LlmRequestPayload {
+            kind: request_kind_for_record(input.fields),
+            provider: input.model.protocol.to_string(),
+            model: input.model.name.clone(),
+            model_alias: Some(input.model_alias.to_owned()),
+            thinking_effort: Some(input.thinking_effort.clone()),
+            thinking_keep: resolve_thinking_keep(
+                model_overrides.thinking_keep.as_deref(),
+                thinking_config.keep.as_deref(),
+                input.thinking_effort,
+            ),
+            temperature: model_overrides.temperature,
+            top_p: model_overrides.top_p,
+            max_tokens: effective_max_completion_tokens(Some(input.params)),
+            beta_api: self.model_beta_api(input.model_alias),
+            tool_select: self.tool_select.enabled(),
+            system_prompt_hash,
+            system_prompt,
+            tools_hash: tools_hash.clone(),
+            message_count: input.messages.len() as f64,
+            turn_step: string_field(input.fields, "turnStep"),
+            attempt: string_field(input.fields, "attempt"),
+            projection: projection_field(input.fields),
+            dropped_count: number_field(input.fields, "droppedCount"),
+        };
+        dispatch_request_trace(&self.wire, tools_hash, tools, payload)
+    }
+
     async fn perform(
         &self,
         overrides: AgentLlmRequestOverrides,
@@ -202,11 +357,8 @@ impl AgentLlmRequesterService {
                 .throw_if_aborted()
                 .map_err(|error| error as AgentLlmRequestError)?;
         }
-        let source_turn = match &overrides.source {
-            Some(AgentLlmRequestSource::Turn { turn_id, .. }) => Some(*turn_id as i64),
-            _ => None,
-        };
-        let (resolved, params, prompt) = match source_turn {
+        let source_turn = source_turn_id(overrides.source.as_ref());
+        let (resolved, mut params, prompt) = match source_turn {
             Some(id) => self.turn_config(id)?,
             None => (
                 self.profile
@@ -218,10 +370,32 @@ impl AgentLlmRequesterService {
                 self.profile.get_system_prompt(),
             ),
         };
+        let model_overrides = self.model_overrides();
+        let budget = resolve_completion_budget(ResolveCompletionBudgetArgs {
+            max_output_size: overrides
+                .max_output_size
+                .or_else(|| resolved.max_output_size.map(|value| value as f64)),
+            reserved_context_size: resolved.reserved_context_size.map(|value| value as f64),
+            max_completion_tokens_cap: model_overrides.max_completion_tokens,
+        });
+        let used_context_tokens = overrides
+            .messages
+            .is_none()
+            .then(|| self.context_size.get(None, None).measured);
+        if let Some(budget_params) = completion_budget_params(
+            budget,
+            Some(&resolved.model_capabilities),
+            used_context_tokens,
+        ) {
+            params.max_completion_tokens = Some(budget_params.max_completion_tokens);
+            params.used_context_tokens = budget_params.used_context_tokens;
+            params.max_context_tokens = budget_params.max_context_tokens.map(|value| value as f64);
+        }
         let requester = self
             .catalog
             .get_requester(&resolved.model_alias)
             .map_err(AgentLlmRequestError::from)?;
+        let model = requester.model();
         let history = overrides
             .messages
             .as_ref()
@@ -241,28 +415,55 @@ impl AgentLlmRequesterService {
                     .collect()
             })
             .unwrap_or_else(|| self.context.get());
+        let source_messages = history
+            .iter()
+            .map(|entry| entry.message.clone())
+            .collect::<Vec<_>>();
         let shaped = self.tool_select.shape_history(&history);
         let tools = overrides.tools.unwrap_or_else(|| self.default_tools());
         let system_prompt = overrides.system_prompt.unwrap_or(prompt);
-        let mut projection = 0_u8;
+        let base_fields = log_fields_for_source(overrides.source.as_ref());
+        let mut media_strip_snapshot =
+            self.media_strip_snapshot_for_turn(overrides.source.as_ref());
+        let mut projection = if media_strip_snapshot.is_some() {
+            RequestProjection::MediaStripped
+        } else if self.is_media_degraded_recovery_turn(overrides.source.as_ref()) {
+            RequestProjection::MediaDegraded
+        } else {
+            RequestProjection::Normal
+        };
         loop {
             trace.set_trace_id(None);
             let messages = match projection {
-                0 => self.projector.project(&shaped),
-                1 => self.projector.project_strict(&shaped),
-                2 => self.projector.project_media_degraded(&shaped),
-                _ => self.projector.project_media_stripped(&shaped, None),
+                RequestProjection::Normal => self.projector.project(&shaped),
+                RequestProjection::Strict => self.projector.project_strict(&shaped),
+                RequestProjection::MediaDegraded => self.projector.project_media_degraded(&shaped),
+                RequestProjection::MediaStripped => self
+                    .projector
+                    .project_media_stripped(&shaped, media_strip_snapshot.as_ref()),
             }
             .map_err(|error| Arc::new(error) as AgentLlmRequestError)?;
+            let input = ModelRequestInput {
+                system_prompt: system_prompt.clone(),
+                tools: tools.clone(),
+                messages: messages.clone(),
+                response_format: None,
+            };
+            let fields = request_fields(&base_fields, projection);
+            self.record_request(LlmRequestRecordInput {
+                model: model.as_ref(),
+                model_alias: &resolved.model_alias,
+                thinking_effort: &resolved.thinking_level,
+                params: &params,
+                system_prompt: &input.system_prompt,
+                tools: &input.tools,
+                messages: &input.messages,
+                fields: &fields,
+            })?;
             match self
                 .run_stream(
                     requester.clone(),
-                    ModelRequestInput {
-                        system_prompt: system_prompt.clone(),
-                        tools: tools.clone(),
-                        messages: messages.clone(),
-                        response_format: None,
-                    },
+                    input,
                     params.clone(),
                     on_part.clone(),
                     signal.clone(),
@@ -270,14 +471,15 @@ impl AgentLlmRequesterService {
                 )
                 .await
             {
-                Ok(finish) => {
+                Ok(mut finish) => {
+                    finish.model = Some(resolved.model_alias.clone());
                     let _ = self.usage.record(
-                        resolved.model_alias,
+                        resolved.model_alias.clone(),
                         finish.usage,
                         overrides.source.clone(),
                     );
                     let _ = self.context_size.measured(
-                        &messages,
+                        &source_messages,
                         std::slice::from_ref(&finish.message),
                         finish.usage,
                     );
@@ -290,7 +492,55 @@ impl AgentLlmRequesterService {
                     let Some(provider_error) = find_provider_error(error.as_ref()) else {
                         return Err(error);
                     };
-                    projection = match (provider_error, projection) { (ChatProviderError::ApiRequestTooLarge { .. }, 0) => 2, (ChatProviderError::ApiRequestTooLarge { .. }, 2) => 3, (_, 0) if crate::kosong::contract::errors::is_image_format_error(provider_error) => 3, (_, 0) if crate::kosong::contract::errors::is_recoverable_request_structure_error(provider_error) => 1, _ => return Err(error) };
+                    projection = match (provider_error, projection) {
+                        (
+                            ChatProviderError::ApiRequestTooLarge { .. },
+                            RequestProjection::Normal,
+                        ) => {
+                            self.mark_media_degraded_recovery_turn(overrides.source.as_ref());
+                            RequestProjection::MediaDegraded
+                        }
+                        (
+                            ChatProviderError::ApiRequestTooLarge { .. },
+                            RequestProjection::MediaDegraded,
+                        ) => {
+                            let snapshot = self
+                                .projector
+                                .capture_media_strip_snapshot(&shaped)
+                                .map_err(|error| Arc::new(error) as AgentLlmRequestError)?;
+                            self.mark_media_stripped_recovery_turn(
+                                snapshot.clone(),
+                                overrides.source.as_ref(),
+                            );
+                            media_strip_snapshot = Some(snapshot);
+                            RequestProjection::MediaStripped
+                        }
+                        (_, current)
+                            if current != RequestProjection::MediaStripped
+                                && crate::kosong::contract::errors::is_image_format_error(
+                                    provider_error,
+                                ) =>
+                        {
+                            let snapshot = self
+                                .projector
+                                .capture_media_strip_snapshot(&shaped)
+                                .map_err(|error| Arc::new(error) as AgentLlmRequestError)?;
+                            self.mark_media_stripped_recovery_turn(
+                                snapshot.clone(),
+                                overrides.source.as_ref(),
+                            );
+                            media_strip_snapshot = Some(snapshot);
+                            RequestProjection::MediaStripped
+                        }
+                        (_, RequestProjection::Normal)
+                            if crate::kosong::contract::errors::is_recoverable_request_structure_error(
+                                provider_error,
+                            ) =>
+                        {
+                            RequestProjection::Strict
+                        }
+                        _ => return Err(error),
+                    };
                 }
             }
         }
@@ -453,9 +703,136 @@ impl AgentLlmRequesterService {
             usage: self.usage.clone(),
             catalog: self.catalog.clone(),
             fault: self.fault.clone(),
+            config: self.config.clone(),
+            wire: self.wire.clone(),
             turn_configs: self.turn_configs.clone_for_task(),
+            media_degraded_turns: Arc::clone(&self.media_degraded_turns),
+            media_stripped_turns: Arc::clone(&self.media_stripped_turns),
         }
     }
+}
+
+fn source_turn_id(source: Option<&AgentLlmRequestSource>) -> Option<i64> {
+    match source {
+        Some(AgentLlmRequestSource::Turn { turn_id, .. }) => Some(*turn_id as i64),
+        _ => None,
+    }
+}
+
+fn log_fields_for_source(source: Option<&AgentLlmRequestSource>) -> AgentLlmRequestLogFields {
+    match source {
+        Some(AgentLlmRequestSource::Turn {
+            turn_id,
+            step,
+            log_fields,
+        }) => {
+            let mut fields = log_fields.clone().unwrap_or_default();
+            if let Some(step) = step {
+                fields.insert(
+                    "turnStep".into(),
+                    Value::String(format!("{turn_id}.{step}")),
+                );
+            }
+            fields
+        }
+        Some(AgentLlmRequestSource::Operation {
+            request_kind,
+            log_fields,
+            ..
+        }) => {
+            let mut fields = log_fields.clone().unwrap_or_default();
+            if let Some(request_kind) = request_kind {
+                fields.insert("requestKind".into(), Value::String(request_kind.clone()));
+            }
+            fields
+        }
+        None => Map::new(),
+    }
+}
+
+fn request_fields(
+    base: &AgentLlmRequestLogFields,
+    projection: RequestProjection,
+) -> AgentLlmRequestLogFields {
+    let mut fields = base.clone();
+    if let Some(projection) = projection.as_field() {
+        fields.insert("projection".into(), Value::String(projection.into()));
+    }
+    fields
+}
+
+fn provider_visible_tools(tools: &[Tool]) -> impl Iterator<Item = &Tool> {
+    tools.iter().filter(|tool| tool.deferred != Some(true))
+}
+
+fn tool_signature<'a>(tools: impl IntoIterator<Item = &'a Tool>) -> Vec<LlmRequestToolSchema> {
+    tools
+        .into_iter()
+        .map(|tool| LlmRequestToolSchema {
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            parameters: tool.parameters.clone(),
+        })
+        .collect()
+}
+
+fn request_kind_for_record(fields: &AgentLlmRequestLogFields) -> LlmRequestKind {
+    if fields.get("kind").and_then(Value::as_str) == Some("compaction")
+        || fields.get("requestKind").and_then(Value::as_str) == Some("full_compaction")
+    {
+        LlmRequestKind::Compaction
+    } else {
+        LlmRequestKind::Loop
+    }
+}
+
+fn string_field(fields: &AgentLlmRequestLogFields, key: &str) -> Option<String> {
+    fields.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+fn number_field(fields: &AgentLlmRequestLogFields, key: &str) -> Option<f64> {
+    fields.get(key).and_then(Value::as_f64)
+}
+
+fn projection_field(fields: &AgentLlmRequestLogFields) -> Option<LlmRequestProjection> {
+    match fields.get("projection").and_then(Value::as_str) {
+        Some("strict") => Some(LlmRequestProjection::Strict),
+        Some("media-degraded") => Some(LlmRequestProjection::MediaDegraded),
+        Some("media-stripped") => Some(LlmRequestProjection::MediaStripped),
+        _ => None,
+    }
+}
+
+fn fingerprint(content: &str) -> String {
+    Sha256::digest(content.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn dispatch_request_trace(
+    wire: &WireServiceHandle,
+    tools_hash: String,
+    tools: Vec<LlmRequestToolSchema>,
+    payload: LlmRequestPayload,
+) -> Result<(), AgentLlmRequestError> {
+    if !wire
+        .get_model(&LLM_REQUEST_TRACE_MODEL)
+        .seen_tools_hashes
+        .contains(&tools_hash)
+    {
+        let op = llm_tools_snapshot(LlmToolsSnapshotPayload {
+            hash: tools_hash,
+            tools,
+        })
+        .map_err(|error| Arc::new(error) as AgentLlmRequestError)?;
+        wire.dispatch([op])
+            .map_err(|error| Arc::new(error) as AgentLlmRequestError)?;
+    }
+
+    let op = llm_request(payload).map_err(|error| Arc::new(error) as AgentLlmRequestError)?;
+    wire.dispatch([op])
+        .map_err(|error| Arc::new(error) as AgentLlmRequestError)
 }
 
 fn find_provider_error<'a>(mut error: &'a (dyn Error + 'static)) -> Option<&'a ChatProviderError> {
@@ -467,7 +844,17 @@ fn find_provider_error<'a>(mut error: &'a (dyn Error + 'static)) -> Option<&'a C
     }
 }
 
+fn register_llm_request_ops() {
+    // TypeScript registers these descriptors as a module-import side effect.
+    // Rust's LazyLock definitions need an explicit force before any agent wire
+    // can restore records produced by either implementation.
+    LazyLock::force(&LLM_TOOLS_SNAPSHOT);
+    LazyLock::force(&LLM_REQUEST);
+}
+
 pub fn register_agent_llm_requester_service() {
+    register_llm_request_ops();
+
     register_scoped_service(
         LifecycleScope::Agent,
         AGENT_LLM_REQUESTER_SERVICE_ID,
@@ -481,6 +868,8 @@ pub fn register_agent_llm_requester_service() {
             let usage = accessor.get(AGENT_USAGE_SERVICE_ID)?;
             let catalog = accessor.get(MODEL_CATALOG_SERVICE_ID)?;
             let fault = accessor.get(FAULT_INJECTION_SERVICE_ID)?;
+            let config = accessor.get(CONFIG_SERVICE_ID)?;
+            let wire = accessor.get(WIRE_SERVICE_ID)?;
             Ok(AgentLlmRequesterServiceHandle(Arc::new(
                 AgentLlmRequesterService::new(
                     (*context).clone(),
@@ -492,6 +881,8 @@ pub fn register_agent_llm_requester_service() {
                     (*usage).clone(),
                     (*catalog).clone(),
                     (*fault).clone(),
+                    (*config).clone(),
+                    (*wire).clone(),
                 ),
             )))
         }),
@@ -503,10 +894,110 @@ pub fn register_agent_llm_requester_service() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::_base::{
-        errors::errors::{Error2, Error2Options, ErrorCause},
-        utils::abort::{AbortController, AbortError},
+    use futures_util::stream;
+
+    use crate::{
+        _base::{
+            di::lifecycle::{DisposableHandle, disposable_none},
+            errors::errors::{Error2, Error2Options, ErrorCause},
+            utils::abort::{AbortController, AbortError},
+        },
+        persistence::interface::append_log_store::{
+            AppendLogError, AppendLogOptions, AppendLogStoreHandle, AppendLogStoreService,
+            AppendLogValueStream,
+        },
+        wire::wire_service::{DomainEventPublisher, WireBlobService, WireService},
     };
+
+    #[derive(Default)]
+    struct MemoryLog(Mutex<Vec<Value>>);
+
+    #[async_trait]
+    impl AppendLogStoreService for MemoryLog {
+        fn append_value(&self, _: &str, _: &str, value: Value, _: AppendLogOptions) {
+            self.0.lock().unwrap().push(value);
+        }
+
+        fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
+            Box::pin(stream::iter(
+                self.0.lock().unwrap().clone().into_iter().map(Ok),
+            ))
+        }
+
+        async fn rewrite_values(
+            &self,
+            _: &str,
+            _: &str,
+            records: Vec<Value>,
+        ) -> Result<(), AppendLogError> {
+            *self.0.lock().unwrap() = records;
+            Ok(())
+        }
+
+        async fn flush(&self) -> Result<(), AppendLogError> {
+            Ok(())
+        }
+
+        async fn close(&self) -> Result<(), AppendLogError> {
+            Ok(())
+        }
+
+        fn acquire(&self, _: &str, _: &str) -> DisposableHandle {
+            disposable_none()
+        }
+    }
+
+    struct IdentityBlobs;
+
+    #[async_trait]
+    impl WireBlobService for IdentityBlobs {
+        async fn offload_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+            Ok(parts)
+        }
+
+        async fn load_parts(&self, parts: Vec<Value>) -> Result<Vec<Value>, String> {
+            Ok(parts)
+        }
+    }
+
+    struct IgnoreEvents;
+
+    impl DomainEventPublisher for IgnoreEvents {
+        fn publish(&self, _: Value) {}
+    }
+
+    fn trace_wire(log: Arc<MemoryLog>) -> WireServiceHandle {
+        WireServiceHandle(Arc::new(WireService::new(
+            "agents/llm-requester-test",
+            AppendLogStoreHandle(log),
+            Arc::new(IdentityBlobs),
+            Arc::new(IgnoreEvents),
+        )))
+    }
+
+    fn request_payload(tools_hash: &str) -> LlmRequestPayload {
+        LlmRequestPayload {
+            kind: LlmRequestKind::Loop,
+            provider: "openai".into(),
+            model: "kimi-test".into(),
+            model_alias: Some("test".into()),
+            thinking_effort: Some(ThinkingEffort::from("high")),
+            thinking_keep: Some("all".into()),
+            temperature: Some(0.6),
+            top_p: Some(0.9),
+            max_tokens: Some(4096.0),
+            beta_api: None,
+            tool_select: true,
+            system_prompt_hash: fingerprint("system"),
+            system_prompt: None,
+            tools_hash: tools_hash.into(),
+            message_count: 2.0,
+            turn_step: Some("1.1".into()),
+            attempt: None,
+            projection: None,
+            dropped_count: None,
+        }
+    }
 
     #[tokio::test]
     async fn abort_signal_bridge_cancels_the_provider_token() {
@@ -568,5 +1059,172 @@ mod tests {
         assert_eq!(config.0.model_alias, "frozen-model");
         assert_eq!(config.0.thinking_level.as_str(), "high");
         assert_eq!(config.2, "frozen system prompt");
+    }
+
+    #[test]
+    fn request_fields_match_typescript_source_mapping() {
+        let turn = AgentLlmRequestSource::Turn {
+            turn_id: 7.0,
+            step: Some(2.0),
+            log_fields: Some(Map::from_iter([(
+                "attempt".into(),
+                Value::String("retry-1".into()),
+            )])),
+        };
+        let normal = log_fields_for_source(Some(&turn));
+        assert_eq!(normal["turnStep"], "7.2");
+        assert_eq!(normal["attempt"], "retry-1");
+        assert!(projection_field(&normal).is_none());
+
+        let degraded = request_fields(&normal, RequestProjection::MediaDegraded);
+        assert_eq!(
+            projection_field(&degraded),
+            Some(LlmRequestProjection::MediaDegraded)
+        );
+        assert_eq!(string_field(&degraded, "turnStep").as_deref(), Some("7.2"));
+
+        let compaction = AgentLlmRequestSource::Operation {
+            turn_id: Some(7.0),
+            request_kind: Some("full_compaction".into()),
+            log_fields: Some(Map::from_iter([("droppedCount".into(), Value::from(3))])),
+        };
+        let compaction_fields = log_fields_for_source(Some(&compaction));
+        assert_eq!(
+            request_kind_for_record(&compaction_fields),
+            LlmRequestKind::Compaction
+        );
+        assert_eq!(number_field(&compaction_fields, "droppedCount"), Some(3.0));
+    }
+
+    #[test]
+    fn tool_snapshot_hash_matches_typescript_json_stringify() {
+        let visible = Tool {
+            name: "read".into(),
+            description: "Read".into(),
+            parameters: Map::from_iter([("type".into(), Value::String("object".into()))]),
+            deferred: None,
+        };
+        let deferred = Tool {
+            name: "select_tools".into(),
+            description: "Deferred".into(),
+            parameters: Map::new(),
+            deferred: Some(true),
+        };
+
+        let signature = tool_signature(provider_visible_tools(&[visible, deferred]));
+        let json = serde_json::to_string(&signature).unwrap();
+        assert_eq!(
+            json,
+            r#"[{"name":"read","description":"Read","parameters":{"type":"object"}}]"#
+        );
+        assert_eq!(
+            fingerprint(&json),
+            "86c4061e864cf228c524edb67180ab8f17337360d959739f8ebe9fd65a34ae12"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_trace_dispatch_deduplicates_snapshots_across_restore() {
+        register_llm_request_ops();
+        let log = Arc::new(MemoryLog::default());
+        let tools = vec![LlmRequestToolSchema {
+            name: "read".into(),
+            description: "Read".into(),
+            parameters: Map::from_iter([("type".into(), Value::String("object".into()))]),
+        }];
+        let tools_hash = fingerprint(&serde_json::to_string(&tools).unwrap());
+        let first = trace_wire(Arc::clone(&log));
+
+        dispatch_request_trace(
+            &first,
+            tools_hash.clone(),
+            tools.clone(),
+            request_payload(&tools_hash),
+        )
+        .unwrap();
+        dispatch_request_trace(
+            &first,
+            tools_hash.clone(),
+            tools.clone(),
+            request_payload(&tools_hash),
+        )
+        .unwrap();
+        first.flush().await.unwrap();
+
+        let records = log.0.lock().unwrap().clone();
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["type"] == "llm.tools_snapshot")
+                .count(),
+            1
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["type"] == "llm.request")
+                .count(),
+            2
+        );
+
+        let restored = trace_wire(Arc::clone(&log));
+        restored.restore().await.unwrap();
+        assert_eq!(
+            restored
+                .get_model(&LLM_REQUEST_TRACE_MODEL)
+                .seen_tools_hashes,
+            vec![tools_hash.clone()]
+        );
+        dispatch_request_trace(
+            &restored,
+            tools_hash.clone(),
+            tools,
+            request_payload(&tools_hash),
+        )
+        .unwrap();
+        restored.flush().await.unwrap();
+
+        let records = log.0.lock().unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["type"] == "llm.tools_snapshot")
+                .count(),
+            1
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["type"] == "llm.request")
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn projection_field_accepts_only_wire_schema_values() {
+        for (raw, expected) in [
+            ("strict", Some(LlmRequestProjection::Strict)),
+            ("media-degraded", Some(LlmRequestProjection::MediaDegraded)),
+            ("media-stripped", Some(LlmRequestProjection::MediaStripped)),
+            ("normal", None),
+            ("unknown", None),
+        ] {
+            let fields = Map::from_iter([("projection".into(), Value::String(raw.into()))]);
+            assert_eq!(projection_field(&fields), expected);
+        }
+    }
+
+    #[test]
+    fn runtime_registration_installs_request_trace_ops_before_restore() {
+        register_llm_request_ops();
+        assert!(
+            crate::wire::op::registered_op("llm.tools_snapshot").is_some(),
+            "tool snapshots must be replayable before requester instantiation"
+        );
+        assert!(
+            crate::wire::op::registered_op("llm.request").is_some(),
+            "request records must be replayable before requester instantiation"
+        );
     }
 }
