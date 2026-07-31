@@ -69,6 +69,7 @@ import {
   archiveSession,
   createAgentClient,
   createOrTouchWorkspace,
+  getSkillContent,
   listSkills,
   listWorkspaceSessions,
   prepareSession,
@@ -140,6 +141,7 @@ import type {
   ProtocolMessage,
   QuestionPayload,
   QuestionResponse,
+  SkillContent,
   SkillDescriptor,
   TokenUsage,
   TodoItem,
@@ -455,6 +457,12 @@ interface SkillPromptDisplay {
   skills: string[];
 }
 
+interface SkillDetailTarget {
+  name: string;
+  description?: string;
+  source?: SkillDescriptor["source"];
+}
+
 function decodeSkillAttribute(value: string): string {
   return value
     .replaceAll("&quot;", '"')
@@ -499,16 +507,36 @@ function parseSkillPromptDisplay(value: string): SkillPromptDisplay {
   };
 }
 
-function SkillNameChips({ names }: { names: readonly string[] }) {
+function SkillNameChips({
+  names,
+  onSkillOpen,
+}: {
+  names: readonly string[];
+  onSkillOpen?: (name: string) => void;
+}) {
   if (names.length === 0) return null;
   return (
     <div className="message-skill-list" aria-label="本次消息使用的技能">
-      {names.map((name) => (
-        <span className="message-skill-chip" key={name}>
-          <Package size={13} />
-          {name}
-        </span>
-      ))}
+      {names.map((name) =>
+        onSkillOpen ? (
+          <button
+            className="message-skill-chip"
+            type="button"
+            title="查看技能说明"
+            aria-label={`查看技能 ${name}`}
+            key={name}
+            onClick={() => onSkillOpen(name)}
+          >
+            <Package size={13} />
+            {name}
+          </button>
+        ) : (
+          <span className="message-skill-chip" key={name}>
+            <Package size={13} />
+            {name}
+          </span>
+        ),
+      )}
     </div>
   );
 }
@@ -516,9 +544,11 @@ function SkillNameChips({ names }: { names: readonly string[] }) {
 function SkillPromptDisplayContent({
   text,
   skills = [],
+  onSkillOpen,
 }: {
   text: string;
   skills?: readonly string[];
+  onSkillOpen?: (name: string) => void;
 }) {
   const parsed = parseSkillPromptDisplay(text);
   const names = [...skills];
@@ -527,7 +557,7 @@ function SkillPromptDisplayContent({
   }
   return (
     <>
-      <SkillNameChips names={names} />
+      <SkillNameChips names={names} onSkillOpen={onSkillOpen} />
       {parsed.text}
     </>
   );
@@ -1393,6 +1423,11 @@ export default function App() {
   const [availableSkills, setAvailableSkills] = useState<SkillDescriptor[]>([]);
   const [skillsBusy, setSkillsBusy] = useState(false);
   const [skillsError, setSkillsError] = useState<string>();
+  const [skillDetailTarget, setSkillDetailTarget] =
+    useState<SkillDetailTarget>();
+  const [skillDetail, setSkillDetail] = useState<SkillContent>();
+  const [skillDetailBusy, setSkillDetailBusy] = useState(false);
+  const [skillDetailError, setSkillDetailError] = useState<string>();
   const [composerAddOpen, setComposerAddOpen] = useState(false);
   const [queuedPrompts, setQueuedPrompts] = useState<
     Record<string, QueuedPrompt[]>
@@ -1472,6 +1507,7 @@ export default function App() {
   const historyRequests = useRef<Record<string, number>>({});
   const backgroundTaskRequests = useRef<Record<string, number>>({});
   const skillsRequest = useRef(0);
+  const skillDetailRequest = useRef(0);
   const agentSubscriptions = useRef<Map<string, AgentSubscription>>(new Map());
   const pendingAgentSubscriptions = useRef<
     Map<string, PendingAgentSubscription>
@@ -1959,11 +1995,16 @@ export default function App() {
 
   useEffect(() => {
     skillsRequest.current += 1;
+    skillDetailRequest.current += 1;
     setComposerAddOpen(false);
     setAvailableSkills([]);
     setSkillsBusy(false);
     setSkillsError(undefined);
     setPromptSkills([]);
+    setSkillDetailTarget(undefined);
+    setSkillDetail(undefined);
+    setSkillDetailBusy(false);
+    setSkillDetailError(undefined);
   }, [activeConversation?.id]);
 
   useEffect(() => {
@@ -3042,6 +3083,42 @@ export default function App() {
     window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
+  const openSkillDetail = async (skill: SkillDetailTarget): Promise<void> => {
+    const request = skillDetailRequest.current + 1;
+    skillDetailRequest.current = request;
+    const scope = activeAgentScope;
+
+    setComposerAddOpen(false);
+    setSkillDetailTarget(skill);
+    setSkillDetail(undefined);
+    setSkillDetailError(undefined);
+    if (!scope) {
+      setSkillDetailBusy(false);
+      setSkillDetailError("会话正在准备，请稍后再试");
+      return;
+    }
+
+    setSkillDetailBusy(true);
+    try {
+      const content = await getSkillContent(scope.sessionId, skill.name);
+      if (request !== skillDetailRequest.current) return;
+      setSkillDetail(content);
+    } catch (error) {
+      if (request !== skillDetailRequest.current) return;
+      setSkillDetailError(conciseError(error));
+    } finally {
+      if (request === skillDetailRequest.current) setSkillDetailBusy(false);
+    }
+  };
+
+  const closeSkillDetail = (): void => {
+    skillDetailRequest.current += 1;
+    setSkillDetailTarget(undefined);
+    setSkillDetail(undefined);
+    setSkillDetailBusy(false);
+    setSkillDetailError(undefined);
+  };
+
   const addPromptAttachments = async (
     files: readonly File[],
   ): Promise<void> => {
@@ -3885,6 +3962,9 @@ export default function App() {
                       }
                       copiedMessageId={copiedMessage}
                       onCopy={copyMessage}
+                      onSkillOpen={(name) =>
+                        void openSkillDetail({ name })
+                      }
                     />
                   ))}
                   {activeTurn && (
@@ -3893,6 +3973,9 @@ export default function App() {
                       outlineId={liveOutlineTurnId}
                       subagentRuns={activeSubagentRuns}
                       subagentLiveTurns={activeSubagentLiveTurns}
+                      onSkillOpen={(name) =>
+                        void openSkillDetail({ name })
+                      }
                     />
                   )}
                   {activeQueuedPrompts.length > 0 && (
@@ -3902,6 +3985,9 @@ export default function App() {
                       onRemove={removeQueuedPrompt}
                       onSteer={(queuedPromptId) =>
                         void steerQueuedPrompt(queuedPromptId)
+                      }
+                      onSkillOpen={(name) =>
+                        void openSkillDetail({ name })
                       }
                     />
                   )}
@@ -4033,9 +4119,18 @@ export default function App() {
                   <div className="prompt-skill-list" aria-label="已选择的技能">
                     {promptSkills.map((skill) => (
                       <span className="prompt-skill-chip" key={skill.name}>
-                        <Package size={13} />
-                        <span>{skill.name}</span>
                         <button
+                          className="prompt-skill-open"
+                          type="button"
+                          aria-label={`查看技能 ${skill.name}`}
+                          title="查看技能说明"
+                          onClick={() => void openSkillDetail(skill)}
+                        >
+                          <Package size={13} />
+                          <span>{skill.name}</span>
+                        </button>
+                        <button
+                          className="prompt-skill-remove"
                           type="button"
                           aria-label={`移除技能 ${skill.name}`}
                           title="移除技能"
@@ -4359,6 +4454,17 @@ export default function App() {
           />
         )}
         </main>
+        {skillDetailTarget && (
+          <SkillDetailSidebar
+            skill={skillDetail ?? skillDetailTarget}
+            content={skillDetail?.content}
+            path={skillDetail?.path}
+            busy={skillDetailBusy}
+            error={skillDetailError}
+            onClose={closeSkillDetail}
+            onRetry={() => void openSkillDetail(skillDetailTarget)}
+          />
+        )}
       </div>
 
       {loginOpen && (
@@ -5730,11 +5836,13 @@ function LiveTurnView({
   outlineId,
   subagentRuns,
   subagentLiveTurns,
+  onSkillOpen,
 }: {
   turn: InFlightTurn;
   outlineId?: string;
   subagentRuns?: SubagentRunsByTool;
   subagentLiveTurns?: Record<string, InFlightTurn>;
+  onSkillOpen: (name: string) => void;
 }) {
   const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
   const streaming = isTurnRunning(turn);
@@ -5752,6 +5860,7 @@ function LiveTurnView({
           <SkillPromptDisplayContent
             text={turn.prompt}
             skills={turn.skills}
+            onSkillOpen={onSkillOpen}
           />
           <PromptAttachmentContent attachments={turn.attachments} />
         </div>
@@ -5771,7 +5880,11 @@ function LiveTurnView({
                 {steeredPrompts
                   .filter((item) => item.afterBlockIndex === -1)
                   .map((item) => (
-                    <LiveSteeredPromptView item={item} key={item.promptId} />
+                    <LiveSteeredPromptView
+                      item={item}
+                      onSkillOpen={onSkillOpen}
+                      key={item.promptId}
+                    />
                   ))}
                 {step.blocks.map((block, index) => {
                   let blockView: ReactNode;
@@ -5817,6 +5930,7 @@ function LiveTurnView({
                         .map((item) => (
                           <LiveSteeredPromptView
                             item={item}
+                            onSkillOpen={onSkillOpen}
                             key={item.promptId}
                           />
                         ))}
@@ -5834,7 +5948,11 @@ function LiveTurnView({
           {turn.steeredPrompts
             .filter((item) => item.anchorStepKey === undefined)
             .map((item) => (
-              <LiveSteeredPromptView item={item} key={item.promptId} />
+              <LiveSteeredPromptView
+                item={item}
+                onSkillOpen={onSkillOpen}
+                key={item.promptId}
+              />
             ))}
           {!hasBlocks &&
             (turn.status === "queued" || turn.status === "running") && (
@@ -5855,7 +5973,13 @@ function LiveTurnView({
   );
 }
 
-function LiveSteeredPromptView({ item }: { item: LiveSteeredPrompt }) {
+function LiveSteeredPromptView({
+  item,
+  onSkillOpen,
+}: {
+  item: LiveSteeredPrompt;
+  onSkillOpen: (name: string) => void;
+}) {
   const message = item.message;
   if (!message) return null;
   return (
@@ -5867,6 +5991,7 @@ function LiveSteeredPromptView({ item }: { item: LiveSteeredPrompt }) {
         <SkillPromptDisplayContent
           text={message.text}
           skills={message.skills.map((skill) => skill.name)}
+          onSkillOpen={onSkillOpen}
         />
         <PromptAttachmentContent attachments={message.attachments} />
       </div>
@@ -5879,11 +6004,13 @@ function QueuedPromptList({
   canSteer,
   onRemove,
   onSteer,
+  onSkillOpen,
 }: {
   prompts: readonly QueuedPrompt[];
   canSteer: boolean;
   onRemove: (queuedPromptId: string) => void;
   onSteer: (queuedPromptId: string) => void;
+  onSkillOpen: (name: string) => void;
 }) {
   return (
     <section className="queued-prompt-stack" aria-label="排队中的消息">
@@ -5902,6 +6029,7 @@ function QueuedPromptList({
                 <SkillPromptDisplayContent
                   text={prompt.text}
                   skills={prompt.skills.map((skill) => skill.name)}
+                  onSkillOpen={onSkillOpen}
                 />
               </div>
             ) : (
@@ -6573,6 +6701,7 @@ const HistoryTurnView = memo(function HistoryTurnView({
   messageDurations,
   copiedMessageId,
   onCopy,
+  onSkillOpen,
 }: {
   turn: HistoryConversationTurn;
   toolResults: Map<string, ToolResultContent>;
@@ -6581,6 +6710,7 @@ const HistoryTurnView = memo(function HistoryTurnView({
   messageDurations: Record<string, number>;
   copiedMessageId?: string;
   onCopy: (message: ProtocolMessage) => void;
+  onSkillOpen: (name: string) => void;
 }) {
   const [processOpen, setProcessOpen] = useState(false);
   const finalResponse = finalResponseMessage(turn.responses);
@@ -6615,6 +6745,7 @@ const HistoryTurnView = memo(function HistoryTurnView({
           toolResults={toolResults}
           subagentRuns={subagentRuns}
           subagentLiveTurns={subagentLiveTurns}
+          onSkillOpen={onSkillOpen}
         />
       )}
       {turn.responses.length > 0 && (
@@ -6706,11 +6837,13 @@ function UserMessageView({
   toolResults,
   subagentRuns,
   subagentLiveTurns,
+  onSkillOpen,
 }: {
   message: RenderMessage;
   toolResults: Map<string, ToolResultContent>;
   subagentRuns?: SubagentRunsByTool;
   subagentLiveTurns?: Record<string, InFlightTurn>;
+  onSkillOpen: (name: string) => void;
 }) {
   const text = messageText(message);
   const structured = messageStructuredContent(message);
@@ -6720,7 +6853,10 @@ function UserMessageView({
         <time>{formatTime(message.created_at)}</time>
       </div>
       <div className="user-bubble">
-        <SkillPromptDisplayContent text={text} />
+        <SkillPromptDisplayContent
+          text={text}
+          onSkillOpen={onSkillOpen}
+        />
         <StructuredMessageContent
           parts={structured}
           toolResults={toolResults}
@@ -7061,6 +7197,97 @@ function StructuredMessageContent({
         }
       })}
     </div>
+  );
+}
+
+function skillSourceLabel(source?: SkillDescriptor["source"]): string {
+  switch (source) {
+    case "project":
+      return "项目技能";
+    case "user":
+      return "个人技能";
+    case "extra":
+      return "扩展技能";
+    case "builtin":
+      return "内置技能";
+    default:
+      return "技能说明";
+  }
+}
+
+function SkillDetailSidebar({
+  skill,
+  content,
+  path,
+  busy,
+  error,
+  onClose,
+  onRetry,
+}: {
+  skill: SkillDetailTarget;
+  content?: string;
+  path?: string;
+  busy: boolean;
+  error?: string;
+  onClose: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    <aside className="skill-detail-sidebar" aria-label={`${skill.name} 技能说明`}>
+      <header className="skill-detail-header">
+        <div className="skill-detail-heading">
+          <span className="skill-detail-icon">
+            <Package size={16} />
+          </span>
+          <div>
+            <h2>{skill.name}</h2>
+            <span>{skillSourceLabel(skill.source)}</span>
+          </div>
+        </div>
+        <button
+          className="icon-button quiet"
+          type="button"
+          aria-label="关闭技能说明"
+          title="关闭"
+          onClick={onClose}
+        >
+          <X size={16} />
+        </button>
+      </header>
+
+      {skill.description && (
+        <p className="skill-detail-description">{skill.description}</p>
+      )}
+
+      <div className="skill-detail-content">
+        {busy ? (
+          <div className="skill-detail-status">
+            <span className="spinner" />
+            <span>正在加载技能说明…</span>
+          </div>
+        ) : error ? (
+          <div className="skill-detail-status error">
+            <span>{error}</span>
+            <button type="button" onClick={onRetry}>
+              重试
+            </button>
+          </div>
+        ) : content ? (
+          <div className="markdown-body skill-detail-markdown">
+            <MarkdownMessage content={content} />
+          </div>
+        ) : (
+          <div className="skill-detail-status">该技能没有可显示的说明。</div>
+        )}
+      </div>
+
+      {path && (
+        <footer className="skill-detail-path" title={path}>
+          <FileCode2 size={12} />
+          <span>{path}</span>
+        </footer>
+      )}
+    </aside>
   );
 }
 

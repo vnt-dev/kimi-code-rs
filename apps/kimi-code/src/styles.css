@@ -70,6 +70,7 @@ select:focus-visible {
 }
 
 .app-body {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
@@ -1268,6 +1269,169 @@ select:focus-visible {
   background: #1e1f22;
 }
 
+.skill-detail-sidebar {
+  display: flex;
+  width: clamp(340px, 31vw, 460px);
+  min-width: 340px;
+  min-height: 0;
+  flex: 0 0 auto;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--bg);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.08);
+  animation: skill-detail-in 160ms ease-out;
+  z-index: 10;
+}
+
+.skill-detail-header {
+  display: flex;
+  min-height: 68px;
+  padding: 0 14px 0 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.skill-detail-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.skill-detail-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.skill-detail-heading h2 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-detail-heading span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.skill-detail-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-radius: 8px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.skill-detail-description {
+  margin: 0;
+  padding: 12px 18px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.skill-detail-content {
+  min-height: 0;
+  padding: 18px;
+  flex: 1;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+.skill-detail-markdown {
+  width: 100%;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.skill-detail-markdown h1 {
+  font-size: 18px;
+}
+
+.skill-detail-markdown h2 {
+  font-size: 15px;
+}
+
+.skill-detail-markdown h3 {
+  font-size: 13px;
+}
+
+.skill-detail-status {
+  display: flex;
+  min-height: 120px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.skill-detail-status.error {
+  flex-direction: column;
+  color: var(--danger);
+}
+
+.skill-detail-status button {
+  padding: 5px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--control);
+  cursor: pointer;
+}
+
+.skill-detail-status button:hover {
+  background: var(--control-hover);
+}
+
+.skill-detail-path {
+  display: flex;
+  min-height: 34px;
+  padding: 0 16px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.skill-detail-path > svg {
+  flex: 0 0 auto;
+}
+
+.skill-detail-path > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes skill-detail-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
 .chat-header {
   display: flex;
   height: 68px;
@@ -1873,6 +2037,16 @@ select:focus-visible {
 
 .message-skill-chip > svg {
   flex: 0 0 auto;
+}
+
+button.message-skill-chip {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button.message-skill-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .queued-prompt-stack {
@@ -4681,9 +4855,9 @@ select:focus-visible {
   display: inline-flex;
   min-width: 0;
   min-height: 25px;
-  padding: 2px 5px 2px 7px;
+  padding: 2px 3px;
   align-items: center;
-  gap: 5px;
+  gap: 2px;
   border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
   border-radius: 7px;
   color: var(--accent);
@@ -4692,17 +4866,32 @@ select:focus-visible {
   font-weight: 500;
 }
 
-.prompt-skill-chip > svg {
+.prompt-skill-open {
+  display: flex;
+  min-width: 0;
+  height: 20px;
+  padding: 0 4px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 4px;
+  color: currentColor;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.prompt-skill-open > svg {
   flex: 0 0 auto;
 }
 
-.prompt-skill-chip > span {
+.prompt-skill-open > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.prompt-skill-chip button {
+.prompt-skill-remove {
   display: grid;
   width: 18px;
   height: 18px;
@@ -4717,7 +4906,8 @@ select:focus-visible {
   opacity: 0.66;
 }
 
-.prompt-skill-chip button:hover {
+.prompt-skill-open:hover,
+.prompt-skill-remove:hover {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   opacity: 1;
 }
@@ -5928,6 +6118,14 @@ select:focus-visible {
   .sidebar:not(.collapsed) {
     flex-basis: 248px;
     width: 248px;
+  }
+
+  .skill-detail-sidebar {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(420px, calc(100% - 68px));
+    min-width: 0;
+    box-shadow: -20px 0 60px rgba(0, 0, 0, 0.38);
   }
 
   .connection-pill,

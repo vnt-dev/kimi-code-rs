@@ -9,6 +9,7 @@ import type {
   PlanData,
   PreparedSession,
   SessionSummary,
+  SkillContent,
   SkillDescriptor,
   TodoItem,
   Workspace,
@@ -205,6 +206,13 @@ export function archiveSession(sessionId: string): Promise<void> {
 
 export function listSkills(sessionId: string): Promise<SkillDescriptor[]> {
   return invoke<SkillDescriptor[]>("list_skills", { sessionId });
+}
+
+export function getSkillContent(
+  sessionId: string,
+  name: string,
+): Promise<SkillContent> {
+  return invoke<SkillContent>("get_skill_content", { sessionId, name });
 }
 
 export function setDefaultModel(model: string): Promise<void> {

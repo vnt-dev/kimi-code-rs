@@ -107,6 +107,11 @@ export interface SkillDescriptor {
   source: "project" | "user" | "extra" | "builtin";
 }
 
+export interface SkillContent extends SkillDescriptor {
+  path: string;
+  content: string;
+}
+
 export interface AgentConfig {
   modelAlias?: string;
   thinkingLevel: string;
