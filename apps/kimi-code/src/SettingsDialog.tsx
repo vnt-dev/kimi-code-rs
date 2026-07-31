@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -30,6 +30,43 @@ export default function SettingsDialog({
   const [updateMessage, setUpdateMessage] = useState<string>();
   const [updateToast, setUpdateToast] = useState<string>();
   const [downloadProgress, setDownloadProgress] = useState<number>();
+  const updateToastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+
+  const clearUpdateToastTimer = useCallback((): void => {
+    if (updateToastTimerRef.current === undefined) return;
+    clearTimeout(updateToastTimerRef.current);
+    updateToastTimerRef.current = undefined;
+  }, []);
+
+  const hideUpdateToast = useCallback((): void => {
+    clearUpdateToastTimer();
+    setUpdateToast(undefined);
+  }, [clearUpdateToastTimer]);
+
+  const scheduleUpdateToastDismiss = useCallback((): void => {
+    clearUpdateToastTimer();
+    updateToastTimerRef.current = setTimeout(() => {
+      updateToastTimerRef.current = undefined;
+      setUpdateToast(undefined);
+    }, 3_000);
+  }, [clearUpdateToastTimer]);
+
+  const showUpdateToast = useCallback(
+    (message: string): void => {
+      setUpdateToast(message);
+      scheduleUpdateToastDismiss();
+    },
+    [scheduleUpdateToastDismiss],
+  );
+
+  useEffect(
+    () => () => {
+      clearUpdateToastTimer();
+    },
+    [clearUpdateToastTimer],
+  );
 
   useEffect(() => {
     const previousFocus = document.activeElement;
@@ -73,26 +110,26 @@ export default function SettingsDialog({
 
   const handleCheckForUpdates = async (): Promise<void> => {
     if (!isTauri()) {
-      setUpdateToast("请在桌面客户端中检查更新");
+      showUpdateToast("请在桌面客户端中检查更新");
       return;
     }
 
     setUpdateBusy(true);
-    setUpdateToast(undefined);
+    hideUpdateToast();
     setUpdateMessage(undefined);
     setPendingUpdate(null);
     setDownloadProgress(undefined);
     try {
       const update = await check({ timeout: 30_000 });
       if (!update) {
-        setUpdateToast("当前已是最新版本");
+        showUpdateToast("当前已是最新版本");
         return;
       }
 
       setPendingUpdate(update);
       setUpdateMessage(`发现新版本 v${update.version}`);
     } catch (error) {
-      setUpdateToast(`检查更新失败：${errorMessage(error)}`);
+      showUpdateToast(`检查更新失败：${errorMessage(error)}`);
     } finally {
       setUpdateBusy(false);
     }
@@ -102,7 +139,7 @@ export default function SettingsDialog({
     if (!pendingUpdate) return;
 
     setUpdateBusy(true);
-    setUpdateToast(undefined);
+    hideUpdateToast();
     setUpdateMessage(`正在下载 v${pendingUpdate.version}…`);
     setDownloadProgress(0);
     let downloaded = 0;
@@ -126,7 +163,7 @@ export default function SettingsDialog({
       });
       await relaunch();
     } catch (error) {
-      setUpdateToast(`安装更新失败：${errorMessage(error)}`);
+      showUpdateToast(`安装更新失败：${errorMessage(error)}`);
       setUpdateMessage(`发现新版本 v${pendingUpdate.version}`);
       setDownloadProgress(undefined);
       setUpdateBusy(false);
@@ -270,12 +307,17 @@ export default function SettingsDialog({
         </div>
 
         {updateToast && (
-          <div className="settings-toast" role="status">
+          <div
+            className="settings-toast"
+            role="status"
+            onMouseEnter={clearUpdateToastTimer}
+            onMouseLeave={scheduleUpdateToastDismiss}
+          >
             <span>{updateToast}</span>
             <button
               type="button"
               aria-label="关闭更新提示"
-              onClick={() => setUpdateToast(undefined)}
+              onClick={hideUpdateToast}
             >
               <X size={14} />
             </button>
