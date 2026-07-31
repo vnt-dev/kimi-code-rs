@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { RefreshCw, X } from "lucide-react";
+import { Check, ChevronDown, RefreshCw, X } from "lucide-react";
 
 import type { ColorScheme } from "./appearance";
+import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
 
 type SettingsTab = "general" | "about";
 
@@ -12,15 +13,94 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function LanguageSelect({
+  language,
+  onLanguageChange,
+}: {
+  language: Language;
+  onLanguageChange: (language: Language) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent): void => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+
+  const activeLabel =
+    LANGUAGE_OPTIONS.find((option) => option.value === language)?.label ??
+    language;
+
+  return (
+    <div
+      className={`settings-select ${open ? "open" : ""}`}
+      ref={rootRef}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && open) {
+          event.stopPropagation();
+          setOpen(false);
+        }
+      }}
+    >
+      <button
+        className="settings-select-trigger"
+        type="button"
+        aria-label={t("settings.language")}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span>{activeLabel}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div
+          className="settings-select-menu"
+          role="listbox"
+          aria-label={t("settings.language")}
+        >
+          {LANGUAGE_OPTIONS.map((option) => {
+            const selected = option.value === language;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onClick={() => {
+                  onLanguageChange(option.value);
+                  setOpen(false);
+                }}
+              >
+                <span>{option.label}</span>
+                {selected && <Check size={14} />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsDialog({
   appVersion,
   colorScheme,
+  language,
   onColorSchemeChange,
+  onLanguageChange,
   onClose,
 }: {
   appVersion?: string;
   colorScheme: ColorScheme;
+  language: Language;
   onColorSchemeChange: (colorScheme: ColorScheme) => void;
+  onLanguageChange: (language: Language) => void;
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -110,7 +190,7 @@ export default function SettingsDialog({
 
   const handleCheckForUpdates = async (): Promise<void> => {
     if (!isTauri()) {
-      showUpdateToast("请在桌面客户端中检查更新");
+      showUpdateToast(t("settings.updateDesktopOnly"));
       return;
     }
 
@@ -122,14 +202,18 @@ export default function SettingsDialog({
     try {
       const update = await check({ timeout: 30_000 });
       if (!update) {
-        showUpdateToast("当前已是最新版本");
+        showUpdateToast(t("settings.updateLatest"));
         return;
       }
 
       setPendingUpdate(update);
-      setUpdateMessage(`发现新版本 v${update.version}`);
+      setUpdateMessage(
+        t("settings.updateFound", { version: update.version }),
+      );
     } catch (error) {
-      showUpdateToast(`检查更新失败：${errorMessage(error)}`);
+      showUpdateToast(
+        t("settings.updateCheckFailed", { error: errorMessage(error) }),
+      );
     } finally {
       setUpdateBusy(false);
     }
@@ -140,7 +224,9 @@ export default function SettingsDialog({
 
     setUpdateBusy(true);
     hideUpdateToast();
-    setUpdateMessage(`正在下载 v${pendingUpdate.version}…`);
+    setUpdateMessage(
+      t("settings.updateDownloading", { version: pendingUpdate.version }),
+    );
     setDownloadProgress(0);
     let downloaded = 0;
     let contentLength = 0;
@@ -158,13 +244,17 @@ export default function SettingsDialog({
           }
         } else if (event.event === "Finished") {
           setDownloadProgress(100);
-          setUpdateMessage("更新已安装，正在重启…");
+          setUpdateMessage(t("settings.updateInstalled"));
         }
       });
       await relaunch();
     } catch (error) {
-      showUpdateToast(`安装更新失败：${errorMessage(error)}`);
-      setUpdateMessage(`发现新版本 v${pendingUpdate.version}`);
+      showUpdateToast(
+        t("settings.updateInstallFailed", { error: errorMessage(error) }),
+      );
+      setUpdateMessage(
+        t("settings.updateFound", { version: pendingUpdate.version }),
+      );
       setDownloadProgress(undefined);
       setUpdateBusy(false);
     }
@@ -186,11 +276,11 @@ export default function SettingsDialog({
         tabIndex={-1}
       >
         <header className="settings-dialog-header">
-          <h2 id="settings-dialog-title">设置</h2>
+          <h2 id="settings-dialog-title">{t("settings.title")}</h2>
           <button
             className="settings-dialog-close"
             type="button"
-            aria-label="关闭设置"
+            aria-label={t("settings.close")}
             onClick={onClose}
           >
             <X size={17} />
@@ -198,14 +288,14 @@ export default function SettingsDialog({
         </header>
 
         <div className="settings-dialog-layout">
-          <nav className="settings-tabs" aria-label="设置分类">
+          <nav className="settings-tabs" aria-label={t("settings.tabs")}>
             <button
               className={`settings-tab ${activeTab === "general" ? "active" : ""}`}
               type="button"
               aria-current={activeTab === "general" ? "page" : undefined}
               onClick={() => setActiveTab("general")}
             >
-              通用
+              {t("settings.tabGeneral")}
             </button>
             <button
               className={`settings-tab ${activeTab === "about" ? "active" : ""}`}
@@ -213,7 +303,7 @@ export default function SettingsDialog({
               aria-current={activeTab === "about" ? "page" : undefined}
               onClick={() => setActiveTab("about")}
             >
-              关于
+              {t("settings.tabAbout")}
             </button>
           </nav>
 
@@ -223,13 +313,15 @@ export default function SettingsDialog({
                 className="settings-section"
                 aria-labelledby="appearance-heading"
               >
-                <h3 id="appearance-heading">外观</h3>
+                <h3 id="appearance-heading">{t("settings.appearance")}</h3>
                 <div className="settings-row">
-                  <span className="settings-row-label">明暗</span>
+                  <span className="settings-row-label">
+                    {t("settings.theme")}
+                  </span>
                   <div
                     className="settings-segmented"
                     role="group"
-                    aria-label="明暗主题"
+                    aria-label={t("settings.themeGroup")}
                   >
                     <button
                       className={colorScheme === "light" ? "active" : ""}
@@ -237,7 +329,7 @@ export default function SettingsDialog({
                       aria-pressed={colorScheme === "light"}
                       onClick={() => onColorSchemeChange("light")}
                     >
-                      月之亮面
+                      {t("settings.themeLight")}
                     </button>
                     <button
                       className={colorScheme === "dark" ? "active" : ""}
@@ -245,9 +337,18 @@ export default function SettingsDialog({
                       aria-pressed={colorScheme === "dark"}
                       onClick={() => onColorSchemeChange("dark")}
                     >
-                      月之暗面
+                      {t("settings.themeDark")}
                     </button>
                   </div>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-row-label">
+                    {t("settings.language")}
+                  </span>
+                  <LanguageSelect
+                    language={language}
+                    onLanguageChange={onLanguageChange}
+                  />
                 </div>
               </section>
             ) : (
@@ -258,7 +359,9 @@ export default function SettingsDialog({
                 <h3 id="about-heading">Kimi Code</h3>
                 <div className="settings-row">
                   <div className="settings-version">
-                    <span className="settings-row-label">版本</span>
+                    <span className="settings-row-label">
+                      {t("settings.version")}
+                    </span>
                     <span className="settings-version-number">
                       v{appVersion ?? "—"}
                     </span>
@@ -277,7 +380,9 @@ export default function SettingsDialog({
                       size={14}
                       className={updateBusy ? "spinning" : undefined}
                     />
-                    {pendingUpdate ? "下载并安装" : "检查更新"}
+                    {pendingUpdate
+                      ? t("settings.installUpdate")
+                      : t("settings.checkUpdate")}
                   </button>
                 </div>
 
@@ -288,7 +393,7 @@ export default function SettingsDialog({
                       <div
                         className="settings-update-progress"
                         role="progressbar"
-                        aria-label="更新下载进度"
+                        aria-label={t("settings.updateProgress")}
                         aria-valuemin={0}
                         aria-valuemax={100}
                         aria-valuenow={downloadProgress}
@@ -316,7 +421,7 @@ export default function SettingsDialog({
             <span>{updateToast}</span>
             <button
               type="button"
-              aria-label="关闭更新提示"
+              aria-label={t("settings.updateToastClose")}
               onClick={hideUpdateToast}
             >
               <X size={14} />

@@ -107,6 +107,15 @@ import {
 } from "./appearance";
 import SettingsDialog from "./SettingsDialog";
 import {
+  applyLanguage,
+  loadLanguage,
+  localeTag,
+  saveLanguage,
+  setLanguage,
+  t,
+  type Language,
+} from "./i18n";
+import {
   isSubagentEvent,
   mergeSessionSubagentEvent,
   subagentRunsWithSwarmItems,
@@ -329,9 +338,9 @@ function readFileAsDataUrl(file: Blob): Promise<string> {
     reader.onload = () =>
       typeof reader.result === "string"
         ? resolve(reader.result)
-        : reject(new Error("无法读取媒体文件"));
+        : reject(new Error(t("error.readMedia")));
     reader.onerror = () =>
-      reject(reader.error ?? new Error("无法读取媒体文件"));
+      reject(reader.error ?? new Error(t("error.readMedia")));
     reader.readAsDataURL(file);
   });
 }
@@ -344,7 +353,7 @@ function canvasToBlob(
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       (blob) =>
-        blob ? resolve(blob) : reject(new Error("无法处理所选图片")),
+        blob ? resolve(blob) : reject(new Error(t("error.processImage"))),
       type,
       quality,
     );
@@ -354,7 +363,7 @@ function canvasToBlob(
 async function preparePromptAttachment(file: File): Promise<PromptAttachment> {
   const kind = promptAttachmentKind(file.type);
   if (file.size > MAX_PROMPT_ATTACHMENT_BYTES) {
-    throw new Error(`${file.name} 超过 20 MB`);
+    throw new Error(t("error.fileTooLarge", { name: file.name }));
   }
 
   if (kind === "file") {
@@ -387,7 +396,7 @@ async function preparePromptAttachment(file: File): Promise<PromptAttachment> {
         canvas.width = Math.max(1, Math.round(bitmap.width * scale));
         canvas.height = Math.max(1, Math.round(bitmap.height * scale));
         const context = canvas.getContext("2d", { alpha: false });
-        if (!context) throw new Error("无法处理所选图片");
+        if (!context) throw new Error(t("error.processImage"));
         context.fillStyle = "#ffffff";
         context.fillRect(0, 0, canvas.width, canvas.height);
         context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
@@ -534,14 +543,14 @@ function SkillNameChips({
 }) {
   if (names.length === 0) return null;
   return (
-    <div className="message-skill-list" aria-label="本次消息使用的技能">
+    <div className="message-skill-list" aria-label={t("skills.usedInMessage")}>
       {names.map((name) =>
         onSkillOpen ? (
           <button
             className="message-skill-chip"
             type="button"
-            title="查看技能说明"
-            aria-label={`查看技能 ${name}`}
+            title={t("skills.viewDetail")}
+            aria-label={t("skills.viewSkill", { name })}
             key={name}
             onClick={() => onSkillOpen(name)}
           >
@@ -613,23 +622,23 @@ interface HistoryConversationTurn {
 const PROMPT_SUGGESTIONS = [
   {
     icon: <FileCode2 size={17} />,
-    title: "理解这个项目",
-    prompt: "分析这个项目的结构、核心模块和运行方式，给我一份简洁的导览。",
+    title: t("suggestion.explore.title"),
+    prompt: t("suggestion.explore.prompt"),
   },
   {
     icon: <Wrench size={17} />,
-    title: "排查一个问题",
-    prompt: "帮我检查这个项目中潜在的错误和可维护性问题，按优先级给出建议。",
+    title: t("suggestion.debug.title"),
+    prompt: t("suggestion.debug.prompt"),
   },
   {
     icon: <TerminalSquare size={17} />,
-    title: "开始一个功能",
-    prompt: "先阅读项目结构，然后帮我规划并实现一个新功能。",
+    title: t("suggestion.feature.title"),
+    prompt: t("suggestion.feature.prompt"),
   },
 ];
 
 function formatTime(timestamp: string | number): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(localeTag(), {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(timestamp));
@@ -686,21 +695,21 @@ function TokenUsageBreakdown({
       <strong>{label}</strong>
       <div>
         <span>
-          <small>总输入</small>
+          <small>{t("usage.totalInput")}</small>
           <b>{usage ? formatTokenCount(inputTokenUsage(usage)) : "—"}</b>
         </span>
         <span>
-          <small>输出</small>
+          <small>{t("usage.output")}</small>
           <b>{usage ? formatTokenCount(usage.output) : "—"}</b>
         </span>
       </div>
       <div>
         <span>
-          <small>缓存输入</small>
+          <small>{t("usage.cacheInput")}</small>
           <b>{usage ? formatTokenCount(usage.inputCacheRead) : "—"}</b>
         </span>
         <span>
-          <small>缓存命中率</small>
+          <small>{t("usage.cacheHitRate")}</small>
           <b>{formatCacheHitRate(usage)}</b>
         </span>
       </div>
@@ -1302,12 +1311,16 @@ function completedTurnMessageId(
 
 function formatElapsedDuration(durationMs: number): string {
   const totalSeconds = Math.max(0, durationMs) / 1000;
-  if (totalSeconds < 10) return `${totalSeconds.toFixed(1)} 秒`;
+  if (totalSeconds < 10)
+    return t("duration.seconds", { value: totalSeconds.toFixed(1) });
   const roundedSeconds = Math.round(totalSeconds);
-  if (roundedSeconds < 60) return `${roundedSeconds} 秒`;
+  if (roundedSeconds < 60)
+    return t("duration.seconds", { value: roundedSeconds });
   const minutes = Math.floor(roundedSeconds / 60);
   const seconds = roundedSeconds % 60;
-  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+  return seconds > 0
+    ? t("duration.minutesSeconds", { minutes, seconds })
+    : t("duration.minutes", { value: minutes });
 }
 
 function mergeHistoryToolResults(
@@ -1478,6 +1491,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [colorScheme, setColorScheme] =
     useState<ColorScheme>(loadColorScheme);
+  const [language, setLanguageState] = useState<Language>(loadLanguage);
   const [appVersion, setAppVersion] = useState<string>();
   const [accountUsage, setAccountUsage] = useState<AccountUsage>();
   const [accountUsageBusy, setAccountUsageBusy] = useState(false);
@@ -1635,7 +1649,7 @@ export default function App() {
         {
           id: turn.id,
           title:
-            compactOutlineText(messageText(turn.user), 120) || "用户消息",
+            compactOutlineText(messageText(turn.user), 120) || t("message.user"),
           previewLines: conversationOutlinePreview(responseText),
           tickWidth: outlineTickWidth(messageLength),
         },
@@ -1652,7 +1666,7 @@ export default function App() {
         .join("\n");
       items.push({
         id: liveOutlineTurnId,
-        title: compactOutlineText(activeTurn.prompt, 120) || "用户消息",
+        title: compactOutlineText(activeTurn.prompt, 120) || t("message.user"),
         previewLines: conversationOutlinePreview(responseText),
         tickWidth: outlineTickWidth(responseText.length),
       });
@@ -1952,7 +1966,7 @@ export default function App() {
     try {
       const nextModels = await invoke<Model[]>("list_models");
       setModels(nextModels);
-      if (nextModels.length === 0) showNotice("配置中没有可用模型");
+      if (nextModels.length === 0) showNotice(t("notice.noModelsConfigured"));
     } catch (error) {
       showNotice(conciseError(error));
     } finally {
@@ -1964,7 +1978,7 @@ export default function App() {
     try {
       const nextModels = await invoke<Model[]>("refresh_models");
       setModels(nextModels);
-      if (nextModels.length === 0) showNotice("当前账号没有可用模型");
+      if (nextModels.length === 0) showNotice(t("notice.noModelsForAccount"));
     } catch {
       // Keep using the configured model list when the background refresh fails.
     }
@@ -2007,9 +2021,20 @@ export default function App() {
     saveColorScheme(nextColorScheme);
   };
 
+  const updateLanguage = (nextLanguage: Language): void => {
+    setLanguage(nextLanguage);
+    setLanguageState(nextLanguage);
+    saveLanguage(nextLanguage);
+  };
+
   useLayoutEffect(() => {
     applyColorScheme(colorScheme);
   }, [colorScheme]);
+
+  useLayoutEffect(() => {
+    setLanguage(language);
+    applyLanguage(language);
+  }, [language]);
 
   useEffect(() => {
     let active = true;
@@ -2209,7 +2234,7 @@ export default function App() {
     const unlistenBrowserError = listen<string>(
       "auth-browser-open-failed",
       (event) => {
-        showNotice(`未能自动打开浏览器：${event.payload}`);
+        showNotice(t("notice.browserOpenFailed", { error: event.payload }));
       },
     );
     const unlistenChatEvent = listen<AgentChatEventEnvelope>(
@@ -2784,7 +2809,7 @@ export default function App() {
             activeConversationId: fallback?.conversations[0]?.id,
           };
         });
-        showNotice(`已从列表移除项目“${target.name}”`);
+        showNotice(t("notice.projectRemoved", { name: target.name }));
       } else {
         await archiveSession(target.conversationId);
         forgetSessionState([target.conversationId]);
@@ -2817,7 +2842,7 @@ export default function App() {
             activeConversationId: fallback?.id,
           };
         });
-        showNotice(`已归档对话“${target.title}”`);
+        showNotice(t("notice.conversationArchived", { title: target.title }));
       }
       setRemovalTarget(undefined);
     } catch (error) {
@@ -2832,7 +2857,7 @@ export default function App() {
       const selection = await open({
         directory: true,
         multiple: false,
-        title: "选择一个项目目录",
+        title: t("dialog.pickProjectDirectory"),
       });
       if (!selection) return;
       const workspace = await createOrTouchWorkspace(selection);
@@ -2875,7 +2900,7 @@ export default function App() {
     event?.stopPropagation();
     const model = selectedModel ?? models[0];
     if (!model) {
-      showNotice("请先配置并选择一个模型");
+      showNotice(t("notice.modelRequired"));
       return;
     }
     try {
@@ -3087,7 +3112,7 @@ export default function App() {
       setAuth(status);
       if (status.loggedIn) {
         setLoginOpen(false);
-        showNotice("已登录 Kimi Code");
+        showNotice(t("notice.loginSuccess"));
         void refreshModels();
       }
     } catch (error) {
@@ -3106,7 +3131,7 @@ export default function App() {
       setAccountUsageBusy(false);
       setAccountUsageError(undefined);
       setProfileOpen(false);
-      showNotice("已退出 Kimi Code 登录");
+      showNotice(t("notice.logoutSuccess"));
     } catch (error) {
       showNotice(conciseError(error));
     }
@@ -3180,7 +3205,7 @@ export default function App() {
     if (!scope) {
       setAvailableSkills([]);
       setSkillsBusy(false);
-      setSkillsError("会话正在准备，请稍后再试");
+      setSkillsError(t("notice.sessionPreparing"));
       return;
     }
 
@@ -3213,7 +3238,7 @@ export default function App() {
       (item) => item.name === skill.name,
     );
     if (!selected && promptSkills.length >= MAX_PROMPT_SKILLS) {
-      showNotice(`每次最多选择 ${MAX_PROMPT_SKILLS} 个技能`);
+      showNotice(t("notice.maxSkills", { count: MAX_PROMPT_SKILLS }));
       setComposerAddOpen(false);
       return;
     }
@@ -3239,7 +3264,7 @@ export default function App() {
     setSkillDetailError(undefined);
     if (!scope) {
       setSkillDetailBusy(false);
-      setSkillDetailError("会话正在准备，请稍后再试");
+      setSkillDetailError(t("notice.sessionPreparing"));
       return;
     }
 
@@ -3284,7 +3309,7 @@ export default function App() {
     if (files.length === 0) return;
     const remaining = MAX_PROMPT_ATTACHMENTS - promptAttachments.length;
     if (remaining <= 0) {
-      showNotice(`每次最多添加 ${MAX_PROMPT_ATTACHMENTS} 个附件`);
+      showNotice(t("notice.maxAttachments", { count: MAX_PROMPT_ATTACHMENTS }));
       return;
     }
 
@@ -3294,10 +3319,10 @@ export default function App() {
       try {
         const kind = promptAttachmentKind(file.type);
         if (kind === "image" && !selectedModel?.supportsImage) {
-          throw new Error("当前模型不支持图片输入");
+          throw new Error(t("error.imageNotSupported"));
         }
         if (kind === "video" && !selectedModel?.supportsVideo) {
-          throw new Error("当前模型不支持视频输入");
+          throw new Error(t("error.videoNotSupported"));
         }
         prepared.push(await preparePromptAttachment(file));
       } catch (error) {
@@ -3308,7 +3333,7 @@ export default function App() {
       setPromptAttachments((current) => [...current, ...prepared]);
     }
     if (files.length > remaining) {
-      showNotice(`每次最多添加 ${MAX_PROMPT_ATTACHMENTS} 个附件`);
+      showNotice(t("notice.maxAttachments", { count: MAX_PROMPT_ATTACHMENTS }));
     }
   };
 
@@ -3356,28 +3381,28 @@ export default function App() {
       return;
     }
     if (!selectedModel) {
-      showNotice("请先配置并选择一个模型");
+      showNotice(t("notice.modelRequired"));
       return;
     }
     if (
       attachments.some((attachment) => attachment.kind === "image") &&
       !selectedModel.supportsImage
     ) {
-      showNotice("当前模型不支持图片输入");
+      showNotice(t("error.imageNotSupported"));
       return;
     }
     if (
       attachments.some((attachment) => attachment.kind === "video") &&
       !selectedModel.supportsVideo
     ) {
-      showNotice("当前模型不支持视频输入");
+      showNotice(t("error.videoNotSupported"));
       return;
     }
 
     const conversationId = activeConversation.id;
     const projectId = activeProject.id;
     if (activeAgentScope?.sessionId !== conversationId) {
-      showNotice("会话正在准备，请稍后再试");
+      showNotice(t("notice.sessionPreparing"));
       return;
     }
 
@@ -3418,8 +3443,11 @@ export default function App() {
     }
 
     const title =
-      activeConversation.title === "新对话"
-        ? (submittedText || `媒体对话（${attachments.length} 个附件）`)
+      activeConversation.title === t("conversation.new")
+        ? (
+            submittedText ||
+            t("conversation.mediaTitle", { count: attachments.length })
+          )
             .replace(/\s+/g, " ")
             .slice(0, 28)
         : activeConversation.title;
@@ -3604,8 +3632,8 @@ export default function App() {
       }));
       showNotice(
         submitted.status === "steered"
-          ? "消息已立即执行"
-          : "当前回合已结束，消息已作为下一回合执行",
+          ? t("notice.steeredNow")
+          : t("notice.steeredNext"),
       );
     } catch (error) {
       setQueuedPrompts((current) => ({
@@ -3705,15 +3733,15 @@ export default function App() {
   const runCompactionCommand = async (): Promise<void> => {
     const scope = activeAgentScope;
     if (!scope) {
-      showNotice("会话正在准备，请稍后再试");
+      showNotice(t("notice.sessionPreparing"));
       return;
     }
     if (isStreaming) {
-      showNotice("任务执行期间不能压缩上下文");
+      showNotice(t("notice.compactWhileRunning"));
       return;
     }
     if (activeCompaction?.phase === "started" || compactionCommandBusy) {
-      showNotice("上下文正在压缩");
+      showNotice(t("notice.compacting"));
       return;
     }
 
@@ -3743,11 +3771,11 @@ export default function App() {
       !source ||
       activeAgentScope?.sessionId !== source.id
     ) {
-      showNotice("会话正在准备，请稍后再试");
+      showNotice(t("notice.sessionPreparing"));
       return;
     }
     if (isStreaming) {
-      showNotice("任务执行期间不能复制会话");
+      showNotice(t("notice.forkWhileRunning"));
       return;
     }
     if (
@@ -3755,7 +3783,7 @@ export default function App() {
       compactionCommandBusy ||
       forkCommandBusy
     ) {
-      showNotice("上下文压缩期间不能复制会话");
+      showNotice(t("notice.forkWhileCompacting"));
       return;
     }
 
@@ -3800,7 +3828,7 @@ export default function App() {
         ),
       }));
       followLatestMessageRef.current = true;
-      showNotice("已复制并切换到新会话");
+      showNotice(t("notice.forked"));
     } catch (error) {
       showNotice(conciseError(error));
     } finally {
@@ -3815,11 +3843,11 @@ export default function App() {
       !conversation ||
       activeAgentScope?.sessionId !== conversation.id
     ) {
-      showNotice("会话正在准备，请稍后再试");
+      showNotice(t("notice.sessionPreparing"));
       return;
     }
     if (activeCompaction?.phase === "started") {
-      showNotice("上下文压缩期间不能发起侧边聊天");
+      showNotice(t("notice.sideChatWhileCompacting"));
       return;
     }
 
@@ -4076,7 +4104,7 @@ export default function App() {
         <aside className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
         <div className="brand-row">
           <div className="sidebar-heading-copy" aria-hidden={sidebarCollapsed}>
-            <strong>工作区</strong>
+            <strong>{t("sidebar.workspace")}</strong>
             <span>Projects &amp; sessions</span>
           </div>
           <button
@@ -4085,7 +4113,7 @@ export default function App() {
               setSidebarCollapsed((value) => !value);
               setProfileOpen(false);
             }}
-            title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+            title={sidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
           >
             {sidebarCollapsed ? (
               <PanelLeftOpen size={17} />
@@ -4099,15 +4127,15 @@ export default function App() {
           <button className="new-project-button" onClick={() => void addProject()}>
             <Plus size={17} />
             <span className="sidebar-control-label" aria-hidden={sidebarCollapsed}>
-              打开项目
+              {t("sidebar.openProject")}
             </span>
           </button>
 
           <div className="sidebar-section-heading" aria-hidden={sidebarCollapsed}>
-            <span>项目</span>
+            <span>{t("sidebar.projects")}</span>
           </div>
 
-          <nav className="project-list" aria-label="项目和对话">
+          <nav className="project-list" aria-label={t("sidebar.projectsAndConversations")}>
             {desktop.projects.map((project) => {
               const isProjectActive = project.id === activeProject?.id;
               return (
@@ -4141,8 +4169,8 @@ export default function App() {
                         onClick={(event) =>
                           void createConversation(project, event)
                         }
-                        title="新建对话"
-                        aria-label={`在 ${project.name} 中新建对话`}
+                        title={t("conversation.create")}
+                        aria-label={t("conversation.newIn", { name: project.name })}
                       >
                         <Plus size={14} />
                       </button>
@@ -4162,8 +4190,8 @@ export default function App() {
                             ),
                           });
                         }}
-                        title="移除项目"
-                        aria-label={`移除项目 ${project.name}`}
+                        title={t("sidebar.removeProject")}
+                        aria-label={t("sidebar.removeProjectNamed", { name: project.name })}
                       >
                         <FolderMinus size={13} />
                       </button>
@@ -4210,8 +4238,8 @@ export default function App() {
                                 <span
                                   className="conversation-running-indicator"
                                   role="status"
-                                  aria-label="对话进行中"
-                                  title="对话进行中"
+                                  aria-label={t("conversation.running")}
+                                  title={t("conversation.running")}
                                 />
                               </span>
                             )}
@@ -4228,8 +4256,8 @@ export default function App() {
                                 title: conversation.title,
                               });
                             }}
-                            title="归档对话"
-                            aria-label={`归档对话 ${conversation.title}`}
+                            title={t("conversation.archive")}
+                            aria-label={t("conversation.archiveNamed", { title: conversation.title })}
                           >
                             <Archive size={12} />
                           </button>
@@ -4246,7 +4274,7 @@ export default function App() {
           {desktop.projects.length === 0 && (
             <div className="sidebar-empty" aria-hidden={sidebarCollapsed}>
               <Folder size={22} />
-              <p>打开一个本地目录，开始和 Kimi 一起写代码。</p>
+              <p>{t("sidebar.empty")}</p>
             </div>
           )}
         </div>
@@ -4267,7 +4295,7 @@ export default function App() {
                 </span>
                 <span className="account-copy" aria-hidden={sidebarCollapsed}>
                   <strong>Kimi Code</strong>
-                  <small>已连接</small>
+                  <small>{t("account.connected")}</small>
                 </span>
                 <MoreHorizontal
                   className="account-trailing-icon"
@@ -4283,8 +4311,8 @@ export default function App() {
                 <button
                   className="account-compact-kimi"
                   type="button"
-                  title="Kimi Code 账号"
-                  aria-label="打开 Kimi Code 账号菜单"
+                  title={t("account.kimiAccount")}
+                  aria-label={t("account.openMenu")}
                   aria-expanded={profileOpen}
                   aria-controls="account-usage-popover"
                   onClick={toggleProfile}
@@ -4310,8 +4338,8 @@ export default function App() {
                 <CircleUserRound size={18} />
               </span>
               <span className="account-copy" aria-hidden={sidebarCollapsed}>
-                <strong>登录 Kimi</strong>
-                <small>同步模型与额度</small>
+                <strong>{t("account.login")}</strong>
+                <small>{t("account.loginHint")}</small>
               </span>
               <LogIn
                 className="account-trailing-icon"
@@ -4347,9 +4375,9 @@ export default function App() {
               <div className="header-actions">
                 <span className="connection-pill">
                   <i className="online" />
-                  Core v2 已连接
+                  {t("header.coreConnected")}
                 </span>
-                <button className="icon-button" title="新建对话" onClick={() => void createConversation(activeProject)}>
+                <button className="icon-button" title={t("conversation.create")} onClick={() => void createConversation(activeProject)}>
                   <SquarePen size={17} />
                 </button>
               </div>
@@ -4370,7 +4398,7 @@ export default function App() {
               {isHistoryLoading ? (
                 <div className="history-loading">
                   <span className="spinner" />
-                  正在读取会话历史…
+                  {t("history.loading")}
                 </div>
               ) : activeHistory?.error && !hasVisibleMessages ? (
                 <div className="history-loading error">
@@ -4509,7 +4537,7 @@ export default function App() {
                     className="slash-command-menu"
                     id="slash-command-menu"
                     role="menu"
-                    aria-label="斜杠命令"
+                    aria-label={t("slash.commands")}
                     onMouseDown={(event) => event.preventDefault()}
                   >
                     <button
@@ -4530,13 +4558,13 @@ export default function App() {
                           <Minimize2 size={14} />
                         )}
                       </span>
-                      <strong>压缩</strong>
+                      <strong>{t("slash.compact")}</strong>
                       <small>
                         {activeCompaction?.phase === "started"
-                          ? "正在压缩此任务的上下文"
+                          ? t("slash.compacting")
                           : activeContextPercent === undefined
-                            ? "压缩此任务的上下文"
-                            : `压缩此任务的上下文（已占用 ${activeContextPercent}%）`}
+                            ? t("slash.compactDesc")
+                            : t("slash.compactDescPercent", { percent: activeContextPercent })}
                       </small>
                     </button>
                     <button
@@ -4557,8 +4585,8 @@ export default function App() {
                           <Copy size={14} />
                         )}
                       </span>
-                      <strong>复制</strong>
-                      <small>从当前会话复制出一个新会话</small>
+                      <strong>{t("slash.fork")}</strong>
+                      <small>{t("slash.forkDesc")}</small>
                     </button>
                     <button
                       className={
@@ -4574,8 +4602,8 @@ export default function App() {
                       <span className="slash-command-icon" aria-hidden="true">
                         <MessageSquareText size={14} />
                       </span>
-                      <strong>侧边聊天</strong>
-                      <small>使用当前上下文发起只读聊天</small>
+                      <strong>{t("sideChat.title")}</strong>
+                      <small>{t("slash.sideChatDesc")}</small>
                     </button>
                   </div>
                 )}
@@ -4614,8 +4642,8 @@ export default function App() {
                         </figcaption>
                         <button
                           type="button"
-                          aria-label={`移除 ${attachment.name}`}
-                          title="移除附件"
+                          aria-label={t("composer.removeAttachmentNamed", { name: attachment.name })}
+                          title={t("composer.removeAttachment")}
                           onClick={() =>
                             setPromptAttachments((current) =>
                               current.filter(
@@ -4633,19 +4661,19 @@ export default function App() {
                 {(activePlan || promptSkills.length > 0) && (
                   <div
                     className="prompt-skill-list"
-                    aria-label="当前输入设置"
+                    aria-label={t("composer.inputSettings")}
                   >
                     {activePlan && (
                       <span className="prompt-skill-chip prompt-plan-chip">
                         <span className="prompt-skill-open prompt-plan-label">
                           <ClipboardList size={13} />
-                          <span>计划</span>
+                          <span>{t("plan.label")}</span>
                         </span>
                         <button
                           className="prompt-skill-remove"
                           type="button"
-                          aria-label="退出计划模式"
-                          title="退出计划模式"
+                          aria-label={t("plan.exit")}
+                          title={t("plan.exit")}
                           disabled={modeBusy || isStreaming}
                           onClick={() => void togglePlanMode()}
                         >
@@ -4662,8 +4690,8 @@ export default function App() {
                         <button
                           className="prompt-skill-open"
                           type="button"
-                          aria-label={`查看技能 ${skill.name}`}
-                          title="查看技能说明"
+                          aria-label={t("skills.viewSkill", { name: skill.name })}
+                          title={t("skills.viewDetail")}
                           onClick={() => void openSkillDetail(skill)}
                         >
                           <Package size={13} />
@@ -4672,8 +4700,8 @@ export default function App() {
                         <button
                           className="prompt-skill-remove"
                           type="button"
-                          aria-label={`移除技能 ${skill.name}`}
-                          title="移除技能"
+                          aria-label={t("skills.removeSkill", { name: skill.name })}
+                          title={t("skills.remove")}
                           onClick={() =>
                             setPromptSkills((current) =>
                               current.filter(
@@ -4739,10 +4767,10 @@ export default function App() {
                   }
                   placeholder={
                     activePlan
-                      ? "计划模式：描述需要分析和规划的任务…"
+                      ? t("composer.placeholderPlan")
                       : isStreaming
-                        ? "继续输入；发送后将加入队列…"
-                        : "告诉模型你想完成什么…"
+                        ? t("composer.placeholderStreaming")
+                        : t("composer.placeholder")
                   }
                   rows={1}
                   disabled={modelBusy || hasBlockingInteraction}
@@ -4758,8 +4786,8 @@ export default function App() {
                       <button
                         className="toolbar-icon composer-add-trigger"
                         type="button"
-                        title="添加附件、计划或技能"
-                        aria-label="添加附件、计划或技能"
+                        title={t("composer.add")}
+                        aria-label={t("composer.add")}
                         aria-expanded={composerAddOpen}
                         aria-controls="composer-add-menu"
                         onClick={toggleComposerAdd}
@@ -4772,7 +4800,7 @@ export default function App() {
                           className="composer-add-menu"
                           id="composer-add-menu"
                           role="menu"
-                          aria-label="添加到输入框"
+                          aria-label={t("composer.addMenu")}
                         >
                           <div className="composer-add-group">
                             <button
@@ -4790,8 +4818,8 @@ export default function App() {
                             >
                               <Paperclip size={15} />
                               <span>
-                                <strong>附件</strong>
-                                <small>添加图片、音频、视频或文件</small>
+                                <strong>{t("composer.attachments")}</strong>
+                                <small>{t("composer.attachmentsDesc")}</small>
                               </span>
                             </button>
                             <button
@@ -4811,20 +4839,20 @@ export default function App() {
                             >
                               <ClipboardList size={15} />
                               <span>
-                                <strong>计划</strong>
-                                <small>只规划和分析，不执行操作</small>
+                                <strong>{t("plan.label")}</strong>
+                                <small>{t("plan.desc")}</small>
                               </span>
                               {activePlan && <Check size={14} />}
                             </button>
                           </div>
 
                           <div className="composer-add-divider" />
-                          <div className="composer-add-heading">技能</div>
+                          <div className="composer-add-heading">{t("skills.heading")}</div>
                           <div className="composer-skill-list">
                             {skillsBusy ? (
                               <div className="composer-add-empty">
                                 <span className="spinner" />
-                                正在加载技能…
+                                {t("skills.loading")}
                               </div>
                             ) : skillsError ? (
                               <div className="composer-add-empty error">
@@ -4833,12 +4861,12 @@ export default function App() {
                                   type="button"
                                   onClick={() => void loadAvailableSkills()}
                                 >
-                                  重试
+                                  {t("common.retry")}
                                 </button>
                               </div>
                             ) : availableSkills.length === 0 ? (
                               <div className="composer-add-empty">
-                                当前会话没有可用技能
+                                {t("skills.empty")}
                               </div>
                             ) : (
                               availableSkills.map((skill) => {
@@ -4872,13 +4900,13 @@ export default function App() {
                     </div>
                     <ToolbarSelect
                       className="model-select"
-                      ariaLabel="选择模型"
+                      ariaLabel={t("model.select")}
                       icon={<Bot size={15} />}
                       value={selectedModel?.id ?? ""}
                       label={
                         modelsBusy
-                          ? "同步模型中…"
-                          : selectedModel?.displayName ?? "暂无可用模型"
+                          ? t("model.syncing")
+                          : (selectedModel?.displayName ?? t("model.none"))
                       }
                       disabled={
                         modelsBusy ||
@@ -4889,7 +4917,7 @@ export default function App() {
                       options={models.map((model) => ({
                         value: model.id,
                         label: model.displayName,
-                        description: `${formatContext(model.contextLength)} 上下文`,
+                        description: t("model.contextDesc", { size: formatContext(model.contextLength) }),
                       }))}
                       onChange={chooseModel}
                     />
@@ -4897,14 +4925,14 @@ export default function App() {
                       supportedThinkingLevels.length > 0 && (
                         <ToolbarSelect
                           className="effort-select"
-                          ariaLabel="选择思考强度"
+                          ariaLabel={t("thinking.select")}
                           icon={<BrainCircuit size={15} />}
                           value={effort}
-                          label={`思考 · ${effort}`}
+                          label={t("thinking.label", { level: effort })}
                           disabled={modelBusy || !activeAgentScope}
                           options={supportedThinkingLevels.map((value) => ({
                             value,
-                            label: `思考 · ${value}`,
+                            label: t("thinking.label", { level: value }),
                             description: thinkingLevelDescription(value),
                           }))}
                           onChange={chooseEffort}
@@ -4918,32 +4946,32 @@ export default function App() {
                             ? "auto-access"
                             : ""
                       }`}
-                      ariaLabel="选择权限模式"
+                      ariaLabel={t("permission.select")}
                       icon={<ShieldCheck size={15} />}
                       value={permissionMode}
                       label={
                         permissionMode === "yolo"
-                          ? "完全访问"
+                          ? t("permission.yolo")
                           : permissionMode === "auto"
-                            ? "自动选择"
-                            : "请求审批"
+                            ? t("permission.auto")
+                            : t("permission.manual")
                       }
                       disabled={isStreaming || modelBusy}
                       options={[
                         {
                           value: "manual",
-                          label: "请求审批",
-                          description: "执行命令前由你确认",
+                          label: t("permission.manual"),
+                          description: t("permission.manualDesc"),
                         },
                         {
                           value: "auto",
-                          label: "自动选择",
-                          description: "由权限策略判断是否允许",
+                          label: t("permission.auto"),
+                          description: t("permission.autoDesc"),
                         },
                         {
                           value: "yolo",
-                          label: "完全访问",
-                          description: "跳过审批并直接执行命令",
+                          label: t("permission.yolo"),
+                          description: t("permission.yoloDesc"),
                           danger: true,
                         },
                       ]}
@@ -4961,7 +4989,7 @@ export default function App() {
                     )}
                   </div>
                   <div className="send-zone">
-                    <span>{isStreaming ? "Enter 加入队列" : "Enter 发送"}</span>
+                    <span>{isStreaming ? t("composer.enterQueue") : t("composer.enterSend")}</span>
                     <button
                       className="send-button"
                       type={showStopButton ? "button" : "submit"}
@@ -4987,7 +5015,7 @@ export default function App() {
                             ) &&
                               !selectedModel?.supportsVideo)
                       }
-                      title={showStopButton ? "停止" : isStreaming ? "加入队列" : "发送"}
+                      title={showStopButton ? t("composer.stop") : isStreaming ? t("composer.queue") : t("composer.send")}
                     >
                       {showStopButton ? <X size={17} /> : <ArrowUp size={18} />}
                     </button>
@@ -4995,7 +5023,7 @@ export default function App() {
                 </div>
               </form>
               <p className="composer-caption">
-                模型可能会犯错，请检查生成的代码和重要信息。
+                {t("composer.caption")}
               </p>
             </div>
           </>
@@ -5054,7 +5082,9 @@ export default function App() {
         <SettingsDialog
           appVersion={appVersion}
           colorScheme={colorScheme}
+          language={language}
           onColorSchemeChange={updateColorScheme}
+          onLanguageChange={updateLanguage}
           onClose={closeSettings}
         />
       )}
@@ -5062,7 +5092,7 @@ export default function App() {
       {notice && (
         <div className="toast" role="status">
           <span>{notice}</span>
-          <button aria-label="关闭提示" onClick={() => setNotice(undefined)}>
+          <button aria-label={t("notice.dismiss")} onClick={() => setNotice(undefined)}>
             <X size={14} />
           </button>
         </div>
@@ -5097,7 +5127,7 @@ function AccountUsagePopover({
       id="account-usage-popover"
       className="profile-popover"
       role="dialog"
-      aria-label="Kimi Code 账号用量"
+      aria-label={t("account.usageTitle")}
     >
       <div className="profile-popover-header">
         <div className="profile-identity">
@@ -5109,14 +5139,14 @@ function AccountUsagePopover({
               <strong>Kimi Code</strong>
               {appVersion && <small>v{appVersion}</small>}
             </span>
-            <small>OAuth 账号</small>
+            <small>{t("account.oauthAccount")}</small>
           </span>
         </div>
         <button
           className="profile-refresh"
           type="button"
-          title="刷新账号用量"
-          aria-label="刷新账号用量"
+          title={t("account.refreshUsage")}
+          aria-label={t("account.refreshUsage")}
           disabled={busy}
           onClick={onRefresh}
         >
@@ -5126,12 +5156,12 @@ function AccountUsagePopover({
 
       <div className="account-usage-content" aria-live="polite">
         <div className="account-usage-heading">
-          <span>套餐用量</span>
-          {busy && usage && <small>正在更新</small>}
+          <span>{t("account.planUsage")}</span>
+          {busy && usage && <small>{t("account.updating")}</small>}
         </div>
 
         {busy && !usage ? (
-          <div className="account-usage-skeleton" aria-label="正在加载账号用量">
+          <div className="account-usage-skeleton" aria-label={t("account.loadingUsage")}>
             <i />
             <i />
           </div>
@@ -5147,7 +5177,7 @@ function AccountUsagePopover({
           </div>
         ) : (
           <div className="account-usage-empty">
-            {error ? "额度暂时无法加载" : "当前账号未返回套餐额度"}
+            {error ? t("account.usageError") : t("account.noUsage")}
           </div>
         )}
 
@@ -5155,7 +5185,7 @@ function AccountUsagePopover({
           <div className="account-usage-error">
             <span>{error}</span>
             <button type="button" disabled={busy} onClick={onRefresh}>
-              重试
+              {t("common.retry")}
             </button>
           </div>
         )}
@@ -5172,11 +5202,11 @@ function AccountUsagePopover({
           onClick={onOpenSettings}
         >
           <SettingsIcon size={14} />
-          设置
+          {t("settings.title")}
         </button>
         <button className="profile-signout" type="button" onClick={onSignOut}>
           <LogOut size={14} />
-          退出登录
+          {t("account.signOut")}
         </button>
       </div>
     </div>
@@ -5238,21 +5268,21 @@ function BoosterWalletSummary({
   return (
     <div className="booster-wallet">
       <div className="account-usage-heading">
-        <span>额外用量</span>
+        <span>{t("account.extraUsage")}</span>
         <small>Booster</small>
       </div>
       <div className="booster-balance">
-        <span>可用余额</span>
+        <span>{t("account.balance")}</span>
         <strong>{formatCurrency(wallet.balanceCents, wallet.currency)}</strong>
       </div>
       <div className="booster-details">
         <span>
-          本月已用 {formatCurrency(wallet.monthlyUsedCents, wallet.currency)}
+          {t("account.monthlyUsed", { amount: formatCurrency(wallet.monthlyUsedCents, wallet.currency) })}
         </span>
         <span>
           {hasMonthlyLimit
-            ? `上限 ${formatCurrency(wallet.monthlyChargeLimitCents, wallet.currency)}`
-            : "月度上限：不限"}
+            ? t("account.monthlyLimit", { amount: formatCurrency(wallet.monthlyChargeLimitCents, wallet.currency) })
+            : t("account.monthlyLimitUnlimited")}
         </span>
       </div>
       {hasMonthlyLimit && (
@@ -5269,23 +5299,25 @@ function BoosterWalletSummary({
 
 function formatUsageLabel(label: string): string {
   const normalized = label.trim().toLowerCase();
-  if (normalized === "weekly limit") return "每周额度";
+  if (normalized === "weekly limit") return t("usage.weeklyLimit");
   return label
-    .replace(/^(\d+)h limit$/i, "$1 小时额度")
-    .replace(/^(\d+)d limit$/i, "$1 天额度")
-    .replace(/^(\d+)m limit$/i, "$1 分钟额度");
+    .replace(/^(\d+)h limit$/i, t("usage.hoursLimit", { count: "$1" }))
+    .replace(/^(\d+)d limit$/i, t("usage.daysLimit", { count: "$1" }))
+    .replace(/^(\d+)m limit$/i, t("usage.minutesLimit", { count: "$1" }));
 }
 
 function formatResetHint(hint: string): string {
-  if (hint === "reset") return "已重置";
-  if (hint.startsWith("resets in ")) return `${hint.slice(10)} 后重置`;
-  if (hint.startsWith("resets at ")) return `${hint.slice(10)} 重置`;
+  if (hint === "reset") return t("usage.resetDone");
+  if (hint.startsWith("resets in "))
+    return t("usage.resetsIn", { time: hint.slice(10) });
+  if (hint.startsWith("resets at "))
+    return t("usage.resetsAt", { time: hint.slice(10) });
   return hint;
 }
 
 function formatCurrency(cents: number, currency: string): string {
   try {
-    return new Intl.NumberFormat("zh-CN", {
+    return new Intl.NumberFormat(localeTag(), {
       style: "currency",
       currency: currency || "USD",
       currencyDisplay: "narrowSymbol",
@@ -5359,7 +5391,7 @@ function WindowTitleBar({
   };
 
   const contextTitle =
-    conversationTitle ?? projectName ?? "准备开始新的编码任务";
+    conversationTitle ?? projectName ?? t("titlebar.defaultContext");
 
   return (
     <header className="window-titlebar" data-tauri-drag-region>
@@ -5393,8 +5425,8 @@ function WindowTitleBar({
         <button
           className="window-control"
           type="button"
-          title="最小化"
-          aria-label="最小化窗口"
+          title={t("window.minimize")}
+          aria-label={t("window.minimizeWindow")}
           onClick={() => runWindowAction("minimize")}
         >
           <Minus size={15} strokeWidth={1.7} />
@@ -5402,8 +5434,8 @@ function WindowTitleBar({
         <button
           className="window-control"
           type="button"
-          title={maximized ? "还原" : "最大化"}
-          aria-label={maximized ? "还原窗口" : "最大化窗口"}
+          title={maximized ? t("window.restore") : t("window.maximize")}
+          aria-label={maximized ? t("window.restoreWindow") : t("window.maximizeWindow")}
           onClick={toggleMaximize}
         >
           {maximized ? (
@@ -5415,8 +5447,8 @@ function WindowTitleBar({
         <button
           className="window-control close"
           type="button"
-          title="关闭"
-          aria-label="关闭窗口"
+          title={t("window.close")}
+          aria-label={t("window.closeWindow")}
           onClick={() => runWindowAction("close")}
         >
           <X size={15} strokeWidth={1.7} />
@@ -5455,8 +5487,8 @@ function ContextUsageIndicator({
       tabIndex={0}
       aria-label={
         percent === undefined
-          ? "上下文窗口上限未知"
-          : `上下文窗口已用 ${percent}%`
+          ? t("context.unknownLimit")
+          : t("context.usedPercentAria", { percent })
       }
     >
       <span className="context-usage-meter" aria-hidden="true">
@@ -5474,28 +5506,28 @@ function ContextUsageIndicator({
         </svg>
       </span>
       <div className="context-usage-tooltip" role="tooltip">
-        <section className="agent-token-usage" aria-label="Token 用量">
+        <section className="agent-token-usage" aria-label={t("usage.tokenUsage")}>
           <div className="usage-section-heading">
-            <strong>Token 用量</strong>
+            <strong>{t("usage.tokenUsage")}</strong>
             <small>
               {modelUsages.length > 0
-                ? `${modelUsages.length} 个模型`
-                : "当前 Agent"}
+                ? t("usage.modelCount", { count: modelUsages.length })
+                : t("usage.currentAgent")}
             </small>
           </div>
           {hasTokenUsage ? (
             <>
               <TokenUsageBreakdown
-                label="本轮"
+                label={t("usage.thisTurn")}
                 usage={agentUsage?.currentTurn}
               />
               <TokenUsageBreakdown
-                label="会话累计"
+                label={t("usage.sessionTotal")}
                 usage={agentUsage?.total}
               />
               {modelUsages.length > 0 && (
                 <div className="token-usage-models">
-                  <strong>按模型</strong>
+                  <strong>{t("usage.byModel")}</strong>
                   {modelUsages.slice(0, 3).map(([model, modelUsage]) => {
                     const totalInput = inputTokenUsage(modelUsage);
                     const modelDisplayName =
@@ -5506,50 +5538,54 @@ function ContextUsageIndicator({
                     return (
                       <div
                         key={model}
-                        title={`${modelDisplayName}：缓存输入 ${formatTokenCount(
-                          modelUsage.inputCacheRead,
-                        )}，总输入 ${formatTokenCount(
-                          totalInput,
-                        )}，输出 ${formatTokenCount(
-                          modelUsage.output,
-                        )}，缓存命中率 ${formatCacheHitRate(modelUsage)}`}
+                        title={t("usage.modelTooltip", {
+                          name: modelDisplayName,
+                          cacheInput: formatTokenCount(modelUsage.inputCacheRead),
+                          totalInput: formatTokenCount(totalInput),
+                          output: formatTokenCount(modelUsage.output),
+                          hitRate: formatCacheHitRate(modelUsage),
+                        })}
                       >
                         <span>
                           <i>{modelDisplayName}</i>
-                          <b>命中率 {formatCacheHitRate(modelUsage)}</b>
+                          <b>{t("usage.hitRate", { rate: formatCacheHitRate(modelUsage) })}</b>
                         </span>
                         <small>
-                          缓存输入{" "}
+                          {t("usage.cacheInput")}{" "}
                           {formatCompactTokenCount(modelUsage.inputCacheRead)}
-                          <em>/</em>总输入{" "}
+                          <em>/</em>
+                          {t("usage.totalInput")}{" "}
                           {formatCompactTokenCount(totalInput)}
-                          <em>/</em>输出{" "}
+                          <em>/</em>
+                          {t("usage.output")}{" "}
                           {formatCompactTokenCount(modelUsage.output)}
                         </small>
                       </div>
                     );
                   })}
                   {modelUsages.length > 3 && (
-                    <small>另有 {modelUsages.length - 3} 个模型</small>
+                    <small>{t("usage.moreModels", { count: modelUsages.length - 3 })}</small>
                   )}
                 </div>
               )}
             </>
           ) : (
-            <span className="token-usage-empty">暂无用量记录</span>
+            <span className="token-usage-empty">{t("usage.empty")}</span>
           )}
         </section>
         <span className="context-usage-divider" aria-hidden="true" />
-        <section className="context-window-usage" aria-label="上下文窗口">
+        <section className="context-window-usage" aria-label={t("context.window")}>
           <div className="usage-section-heading">
-            <strong>上下文窗口</strong>
+            <strong>{t("context.window")}</strong>
           </div>
           <span className="context-usage-summary">
-            {percent === undefined ? "使用量未知" : `${percent}% 已用`}
+            {percent === undefined ? t("context.usageUnknown") : t("context.usedPercent", { percent })}
           </span>
           <span>
-            已用 {formatTokenCount(contextTokens)} tokens，共{" "}
-            {effectiveMax > 0 ? formatTokenCount(effectiveMax) : "未知"}
+            {t("context.usedOf", {
+              used: formatTokenCount(contextTokens),
+              total: effectiveMax > 0 ? formatTokenCount(effectiveMax) : t("context.unknown"),
+            })}
           </span>
         </section>
       </div>
@@ -5571,20 +5607,20 @@ function TodoProgress({ todos }: { todos: readonly TodoItem[] }) {
         : Math.max(0, todos.length - 1);
   const allDone = completed === todos.length;
   const progressLabel = allDone
-    ? `已完成 ${completed} / ${todos.length}`
-    : `第 ${currentIndex + 1} / ${todos.length} 步`;
+    ? t("todo.doneCount", { completed, total: todos.length })
+    : t("todo.stepCount", { current: currentIndex + 1, total: todos.length });
 
   return (
     <div
       className={`todo-progress-anchor ${allDone ? "complete" : ""}`}
       tabIndex={0}
-      aria-label={`${progressLabel}，悬停或聚焦查看任务列表`}
+      aria-label={t("todo.ariaLabel", { label: progressLabel })}
     >
       <div className="todo-popover" role="tooltip">
         <div className="todo-popover-heading">
-          <strong>当前任务</strong>
+          <strong>{t("todo.current")}</strong>
           <span>
-            {completed} / {todos.length} 已完成
+            {completed} / {todos.length} {t("status.completed")}
           </span>
         </div>
         <ol className="todo-list">
@@ -5614,17 +5650,17 @@ function TodoProgress({ todos }: { todos: readonly TodoItem[] }) {
 function backgroundTaskStatusLabel(status: AgentTaskInfo["status"]): string {
   switch (status) {
     case "running":
-      return "运行中";
+      return t("status.running");
     case "completed":
-      return "已完成";
+      return t("status.completed");
     case "failed":
-      return "失败";
+      return t("status.failed");
     case "timed_out":
-      return "已超时";
+      return t("status.timedOut");
     case "killed":
-      return "已终止";
+      return t("status.killed");
     case "lost":
-      return "已丢失";
+      return t("status.lost");
   }
 }
 
@@ -5633,16 +5669,16 @@ function backgroundTaskElapsed(task: AgentTaskInfo): string {
   if (typeof end !== "number") return "";
   const duration = Math.max(0, end - task.startedAt);
   const seconds = Math.floor(duration / 1000);
-  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 60) return t("duration.seconds", { value: seconds });
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   if (minutes < 60) {
     return remainder > 0
-      ? `${minutes}分${remainder}秒`
-      : `${minutes}分钟`;
+      ? t("duration.minSec", { minutes, seconds: remainder })
+      : t("duration.minutesTight", { minutes });
   }
   const hours = Math.floor(minutes / 60);
-  return `${hours}小时${minutes % 60}分`;
+  return t("duration.hourMin", { hours, minutes: minutes % 60 });
 }
 
 function BackgroundTaskProgress({
@@ -5672,21 +5708,21 @@ function BackgroundTaskProgress({
     <div
       className={`background-task-anchor ${allDone ? "complete" : ""}`}
       tabIndex={0}
-      aria-label={`后台任务 ${tasks.length} 个，悬停查看详情`}
+      aria-label={t("tasks.ariaLabel", { count: tasks.length })}
     >
       <div
         className="background-task-popover"
         role="dialog"
-        aria-label="后台任务"
+        aria-label={t("tasks.title")}
       >
         <div className="background-task-popover-heading">
-          <strong>后台任务</strong>
+          <strong>{t("tasks.title")}</strong>
           <span>
             {running > 0
-              ? `${running} 个运行中`
+              ? t("tasks.runningCount", { count: running })
               : failed > 0
-                ? `${failed} 个异常`
-                : `${tasks.length} 个已完成`}
+                ? t("tasks.failedCount", { count: failed })
+                : t("tasks.completedCount", { count: tasks.length })}
           </span>
         </div>
         <ul className="background-task-list">
@@ -5735,17 +5771,17 @@ function BackgroundTaskProgress({
                 </button>
                 {expanded && (
                   <div className="background-task-detail">
-                    <span>命令</span>
+                    <span>{t("tasks.command")}</span>
                     <pre className="background-task-command">
                       <code>{task.command || task.description}</code>
                     </pre>
-                    <span>输出</span>
+                    <span>{t("tasks.output")}</span>
                     <pre className="background-task-output">
                       <code>
                         {task.output ||
                           (task.outputLoading
-                            ? "正在读取输出…"
-                            : task.outputError || "暂无输出")}
+                            ? t("tasks.loadingOutput")
+                            : task.outputError || t("tasks.noOutput"))}
                       </code>
                     </pre>
                   </div>
@@ -5757,7 +5793,7 @@ function BackgroundTaskProgress({
       </div>
       <div className="background-task-pill" aria-hidden="true">
         <TerminalSquare size={13} />
-        <span>后台任务 {tasks.length}</span>
+        <span>{t("tasks.title")} {tasks.length}</span>
         {running > 0 && <span className="background-task-running-dot" />}
       </div>
     </div>
@@ -5801,12 +5837,12 @@ function CompactionNotice({ event }: { event: CompactionEvent }) {
       )}
       <strong>
         {event.phase === "completed"
-          ? "上下文已压缩"
+          ? t("compaction.completed")
           : event.phase === "cancelled"
-            ? "上下文压缩已取消"
-            : "正在压缩上下文"}
+            ? t("compaction.cancelled")
+            : t("compaction.inProgress")}
         {event.phase === "completed" && tokenTransition
-          ? `（${tokenTransition}）`
+          ? t("compaction.tokens", { transition: tokenTransition })
           : ""}
       </strong>
       <span aria-hidden="true" />
@@ -5972,8 +6008,8 @@ function QuestionCard({
           <MessageSquareText size={18} />
         </span>
         <div>
-          <small>Kimi 需要你补充信息</small>
-          <strong>回答后将继续制定计划</strong>
+          <small>{t("question.subtitle")}</small>
+          <strong>{t("question.title")}</strong>
         </div>
       </div>
       <div className="question-list">
@@ -6013,11 +6049,11 @@ function QuestionCard({
                 })}
               </div>
               <label className="question-other">
-                <span>{question.otherLabel || "其他"}</span>
+                <span>{question.otherLabel || t("question.other")}</span>
                 <input
                   value={otherAnswers[questionIndex] ?? ""}
                   disabled={busy}
-                  placeholder={question.otherDescription || "输入其他答案"}
+                  placeholder={question.otherDescription || t("question.otherPlaceholder")}
                   onChange={(event) =>
                     updateOtherAnswer(questionIndex, event.target.value, multiSelect)
                   }
@@ -6034,7 +6070,7 @@ function QuestionCard({
           disabled={busy}
           onClick={() => onRespond(null)}
         >
-          跳过
+          {t("question.skip")}
         </button>
         <button
           type="button"
@@ -6043,7 +6079,7 @@ function QuestionCard({
           onClick={submit}
         >
           {busy ? <span className="spinner light" /> : <Check size={14} />}
-          提交回答
+          {t("question.submit")}
         </button>
       </div>
     </section>
@@ -6093,8 +6129,8 @@ function PlanReviewCard({
           <ClipboardList size={18} />
         </span>
         <div>
-          <small>计划已完成</small>
-          <strong>审核计划并选择下一步</strong>
+          <small>{t("plan.completed")}</small>
+          <strong>{t("plan.reviewTitle")}</strong>
         </div>
       </div>
       <div className="plan-review-content">
@@ -6103,7 +6139,7 @@ function PlanReviewCard({
       {display.path && <code className="plan-review-path">{display.path}</code>}
       {options.length > 0 && (
         <div className="plan-review-options">
-          <span>选择实施方案</span>
+          <span>{t("plan.chooseOption")}</span>
           <div className="plan-review-option-list" role="radiogroup">
             {options.map((option) => (
               <label
@@ -6130,12 +6166,12 @@ function PlanReviewCard({
         </div>
       )}
       <label className="plan-review-feedback">
-        <span>需要调整？写下修改意见</span>
+        <span>{t("plan.feedbackLabel")}</span>
         <textarea
           rows={2}
           value={feedback}
           disabled={busy}
-          placeholder="告诉 Kimi 需要修改计划的哪些部分"
+          placeholder={t("plan.feedbackPlaceholder")}
           onChange={(event) => setFeedback(event.target.value)}
         />
       </label>
@@ -6148,7 +6184,7 @@ function PlanReviewCard({
             onRespond({ decision: "rejected", selectedLabel: "Reject" })
           }
         >
-          拒绝
+          {t("common.reject")}
         </button>
         <button
           type="button"
@@ -6165,7 +6201,7 @@ function PlanReviewCard({
           ) : (
             <Check size={14} />
           )}
-          {needsRevision ? "返回修改" : "执行方案"}
+          {needsRevision ? t("plan.revise") : t("plan.execute")}
         </button>
       </div>
     </section>
@@ -6205,8 +6241,8 @@ function ApprovalCard({
       <div className="approval-content">
         <div className="approval-heading">
           <div>
-            <span>需要你的批准</span>
-            <strong>{payload.action || `${payload.toolName} 请求执行操作`}</strong>
+            <span>{t("approval.title")}</span>
+            <strong>{payload.action || t("approval.toolRequest", { tool: payload.toolName })}</strong>
           </div>
           <span className="approval-tool">{payload.toolName}</span>
         </div>
@@ -6214,25 +6250,25 @@ function ApprovalCard({
           <div className="approval-command">
             <div>
               <TerminalSquare size={13} />
-              <span>{cwd || "当前项目目录"}</span>
+              <span>{cwd || t("approval.currentDir")}</span>
             </div>
             <code>{command}</code>
           </div>
         ) : (
-          <div className="approval-detail">{String(detail || "该操作需要确认")}</div>
+          <div className="approval-detail">{String(detail || t("approval.needsConfirm"))}</div>
         )}
         <div className="approval-footer">
-          <p>请确认命令及工作目录可信后再允许执行。</p>
+          <p>{t("approval.warning")}</p>
           <div className="approval-actions">
             <button type="button" className="approval-reject" onClick={onReject} disabled={busy}>
-              拒绝
+              {t("common.reject")}
             </button>
             <button type="button" className="approval-session" onClick={onApproveSession} disabled={busy}>
-              本会话允许
+              {t("approval.allowSession")}
             </button>
             <button type="button" className="approval-once" onClick={onApprove} disabled={busy}>
               {busy ? <span className="spinner light" /> : <Check size={14} />}
-              允许一次
+              {t("approval.allowOnce")}
             </button>
           </div>
         </div>
@@ -6259,7 +6295,7 @@ const ConversationOutline = memo(function ConversationOutline({
   return (
     <nav
       className="conversation-outline"
-      aria-label="快速浏览会话消息"
+      aria-label={t("outline.ariaLabel")}
       onMouseLeave={() => setPreviewTurnId(undefined)}
     >
       <div className="conversation-outline-scroll">
@@ -6270,7 +6306,7 @@ const ConversationOutline = memo(function ConversationOutline({
               key={item.id}
               type="button"
               className={`conversation-outline-row${active ? " active" : ""}`}
-              aria-label={`第 ${index + 1} 轮：${item.title}`}
+              aria-label={t("outline.turnLabel", { index: index + 1, title: item.title })}
               aria-current={active ? "true" : undefined}
               style={
                 {
@@ -6302,7 +6338,7 @@ const ConversationOutline = memo(function ConversationOutline({
               </span>
             ) : (
               <span className="conversation-outline-empty">
-                暂无模型回复预览
+                {t("outline.emptyPreview")}
               </span>
             )}
           </>
@@ -6330,12 +6366,13 @@ function Welcome({
       </div>
       <p className="eyebrow">KIMI CODE AGENT</p>
       <h2>
-        准备好一起构建
+        {t("welcome.title")}
         <br />
-        <span>{project.name}</span> 了吗？
+        <span>{project.name}</span>
+        {t("welcome.titleSuffix")}
       </h2>
       <p className="welcome-copy">
-        我会结合当前项目上下文理解你的目标。你可以让我阅读代码、解释结构，或从一个具体任务开始。
+        {t("welcome.copy")}
       </p>
       <div className="suggestion-grid">
         {PROMPT_SUGGESTIONS.map((suggestion) => (
@@ -6536,13 +6573,13 @@ function QueuedPromptList({
   onSkillOpen: (name: string) => void;
 }) {
   return (
-    <section className="queued-prompt-stack" aria-label="排队中的消息">
+    <section className="queued-prompt-stack" aria-label={t("queue.ariaLabel")}>
       <header>
         <span>
           <MessageSquareText size={13} />
-          队列 · {prompts.length}
+          {t("queue.title", { count: prompts.length })}
         </span>
-        <small>当前回合结束后自动逐条发送</small>
+        <small>{t("queue.hint")}</small>
       </header>
       {prompts.map((prompt, index) => (
         <article className="queued-prompt" key={prompt.id}>
@@ -6557,14 +6594,14 @@ function QueuedPromptList({
               </div>
             ) : (
               <span className="queued-prompt-placeholder">
-                附件 ×{prompt.attachments.length}
+                {t("queue.attachmentsOnly", { count: prompt.attachments.length })}
               </span>
             )}
             <PromptAttachmentContent attachments={prompt.attachments} />
           </div>
           <footer>
             <span className={index === 0 ? "next" : ""}>
-              {index === 0 ? "下一条" : `#${index + 1}`}
+              {index === 0 ? t("queue.next") : `#${index + 1}`}
             </span>
             <div>
               <button
@@ -6576,26 +6613,26 @@ function QueuedPromptList({
                 }
                 title={
                   prompt.skills.length > 0
-                    ? "技能将在当前回合结束后激活"
+                    ? t("queue.skillPending")
                     : canSteer
-                      ? "立即执行"
-                      : "等待当前回合启动后可立即执行"
+                      ? t("queue.steer")
+                      : t("queue.steerPending")
                 }
-                aria-label="立即执行排队消息"
+                aria-label={t("queue.steerAria")}
                 onClick={() => onSteer(prompt.id)}
               >
                 {prompt.steering ? <span className="spinner" /> : <ArrowUp size={13} />}
-                立即执行
+                {t("queue.steer")}
               </button>
               <button
                 type="button"
                 disabled={prompt.steering}
-                title="撤回"
-                aria-label="撤回排队消息"
+                title={t("queue.withdraw")}
+                aria-label={t("queue.withdrawAria")}
                 onClick={() => onRemove(prompt.id)}
               >
                 <X size={13} />
-                撤回
+                {t("queue.withdraw")}
               </button>
             </div>
           </footer>
@@ -6620,7 +6657,7 @@ function AssistantResponseStatus({
     >
       {running ? (
         <>
-          <span>正在思考</span>
+          <span>{t("assistant.thinking")}</span>
           <span className="assistant-thinking-dots" aria-hidden="true">
             <i />
             <i />
@@ -6628,7 +6665,7 @@ function AssistantResponseStatus({
           </span>
         </>
       ) : (
-        <span>用时 {formatElapsedDuration(durationMs ?? 0)}</span>
+        <span>{t("assistant.elapsed", { duration: formatElapsedDuration(durationMs ?? 0) })}</span>
       )}
     </div>
   );
@@ -6673,7 +6710,7 @@ function ThinkingSummary({ content }: { content: string }) {
         type="button"
         className="thinking-summary-toggle"
         aria-expanded={open}
-        title={open ? "收起思维链" : "展开完整思维链"}
+        title={open ? t("thinking.collapse") : t("thinking.expand")}
         onClick={() => setOpen((value) => !value)}
       >
         <span>{summary}</span>
@@ -6710,7 +6747,7 @@ function LiveAssistantContent({
         <img
           className="history-media"
           src={content.imageUrl.url}
-          alt="对话图片"
+          alt={t("message.imageAlt")}
         />
       );
     case "audio_url":
@@ -6762,7 +6799,7 @@ function LiveToolBlock({
       >
         <ToolStatusIcon status={tool.status} />
         <Wrench size={13} />
-        <span>{tool.name ?? "准备工具调用"}</span>
+        <span>{tool.name ?? t("tool.preparing")}</span>
         <small>{liveToolStatusLabel(tool.status)}</small>
       </button>
       {displayedSubagents.length > 0 && (
@@ -6778,7 +6815,7 @@ function LiveToolBlock({
           {tool.description && <p>{tool.description}</p>}
           {input !== undefined && (
             <section className="tool-detail-section">
-              <span>参数</span>
+              <span>{t("tool.params")}</span>
               <ToolInputView name={tool.name} input={input} />
             </section>
           )}
@@ -6793,7 +6830,7 @@ function LiveToolBlock({
           )}
           {tool.output !== undefined && (
             <section className="tool-detail-section">
-              <span>结果</span>
+              <span>{t("tool.result")}</span>
               <pre className={tool.isError ? "error" : ""}>
                 {structuredValue(tool.output)}
               </pre>
@@ -6825,17 +6862,17 @@ function displayedSubagentStatus(
 function subagentStatusLabel(status: DisplaySubagentStatus): string {
   switch (status) {
     case "queued":
-      return "等待中";
+      return t("status.queued");
     case "running":
-      return "执行中";
+      return t("status.executing");
     case "suspended":
-      return "等待重试";
+      return t("status.suspended");
     case "completed":
-      return "已完成";
+      return t("status.completed");
     case "failed":
-      return "失败";
+      return t("status.failed");
     case "stopped":
-      return "已停止";
+      return t("status.stopped");
   }
 }
 
@@ -6846,12 +6883,12 @@ function subagentPanelSummary(statuses: DisplaySubagentStatus[]): string {
   ).length;
   const queued = statuses.filter((status) => status === "queued").length;
   const failed = statuses.filter((status) => status === "failed").length;
-  if (running > 0) return `${running} 个执行中`;
-  if (suspended > 0) return `${suspended} 个等待重试`;
-  if (queued > 0) return `${queued} 个等待中`;
-  if (failed > 0) return `${failed} 个失败`;
-  if (statuses.some((status) => status === "stopped")) return "已停止";
-  return "全部完成";
+  if (running > 0) return t("subagent.runningCount", { count: running });
+  if (suspended > 0) return t("subagent.suspendedCount", { count: suspended });
+  if (queued > 0) return t("subagent.queuedCount", { count: queued });
+  if (failed > 0) return t("subagent.failedCount", { count: failed });
+  if (statuses.some((status) => status === "stopped")) return t("status.stopped");
+  return t("subagent.allDone");
 }
 
 function SubagentStatusIcon({ status }: { status: DisplaySubagentStatus }) {
@@ -6915,7 +6952,7 @@ function SubagentPanel({
   return (
     <section
       className={`subagent-panel ${active ? "active" : "settled"}`}
-      aria-label="子代理执行进度"
+      aria-label={t("subagent.progressAria")}
     >
       <button
         type="button"
@@ -6927,7 +6964,7 @@ function SubagentPanel({
         }}
       >
         <Bot size={13} />
-        <span>子代理</span>
+        <span>{t("subagent.title")}</span>
         <strong>
           {finished}/{subagents.length}
         </strong>
@@ -7021,14 +7058,14 @@ function SubagentRow({
         <span className="subagent-row-copy">
           <strong>
             {subagent.description ||
-              `子代理 ${subagent.swarmIndex ?? subagent.subagentName}`}
+              t("subagent.fallbackName", { name: subagent.swarmIndex ?? subagent.subagentName })}
           </strong>
           <small>
             {subagent.swarmIndex !== undefined &&
               `#${subagent.swarmIndex} · `}
             {subagent.subagentName} ·{" "}
             <span title={subagent.subagentId}>{shortId}</span>
-            {subagent.runInBackground && " · 后台"}
+            {subagent.runInBackground && t("subagent.backgroundSuffix")}
           </small>
           {activity && <span className="subagent-row-activity">{activity}</span>}
         </span>
@@ -7049,13 +7086,13 @@ function SubagentRow({
           )}
           {subagent.resultSummary && (
             <section className="subagent-result-summary">
-              <span>最终摘要</span>
+              <span>{t("subagent.finalSummary")}</span>
               <pre>{subagent.resultSummary}</pre>
             </section>
           )}
           {subagent.error && (
             <section className="subagent-result-summary">
-              <span>{status === "failed" ? "错误" : "状态说明"}</span>
+              <span>{status === "failed" ? t("subagent.errorLabel") : t("subagent.statusNote")}</span>
               <pre className={status === "failed" ? "error" : ""}>
                 {subagent.error}
               </pre>
@@ -7069,7 +7106,7 @@ function SubagentRow({
               )}
               {subagent.contextTokens !== undefined && (
                 <span>
-                  上下文 {formatCompactTokenCount(subagent.contextTokens)}
+                  {t("subagent.contextTokens", { count: formatCompactTokenCount(subagent.contextTokens) })}
                 </span>
               )}
             </div>
@@ -7088,19 +7125,19 @@ function subagentLiveActivity(turn?: InFlightTurn): string | undefined {
       const block = blocks[blockIndex];
       if (block.kind === "tool") {
         return block.status === "running" || block.status === "streaming"
-          ? `正在执行 ${block.name ?? "工具"}`
-          : `${block.name ?? "工具"}已结束`;
+          ? t("subagent.executingTool", { name: block.name ?? t("tool.fallback") })
+          : t("subagent.toolEnded", { name: block.name ?? t("tool.fallback") });
       }
-      if (block.kind === "thinking") return "正在思考";
+      if (block.kind === "thinking") return t("assistant.thinking");
       if (
         block.kind === "text" ||
         (block.kind === "content" && block.content.type === "text")
       ) {
-        return isTurnRunning(turn) ? "正在生成回复" : "回复已生成";
+        return isTurnRunning(turn) ? t("subagent.generating") : t("subagent.responseReady");
       }
     }
   }
-  return isTurnRunning(turn) ? "正在启动" : "任务已结束";
+  return isTurnRunning(turn) ? t("subagent.starting") : t("subagent.taskEnded");
 }
 
 function SubagentLiveTimeline({
@@ -7171,7 +7208,7 @@ function SubagentLiveTimeline({
       {!hasBlocks && streaming && (
         <div className="subagent-live-placeholder">
           <span className="spinner" />
-          等待子代理输出…
+          {t("subagent.waitingOutput")}
         </div>
       )}
       {turn.error && <div className="live-turn-error">{turn.error}</div>}
@@ -7192,13 +7229,13 @@ function liveToolStatusLabel(
 ): string {
   switch (status) {
     case "streaming":
-      return "准备中";
+      return t("status.preparing");
     case "running":
-      return "执行中";
+      return t("status.executing");
     case "completed":
-      return "已完成";
+      return t("status.completed");
     case "error":
-      return "失败";
+      return t("status.failed");
   }
 }
 
@@ -7210,24 +7247,24 @@ function ToolStatusIcon({
     | "incomplete";
 }) {
   if (status === "streaming" || status === "running") {
-    return <span className="tool-status-icon spinning" aria-label="执行中" />;
+    return <span className="tool-status-icon spinning" aria-label={t("status.executing")} />;
   }
   if (status === "completed") {
     return (
-      <span className="tool-status-icon completed" aria-label="已完成">
+      <span className="tool-status-icon completed" aria-label={t("status.completed")}>
         <Check size={11} />
       </span>
     );
   }
   if (status === "error") {
     return (
-      <span className="tool-status-icon error" aria-label="执行失败">
+      <span className="tool-status-icon error" aria-label={t("status.error")}>
         <X size={11} />
       </span>
     );
   }
   return (
-    <span className="tool-status-icon incomplete" aria-label="未完成">
+    <span className="tool-status-icon incomplete" aria-label={t("status.incomplete")}>
       <MoreHorizontal size={11} />
     </span>
   );
@@ -7304,7 +7341,7 @@ const HistoryTurnView = memo(function HistoryTurnView({
                   onClick={() => setProcessOpen((value) => !value)}
                 >
                   <span>
-                    已处理
+                    {t("history.processed")}
                     {responseDuration !== undefined
                       ? ` ${formatElapsedDuration(responseDuration)}`
                       : ""}
@@ -7363,7 +7400,7 @@ const HistoryTurnView = memo(function HistoryTurnView({
                   ) : (
                     <Copy size={14} />
                   )}
-                  {copiedMessageId === finalResponse.id ? "已复制" : "复制"}
+                  {copiedMessageId === finalResponse.id ? t("common.copied") : t("common.copy")}
                 </button>
               </div>
             )}
@@ -7443,14 +7480,14 @@ function AssistantMessagePart({
       <div className="history-summary-divider" role="separator">
         <span aria-hidden="true" />
         <strong>
-          上下文已压缩
-          {tokenTransition ? `（${tokenTransition}）` : ""}
+          {t("compaction.completed")}
+          {tokenTransition ? t("compaction.tokens", { transition: tokenTransition }) : ""}
         </strong>
         <button
           type="button"
           onClick={() => onCompactionSummaryOpen(message)}
         >
-          查看摘要
+          {t("compaction.viewSummary")}
         </button>
         <span aria-hidden="true" />
       </div>
@@ -7764,7 +7801,7 @@ function HistoryToolCard({
         <Wrench size={13} />
         <span>{tool.tool_name}</span>
         <small>
-          {result ? (result.is_error ? "失败" : "已完成") : "未完成"}
+          {result ? (result.is_error ? t("status.failed") : t("status.completed")) : t("status.incomplete")}
         </small>
       </button>
       {displayedSubagents.length > 0 && (
@@ -7778,12 +7815,12 @@ function HistoryToolCard({
       <Collapsible className="tool-card-collapse" open={open}>
         <div className="history-tool-detail">
           <section className="tool-detail-section">
-            <span>参数</span>
+            <span>{t("tool.params")}</span>
             <ToolInputView name={tool.tool_name} input={tool.input} />
           </section>
           {result && (
             <section className="tool-detail-section">
-              <span>结果</span>
+              <span>{t("tool.result")}</span>
               <pre className={result.is_error ? "error" : ""}>
                 {structuredValue(result.output)}
               </pre>
@@ -7829,10 +7866,10 @@ function StructuredMessageContent({
           case "image": {
             const url = mediaSourceUrl(part.source);
             return url ? (
-              <MessageImage src={url} alt="会话图片" key={index} />
+              <MessageImage src={url} alt={t("message.sessionImageAlt")} key={index} />
             ) : (
               <div className="history-file" key={index}>
-                图片文件：{part.source.kind === "file" ? part.source.file_id : ""}
+                {t("message.imageFile", { id: part.source.kind === "file" ? part.source.file_id : "" })}
               </div>
             );
           }
@@ -7842,8 +7879,7 @@ function StructuredMessageContent({
               <MessageAudio src={url} key={index} />
             ) : (
               <div className="history-file" key={index}>
-                音频文件：
-                {part.source.kind === "file" ? part.source.file_id : ""}
+                {t("message.audioFile", { id: part.source.kind === "file" ? part.source.file_id : "" })}
               </div>
             );
           }
@@ -7853,7 +7889,7 @@ function StructuredMessageContent({
               <MessageVideo src={url} key={index} />
             ) : (
               <div className="history-file" key={index}>
-                视频文件：{part.source.kind === "file" ? part.source.file_id : ""}
+                {t("message.videoFile", { id: part.source.kind === "file" ? part.source.file_id : "" })}
               </div>
             );
           }
@@ -7921,14 +7957,14 @@ function SideChatTurnView({ turn }: { turn: InFlightTurn }) {
               }
               return (
                 <div className="side-chat-readonly-note" key={block.toolCallId}>
-                  侧边聊天为只读模式，不能调用工具。
+                  {t("sideChat.readonlyNote")}
                 </div>
               );
             })}
           </Fragment>
         ))}
         {!hasAssistantContent && running && (
-          <div className="typing" aria-label="正在思考">
+          <div className="typing" aria-label={t("assistant.thinking")}>
             <i />
             <i />
             <i />
@@ -7969,7 +8005,7 @@ function SideChatSidebar({
   return (
     <aside
       className="skill-detail-sidebar side-chat-sidebar"
-      aria-label="侧边聊天"
+      aria-label={t("sideChat.title")}
     >
       <header className="skill-detail-header">
         <div className="skill-detail-heading">
@@ -7977,15 +8013,15 @@ function SideChatSidebar({
             <MessageSquareText size={16} />
           </span>
           <div>
-            <h2>侧边聊天</h2>
-            <span>使用当前上下文 · 只读</span>
+            <h2>{t("sideChat.title")}</h2>
+            <span>{t("sideChat.subtitle")}</span>
           </div>
         </div>
         <button
           className="icon-button quiet"
           type="button"
-          aria-label="关闭侧边聊天"
-          title="关闭"
+          aria-label={t("sideChat.close")}
+          title={t("window.close")}
           onClick={onClose}
         >
           <X size={16} />
@@ -7998,8 +8034,8 @@ function SideChatSidebar({
             <span>
               <MessageSquareText size={19} />
             </span>
-            <strong>询问当前会话</strong>
-            <p>回答会参考当前上下文，但不会修改文件或执行命令。</p>
+            <strong>{t("sideChat.emptyTitle")}</strong>
+            <p>{t("sideChat.emptyCopy")}</p>
           </div>
         ) : (
           state.turns.map((turn) => (
@@ -8022,8 +8058,8 @@ function SideChatSidebar({
           ref={inputRef}
           value={state.draft}
           rows={2}
-          placeholder="询问当前会话中的内容…"
-          aria-label="侧边聊天输入"
+          placeholder={t("sideChat.placeholder")}
+          aria-label={t("sideChat.inputAria")}
           onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={(event) => {
             if (
@@ -8039,8 +8075,8 @@ function SideChatSidebar({
         <button
           type="submit"
           disabled={!canSend}
-          aria-label="发送侧边聊天消息"
-          title="发送"
+          aria-label={t("sideChat.sendAria")}
+          title={t("composer.send")}
         >
           {sending ? <span className="spinner light" /> : <ArrowUp size={16} />}
         </button>
@@ -8059,7 +8095,7 @@ function CompactionSummarySidebar({
   return (
     <aside
       className="skill-detail-sidebar compaction-summary-sidebar"
-      aria-label="上下文压缩摘要"
+      aria-label={t("compaction.summaryAria")}
     >
       <header className="skill-detail-header">
         <div className="skill-detail-heading">
@@ -8067,15 +8103,15 @@ function CompactionSummarySidebar({
             <BrainCircuit size={16} />
           </span>
           <div>
-            <h2>上下文摘要</h2>
-            <span>压缩后保留的会话上下文</span>
+            <h2>{t("compaction.summaryTitle")}</h2>
+            <span>{t("compaction.summarySubtitle")}</span>
           </div>
         </div>
         <button
           className="icon-button quiet"
           type="button"
-          aria-label="关闭上下文摘要"
-          title="关闭"
+          aria-label={t("compaction.closeSummary")}
+          title={t("window.close")}
           onClick={onClose}
         >
           <X size={16} />
@@ -8088,14 +8124,14 @@ function CompactionSummarySidebar({
             <MarkdownMessage content={summary.content} />
           </div>
         ) : (
-          <div className="skill-detail-status">该摘要没有可显示的内容。</div>
+          <div className="skill-detail-status">{t("compaction.summaryEmpty")}</div>
         )}
       </div>
 
       <footer className="skill-detail-path">
         <BrainCircuit size={12} />
         <span>
-          生成于 {new Date(summary.createdAt).toLocaleString("zh-CN")}
+          {t("compaction.generatedAt", { time: new Date(summary.createdAt).toLocaleString(localeTag()) })}
         </span>
       </footer>
     </aside>
@@ -8105,15 +8141,15 @@ function CompactionSummarySidebar({
 function skillSourceLabel(source?: SkillDescriptor["source"]): string {
   switch (source) {
     case "project":
-      return "项目技能";
+      return t("skills.sourceProject");
     case "user":
-      return "个人技能";
+      return t("skills.sourceUser");
     case "extra":
-      return "扩展技能";
+      return t("skills.sourceExtra");
     case "builtin":
-      return "内置技能";
+      return t("skills.sourceBuiltin");
     default:
-      return "技能说明";
+      return t("skills.detailFallback");
   }
 }
 
@@ -8135,7 +8171,7 @@ function SkillDetailSidebar({
   onRetry: () => void;
 }) {
   return (
-    <aside className="skill-detail-sidebar" aria-label={`${skill.name} 技能说明`}>
+    <aside className="skill-detail-sidebar" aria-label={t("skills.detailAria", { name: skill.name })}>
       <header className="skill-detail-header">
         <div className="skill-detail-heading">
           <span className="skill-detail-icon">
@@ -8149,8 +8185,8 @@ function SkillDetailSidebar({
         <button
           className="icon-button quiet"
           type="button"
-          aria-label="关闭技能说明"
-          title="关闭"
+          aria-label={t("skills.closeDetail")}
+          title={t("window.close")}
           onClick={onClose}
         >
           <X size={16} />
@@ -8165,13 +8201,13 @@ function SkillDetailSidebar({
         {busy ? (
           <div className="skill-detail-status">
             <span className="spinner" />
-            <span>正在加载技能说明…</span>
+            <span>{t("skills.loadingDetail")}</span>
           </div>
         ) : error ? (
           <div className="skill-detail-status error">
             <span>{error}</span>
             <button type="button" onClick={onRetry}>
-              重试
+              {t("common.retry")}
             </button>
           </div>
         ) : content ? (
@@ -8179,7 +8215,7 @@ function SkillDetailSidebar({
             <MarkdownMessage content={content} />
           </div>
         ) : (
-          <div className="skill-detail-status">该技能没有可显示的说明。</div>
+          <div className="skill-detail-status">{t("skills.detailEmpty")}</div>
         )}
       </div>
 
@@ -8318,19 +8354,19 @@ function ProjectLanding({
         <i className="landing-dot dot-three" />
       </div>
       <p className="eyebrow">YOUR AI CODING PARTNER</p>
-      <h1>从一个项目开始</h1>
+      <h1>{t("landing.title")}</h1>
       <p>
-        选择本地代码目录。每个项目都有独立的对话空间，
+        {t("landing.copy1")}
         <br />
-        你的上下文和灵感会一直留在这里。
+        {t("landing.copy2")}
       </p>
       <button className="landing-primary" onClick={onAddProject}>
         <Folder size={17} />
-        打开本地项目
+        {t("landing.openProject")}
       </button>
       <div className="landing-shortcut">
-        <span>提示</span>
-        你也可以把项目文件夹拖到窗口中
+        <span>{t("landing.tip")}</span>
+        {t("landing.dragHint")}
       </div>
     </div>
   );
@@ -8369,7 +8405,7 @@ function RemovalDialog({
         <button
           className="dialog-close"
           type="button"
-          aria-label="关闭确认窗口"
+          aria-label={t("removal.close")}
           onClick={onClose}
           disabled={busy}
         >
@@ -8386,12 +8422,12 @@ function RemovalDialog({
           {isProject ? "WORKSPACE CATALOG" : "CONVERSATION ARCHIVE"}
         </p>
         <h2 id="removal-dialog-title">
-          {isProject ? "移除这个项目？" : "归档这个对话？"}
+          {isProject ? t("removal.projectTitle") : t("removal.conversationTitle")}
         </h2>
         <p className="dialog-copy">
           {isProject
-            ? `“${target.name}”只会从项目列表中移除，本地目录和历史对话都不会被删除。重新打开该目录即可恢复。`
-            : `“${target.title}”将移入归档并从当前列表隐藏，对话内容不会从磁盘永久删除。`}
+            ? t("removal.projectCopy", { name: target.name })
+            : t("removal.conversationCopy", { title: target.title })}
         </p>
         {isProject && <div className="operation-target">{target.path}</div>}
         <div className="operation-dialog-actions">
@@ -8402,7 +8438,7 @@ function RemovalDialog({
             disabled={busy}
             autoFocus
           >
-            取消
+            {t("common.cancel")}
           </button>
           <button
             className="dialog-danger"
@@ -8413,17 +8449,17 @@ function RemovalDialog({
             {busy ? (
               <>
                 <span className="spinner light" />
-                正在处理…
+                {t("common.processing")}
               </>
             ) : isProject ? (
               <>
                 <FolderMinus size={15} />
-                移除项目
+                {t("sidebar.removeProject")}
               </>
             ) : (
               <>
                 <Archive size={15} />
-                归档对话
+                {t("conversation.archive")}
               </>
             )}
           </button>
@@ -8456,7 +8492,7 @@ function LoginDialog({
       <section className="login-dialog" onMouseDown={(event) => event.stopPropagation()}>
         <button
           className="dialog-close"
-          aria-label="关闭登录窗口"
+          aria-label={t("login.close")}
           onClick={onClose}
           disabled={busy}
         >
@@ -8466,45 +8502,45 @@ function LoginDialog({
           <Sparkles size={24} />
         </div>
         <p className="eyebrow">KIMI CODE ACCOUNT</p>
-        <h2>连接你的 Kimi 账号</h2>
+        <h2>{t("login.title")}</h2>
         <p className="dialog-copy">
-          登录后会安全地同步可用模型。授权信息由 agent-core-v2 保存在本机。
+          {t("login.copy")}
         </p>
         {code ? (
           <>
             <button className="device-code" onClick={() => void copyCode()}>
-              <span>设备验证码</span>
+              <span>{t("login.deviceCode")}</span>
               <strong>{code.userCode}</strong>
-              <small>{copied ? "已复制" : "点击复制"}</small>
+              <small>{copied ? t("common.copied") : t("login.clickToCopy")}</small>
             </button>
             <button
               className="dialog-primary"
               onClick={() => void openUrl(code.verificationUriComplete || code.verificationUri)}
             >
-              在浏览器中授权
+              {t("login.authorize")}
               <ExternalLink size={16} />
             </button>
             <div className="waiting-line">
               <span className="spinner" />
-              等待浏览器确认…
+              {t("login.waiting")}
             </div>
           </>
         ) : (
           <>
             <div className="login-features">
-              <span><Check size={14} /> OAuth 安全登录</span>
-              <span><Check size={14} /> 自动同步模型</span>
-              <span><Check size={14} /> 凭证仅保存在本机</span>
+              <span><Check size={14} /> {t("login.featureOauth")}</span>
+              <span><Check size={14} /> {t("login.featureSync")}</span>
+              <span><Check size={14} /> {t("login.featureLocal")}</span>
             </div>
             <button className="dialog-primary" onClick={onStart} disabled={busy}>
               {busy ? (
                 <>
                   <span className="spinner light" />
-                  正在创建授权…
+                  {t("login.creating")}
                 </>
               ) : (
                 <>
-                  继续登录
+                  {t("login.continue")}
                   <ArrowUp size={16} />
                 </>
               )}

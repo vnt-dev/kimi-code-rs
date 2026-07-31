@@ -1,4 +1,5 @@
 import { listWorkspaces, listWorkspaceSessions } from "./agentRpc";
+import { t } from "./i18n";
 import type {
   Conversation,
   DesktopState,
@@ -14,7 +15,7 @@ export function conversationFromSummary(
 ): Conversation {
   return {
     id: session.id,
-    title: session.title || session.lastPrompt || "新对话",
+    title: session.title || session.lastPrompt || t("conversation.new"),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
@@ -65,7 +66,7 @@ export function conversationFromSession(
 ): Conversation {
   return {
     id: sessionId,
-    title: "新对话",
+    title: t("conversation.new"),
     createdAt: now,
     updatedAt: now,
   };

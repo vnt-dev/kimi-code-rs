@@ -5571,6 +5571,10 @@ button.message-skill-chip:hover {
   width: 275px;
 }
 
+.permission-select .toolbar-select-menu {
+  width: 300px;
+}
+
 .model-select .toolbar-select-menu strong,
 .permission-select .toolbar-select-menu strong {
   font-size: 12px;
@@ -5586,7 +5590,7 @@ button.message-skill-chip:hover {
 }
 
 .permission-select .toolbar-select-trigger {
-  max-width: 112px;
+  max-width: 164px;
 }
 
 @container composer (max-width: 720px) {
@@ -7874,6 +7878,79 @@ input:focus-visible {
   color: var(--text);
   background: var(--segment-active);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+}
+
+.settings-select {
+  position: relative;
+  display: inline-flex;
+}
+
+.settings-select-trigger {
+  display: inline-flex;
+  min-height: 30px;
+  padding: 0 8px 0 12px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--segment-surface);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: border-color 140ms ease;
+}
+
+.settings-select-trigger:hover,
+.settings-select.open .settings-select-trigger {
+  border-color: var(--muted);
+}
+
+.settings-select-trigger > svg {
+  color: var(--muted);
+  transition: transform 140ms ease;
+}
+
+.settings-select.open .settings-select-trigger > svg {
+  transform: rotate(180deg);
+}
+
+.settings-select-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
+  z-index: 30;
+  animation: select-menu-in 120ms ease-out;
+}
+
+.settings-select-menu > button {
+  display: flex;
+  width: 100%;
+  padding: 6px 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.settings-select-menu > button:hover {
+  background: var(--segment-active);
+}
+
+.settings-select-menu > button > svg {
+  color: #8b7cf6;
 }
 
 .settings-version {

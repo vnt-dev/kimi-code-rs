@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 import type { Model } from "./types";
 
 export function thinkingLevelsForModel(model?: Model): string[] {
@@ -26,14 +27,14 @@ export function normalizeThinkingLevel(
 export function thinkingLevelDescription(level: string): string {
   switch (level) {
     case "low":
-      return "快速响应，适合简单任务";
+      return t("thinking.low");
     case "medium":
-      return "速度与推理深度平衡";
+      return t("thinking.medium");
     case "high":
-      return "更深入分析复杂问题";
+      return t("thinking.high");
     case "max":
-      return "最大思考深度，适合最复杂的任务";
+      return t("thinking.max");
     default:
-      return `模型支持的 ${level} 思考强度`;
+      return t("thinking.custom", { level });
   }
 }
