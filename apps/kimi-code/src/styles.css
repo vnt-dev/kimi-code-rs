@@ -5197,13 +5197,15 @@ button.message-skill-chip:hover {
   width: min(560px, calc(100vw - 48px));
   max-height: min(430px, calc(100vh - 180px));
   padding: 7px;
-  overflow: hidden;
+  overflow-y: auto;
   border: 1px solid var(--line-strong);
   border-radius: 11px;
   color: var(--text);
   background: var(--dialog-surface);
   box-shadow: var(--dialog-shadow);
   animation: select-menu-in 120ms ease-out;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
 }
 
 .composer-add-group {
@@ -5227,9 +5229,7 @@ button.message-skill-chip:hover {
 }
 
 .composer-skill-list {
-  max-height: min(315px, calc(100vh - 285px));
-  overflow-y: auto;
-  scrollbar-width: thin;
+  overflow: visible;
 }
 
 .composer-add-item {
