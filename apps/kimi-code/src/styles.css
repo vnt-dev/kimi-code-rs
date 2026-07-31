@@ -2371,15 +2371,40 @@ button.message-skill-chip:hover {
   padding-bottom: 14px;
 }
 
-.thinking-summary {
+.thinking-summary-block {
   margin: 8px 0;
+}
+
+.thinking-summary-toggle {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
   color: var(--muted);
+  background: transparent;
+  cursor: pointer;
   font-size: 13px;
   line-height: 1.65;
+  text-align: left;
+}
+
+.thinking-summary-toggle:hover {
+  color: var(--text);
+}
+
+.thinking-full {
+  margin: 6px 0 2px;
+  padding: 7px 9px;
+  border-left: 2px solid rgba(139, 124, 246, 0.24);
+  color: var(--muted);
+  background: rgba(139, 124, 246, 0.025);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.assistant-message-part:first-child > .thinking-summary:first-child {
+.assistant-message-part:first-child > .thinking-summary-block:first-child {
   margin-top: 0;
 }
 

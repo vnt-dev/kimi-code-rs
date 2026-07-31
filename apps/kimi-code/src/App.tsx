@@ -6695,8 +6695,25 @@ function lastThinkingSentence(content: string): string {
 }
 
 function ThinkingSummary({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
   const summary = lastThinkingSentence(content);
-  return summary ? <p className="thinking-summary">{summary}</p> : null;
+  if (!summary) return null;
+  return (
+    <div className="thinking-summary-block">
+      <button
+        type="button"
+        className="thinking-summary-toggle"
+        aria-expanded={open}
+        title={open ? "收起思维链" : "展开完整思维链"}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span>{summary}</span>
+      </button>
+      <Collapsible open={open}>
+        <p className="thinking-full">{content}</p>
+      </Collapsible>
+    </div>
+  );
 }
 
 function LiveThinkingBlock({ content }: { content: string }) {
