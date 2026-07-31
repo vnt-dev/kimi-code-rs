@@ -79,6 +79,12 @@ pub trait SkillCatalogContract: Send + Sync {
         raw_args: &str,
         session_id: Option<&str>,
     ) -> String;
+    fn render_skill_prompt_for_request(
+        &self,
+        skill: &SkillDefinition,
+        raw_args: &str,
+        session_id: Option<&str>,
+    ) -> String;
     fn list_skills(&self) -> Vec<SkillDefinition>;
     fn list_invocable_skills(&self) -> Vec<SkillDefinition>;
     fn get_skill_roots(&self) -> Vec<String>;

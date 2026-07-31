@@ -420,6 +420,7 @@ sk-abcdefghijkl
             .map(PromptInputPart::from)
             .collect(),
             disabled_tools: Some(vec!["WriteFile".into()]),
+            skills: Vec::new(),
         };
 
         assert_eq!(

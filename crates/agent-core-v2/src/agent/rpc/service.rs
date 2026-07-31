@@ -252,19 +252,49 @@ impl AgentRpcServiceContract for AgentRpcService {
         )
         .await?;
         let metadata_text = prompt_metadata_text_from_content_parts(&resolved.content);
+        let prepared_skills = if payload.skills.is_empty() {
+            None
+        } else {
+            Some(
+                self.skills
+                    .prepare_prompt_skills(
+                        payload
+                            .skills
+                            .into_iter()
+                            .map(|skill| SkillActivationInput {
+                                name: skill.name,
+                                args: skill.args,
+                            })
+                            .collect(),
+                        metadata_text.clone(),
+                    )
+                    .await?,
+            )
+        };
         self.update_prompt_metadata(metadata_text.as_deref())
             .await?;
+        let mut content = resolved.content;
+        let origin = if let Some(prepared) = prepared_skills.as_ref() {
+            content.insert(
+                0,
+                ContentPart::Text {
+                    text: prepared.content.clone(),
+                },
+            );
+            PromptOrigin::from_skill_activations(&prepared.origins).unwrap_or(PromptOrigin::User)
+        } else {
+            PromptOrigin::User
+        };
         let handle = self
             .prompt_service
             .enqueue(PromptInput {
                 id: None,
-                message: user_message_with_attachments(
-                    resolved.content,
-                    resolved.attachments,
-                    Some(PromptOrigin::User),
-                ),
+                message: user_message_with_attachments(content, resolved.attachments, Some(origin)),
             })
             .await?;
+        if let Some(prepared) = prepared_skills {
+            self.skills.record_user_activations(&prepared.origins);
+        }
         let turn_id = if handle.snapshot().state == PromptState::Pending {
             None
         } else {
@@ -510,16 +540,15 @@ impl AgentRpcServiceContract for AgentRpcService {
     }
 
     async fn activate_skill(&self, payload: ActivateSkillPayload) -> AgentRpcResult<()> {
-        let skills = self.skills.clone();
         let activation = SkillActivationInput {
             name: payload.name.clone(),
             args: payload.args.clone(),
         };
-        tokio::spawn(async move {
-            let _ = skills.activate(activation).await;
-        });
         let metadata_text = prompt_metadata_text_from_skill(&payload);
-        self.update_prompt_metadata(metadata_text.as_deref()).await
+        self.update_prompt_metadata(metadata_text.as_deref())
+            .await?;
+        self.skills.activate(activation).await?;
+        Ok(())
     }
 
     async fn activate_plugin_command(

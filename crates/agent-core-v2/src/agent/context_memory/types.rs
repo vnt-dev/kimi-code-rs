@@ -53,6 +53,34 @@ pub struct SkillActivationOrigin {
     pub skill_source: Option<SkillSource>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSkillActivation {
+    pub activation_id: String,
+    pub skill_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_args: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<SkillSource>,
+}
+
+impl From<&SkillActivationOrigin> for PromptSkillActivation {
+    fn from(origin: &SkillActivationOrigin) -> Self {
+        Self {
+            activation_id: origin.activation_id.clone(),
+            skill_name: origin.skill_name.clone(),
+            skill_args: origin.skill_args.clone(),
+            skill_type: origin.skill_type.clone(),
+            skill_path: origin.skill_path.clone(),
+            skill_source: origin.skill_source,
+        }
+    }
+}
+
 impl From<SkillActivationOrigin> for PromptOrigin {
     fn from(origin: SkillActivationOrigin) -> Self {
         Self::SkillActivation {
@@ -63,7 +91,24 @@ impl From<SkillActivationOrigin> for PromptOrigin {
             skill_type: origin.skill_type,
             skill_path: origin.skill_path,
             skill_source: origin.skill_source,
+            skills: Vec::new(),
         }
+    }
+}
+
+impl PromptOrigin {
+    pub fn from_skill_activations(origins: &[SkillActivationOrigin]) -> Option<Self> {
+        let primary = origins.first()?;
+        Some(Self::SkillActivation {
+            activation_id: primary.activation_id.clone(),
+            skill_name: primary.skill_name.clone(),
+            skill_args: primary.skill_args.clone(),
+            trigger: primary.trigger,
+            skill_type: primary.skill_type.clone(),
+            skill_path: primary.skill_path.clone(),
+            skill_source: primary.skill_source,
+            skills: origins.iter().map(PromptSkillActivation::from).collect(),
+        })
     }
 }
 
@@ -100,6 +145,8 @@ pub enum PromptOrigin {
         skill_path: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_source: Option<SkillSource>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skills: Vec<PromptSkillActivation>,
     },
     PluginCommand {
         activation_id: String,
@@ -221,6 +268,7 @@ mod tests {
             skill_type: None,
             skill_path: None,
             skill_source: Some(SkillSource::Project),
+            skills: Vec::new(),
         };
 
         assert_eq!(
@@ -256,6 +304,32 @@ mod tests {
             serde_json::to_value(&origin).unwrap(),
             serde_json::to_value(PromptOrigin::from(origin)).unwrap()
         );
+    }
+
+    #[test]
+    fn prompt_origin_can_describe_multiple_skill_activations() {
+        let first = SkillActivationOrigin {
+            kind: SkillActivationOriginKind::SkillActivation,
+            activation_id: "activation-1".into(),
+            skill_name: "pdf".into(),
+            skill_args: None,
+            trigger: SkillActivationTrigger::UserSlash,
+            skill_type: None,
+            skill_path: Some("/pdf/SKILL.md".into()),
+            skill_source: Some(SkillSource::User),
+        };
+        let second = SkillActivationOrigin {
+            activation_id: "activation-2".into(),
+            skill_name: "docs".into(),
+            skill_path: Some("/docs/SKILL.md".into()),
+            ..first.clone()
+        };
+        let value =
+            serde_json::to_value(PromptOrigin::from_skill_activations(&[first, second]).unwrap())
+                .unwrap();
+        assert_eq!(value["skillName"], "pdf");
+        assert_eq!(value["skills"].as_array().unwrap().len(), 2);
+        assert_eq!(value["skills"][1]["skillName"], "docs");
     }
 
     #[test]

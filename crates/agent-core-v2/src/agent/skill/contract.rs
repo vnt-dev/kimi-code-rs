@@ -24,12 +24,24 @@ pub struct SkillActivationInput {
     pub args: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedSkillPrompt {
+    pub content: String,
+    pub origins: Vec<SkillActivationOrigin>,
+}
+
 #[async_trait]
 pub trait AgentSkillServiceContract: Disposable + Send + Sync {
     async fn activate(
         &self,
         input: SkillActivationInput,
     ) -> Result<TurnHandle, AgentSkillServiceError>;
+    async fn prepare_prompt_skills(
+        &self,
+        inputs: Vec<SkillActivationInput>,
+        shared_args: Option<String>,
+    ) -> Result<PreparedSkillPrompt, AgentSkillServiceError>;
+    fn record_user_activations(&self, origins: &[SkillActivationOrigin]);
     fn record_model_tool_activation(&self, origin: SkillActivationOrigin);
 }
 

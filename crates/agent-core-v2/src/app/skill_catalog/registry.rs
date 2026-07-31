@@ -95,6 +95,25 @@ impl InMemorySkillCatalog {
         raw_args: &str,
         session_id: Option<&str>,
     ) -> String {
+        self.render_skill_prompt_with_options(skill, raw_args, session_id, true)
+    }
+
+    pub fn render_skill_prompt_for_request(
+        &self,
+        skill: &SkillDefinition,
+        raw_args: &str,
+        session_id: Option<&str>,
+    ) -> String {
+        self.render_skill_prompt_with_options(skill, raw_args, session_id, false)
+    }
+
+    fn render_skill_prompt_with_options(
+        &self,
+        skill: &SkillDefinition,
+        raw_args: &str,
+        session_id: Option<&str>,
+        append_unbound_args: bool,
+    ) -> String {
         let argument_names = skill_argument_names(&skill.metadata);
         let content = expand_skill_parameters(
             &skill.content,
@@ -104,6 +123,7 @@ impl InMemorySkillCatalog {
                 session_id,
                 argument_names: &argument_names,
             },
+            append_unbound_args,
         );
         let Some(plugin) = &skill.plugin else {
             return content;
@@ -199,6 +219,15 @@ impl SkillCatalogContract for InMemorySkillCatalog {
         InMemorySkillCatalog::render_skill_prompt(self, skill, raw_args, session_id)
     }
 
+    fn render_skill_prompt_for_request(
+        &self,
+        skill: &SkillDefinition,
+        raw_args: &str,
+        session_id: Option<&str>,
+    ) -> String {
+        InMemorySkillCatalog::render_skill_prompt_for_request(self, skill, raw_args, session_id)
+    }
+
     fn list_skills(&self) -> Vec<SkillDefinition> {
         InMemorySkillCatalog::list_skills(self)
     }
@@ -226,7 +255,12 @@ struct SkillExpandContext<'a> {
     argument_names: &'a [String],
 }
 
-fn expand_skill_parameters(body: &str, raw_args: &str, context: SkillExpandContext<'_>) -> String {
+fn expand_skill_parameters(
+    body: &str,
+    raw_args: &str,
+    context: SkillExpandContext<'_>,
+    append_unbound_args: bool,
+) -> String {
     let tokens = tokenize_args(raw_args);
     let mut content = body.to_owned();
     for (index, name) in context.argument_names.iter().enumerate() {
@@ -253,7 +287,7 @@ fn expand_skill_parameters(body: &str, raw_args: &str, context: SkillExpandConte
     content = content
         .replace("${KIMI_SKILL_DIR}", context.skill_dir)
         .replace("${KIMI_SESSION_ID}", context.session_id.unwrap_or_default());
-    if !has_argument_placeholder && !raw_args.is_empty() {
+    if append_unbound_args && !has_argument_placeholder && !raw_args.is_empty() {
         format!("{content}\n\nARGUMENTS: {}", escape_xml_tags(raw_args))
     } else {
         content
@@ -518,6 +552,10 @@ mod tests {
         assert_eq!(
             catalog.render_skill_prompt(&value, "<raw>", None),
             "plain /args\n\nARGUMENTS: &lt;raw&gt;"
+        );
+        assert_eq!(
+            catalog.render_skill_prompt_for_request(&value, "<raw>", None),
+            "plain /args"
         );
     }
 

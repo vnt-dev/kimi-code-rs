@@ -46,6 +46,7 @@ import {
   Minus,
   Minimize2,
   MoreHorizontal,
+  Package,
   Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
@@ -68,6 +69,7 @@ import {
   archiveSession,
   createAgentClient,
   createOrTouchWorkspace,
+  listSkills,
   listWorkspaceSessions,
   prepareSession,
   removeWorkspace,
@@ -138,12 +140,14 @@ import type {
   ProtocolMessage,
   QuestionPayload,
   QuestionResponse,
+  SkillDescriptor,
   TokenUsage,
   TodoItem,
   ToolUpdate,
 } from "./types";
 
 const MAX_PROMPT_ATTACHMENTS = 8;
+const MAX_PROMPT_SKILLS = 8;
 const MAX_PROMPT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_IMAGE_DIMENSION = 2048;
 const IMAGE_COMPRESSION_THRESHOLD = 4 * 1024 * 1024;
@@ -251,6 +255,7 @@ interface LiveStep {
 interface InFlightTurn {
   prompt: string;
   attachments: readonly PromptAttachment[];
+  skills: readonly string[];
   steeredPrompts: readonly LiveSteeredPrompt[];
   createdAt: string;
   turnId?: number;
@@ -285,6 +290,7 @@ interface QueuedPrompt {
   id: string;
   text: string;
   attachments: readonly PromptAttachment[];
+  skills: readonly SkillDescriptor[];
   createdAt: string;
   steering?: boolean;
 }
@@ -434,6 +440,97 @@ function buildAgentPromptInput(
       }
     }),
   ];
+}
+
+function buildSkillPromptText(
+  text: string,
+  skills: readonly SkillDescriptor[],
+): string {
+  const mentions = skills.map((skill) => `$${skill.name}`).join(" ");
+  return [mentions, text].filter(Boolean).join(" ");
+}
+
+interface SkillPromptDisplay {
+  text: string;
+  skills: string[];
+}
+
+function decodeSkillAttribute(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+function parseSkillPromptDisplay(value: string): SkillPromptDisplay {
+  const skills: string[] = [];
+  const collectSkills = (content: string): void => {
+    const pattern =
+      /<kimi-skill-loaded\b[^>]*\bname=(["'])(.*?)\1[^>]*>/gi;
+    for (const match of content.matchAll(pattern)) {
+      const name = decodeSkillAttribute(match[2]).trim();
+      if (name && !skills.includes(name)) skills.push(name);
+    }
+  };
+
+  let text = value.replace(
+    /<kimi-selected-skills\b[^>]*>[\s\S]*?<\/kimi-selected-skills>\s*/gi,
+    (block) => {
+      collectSkills(block);
+      return "";
+    },
+  );
+  text = text.replace(
+    /<kimi-skill-loaded\b[^>]*>[\s\S]*?<\/kimi-skill-loaded>\s*/gi,
+    (block) => {
+      collectSkills(block);
+      return "";
+    },
+  );
+  text = text.replace(
+    /User activated the skill "[^"]+"\.\s*Follow the loaded skill instructions\.\s*/gi,
+    "",
+  );
+  return {
+    text: text.trim().replace(/\n{3,}/g, "\n\n"),
+    skills,
+  };
+}
+
+function SkillNameChips({ names }: { names: readonly string[] }) {
+  if (names.length === 0) return null;
+  return (
+    <div className="message-skill-list" aria-label="本次消息使用的技能">
+      {names.map((name) => (
+        <span className="message-skill-chip" key={name}>
+          <Package size={13} />
+          {name}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SkillPromptDisplayContent({
+  text,
+  skills = [],
+}: {
+  text: string;
+  skills?: readonly string[];
+}) {
+  const parsed = parseSkillPromptDisplay(text);
+  const names = [...skills];
+  for (const name of parsed.skills) {
+    if (!names.includes(name)) names.push(name);
+  }
+  return (
+    <>
+      <SkillNameChips names={names} />
+      {parsed.text}
+    </>
+  );
 }
 
 function newQueuedPromptId(): string {
@@ -594,10 +691,12 @@ function newInFlightTurn(
   prompt: string,
   attachments: readonly PromptAttachment[],
   historyBoundaryId?: string,
+  skills: readonly string[] = [],
 ): InFlightTurn {
   return {
     prompt,
     attachments,
+    skills,
     steeredPrompts: [],
     createdAt: new Date().toISOString(),
     status: "queued",
@@ -1113,10 +1212,10 @@ function historyBeforeInFlightTurn(
     if (boundary >= 0) return items.slice(0, boundary + 1);
   }
 
-  const prompt = turn.prompt;
+  const prompt = parseSkillPromptDisplay(turn.prompt).text;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const message = items[index];
-    if (message.role === "user" && messageText(message) === prompt) {
+    if (message.role === "user" && displayMessageText(message) === prompt) {
       return items.slice(0, index);
     }
   }
@@ -1136,7 +1235,11 @@ function completedTurnMessageId(
   } else {
     for (let index = items.length - 1; index >= 0; index -= 1) {
       const message = items[index];
-      if (message.role === "user" && messageText(message) === turn.prompt) {
+      if (
+        message.role === "user" &&
+        displayMessageText(message) ===
+          parseSkillPromptDisplay(turn.prompt).text
+      ) {
         startIndex = index + 1;
         break;
       }
@@ -1286,6 +1389,11 @@ export default function App() {
   const [promptAttachments, setPromptAttachments] = useState<
     PromptAttachment[]
   >([]);
+  const [promptSkills, setPromptSkills] = useState<SkillDescriptor[]>([]);
+  const [availableSkills, setAvailableSkills] = useState<SkillDescriptor[]>([]);
+  const [skillsBusy, setSkillsBusy] = useState(false);
+  const [skillsError, setSkillsError] = useState<string>();
+  const [composerAddOpen, setComposerAddOpen] = useState(false);
   const [queuedPrompts, setQueuedPrompts] = useState<
     Record<string, QueuedPrompt[]>
   >({});
@@ -1350,6 +1458,7 @@ export default function App() {
   const promptUndoConversationRef = useRef<string | undefined>(undefined);
   const promptCompositionRef = useRef(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const composerAddRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageStackRef = useRef<HTMLDivElement>(null);
   const followLatestMessageRef = useRef(true);
@@ -1362,6 +1471,7 @@ export default function App() {
   const accountUsageRequest = useRef(0);
   const historyRequests = useRef<Record<string, number>>({});
   const backgroundTaskRequests = useRef<Record<string, number>>({});
+  const skillsRequest = useRef(0);
   const agentSubscriptions = useRef<Map<string, AgentSubscription>>(new Map());
   const pendingAgentSubscriptions = useRef<
     Map<string, PendingAgentSubscription>
@@ -1471,7 +1581,9 @@ export default function App() {
     activeQueuedPrompts.length > 0;
   const isStreaming = isTurnRunning(activeTurn);
   const composerHasContent =
-    prompt.trim().length > 0 || promptAttachments.length > 0;
+    prompt.trim().length > 0 ||
+    promptAttachments.length > 0 ||
+    promptSkills.length > 0;
   const showStopButton = isStreaming && !composerHasContent;
   const isHistoryLoading =
     activeConversation !== undefined &&
@@ -1821,6 +1933,38 @@ export default function App() {
       document.removeEventListener("keydown", closeProfileOnEscape);
     };
   }, [profileOpen]);
+
+  useEffect(() => {
+    if (!composerAddOpen) return;
+    const closeComposerAdd = (event: PointerEvent): void => {
+      if (
+        event.target instanceof Node &&
+        !composerAddRef.current?.contains(event.target)
+      ) {
+        setComposerAddOpen(false);
+      }
+    };
+    const closeComposerAddOnEscape = (
+      event: globalThis.KeyboardEvent,
+    ): void => {
+      if (event.key === "Escape") setComposerAddOpen(false);
+    };
+    document.addEventListener("pointerdown", closeComposerAdd);
+    document.addEventListener("keydown", closeComposerAddOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeComposerAdd);
+      document.removeEventListener("keydown", closeComposerAddOnEscape);
+    };
+  }, [composerAddOpen]);
+
+  useEffect(() => {
+    skillsRequest.current += 1;
+    setComposerAddOpen(false);
+    setAvailableSkills([]);
+    setSkillsBusy(false);
+    setSkillsError(undefined);
+    setPromptSkills([]);
+  }, [activeConversation?.id]);
 
   useEffect(() => {
     setActiveAgentScope(undefined);
@@ -2845,6 +2989,59 @@ export default function App() {
     }
   };
 
+  const loadAvailableSkills = async (): Promise<void> => {
+    const request = skillsRequest.current + 1;
+    skillsRequest.current = request;
+    const scope = activeAgentScope;
+    if (!scope) {
+      setAvailableSkills([]);
+      setSkillsBusy(false);
+      setSkillsError("会话正在准备，请稍后再试");
+      return;
+    }
+
+    setSkillsBusy(true);
+    setSkillsError(undefined);
+    try {
+      const skills = await listSkills(scope.sessionId);
+      if (request !== skillsRequest.current) return;
+      setAvailableSkills(skills);
+    } catch (error) {
+      if (request !== skillsRequest.current) return;
+      setAvailableSkills([]);
+      setSkillsError(conciseError(error));
+    } finally {
+      if (request === skillsRequest.current) setSkillsBusy(false);
+    }
+  };
+
+  const toggleComposerAdd = (): void => {
+    if (composerAddOpen) {
+      setComposerAddOpen(false);
+      return;
+    }
+    setComposerAddOpen(true);
+    void loadAvailableSkills();
+  };
+
+  const selectPromptSkill = (skill: SkillDescriptor): void => {
+    const selected = promptSkills.some(
+      (item) => item.name === skill.name,
+    );
+    if (!selected && promptSkills.length >= MAX_PROMPT_SKILLS) {
+      showNotice(`每次最多选择 ${MAX_PROMPT_SKILLS} 个技能`);
+      setComposerAddOpen(false);
+      return;
+    }
+    setPromptSkills((current) =>
+      selected
+        ? current.filter((item) => item.name !== skill.name)
+        : [...current, skill],
+    );
+    setComposerAddOpen(false);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
   const addPromptAttachments = async (
     files: readonly File[],
   ): Promise<void> => {
@@ -2900,6 +3097,7 @@ export default function App() {
   const sendPrompt = async (
     override?: string,
     queuedAttachments?: readonly PromptAttachment[],
+    queuedSkills?: readonly SkillDescriptor[],
   ): Promise<void> => {
     const text = (override ?? prompt).trim();
     const attachments = [
@@ -2907,8 +3105,12 @@ export default function App() {
         ? promptAttachments
         : queuedAttachments),
     ];
+    const skills = [
+      ...(queuedSkills === undefined ? promptSkills : queuedSkills),
+    ];
+    const submittedText = buildSkillPromptText(text, skills);
     if (
-      (!text && attachments.length === 0) ||
+      (!submittedText && attachments.length === 0) ||
       !activeProject ||
       !activeConversation ||
       modelBusy ||
@@ -2952,6 +3154,7 @@ export default function App() {
         id: newQueuedPromptId(),
         text,
         attachments,
+        skills,
         createdAt: new Date().toISOString(),
       };
       setQueuedPrompts((current) => ({
@@ -2976,6 +3179,7 @@ export default function App() {
       if (queuedAttachments === undefined) {
         resetPrompt();
         setPromptAttachments([]);
+        setPromptSkills([]);
       }
       followLatestMessageRef.current = true;
       return;
@@ -2983,7 +3187,7 @@ export default function App() {
 
     const title =
       activeConversation.title === "新对话"
-        ? (text || `媒体对话（${attachments.length} 个附件）`)
+        ? (submittedText || `媒体对话（${attachments.length} 个附件）`)
             .replace(/\s+/g, " ")
             .slice(0, 28)
         : activeConversation.title;
@@ -3002,6 +3206,7 @@ export default function App() {
         text,
         attachments,
         activeHistory?.items.at(-1)?.id,
+        skills.map((skill) => skill.name),
       ),
     }));
     updateDesktop((current) => ({
@@ -3027,10 +3232,14 @@ export default function App() {
     if (queuedAttachments === undefined) {
       resetPrompt();
       setPromptAttachments([]);
+      setPromptSkills([]);
     }
 
     try {
-      const submitted = await createAgentClient(activeAgentScope).prompt(input);
+      const client = createAgentClient(activeAgentScope);
+      const submitted = await client.prompt(input, {
+        skills: skills.map((skill) => ({ name: skill.name })),
+      });
       setInFlightTurns((current) => {
         const turn = current[conversationId];
         if (!turn) return current;
@@ -3094,7 +3303,7 @@ export default function App() {
     const queued = activeQueuedPrompts.find(
       (item) => item.id === queuedPromptId,
     );
-    if (!queued || queued.steering) return;
+    if (!queued || queued.steering || queued.skills.length > 0) return;
 
     setQueuedPrompts((current) => ({
       ...current,
@@ -3105,7 +3314,10 @@ export default function App() {
 
     try {
       const submitted = await createAgentClient(activeAgentScope).steer(
-        buildAgentPromptInput(queued.text, queued.attachments),
+        buildAgentPromptInput(
+          buildSkillPromptText(queued.text, queued.skills),
+          queued.attachments,
+        ),
       );
       if (submitted.status === "steered") {
         setInFlightTurns((current) => {
@@ -3139,7 +3351,7 @@ export default function App() {
         });
       } else {
         const turn = newInFlightTurn(
-          queued.text,
+          buildSkillPromptText(queued.text, queued.skills),
           queued.attachments,
           activeHistory?.items.at(-1)?.id,
         );
@@ -3229,9 +3441,11 @@ export default function App() {
         (item) => item.id !== queued.id,
       ),
     }));
-    void sendPrompt(queued.text, queued.attachments).finally(() => {
-      drainingQueuedPrompts.current.delete(queued.id);
-    });
+    void sendPrompt(queued.text, queued.attachments, queued.skills).finally(
+      () => {
+        drainingQueuedPrompts.current.delete(queued.id);
+      },
+    );
   }, [
     activeAgentScope?.sessionId,
     activeConversation?.id,
@@ -3272,14 +3486,27 @@ export default function App() {
       }
       return;
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (
+      event.key === "Backspace" &&
+      prompt.length === 0 &&
+      promptSkills.length > 0
+    ) {
+      event.preventDefault();
+      setPromptSkills((current) => current.slice(0, -1));
+      return;
+    }
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
       event.preventDefault();
       void sendPrompt();
     }
   };
 
   const copyMessage = useCallback(async (message: ProtocolMessage): Promise<void> => {
-    const text = messageText(message).trim();
+    const text = displayMessageText(message);
     if (!text) return;
     await navigator.clipboard.writeText(text);
     setCopiedMessage(message.id);
@@ -3802,6 +4029,30 @@ export default function App() {
                     ))}
                   </div>
                 )}
+                {promptSkills.length > 0 && (
+                  <div className="prompt-skill-list" aria-label="已选择的技能">
+                    {promptSkills.map((skill) => (
+                      <span className="prompt-skill-chip" key={skill.name}>
+                        <Package size={13} />
+                        <span>{skill.name}</span>
+                        <button
+                          type="button"
+                          aria-label={`移除技能 ${skill.name}`}
+                          title="移除技能"
+                          onClick={() =>
+                            setPromptSkills((current) =>
+                              current.filter(
+                                (item) => item.name !== skill.name,
+                              ),
+                            )
+                          }
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <input
                   ref={attachmentInputRef}
                   className="prompt-attachment-input"
@@ -3845,20 +4096,105 @@ export default function App() {
                 />
                 <div className="composer-toolbar">
                   <div className="composer-options">
-                    <button
-                      className="toolbar-icon attachment-button"
-                      type="button"
-                      title="添加图片、音频、视频或文件"
-                      aria-label="添加附件"
-                      onClick={() => attachmentInputRef.current?.click()}
-                      disabled={
-                        !selectedModel ||
-                        modelBusy ||
-                        promptAttachments.length >= MAX_PROMPT_ATTACHMENTS
-                      }
+                    <div
+                      className={`composer-add-menu-wrap ${
+                        composerAddOpen ? "open" : ""
+                      }`}
+                      ref={composerAddRef}
                     >
-                      <Paperclip size={14} />
-                    </button>
+                      <button
+                        className="toolbar-icon composer-add-trigger"
+                        type="button"
+                        title="添加附件或技能"
+                        aria-label="添加附件或技能"
+                        aria-expanded={composerAddOpen}
+                        aria-controls="composer-add-menu"
+                        onClick={toggleComposerAdd}
+                        disabled={!selectedModel || modelBusy}
+                      >
+                        <Plus size={15} />
+                      </button>
+                      {composerAddOpen && (
+                        <div
+                          className="composer-add-menu"
+                          id="composer-add-menu"
+                          role="menu"
+                          aria-label="添加到输入框"
+                        >
+                          <div className="composer-add-group">
+                            <button
+                              className="composer-add-item"
+                              type="button"
+                              role="menuitem"
+                              disabled={
+                                promptAttachments.length >=
+                                MAX_PROMPT_ATTACHMENTS
+                              }
+                              onClick={() => {
+                                setComposerAddOpen(false);
+                                attachmentInputRef.current?.click();
+                              }}
+                            >
+                              <Paperclip size={15} />
+                              <span>
+                                <strong>附件</strong>
+                                <small>添加图片、音频、视频或文件</small>
+                              </span>
+                            </button>
+                          </div>
+
+                          <div className="composer-add-divider" />
+                          <div className="composer-add-heading">技能</div>
+                          <div className="composer-skill-list">
+                            {skillsBusy ? (
+                              <div className="composer-add-empty">
+                                <span className="spinner" />
+                                正在加载技能…
+                              </div>
+                            ) : skillsError ? (
+                              <div className="composer-add-empty error">
+                                {skillsError}
+                                <button
+                                  type="button"
+                                  onClick={() => void loadAvailableSkills()}
+                                >
+                                  重试
+                                </button>
+                              </div>
+                            ) : availableSkills.length === 0 ? (
+                              <div className="composer-add-empty">
+                                当前会话没有可用技能
+                              </div>
+                            ) : (
+                              availableSkills.map((skill) => {
+                                const selected = promptSkills.some(
+                                  (item) => item.name === skill.name,
+                                );
+                                return (
+                                  <button
+                                    className={`composer-add-item skill ${
+                                      selected ? "selected" : ""
+                                    }`}
+                                    type="button"
+                                    role="menuitemcheckbox"
+                                    aria-checked={selected}
+                                    key={skill.name}
+                                    onClick={() => selectPromptSkill(skill)}
+                                  >
+                                    <Package size={15} />
+                                    <span>
+                                      <strong>{skill.name}</strong>
+                                      <small>{skill.description}</small>
+                                    </span>
+                                    {selected && <Check size={14} />}
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                     <ToolbarSelect
                       className="model-select"
                       ariaLabel="选择模型"
@@ -5413,7 +5749,10 @@ function LiveTurnView({
           <time>{formatTime(turn.createdAt)}</time>
         </div>
         <div className="user-bubble">
-          {turn.prompt}
+          <SkillPromptDisplayContent
+            text={turn.prompt}
+            skills={turn.skills}
+          />
           <PromptAttachmentContent attachments={turn.attachments} />
         </div>
       </article>
@@ -5525,7 +5864,10 @@ function LiveSteeredPromptView({ item }: { item: LiveSteeredPrompt }) {
         <time>{formatTime(message.createdAt)}</time>
       </div>
       <div className="user-bubble">
-        {message.text}
+        <SkillPromptDisplayContent
+          text={message.text}
+          skills={message.skills.map((skill) => skill.name)}
+        />
         <PromptAttachmentContent attachments={message.attachments} />
       </div>
     </div>
@@ -5555,8 +5897,13 @@ function QueuedPromptList({
       {prompts.map((prompt, index) => (
         <article className="queued-prompt" key={prompt.id}>
           <div className="queued-prompt-content">
-            {prompt.text ? (
-              <span>{prompt.text}</span>
+            {prompt.text || prompt.skills.length > 0 ? (
+              <div>
+                <SkillPromptDisplayContent
+                  text={prompt.text}
+                  skills={prompt.skills.map((skill) => skill.name)}
+                />
+              </div>
             ) : (
               <span className="queued-prompt-placeholder">
                 附件 ×{prompt.attachments.length}
@@ -5571,8 +5918,18 @@ function QueuedPromptList({
             <div>
               <button
                 type="button"
-                disabled={!canSteer || prompt.steering}
-                title={canSteer ? "立即执行" : "等待当前回合启动后可立即执行"}
+                disabled={
+                  !canSteer ||
+                  prompt.steering ||
+                  prompt.skills.length > 0
+                }
+                title={
+                  prompt.skills.length > 0
+                    ? "技能将在当前回合结束后激活"
+                    : canSteer
+                      ? "立即执行"
+                      : "等待当前回合启动后可立即执行"
+                }
                 aria-label="立即执行排队消息"
                 onClick={() => onSteer(prompt.id)}
               >
@@ -6363,7 +6720,7 @@ function UserMessageView({
         <time>{formatTime(message.created_at)}</time>
       </div>
       <div className="user-bubble">
-        {text}
+        <SkillPromptDisplayContent text={text} />
         <StructuredMessageContent
           parts={structured}
           toolResults={toolResults}
@@ -6441,6 +6798,10 @@ function messageText(message: ProtocolMessage): string {
     )
     .map((part) => part.text)
     .join("");
+}
+
+function displayMessageText(message: ProtocolMessage): string {
+  return parseSkillPromptDisplay(messageText(message)).text;
 }
 
 function embeddedMediaContent(text: string): MessageContent | undefined {

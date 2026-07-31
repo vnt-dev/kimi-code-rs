@@ -168,6 +168,8 @@ pub enum PromptOrigin {
             deserialize_with = "optional_non_null"
         )]
         skill_source: Option<SkillSource>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skills: Vec<PromptSkillActivation>,
     },
     PluginCommand {
         activation_id: String,
@@ -273,6 +275,37 @@ pub struct SkillActivationOrigin {
     )]
     pub skill_args: Option<String>,
     pub trigger: SkillActivationTrigger,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_type: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_path: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_source: Option<SkillSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSkillActivation {
+    pub activation_id: String,
+    pub skill_name: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub skill_args: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -2119,6 +2152,21 @@ mod tests {
                 skill_source: Some(SkillSource::Project),
                 ..
             }
+        ));
+        let origin: PromptOrigin = serde_json::from_value(serde_json::json!({
+            "kind": "skill_activation",
+            "activationId": "activation-1",
+            "skillName": "pdf",
+            "trigger": "user-slash",
+            "skills": [
+                {"activationId": "activation-1", "skillName": "pdf"},
+                {"activationId": "activation-2", "skillName": "docs"}
+            ]
+        }))
+        .unwrap();
+        assert!(matches!(
+            origin,
+            PromptOrigin::SkillActivation { skills, .. } if skills.len() == 2
         ));
         assert!(
             serde_json::from_value::<PromptOrigin>(serde_json::json!({

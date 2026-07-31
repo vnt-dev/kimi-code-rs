@@ -14,7 +14,7 @@ use kimi_code_agent_core_v2::{
         desktop_client::{
             DesktopAuthStatus, DesktopContextUsage, DesktopDeviceCode, DesktopInteraction,
             DesktopManagedUsage, DesktopMessagePage, DesktopModel, DesktopPrepareSessionRequest,
-            DesktopPreparedSession, DesktopWorkspace, KimiCodeDesktopClient,
+            DesktopPreparedSession, DesktopSkill, DesktopWorkspace, KimiCodeDesktopClient,
         },
         file::FileMeta,
         session_index::SessionSummary,
@@ -110,6 +110,14 @@ async fn list_models(
     refresh: Option<bool>,
 ) -> Result<Vec<DesktopModel>, String> {
     state.client.list_models(refresh.unwrap_or(false)).await
+}
+
+#[tauri::command]
+async fn list_skills(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<DesktopSkill>, String> {
+    state.client.list_session_skills(&session_id).await
 }
 
 #[tauri::command]
@@ -298,6 +306,7 @@ pub fn run() {
             login,
             logout,
             list_models,
+            list_skills,
             upload_file,
             set_default_model,
             list_workspaces,

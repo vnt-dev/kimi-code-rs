@@ -60,6 +60,7 @@ use crate::{
         },
         session_index::SessionSummary,
         session_lifecycle::{CreateSessionOptions, SESSION_LIFECYCLE_SERVICE_ID},
+        skill_catalog::{SkillSource as CatalogSkillSource, is_user_activatable_skill_type},
         workspace_registry::{
             WORKSPACE_QUERY_SERVICE_ID, WORKSPACE_REGISTRY_SERVICE_ID, Workspace,
         },
@@ -75,6 +76,7 @@ use crate::{
     session::{
         agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID, ensure_main_agent},
         interaction::{Interaction, InteractionKind, SESSION_INTERACTION_SERVICE_ID},
+        skill_catalog::SESSION_SKILL_CATALOG_ID,
         todo::SESSION_TODO_SERVICE_ID,
     },
 };
@@ -172,6 +174,14 @@ pub struct DesktopModel {
     pub protocol: String,
     pub support_efforts: Vec<String>,
     pub default_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopSkill {
+    pub name: String,
+    pub description: String,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -540,6 +550,41 @@ impl KimiCodeDesktopClient {
             .list_recent_sessions(workspace_id)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    pub async fn list_session_skills(&self, session_id: &str) -> Result<Vec<DesktopSkill>, String> {
+        let sessions = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "the session is not active; prepare it first".to_owned())?;
+        let skills = session
+            .get(SESSION_SKILL_CATALOG_ID)
+            .map_err(|error| error.to_string())?;
+        skills.ready().await.map_err(|error| error.to_string())?;
+
+        Ok(skills
+            .catalog()
+            .list_skills()
+            .into_iter()
+            .filter(|skill| {
+                skill.metadata.is_sub_skill != Some(true)
+                    && is_user_activatable_skill_type(skill.metadata.kind.as_deref())
+            })
+            .map(|skill| DesktopSkill {
+                name: skill.name,
+                description: skill.description,
+                source: match skill.source {
+                    CatalogSkillSource::Project => "project",
+                    CatalogSkillSource::User => "user",
+                    CatalogSkillSource::Extra => "extra",
+                    CatalogSkillSource::Builtin => "builtin",
+                }
+                .to_owned(),
+            })
+            .collect())
     }
 
     pub async fn archive_session(&self, session_id: &str) -> Result<(), String> {

@@ -261,10 +261,20 @@ pub struct SessionSummary {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PromptSkillSelection {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PromptPayload {
     pub input: Vec<PromptInputPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_tools: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<PromptSkillSelection>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -941,6 +951,39 @@ mod tests {
                 "promptId": "prompt-1",
                 "turnId": 7,
                 "status": "running"
+            })
+        );
+    }
+
+    #[test]
+    fn prompt_payload_accepts_structured_skill_selections() {
+        let payload = PromptPayload {
+            input: vec![
+                ContentPart::Text {
+                    text: "review this".into(),
+                }
+                .into(),
+            ],
+            disabled_tools: None,
+            skills: vec![
+                PromptSkillSelection {
+                    name: "review".into(),
+                    args: Some("--strict".into()),
+                },
+                PromptSkillSelection {
+                    name: "docs".into(),
+                    args: None,
+                },
+            ],
+        };
+        assert_eq!(
+            serde_json::to_value(payload).unwrap(),
+            json!({
+                "input": [{"type": "text", "text": "review this"}],
+                "skills": [
+                    {"name": "review", "args": "--strict"},
+                    {"name": "docs"}
+                ]
             })
         );
     }

@@ -2,7 +2,7 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/skill/skillService.ts`.
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -26,13 +26,15 @@ use crate::{
             TurnHandle,
             errors::{TURN_AGENT_BUSY, ensure_loop_errors_registered},
         },
-        prompt::{AGENT_PROMPT_SERVICE_ID, AgentPromptServiceHandle, PromptInput},
+        prompt::{
+            AGENT_PROMPT_SERVICE_ID, AgentPromptServiceHandle, PromptInput, errors::REQUEST_INVALID,
+        },
     },
     app::{
         skill_catalog::{
             SkillDefinition, SkillSource,
             errors::{SKILL_NOT_FOUND, SKILL_TYPE_UNSUPPORTED, ensure_skill_errors_registered},
-            is_user_activatable_skill_type,
+            is_user_activatable_skill_type, normalize_skill_name,
         },
         telemetry::{TELEMETRY_SERVICE_ID, TelemetryServiceHandle},
     },
@@ -46,9 +48,12 @@ use crate::{
 
 use super::{
     AGENT_SKILL_SERVICE_ID, AgentSkillServiceContract, AgentSkillServiceError,
-    AgentSkillServiceHandle, RenderSkillPromptInput, SkillActivationInput,
-    render_user_slash_skill_prompt, skill_activate,
+    AgentSkillServiceHandle, PreparedSkillPrompt, RenderSkillPromptInput, SkillActivationInput,
+    render_skill_loaded_block, render_user_selected_skills_prompt, render_user_slash_skill_prompt,
+    skill_activate,
 };
+
+const MAX_PROMPT_SKILLS: usize = 8;
 
 pub struct AgentSkillService {
     skill_catalog: SessionSkillCatalogHandle,
@@ -174,6 +179,91 @@ impl AgentSkillServiceContract for AgentSkillService {
                     "Cannot activate skill while another turn is active",
                 )) as AgentSkillServiceError
             })
+    }
+
+    async fn prepare_prompt_skills(
+        &self,
+        inputs: Vec<SkillActivationInput>,
+        shared_args: Option<String>,
+    ) -> Result<PreparedSkillPrompt, AgentSkillServiceError> {
+        if inputs.len() > MAX_PROMPT_SKILLS {
+            return Err(Box::new(Error2::new(
+                REQUEST_INVALID,
+                format!("A prompt can activate at most {MAX_PROMPT_SKILLS} skills"),
+            )));
+        }
+        self.skill_catalog
+            .ready()
+            .await
+            .map_err(|error| Box::new(error) as AgentSkillServiceError)?;
+
+        let catalog = self.skill_catalog.catalog();
+        let mut names = HashSet::new();
+        let mut blocks = Vec::new();
+        let mut origins = Vec::new();
+        for input in inputs {
+            let normalized_name = normalize_skill_name(input.name.trim());
+            if !names.insert(normalized_name.clone()) {
+                continue;
+            }
+            let skill = catalog.get_skill(&normalized_name).ok_or_else(|| {
+                Box::new(Error2::new(
+                    SKILL_NOT_FOUND,
+                    format!("Skill \"{}\" was not found", input.name),
+                )) as AgentSkillServiceError
+            })?;
+            if !is_user_activatable_skill_type(skill.metadata.kind.as_deref()) {
+                return Err(Box::new(Error2::new(
+                    SKILL_TYPE_UNSUPPORTED,
+                    format!("Skill \"{}\" cannot be activated by the user", skill.name),
+                )));
+            }
+
+            let skill_args = input
+                .args
+                .as_deref()
+                .or(shared_args.as_deref())
+                .unwrap_or_default();
+            let skill_content = catalog.render_skill_prompt_for_request(
+                &skill,
+                skill_args,
+                Some(&self.session_context.session_id),
+            );
+            blocks.push(render_skill_loaded_block(
+                &RenderSkillPromptInput {
+                    skill_name: &skill.name,
+                    skill_args,
+                    skill_content: &skill_content,
+                    skill_source: Some(skill.source),
+                    skill_dir: Some(&skill.dir),
+                },
+                super::SkillPromptTrigger::UserSlash,
+            ));
+            origins.push(SkillActivationOrigin {
+                kind: SkillActivationOriginKind::SkillActivation,
+                activation_id: Uuid::new_v4().to_string(),
+                skill_name: skill.name.clone(),
+                skill_args: input.args,
+                trigger: SkillActivationTrigger::UserSlash,
+                skill_type: skill.metadata.kind.clone(),
+                skill_path: Some(skill.path.clone()),
+                skill_source: Some(context_skill_source(skill.source)),
+            });
+        }
+
+        Ok(PreparedSkillPrompt {
+            content: render_user_selected_skills_prompt(&blocks),
+            origins,
+        })
+    }
+
+    fn record_user_activations(&self, origins: &[SkillActivationOrigin]) {
+        for origin in origins {
+            if let Ok(op) = skill_activate(origin.clone()) {
+                let _ = self.wire.dispatch([op]);
+                publish_activation(&self.telemetry, origin);
+            }
+        }
     }
 
     fn record_model_tool_activation(&self, origin: SkillActivationOrigin) {

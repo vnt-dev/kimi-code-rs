@@ -37,6 +37,19 @@ pub fn render_user_slash_skill_prompt(input: RenderSkillPromptInput<'_>) -> Stri
     )
 }
 
+pub fn render_user_selected_skills_prompt(blocks: &[String]) -> String {
+    format!(
+        concat!(
+            "<kimi-selected-skills>\n",
+            "User selected the following skills for this request. ",
+            "Follow all loaded skill instructions. If instructions conflict, ",
+            "skills listed earlier take priority.\n\n{}\n",
+            "</kimi-selected-skills>"
+        ),
+        blocks.join("\n\n")
+    )
+}
+
 pub fn render_model_tool_skill_prompt(
     input: RenderSkillPromptInput<'_>,
     trigger: SkillPromptTrigger,
@@ -124,5 +137,16 @@ mod tests {
                 "</kimi-skill-loaded>"
             )
         );
+    }
+
+    #[test]
+    fn selected_skills_are_wrapped_as_one_frontend_collapsible_block() {
+        let rendered = render_user_selected_skills_prompt(&[
+            "<kimi-skill-loaded name=\"pdf\"></kimi-skill-loaded>".into(),
+            "<kimi-skill-loaded name=\"docs\"></kimi-skill-loaded>".into(),
+        ]);
+        assert!(rendered.starts_with("<kimi-selected-skills>"));
+        assert!(rendered.ends_with("</kimi-selected-skills>"));
+        assert_eq!(rendered.matches("<kimi-skill-loaded").count(), 2);
     }
 }

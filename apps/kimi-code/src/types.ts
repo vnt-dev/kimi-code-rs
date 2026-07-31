@@ -101,6 +101,12 @@ export interface PreparedSession {
   permissionMode: PermissionMode;
 }
 
+export interface SkillDescriptor {
+  name: string;
+  description: string;
+  source: "project" | "user" | "extra" | "builtin";
+}
+
 export interface AgentConfig {
   modelAlias?: string;
   thinkingLevel: string;

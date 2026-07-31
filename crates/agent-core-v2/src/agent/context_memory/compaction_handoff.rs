@@ -472,6 +472,7 @@ mod tests {
                 skill_type: None,
                 skill_path: None,
                 skill_source: None,
+                skills: Vec::new(),
             })),
             CompactionUserMessageDisposition::Drop
         );

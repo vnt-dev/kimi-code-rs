@@ -345,7 +345,10 @@ mod tests {
         },
         agent::{
             loop_::TurnHandle,
-            skill::{AgentSkillServiceContract, AgentSkillServiceError, SkillActivationInput},
+            skill::{
+                AgentSkillServiceContract, AgentSkillServiceError, PreparedSkillPrompt,
+                SkillActivationInput,
+            },
         },
         app::skill_catalog::{
             InMemorySkillCatalog, RegisterSkillOptions, SkillCatalogContract, SkillContribution,
@@ -419,6 +422,18 @@ mod tests {
             _input: SkillActivationInput,
         ) -> Result<TurnHandle, AgentSkillServiceError> {
             Err(Box::new(std::io::Error::other("not implemented")))
+        }
+
+        async fn prepare_prompt_skills(
+            &self,
+            _inputs: Vec<SkillActivationInput>,
+            _shared_args: Option<String>,
+        ) -> Result<PreparedSkillPrompt, AgentSkillServiceError> {
+            Err(Box::new(std::io::Error::other("not implemented")))
+        }
+
+        fn record_user_activations(&self, origins: &[SkillActivationOrigin]) {
+            self.origins.lock().unwrap().extend_from_slice(origins);
         }
 
         fn record_model_tool_activation(&self, origin: SkillActivationOrigin) {

@@ -9,6 +9,7 @@ import type {
   PlanData,
   PreparedSession,
   SessionSummary,
+  SkillDescriptor,
   TodoItem,
   Workspace,
 } from "./types";
@@ -78,6 +79,15 @@ export interface AgentPromptSubmitResult {
   status: AgentPromptSubmitStatus;
 }
 
+export interface AgentPromptSkill {
+  name: string;
+  args?: string;
+}
+
+export interface AgentPromptOptions {
+  skills?: readonly AgentPromptSkill[];
+}
+
 export async function callAgentRpc<T>(
   scope: AgentScope,
   method: AgentRpcMethod,
@@ -94,12 +104,18 @@ export async function callAgentRpc<T>(
 
 export function createAgentClient(scope: AgentScope) {
   return {
-    prompt(input: string | readonly AgentPromptPart[]) {
+    prompt(
+      input: string | readonly AgentPromptPart[],
+      options: AgentPromptOptions = {},
+    ) {
       return callAgentRpc<AgentPromptSubmitResult>(scope, "prompt", {
         input:
           typeof input === "string"
             ? [{ type: "text", text: input }]
             : [...input],
+        ...(options.skills?.length
+          ? { skills: options.skills.map((skill) => ({ ...skill })) }
+          : {}),
       });
     },
     steer(input: string | readonly AgentPromptPart[]) {
@@ -108,6 +124,12 @@ export function createAgentClient(scope: AgentScope) {
           typeof input === "string"
             ? [{ type: "text", text: input }]
             : [...input],
+      });
+    },
+    activateSkill(name: string, args?: string) {
+      return callAgentRpc<void>(scope, "activateSkill", {
+        name,
+        ...(args ? { args } : {}),
       });
     },
     cancel(turnId?: number) {
@@ -179,6 +201,10 @@ export function listWorkspaceSessions(
 
 export function archiveSession(sessionId: string): Promise<void> {
   return invoke<void>("archive_session", { sessionId });
+}
+
+export function listSkills(sessionId: string): Promise<SkillDescriptor[]> {
+  return invoke<SkillDescriptor[]>("list_skills", { sessionId });
 }
 
 export function setDefaultModel(model: string): Promise<void> {
