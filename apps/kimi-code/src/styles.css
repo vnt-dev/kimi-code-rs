@@ -1403,6 +1403,179 @@ select:focus-visible {
   background: var(--control-hover);
 }
 
+.side-chat-sidebar {
+  width: clamp(360px, 34vw, 500px);
+  min-width: 360px;
+}
+
+.side-chat-messages {
+  display: flex;
+  min-height: 0;
+  padding: 18px 16px 24px;
+  flex: 1;
+  flex-direction: column;
+  gap: 22px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+.side-chat-empty {
+  display: flex;
+  max-width: 260px;
+  margin: auto;
+  align-items: center;
+  flex-direction: column;
+  color: var(--muted);
+  text-align: center;
+}
+
+.side-chat-empty > span {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 12px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 11px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.side-chat-empty strong {
+  margin-bottom: 5px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.side-chat-empty p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.side-chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.side-chat-message {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.side-chat-message.user {
+  max-width: 88%;
+  padding: 8px 11px;
+  align-self: flex-end;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: 11px 11px 3px 11px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--control));
+  white-space: pre-wrap;
+}
+
+.side-chat-message.assistant {
+  padding: 0 2px;
+}
+
+.side-chat-message.assistant > .typing {
+  min-height: 24px;
+  justify-content: flex-start;
+}
+
+.side-chat-markdown {
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.side-chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.side-chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.side-chat-readonly-note {
+  margin: 5px 0;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--control);
+  font-size: 10.5px;
+}
+
+.side-chat-composer {
+  position: relative;
+  display: flex;
+  margin: 0 14px 14px;
+  padding: 9px 42px 9px 11px;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--control);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.side-chat-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line-strong));
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.12),
+    0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.side-chat-composer textarea {
+  width: 100%;
+  min-height: 38px;
+  max-height: 150px;
+  padding: 0;
+  resize: none;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.side-chat-composer textarea::placeholder {
+  color: var(--muted);
+}
+
+.side-chat-composer > button {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: white;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.side-chat-composer > button:disabled {
+  color: var(--muted);
+  background: var(--line-strong);
+  cursor: default;
+}
+
+.side-chat-composer .spinner {
+  width: 13px;
+  height: 13px;
+}
+
 .skill-detail-path {
   display: flex;
   min-height: 34px;
@@ -4690,6 +4863,8 @@ button.message-skill-chip:hover {
     0 16px 50px rgba(0, 0, 0, 0.32),
     inset 0 1px rgba(255, 255, 255, 0.025);
   transition: border-color 150ms ease, box-shadow 150ms ease;
+  container-name: composer;
+  container-type: inline-size;
 }
 
 .composer:focus-within {
@@ -4944,6 +5119,25 @@ button.message-skill-chip:hover {
 .prompt-skill-remove:hover {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   opacity: 1;
+}
+
+.prompt-plan-label {
+  cursor: default;
+}
+
+.prompt-plan-label:hover {
+  background: transparent;
+}
+
+.prompt-skill-remove:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.prompt-plan-chip .spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 1px;
 }
 
 .composer textarea {
@@ -5272,6 +5466,28 @@ button.message-skill-chip:hover {
 
 .permission-select .toolbar-select-trigger {
   max-width: 112px;
+}
+
+@container composer (max-width: 720px) {
+  .effort-select .toolbar-select-trigger,
+  .permission-select .toolbar-select-trigger {
+    width: 29px;
+    max-width: 29px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .effort-select .toolbar-select-trigger > span,
+  .permission-select .toolbar-select-trigger > span,
+  .effort-select .toolbar-select-trigger > svg:last-child,
+  .permission-select .toolbar-select-trigger > svg:last-child {
+    display: none;
+  }
+
+  .permission-select .toolbar-select-menu {
+    right: 0;
+    left: auto;
+  }
 }
 
 .toolbar-icon {

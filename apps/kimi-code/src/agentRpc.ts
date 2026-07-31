@@ -176,6 +176,9 @@ export function createAgentClient(scope: AgentScope) {
     getTasks(options: { activeOnly?: boolean; limit?: number } = {}) {
       return callAgentRpc<AgentTaskInfo[]>(scope, "getTasks", options);
     },
+    startBtw() {
+      return callAgentRpc<string>(scope, "startBtw");
+    },
     beginCompaction(instruction?: string) {
       return callAgentRpc<void>(scope, "beginCompaction", {
         ...(instruction ? { instruction } : {}),

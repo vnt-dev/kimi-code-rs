@@ -152,7 +152,7 @@ import type {
 
 const MAX_PROMPT_ATTACHMENTS = 8;
 const MAX_PROMPT_SKILLS = 8;
-const SLASH_COMMAND_COUNT = 2;
+const SLASH_COMMAND_COUNT = 3;
 const MAX_PROMPT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_IMAGE_DIMENSION = 2048;
 const IMAGE_COMPRESSION_THRESHOLD = 4 * 1024 * 1024;
@@ -470,6 +470,15 @@ interface CompactionSummaryDetail {
   id: string;
   content: string;
   createdAt: string;
+}
+
+interface SideChatState {
+  instanceId: number;
+  parentSessionId: string;
+  agentId?: string;
+  draft: string;
+  turns: InFlightTurn[];
+  starting: boolean;
 }
 
 function decodeSkillAttribute(value: string): string {
@@ -1452,6 +1461,7 @@ export default function App() {
   const [skillDetailError, setSkillDetailError] = useState<string>();
   const [compactionSummaryDetail, setCompactionSummaryDetail] =
     useState<CompactionSummaryDetail>();
+  const [sideChat, setSideChat] = useState<SideChatState>();
   const [composerAddOpen, setComposerAddOpen] = useState(false);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashMenuActiveIndex, setSlashMenuActiveIndex] = useState(0);
@@ -1546,6 +1556,9 @@ export default function App() {
   const queuedAgentChatEvents = useRef<QueuedAgentChatEvent[]>([]);
   const agentChatEventFrame = useRef<number | undefined>(undefined);
   const drainingQueuedPrompts = useRef(new Set<string>());
+  const sideChatInstance = useRef(0);
+  const sideChatAgentId = useRef<string | undefined>(undefined);
+  const sideChatAgentIds = useRef(new Set<string>());
 
   const { project: activeProject, conversation: activeConversation } = useMemo(
     () => getActive(desktop),
@@ -1707,6 +1720,10 @@ export default function App() {
     activeCompaction?.phase !== "started" &&
     !compactionCommandBusy &&
     !forkCommandBusy;
+  const canOpenSideChat =
+    activeConversation !== undefined &&
+    activeAgentScope?.sessionId === activeConversation.id &&
+    activeCompaction?.phase !== "started";
   const activeAgentUsage = activeConversation
     ? agentUsages[activeConversation.id]
     : undefined;
@@ -1737,6 +1754,12 @@ export default function App() {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     noticeTimer.current = window.setTimeout(() => setNotice(undefined), 3600);
   };
+
+  const closeSideChat = useCallback((): void => {
+    sideChatInstance.current += 1;
+    sideChatAgentId.current = undefined;
+    setSideChat(undefined);
+  }, []);
 
   const loadBackgroundTaskOutput = useCallback(
     async (
@@ -2071,12 +2094,13 @@ export default function App() {
     setSkillsError(undefined);
     setPromptSkills([]);
     setSlashMenuOpen(false);
+    closeSideChat();
     setCompactionSummaryDetail(undefined);
     setSkillDetailTarget(undefined);
     setSkillDetail(undefined);
     setSkillDetailBusy(false);
     setSkillDetailError(undefined);
-  }, [activeConversation?.id]);
+  }, [activeConversation?.id, closeSideChat]);
 
   useEffect(() => {
     setActiveAgentScope(undefined);
@@ -2186,39 +2210,63 @@ export default function App() {
       (event) => {
         const payload = event.payload;
         const isMainAgentEvent = payload.agentId === MAIN_AGENT_ID;
+        const isSideChatEvent =
+          payload.agentId === sideChatAgentId.current;
+        const isSideChatAgent =
+          sideChatAgentIds.current.has(payload.agentId);
         if (isAgentChatEvent(payload.event)) {
-          queuedAgentChatEvents.current.push({
-            sessionId: payload.sessionId,
-            agentId: payload.agentId,
-            event: payload.event,
-          });
-          if (agentChatEventFrame.current === undefined) {
-            agentChatEventFrame.current = window.requestAnimationFrame(() => {
-              agentChatEventFrame.current = undefined;
-              const queue = queuedAgentChatEvents.current;
-              queuedAgentChatEvents.current = [];
-              if (queue.length > 0) {
-                const mainEvents = queue.filter(
-                  (queued) => queued.agentId === MAIN_AGENT_ID,
-                );
-                const subagentEvents = queue.filter(
-                  (queued) => queued.agentId !== MAIN_AGENT_ID,
-                );
-                if (mainEvents.length > 0) {
-                  setInFlightTurns((current) =>
-                    reduceQueuedAgentChatEvents(current, mainEvents),
-                  );
-                }
-                if (subagentEvents.length > 0) {
-                  setSubagentLiveTurns((current) =>
-                    reduceQueuedSubagentChatEvents(current, subagentEvents),
-                  );
-                }
+          const chatEvent = payload.event;
+          if (isSideChatEvent) {
+            setSideChat((current) => {
+              if (
+                !current ||
+                current.parentSessionId !== payload.sessionId
+              ) {
+                return current;
               }
+              const turns = [...current.turns];
+              const last = turns.at(-1);
+              if (!last) return current;
+              turns[turns.length - 1] = reduceAgentChatEvent(
+                last,
+                chatEvent,
+              );
+              return { ...current, turns, starting: false };
             });
+          } else if (!isSideChatAgent) {
+            queuedAgentChatEvents.current.push({
+              sessionId: payload.sessionId,
+              agentId: payload.agentId,
+              event: chatEvent,
+            });
+            if (agentChatEventFrame.current === undefined) {
+              agentChatEventFrame.current = window.requestAnimationFrame(() => {
+                agentChatEventFrame.current = undefined;
+                const queue = queuedAgentChatEvents.current;
+                queuedAgentChatEvents.current = [];
+                if (queue.length > 0) {
+                  const mainEvents = queue.filter(
+                    (queued) => queued.agentId === MAIN_AGENT_ID,
+                  );
+                  const subagentEvents = queue.filter(
+                    (queued) => queued.agentId !== MAIN_AGENT_ID,
+                  );
+                  if (mainEvents.length > 0) {
+                    setInFlightTurns((current) =>
+                      reduceQueuedAgentChatEvents(current, mainEvents),
+                    );
+                  }
+                  if (subagentEvents.length > 0) {
+                    setSubagentLiveTurns((current) =>
+                      reduceQueuedSubagentChatEvents(current, subagentEvents),
+                    );
+                  }
+                }
+              });
+            }
           }
         }
-        if (isSubagentEvent(payload.event)) {
+        if (!isSideChatAgent && isSubagentEvent(payload.event)) {
           const subagentEvent = payload.event;
           setSubagentRuns((current) =>
             mergeSessionSubagentEvent(
@@ -3065,6 +3113,7 @@ export default function App() {
       setQueuedPrompts({});
       setMessageDurations({});
       setProfileOpen(false);
+      closeSideChat();
       showNotice("已退出登录");
     } catch (error) {
       showNotice(conciseError(error));
@@ -3191,6 +3240,7 @@ export default function App() {
     const scope = activeAgentScope;
 
     setComposerAddOpen(false);
+    closeSideChat();
     setCompactionSummaryDetail(undefined);
     setSkillDetailTarget(skill);
     setSkillDetail(undefined);
@@ -3223,6 +3273,7 @@ export default function App() {
   };
 
   const openCompactionSummary = (message: RenderMessage): void => {
+    closeSideChat();
     skillDetailRequest.current += 1;
     setSkillDetailTarget(undefined);
     setSkillDetail(undefined);
@@ -3770,6 +3821,146 @@ export default function App() {
     }
   };
 
+  const openSideChatCommand = (): void => {
+    const conversation = activeConversation;
+    if (
+      !conversation ||
+      activeAgentScope?.sessionId !== conversation.id
+    ) {
+      showNotice("会话正在准备，请稍后再试");
+      return;
+    }
+    if (activeCompaction?.phase === "started") {
+      showNotice("上下文压缩期间不能发起侧边聊天");
+      return;
+    }
+
+    sideChatAgentId.current = undefined;
+    const instanceId = sideChatInstance.current + 1;
+    sideChatInstance.current = instanceId;
+
+    const nextPrompt = prompt.startsWith("/") ? prompt.slice(1) : prompt;
+    resetPrompt(nextPrompt);
+    setSlashMenuOpen(false);
+    skillDetailRequest.current += 1;
+    setSkillDetailTarget(undefined);
+    setSkillDetail(undefined);
+    setSkillDetailBusy(false);
+    setSkillDetailError(undefined);
+    setCompactionSummaryDetail(undefined);
+    setSideChat({
+      instanceId,
+      parentSessionId: conversation.id,
+      draft: "",
+      turns: [],
+      starting: false,
+    });
+  };
+
+  const updateSideChatDraft = (draft: string): void => {
+    setSideChat((current) =>
+      current ? { ...current, draft } : current,
+    );
+  };
+
+  const sendSideChatPrompt = async (): Promise<void> => {
+    const current = sideChat;
+    const scope = activeAgentScope;
+    const text = current?.draft.trim() ?? "";
+    if (
+      !current ||
+      !scope ||
+      scope.sessionId !== current.parentSessionId ||
+      !text ||
+      current.starting ||
+      isTurnRunning(current.turns.at(-1))
+    ) {
+      return;
+    }
+
+    const instanceId = current.instanceId;
+    const createdAt = new Date().toISOString();
+    setSideChat((value) =>
+      value?.instanceId === instanceId
+        ? {
+            ...value,
+            draft: "",
+            starting: true,
+            turns: [
+              ...value.turns,
+              { ...newInFlightTurn(text, []), createdAt },
+            ],
+          }
+        : value,
+    );
+
+    try {
+      let agentId = current.agentId;
+      if (!agentId) {
+        agentId = await createAgentClient(scope).startBtw();
+        if (sideChatInstance.current !== instanceId) return;
+        sideChatAgentIds.current.add(agentId);
+        sideChatAgentId.current = agentId;
+        setSideChat((value) =>
+          value?.instanceId === instanceId
+            ? { ...value, agentId }
+            : value,
+        );
+      }
+
+      const submitted = await createAgentClient({
+        sessionId: current.parentSessionId,
+        agentId,
+      }).prompt(text);
+      if (sideChatInstance.current !== instanceId) return;
+      setSideChat((value) => {
+        if (value?.instanceId !== instanceId) return value;
+        const turns = [...value.turns];
+        const last = turns.at(-1);
+        if (!last || last.createdAt !== createdAt) return value;
+        const status = liveTurnStatusFromSubmit(submitted.status);
+        if (
+          !isTurnRunning(last) &&
+          (status === "queued" || status === "running")
+        ) {
+          return { ...value, starting: false };
+        }
+        turns[turns.length - 1] = {
+          ...last,
+          turnId: submitted.turnId ?? last.turnId,
+          status,
+          durationMs:
+            status === "queued" || status === "running"
+              ? last.durationMs
+              : (last.durationMs ??
+                Math.max(0, Date.now() - Date.parse(last.createdAt))),
+        };
+        return { ...value, turns, starting: false };
+      });
+    } catch (error) {
+      if (sideChatInstance.current !== instanceId) return;
+      const message = conciseError(error);
+      setSideChat((value) => {
+        if (value?.instanceId !== instanceId) return value;
+        const turns = [...value.turns];
+        const last = turns.at(-1);
+        if (last?.createdAt === createdAt) {
+          turns[turns.length - 1] = {
+            ...last,
+            status: "failed",
+            durationMs: Math.max(
+              0,
+              Date.now() - Date.parse(last.createdAt),
+            ),
+            error: message,
+          };
+        }
+        return { ...value, turns, starting: false };
+      });
+      showNotice(message);
+    }
+  };
+
   const handlePromptKeyDown = (
     event: KeyboardEvent<HTMLTextAreaElement>,
   ): void => {
@@ -3801,8 +3992,10 @@ export default function App() {
       event.preventDefault();
       if (slashMenuActiveIndex === 0) {
         void runCompactionCommand();
-      } else {
+      } else if (slashMenuActiveIndex === 1) {
         void runForkCommand();
+      } else {
+        openSideChatCommand();
       }
       return;
     }
@@ -4266,14 +4459,6 @@ export default function App() {
             </div>
 
             <div className="composer-dock">
-              {activePlan && (
-                <AgentModeStatus
-                  plan={activePlan ?? null}
-                  busy={modeBusy}
-                  planLocked={isStreaming}
-                  onExitPlan={() => void togglePlanMode()}
-                />
-              )}
               {activeQuestion && (
                 <QuestionCard
                   key={activeQuestion.id}
@@ -4387,6 +4572,23 @@ export default function App() {
                       <strong>复制</strong>
                       <small>从当前会话复制出一个新会话</small>
                     </button>
+                    <button
+                      className={
+                        slashMenuActiveIndex === 2 ? "selected" : undefined
+                      }
+                      id="slash-command-btw"
+                      type="button"
+                      role="menuitem"
+                      disabled={!canOpenSideChat}
+                      onMouseEnter={() => setSlashMenuActiveIndex(2)}
+                      onClick={openSideChatCommand}
+                    >
+                      <span className="slash-command-icon" aria-hidden="true">
+                        <MessageSquareText size={14} />
+                      </span>
+                      <strong>侧边聊天</strong>
+                      <small>使用当前上下文发起只读聊天</small>
+                    </button>
                   </div>
                 )}
                 {promptAttachments.length > 0 && (
@@ -4440,8 +4642,33 @@ export default function App() {
                     ))}
                   </div>
                 )}
-                {promptSkills.length > 0 && (
-                  <div className="prompt-skill-list" aria-label="已选择的技能">
+                {(activePlan || promptSkills.length > 0) && (
+                  <div
+                    className="prompt-skill-list"
+                    aria-label="当前输入设置"
+                  >
+                    {activePlan && (
+                      <span className="prompt-skill-chip prompt-plan-chip">
+                        <span className="prompt-skill-open prompt-plan-label">
+                          <ClipboardList size={13} />
+                          <span>计划</span>
+                        </span>
+                        <button
+                          className="prompt-skill-remove"
+                          type="button"
+                          aria-label="退出计划模式"
+                          title="退出计划模式"
+                          disabled={modeBusy || isStreaming}
+                          onClick={() => void togglePlanMode()}
+                        >
+                          {modeBusy ? (
+                            <span className="spinner" />
+                          ) : (
+                            <X size={11} />
+                          )}
+                        </button>
+                      </span>
+                    )}
                     {promptSkills.map((skill) => (
                       <span className="prompt-skill-chip" key={skill.name}>
                         <button
@@ -4517,7 +4744,9 @@ export default function App() {
                     slashMenuOpen
                       ? slashMenuActiveIndex === 0
                         ? "slash-command-compact"
-                        : "slash-command-fork"
+                        : slashMenuActiveIndex === 1
+                          ? "slash-command-fork"
+                          : "slash-command-btw"
                       : undefined
                   }
                   placeholder={
@@ -4543,8 +4772,8 @@ export default function App() {
                       <button
                         className="toolbar-icon composer-add-trigger"
                         type="button"
-                        title="添加附件或技能"
-                        aria-label="添加附件或技能"
+                        title="添加附件、计划或技能"
+                        aria-label="添加附件、计划或技能"
                         aria-expanded={composerAddOpen}
                         aria-controls="composer-add-menu"
                         onClick={toggleComposerAdd}
@@ -4578,6 +4807,28 @@ export default function App() {
                                 <strong>附件</strong>
                                 <small>添加图片、音频、视频或文件</small>
                               </span>
+                            </button>
+                            <button
+                              className={`composer-add-item ${
+                                activePlan ? "selected" : ""
+                              }`}
+                              type="button"
+                              role="menuitemcheckbox"
+                              aria-checked={Boolean(activePlan)}
+                              disabled={
+                                !activeAgentScope || modeBusy || isStreaming
+                              }
+                              onClick={() => {
+                                setComposerAddOpen(false);
+                                void togglePlanMode();
+                              }}
+                            >
+                              <ClipboardList size={15} />
+                              <span>
+                                <strong>计划</strong>
+                                <small>只规划和分析，不执行操作</small>
+                              </span>
+                              {activePlan && <Check size={14} />}
                             </button>
                           </div>
 
@@ -4728,19 +4979,6 @@ export default function App() {
                         choosePermissionMode(value as PermissionMode)
                       }
                     />
-                    <button
-                      className={`mode-toolbar-button plan-mode ${
-                        activePlan ? "active" : ""
-                      }`}
-                      type="button"
-                      disabled={!activeAgentScope || modeBusy || isStreaming}
-                      onClick={() => void togglePlanMode()}
-                      title={activePlan ? "退出计划模式" : "进入计划模式"}
-                      aria-pressed={Boolean(activePlan)}
-                    >
-                      <ClipboardList size={14} />
-                      <span>计划</span>
-                    </button>
                     {selectedModel && (
                       <ContextUsageIndicator
                         usage={activeContextUsage}
@@ -4797,7 +5035,14 @@ export default function App() {
           />
         )}
         </main>
-        {compactionSummaryDetail ? (
+        {sideChat ? (
+          <SideChatSidebar
+            state={sideChat}
+            onDraftChange={updateSideChatDraft}
+            onSend={() => void sendSideChatPrompt()}
+            onClose={closeSideChat}
+          />
+        ) : compactionSummaryDetail ? (
           <CompactionSummarySidebar
             summary={compactionSummaryDetail}
             onClose={() => setCompactionSummaryDetail(undefined)}
@@ -5340,54 +5585,6 @@ function ContextUsageIndicator({
   );
 }
 
-function AgentModeStatus({
-  plan,
-  busy,
-  planLocked,
-  onExitPlan,
-}: {
-  plan: PlanData | null;
-  busy: boolean;
-  planLocked: boolean;
-  onExitPlan: () => void;
-}) {
-  const planPreview =
-    plan?.content
-      .split(/\r?\n/)
-      .map((line) => line.replace(/^#+\s*/, "").trim())
-      .find(Boolean) ?? "先分析和制定方案，不直接修改代码";
-
-  return (
-    <section className="mode-status-stack" aria-label="Agent 工作模式">
-      {plan && (
-        <article className="mode-status-card plan">
-          <span className="mode-status-icon">
-            <ClipboardList size={15} />
-          </span>
-          <span className="mode-status-copy">
-            <span className="mode-status-heading">
-              <strong>计划模式</strong>
-              <small>只规划，不执行</small>
-            </span>
-            <span className="mode-status-detail">{planPreview}</span>
-          </span>
-          <span className="mode-status-actions">
-            <button
-              type="button"
-              onClick={onExitPlan}
-              disabled={busy || planLocked}
-              title="退出计划模式"
-            >
-              <X size={13} />
-              <span>退出</span>
-            </button>
-          </span>
-        </article>
-      )}
-    </section>
-  );
-}
-
 function TodoProgress({ todos }: { todos: readonly TodoItem[] }) {
   const completed = todos.filter((todo) => todo.status === "done").length;
   const activeIndex = todos.findIndex(
@@ -5688,6 +5885,7 @@ function ToolbarSelect({
         type="button"
         className="toolbar-select-trigger"
         aria-label={ariaLabel}
+        title={label}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
@@ -7561,6 +7759,181 @@ function StructuredMessageContent({
         }
       })}
     </div>
+  );
+}
+
+function SideChatTurnView({ turn }: { turn: InFlightTurn }) {
+  const running = isTurnRunning(turn);
+  const hasAssistantContent = turn.steps.some(
+    (step) => step.blocks.length > 0,
+  );
+
+  return (
+    <section className="side-chat-turn">
+      <article className="side-chat-message user">
+        <div>{turn.prompt}</div>
+      </article>
+      <article className={`side-chat-message assistant ${turn.status}`}>
+        {turn.steps.map((step) => (
+          <Fragment key={liveStepKey(step.step, step.stepId)}>
+            {step.blocks.map((block, index) => {
+              if (block.kind === "text") {
+                return (
+                  <div
+                    className="markdown-body side-chat-markdown"
+                    key={`text-${index}`}
+                  >
+                    <StreamingMarkdownMessage
+                      active={running && step.status === "running"}
+                      content={block.content}
+                    />
+                  </div>
+                );
+              }
+              if (block.kind === "thinking") {
+                return (
+                  <LiveThinkingBlock
+                    content={block.content}
+                    key={`thinking-${index}`}
+                  />
+                );
+              }
+              if (block.kind === "content") {
+                return (
+                  <LiveAssistantContent
+                    active={running && step.status === "running"}
+                    content={block.content}
+                    key={`content-${index}`}
+                  />
+                );
+              }
+              return (
+                <div className="side-chat-readonly-note" key={block.toolCallId}>
+                  侧边聊天为只读模式，不能调用工具。
+                </div>
+              );
+            })}
+          </Fragment>
+        ))}
+        {!hasAssistantContent && running && (
+          <div className="typing" aria-label="正在思考">
+            <i />
+            <i />
+            <i />
+          </div>
+        )}
+        {turn.error && <div className="live-turn-error">{turn.error}</div>}
+      </article>
+    </section>
+  );
+}
+
+function SideChatSidebar({
+  state,
+  onDraftChange,
+  onSend,
+  onClose,
+}: {
+  state: SideChatState;
+  onDraftChange: (value: string) => void;
+  onSend: () => void;
+  onClose: () => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const lastTurn = state.turns.at(-1);
+  const sending = state.starting || isTurnRunning(lastTurn);
+  const canSend = state.draft.trim().length > 0 && !sending;
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [state.instanceId]);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [state.turns, state.starting]);
+
+  return (
+    <aside
+      className="skill-detail-sidebar side-chat-sidebar"
+      aria-label="侧边聊天"
+    >
+      <header className="skill-detail-header">
+        <div className="skill-detail-heading">
+          <span className="skill-detail-icon">
+            <MessageSquareText size={16} />
+          </span>
+          <div>
+            <h2>侧边聊天</h2>
+            <span>使用当前上下文 · 只读</span>
+          </div>
+        </div>
+        <button
+          className="icon-button quiet"
+          type="button"
+          aria-label="关闭侧边聊天"
+          title="关闭"
+          onClick={onClose}
+        >
+          <X size={16} />
+        </button>
+      </header>
+
+      <div className="side-chat-messages" ref={scrollRef}>
+        {state.turns.length === 0 ? (
+          <div className="side-chat-empty">
+            <span>
+              <MessageSquareText size={19} />
+            </span>
+            <strong>询问当前会话</strong>
+            <p>回答会参考当前上下文，但不会修改文件或执行命令。</p>
+          </div>
+        ) : (
+          state.turns.map((turn) => (
+            <SideChatTurnView
+              turn={turn}
+              key={`${turn.createdAt}-${turn.prompt}`}
+            />
+          ))
+        )}
+      </div>
+
+      <form
+        className="side-chat-composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSend();
+        }}
+      >
+        <textarea
+          ref={inputRef}
+          value={state.draft}
+          rows={2}
+          placeholder="询问当前会话中的内容…"
+          aria-label="侧边聊天输入"
+          onChange={(event) => onDraftChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (
+              event.key === "Enter" &&
+              !event.shiftKey &&
+              !event.nativeEvent.isComposing
+            ) {
+              event.preventDefault();
+              if (canSend) onSend();
+            }
+          }}
+        />
+        <button
+          type="submit"
+          disabled={!canSend}
+          aria-label="发送侧边聊天消息"
+          title="发送"
+        >
+          {sending ? <span className="spinner light" /> : <ArrowUp size={16} />}
+        </button>
+      </form>
+    </aside>
   );
 }
 
