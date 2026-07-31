@@ -236,15 +236,11 @@ fn parse_float_env(
         .map(Some)
 }
 
-fn parse_completion_tokens(raw: Option<&str>) -> Result<Option<f64>, ConfigValidationError> {
+fn parse_completion_tokens(raw: Option<&str>) -> Result<Option<u64>, ConfigValidationError> {
     let Some(value) = trimmed(raw) else {
         return Ok(None);
     };
-    let parsed = value
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite() && value.fract() == 0.0);
-    Ok(parsed)
+    Ok(value.parse::<u64>().ok())
 }
 
 fn parse_capabilities(raw: Option<&str>) -> Option<Vec<String>> {
@@ -291,7 +287,7 @@ fn collect_model_overrides(
     temperature: Option<f64>,
     top_p: Option<f64>,
     thinking_keep: Option<String>,
-    max_completion_tokens: Option<f64>,
+    max_completion_tokens: Option<u64>,
 ) -> Option<Map<String, Value>> {
     let mut overrides = Map::new();
     if let Some(temperature) = temperature {
@@ -302,7 +298,10 @@ fn collect_model_overrides(
     }
     insert_string(&mut overrides, "thinkingKeep", thinking_keep);
     if let Some(max_completion_tokens) = max_completion_tokens {
-        insert_number(&mut overrides, "maxCompletionTokens", max_completion_tokens);
+        overrides.insert(
+            "maxCompletionTokens".into(),
+            Value::Number(max_completion_tokens.into()),
+        );
     }
     (!overrides.is_empty()).then_some(overrides)
 }
@@ -390,7 +389,7 @@ mod tests {
                 &mut effective,
                 HashMap::from([
                     ("KIMI_MODEL_TOP_P", "0.9"),
-                    ("KIMI_MODEL_MAX_TOKENS", "-12")
+                    ("KIMI_MODEL_MAX_TOKENS", "8192")
                 ])
             )
             .unwrap(),
@@ -398,7 +397,7 @@ mod tests {
         );
         assert_eq!(
             effective["modelOverrides"],
-            serde_json::json!({"topP": 0.9, "maxCompletionTokens": -12.0})
+            serde_json::json!({"topP": 0.9, "maxCompletionTokens": 8192})
         );
         let error = apply(
             &mut Map::new(),

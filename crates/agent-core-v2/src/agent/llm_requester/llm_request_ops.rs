@@ -64,7 +64,7 @@ pub struct LlmRequestPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<f64>,
+    pub max_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beta_api: Option<bool>,
     pub tool_select: bool,
@@ -209,7 +209,7 @@ mod tests {
         payload.thinking_keep = Some("all".into());
         payload.temperature = Some(0.2);
         payload.top_p = Some(0.9);
-        payload.max_tokens = Some(4096.0);
+        payload.max_tokens = Some(4096);
         payload.beta_api = Some(true);
         payload.tool_select = true;
         payload.system_prompt = Some("system".into());

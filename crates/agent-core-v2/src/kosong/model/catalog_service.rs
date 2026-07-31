@@ -652,7 +652,7 @@ impl ModelCatalogContract for ModelCatalog {
                     },
                     None,
                     Some(ModelRequestParams {
-                        max_completion_tokens: Some(512.0),
+                        max_completion_tokens: Some(512),
                         ..ModelRequestParams::default()
                     }),
                 );

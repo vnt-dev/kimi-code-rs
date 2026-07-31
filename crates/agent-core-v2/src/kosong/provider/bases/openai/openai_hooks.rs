@@ -21,7 +21,7 @@ pub type BoundWithThinkingHook = Arc<
     dyn Fn(&ThinkingEffort, &ThinkingHookOptions, &JsonObject) -> Option<JsonObject> + Send + Sync,
 >;
 pub type BoundPreserveThinkingHook = Arc<dyn Fn(&JsonObject) -> Option<bool> + Send + Sync>;
-pub type BoundMaxCompletionTokensHook = Arc<dyn Fn(f64) -> Option<JsonObject> + Send + Sync>;
+pub type BoundMaxCompletionTokensHook = Arc<dyn Fn(u64) -> Option<JsonObject> + Send + Sync>;
 pub type BoundCacheKeyHook = Arc<dyn Fn(&str) -> Option<JsonObject> + Send + Sync>;
 pub type BoundExtractUsageHook = Arc<dyn Fn(&JsonObject) -> UsageExtraction + Send + Sync>;
 pub type BoundReasoningKeyHook = Arc<dyn Fn() -> Option<String> + Send + Sync>;

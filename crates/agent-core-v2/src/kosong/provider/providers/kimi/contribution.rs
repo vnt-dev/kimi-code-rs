@@ -457,8 +457,8 @@ mod tests {
         let protocol_trait = kimi_openai_trait();
         let context = context(Protocol::OpenAi);
         assert_eq!(
-            protocol_trait.with_max_completion_tokens.as_ref().unwrap()(200_000.0, &context),
-            Some(object(json!({"max_completion_tokens":200000.0})))
+            protocol_trait.with_max_completion_tokens.as_ref().unwrap()(200_000, &context),
+            Some(object(json!({"max_completion_tokens":200000})))
         );
         assert_eq!(
             protocol_trait.build_params.as_ref().unwrap()(

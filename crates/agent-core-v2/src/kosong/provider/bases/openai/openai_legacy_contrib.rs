@@ -20,8 +20,8 @@ fn string_field(values: &Map<String, Value>, key: &str) -> Option<String> {
     values.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
-fn number_field(values: &Map<String, Value>, key: &str) -> Option<f64> {
-    values.get(key).and_then(Value::as_f64)
+fn number_field(values: &Map<String, Value>, key: &str) -> Option<u64> {
+    values.get(key).and_then(Value::as_u64)
 }
 
 fn headers_field(values: &Map<String, Value>, key: &str) -> Option<IndexMap<String, String>> {
@@ -144,7 +144,7 @@ mod tests {
             api_key: Some("config-key".to_owned()),
             default_headers: None,
             provider_options: Some(ProtocolProviderOptions {
-                default_max_tokens: Some(4096.0),
+                default_max_tokens: Some(4096),
                 reasoning_key: Some(" reasoning ".to_owned()),
                 ..ProtocolProviderOptions::default()
             }),
@@ -183,7 +183,7 @@ mod tests {
             (definition.create_chat_provider)(&ProtocolBaseContext { config, traits }).unwrap();
         assert_eq!(provider.name(), "openai");
         assert_eq!(provider.model_name(), "gpt-5-mini");
-        assert_eq!(provider.max_completion_tokens(), Some(4096.0));
+        assert_eq!(provider.max_completion_tokens(), Some(4096));
         assert_eq!(provider.thinking_effort().unwrap().as_str(), "high");
     }
 }

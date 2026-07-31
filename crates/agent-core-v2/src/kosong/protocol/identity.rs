@@ -103,7 +103,7 @@ pub struct ProtocolProviderOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_max_tokens: Option<f64>,
+    pub default_max_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub support_efforts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -257,7 +257,7 @@ mod tests {
                 "kimi-code".to_owned(),
             )])),
             provider_options: Some(ProtocolProviderOptions {
-                default_max_tokens: Some(8192.0),
+                default_max_tokens: Some(8192),
                 support_efforts: Some(vec!["low".to_owned(), "high".to_owned()]),
                 vertexai: Some(true),
                 project: Some("project-1".to_owned()),
@@ -274,7 +274,7 @@ mod tests {
                 "modelName": "gemini-2.5-pro",
                 "defaultHeaders": {"x-client": "kimi-code"},
                 "providerOptions": {
-                    "defaultMaxTokens": 8192.0,
+                    "defaultMaxTokens": 8192,
                     "supportEfforts": ["low", "high"],
                     "vertexai": true,
                     "project": "project-1",

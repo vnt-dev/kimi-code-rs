@@ -350,7 +350,7 @@ pub fn build_protocol_provider_options(
 ) -> Option<ProtocolProviderOptions> {
     let options = match protocol {
         Protocol::Anthropic => ProtocolProviderOptions {
-            default_max_tokens: model.max_output_size.map(|size| size.get() as f64),
+            default_max_tokens: model.max_output_size.map(|size| size.get()),
             support_efforts: model.support_efforts.clone(),
             adaptive_thinking: model.adaptive_thinking,
             beta_api: model.beta_api,
@@ -641,7 +641,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(anthropic.default_max_tokens, Some(8192.0));
+        assert_eq!(anthropic.default_max_tokens, Some(8192));
         assert_eq!(anthropic.beta_api, Some(true));
 
         let vertex = build_protocol_provider_options(

@@ -44,7 +44,7 @@ use crate::kosong::provider::bases::tool_call_id::{
 
 pub const KNOWN_REASONING_KEYS: [&str; 3] = ["reasoning_content", "reasoning_details", "reasoning"];
 pub const DEFAULT_OUTBOUND_REASONING_KEY: &str = KNOWN_REASONING_KEYS[0];
-pub const CHAT_COMPLETIONS_MAX_OUTPUT_TOKENS_CEILING: f64 = 128.0 * 1024.0;
+pub const CHAT_COMPLETIONS_MAX_OUTPUT_TOKENS_CEILING: u64 = 128 * 1024;
 
 pub static OPENAI_CHAT_TOOL_CALL_ID_POLICY: LazyLock<ToolCallIdPolicy> = LazyLock::new(|| {
     ToolCallIdPolicy::new(Arc::new(|id| sanitize_tool_call_id(id, Some(64))), Some(64))
@@ -79,27 +79,19 @@ pub fn uses_max_completion_tokens(model: &str) -> bool {
 
 // Original: openai-legacy.ts, completionTokenKwargs()
 //
-// Rust adaptation: JSON.stringify emits whole doubles without a fractional
-// part, so whole token counts serialize as JSON integers here. Strict
-// gateways declare max_tokens as an unsigned integer and reject `131072.0`.
+// Rust adaptation: token counts are u64, so they always serialize as JSON
+// integers. Strict gateways declare max_tokens as an unsigned integer and
+// reject `131072.0`.
 pub fn completion_token_kwargs(
     model: &str,
-    max_completion_tokens: f64,
+    max_completion_tokens: u64,
 ) -> OpenAiLegacyGenerationKwargs {
     let key = if uses_max_completion_tokens(model) {
         "max_completion_tokens"
     } else {
         "max_tokens"
     };
-    Map::from_iter([(key.to_owned(), token_count_value(max_completion_tokens))])
-}
-
-fn token_count_value(tokens: f64) -> Value {
-    if tokens.is_finite() && tokens.fract() == 0.0 && tokens >= 0.0 && tokens <= u64::MAX as f64 {
-        Value::from(tokens as u64)
-    } else {
-        Value::from(tokens)
-    }
+    Map::from_iter([(key.to_owned(), Value::from(max_completion_tokens))])
 }
 
 // Original: openai-legacy.ts, normalizeGenerationKwargs()
@@ -367,22 +359,6 @@ pub struct ResolvedRequestKwargs {
     pub reasoning_effort: Option<String>,
 }
 
-fn javascript_min(left: f64, right: f64) -> f64 {
-    if left.is_nan() || right.is_nan() {
-        f64::NAN
-    } else {
-        left.min(right)
-    }
-}
-
-fn javascript_max(left: f64, right: f64) -> f64 {
-    if left.is_nan() || right.is_nan() {
-        f64::NAN
-    } else {
-        left.max(right)
-    }
-}
-
 // Original: openai-legacy.ts, OpenAILegacyChatProvider._resolveRequestKwargs()
 pub fn resolve_request_kwargs(
     model: &str,
@@ -468,11 +444,11 @@ pub fn resolve_request_kwargs(
     if let Some(mut cap) = options.and_then(|options| options.max_completion_tokens) {
         if let Some((used, max)) =
             options.and_then(|options| options.used_context_tokens.zip(options.max_context_tokens))
-            && max > 0.0
+            && max > 0
         {
-            cap = javascript_min(cap, max - used);
+            cap = cap.min(max.saturating_sub(used));
         }
-        cap = javascript_max(1.0, cap);
+        cap = cap.max(1);
         let hooked = hooks
             .and_then(|hooks| hooks.with_max_completion_tokens.as_ref())
             .and_then(|hook| hook(cap));
@@ -481,10 +457,7 @@ pub fn resolve_request_kwargs(
         } else {
             kwargs.extend(completion_token_kwargs(
                 model,
-                javascript_max(
-                    1.0,
-                    javascript_min(cap, CHAT_COMPLETIONS_MAX_OUTPUT_TOKENS_CEILING),
-                ),
+                cap.clamp(1, CHAT_COMPLETIONS_MAX_OUTPUT_TOKENS_CEILING),
             ));
         }
     }
@@ -919,7 +892,7 @@ pub struct OpenAiLegacyOptions {
     pub default_headers: Option<IndexMap<String, String>>,
     pub reasoning_key: Option<String>,
     pub thinking_effort: Option<ThinkingEffort>,
-    pub max_tokens: Option<f64>,
+    pub max_tokens: Option<u64>,
     pub tool_message_conversion: Option<ToolMessageConversion>,
     pub hooks: Option<OpenAiChatHooks>,
     pub http_client: Option<reqwest::Client>,
@@ -1029,11 +1002,11 @@ impl ChatProvider for OpenAiLegacyChatProvider {
         self.thinking_effort.as_ref()
     }
 
-    fn max_completion_tokens(&self) -> Option<f64> {
+    fn max_completion_tokens(&self) -> Option<u64> {
         self.generation_kwargs
             .get("max_completion_tokens")
             .or_else(|| self.generation_kwargs.get("max_tokens"))
-            .and_then(Value::as_f64)
+            .and_then(Value::as_u64)
     }
 
     async fn generate(
@@ -1158,19 +1131,15 @@ mod tests {
             assert!(!uses_max_completion_tokens(model), "{model}");
         }
         assert_eq!(
-            completion_token_kwargs("o1", 8192.0),
+            completion_token_kwargs("o1", 8192),
             json!({"max_completion_tokens":8192})
                 .as_object()
                 .unwrap()
                 .clone()
         );
         assert_eq!(
-            completion_token_kwargs("gpt-4o", 4096.0),
+            completion_token_kwargs("gpt-4o", 4096),
             json!({"max_tokens":4096}).as_object().unwrap().clone()
-        );
-        assert_eq!(
-            completion_token_kwargs("gpt-4o", 4096.5),
-            json!({"max_tokens":4096.5}).as_object().unwrap().clone()
         );
     }
 
@@ -1240,7 +1209,7 @@ mod tests {
         assert_eq!(normalized.len(), 64);
         assert!(normalized.starts_with("call_"));
         assert_eq!(OPENAI_CHAT_TOOL_CALL_ID_POLICY.max_length, Some(64));
-        assert_eq!(CHAT_COMPLETIONS_MAX_OUTPUT_TOKENS_CEILING, 131_072.0);
+        assert_eq!(CHAT_COMPLETIONS_MAX_OUTPUT_TOKENS_CEILING, 131_072);
     }
 
     #[test]
@@ -1343,9 +1312,9 @@ mod tests {
                 temperature: Some(0.4),
                 top_p: Some(0.8),
             }),
-            max_completion_tokens: Some(100.0),
-            used_context_tokens: Some(95.0),
-            max_context_tokens: Some(100.0),
+            max_completion_tokens: Some(100),
+            used_context_tokens: Some(95),
+            max_context_tokens: Some(100),
             ..GenerateOptions::default()
         };
         let resolved =
@@ -1366,7 +1335,7 @@ mod tests {
                 Some(Map::from_iter([("thinking".to_owned(), Value::from(1))]))
             })),
             with_max_completion_tokens: Some(Arc::new(|cap| {
-                assert_eq!(cap, 1.0);
+                assert_eq!(cap, 1);
                 Some(Map::from_iter([(
                     "custom_max".to_owned(),
                     Value::from(cap),
@@ -1381,9 +1350,9 @@ mod tests {
                 effort: ThinkingEffort::from("high"),
                 keep: Some("all".to_owned()),
             }),
-            max_completion_tokens: Some(100.0),
-            used_context_tokens: Some(120.0),
-            max_context_tokens: Some(100.0),
+            max_completion_tokens: Some(100),
+            used_context_tokens: Some(120),
+            max_context_tokens: Some(100),
             ..GenerateOptions::default()
         };
         let resolved = resolve_request_kwargs(
@@ -1395,7 +1364,7 @@ mod tests {
             Some(&hooked_options),
         );
         assert_eq!(resolved.kwargs["thinking"], 1);
-        assert_eq!(resolved.kwargs["custom_max"], 1.0);
+        assert_eq!(resolved.kwargs["custom_max"], 1);
         assert_eq!(resolved.reasoning_effort, None);
 
         let off_effort = ThinkingEffort::from("off");

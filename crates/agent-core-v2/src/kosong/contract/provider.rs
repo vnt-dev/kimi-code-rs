@@ -216,9 +216,9 @@ pub struct GenerateOptions {
     pub cache_key: Option<String>,
     pub sampling: Option<SamplingOptions>,
     pub thinking: Option<ThinkingRequestOptions>,
-    pub max_completion_tokens: Option<f64>,
-    pub used_context_tokens: Option<f64>,
-    pub max_context_tokens: Option<f64>,
+    pub max_completion_tokens: Option<u64>,
+    pub used_context_tokens: Option<u64>,
+    pub max_context_tokens: Option<u64>,
     pub on_request_start: Option<VoidCallback>,
     pub on_request_sent: Option<VoidCallback>,
     pub on_stream_end: Option<StreamEndCallback>,
@@ -238,7 +238,7 @@ pub trait ChatProvider: Send + Sync {
     fn name(&self) -> &str;
     fn model_name(&self) -> &str;
     fn thinking_effort(&self) -> Option<&ThinkingEffort>;
-    fn max_completion_tokens(&self) -> Option<f64>;
+    fn max_completion_tokens(&self) -> Option<u64>;
 
     async fn generate(
         &self,
@@ -354,7 +354,7 @@ mod tests {
         let options = GenerateOptions {
             signal: Some(signal.clone()),
             cache_key: Some("session-1".to_owned()),
-            max_completion_tokens: Some(8192.0),
+            max_completion_tokens: Some(8192),
             on_request_start: Some(Arc::new(move || {
                 callback_calls.fetch_add(1, Ordering::SeqCst);
             })),
@@ -422,8 +422,8 @@ mod tests {
             None
         }
 
-        fn max_completion_tokens(&self) -> Option<f64> {
-            Some(4096.0)
+        fn max_completion_tokens(&self) -> Option<u64> {
+            Some(4096)
         }
 
         async fn generate(
@@ -450,7 +450,7 @@ mod tests {
         let provider: &dyn ChatProvider = &TestProvider;
         assert_eq!(provider.name(), "test");
         assert_eq!(provider.model_name(), "test-model");
-        assert_eq!(provider.max_completion_tokens(), Some(4096.0));
+        assert_eq!(provider.max_completion_tokens(), Some(4096));
         assert!(
             provider
                 .upload_video(VideoUploadSource::Location("video.mp4".to_owned()), None)

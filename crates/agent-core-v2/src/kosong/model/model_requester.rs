@@ -87,9 +87,9 @@ pub struct ModelRequestParams {
     pub sampling: Option<SamplingOptions>,
     pub thinking_effort: Option<ThinkingEffort>,
     pub thinking_keep: Option<String>,
-    pub max_completion_tokens: Option<f64>,
-    pub used_context_tokens: Option<f64>,
-    pub max_context_tokens: Option<f64>,
+    pub max_completion_tokens: Option<u64>,
+    pub used_context_tokens: Option<u64>,
+    pub max_context_tokens: Option<u64>,
     pub on_trace_id: Option<TraceIdCallback>,
 }
 
@@ -122,7 +122,7 @@ pub trait ModelRequester: Send + Sync {
 }
 
 // Original: effectiveMaxCompletionTokens().
-pub fn effective_max_completion_tokens(params: Option<&ModelRequestParams>) -> Option<f64> {
+pub fn effective_max_completion_tokens(params: Option<&ModelRequestParams>) -> Option<u64> {
     params.and_then(|params| params.max_completion_tokens)
 }
 
@@ -135,12 +135,12 @@ mod tests {
         assert_eq!(effective_max_completion_tokens(None), None);
         assert_eq!(
             effective_max_completion_tokens(Some(&ModelRequestParams {
-                max_completion_tokens: Some(4096.5),
-                used_context_tokens: Some(1.0),
-                max_context_tokens: Some(2.0),
+                max_completion_tokens: Some(4096),
+                used_context_tokens: Some(1),
+                max_context_tokens: Some(2),
                 ..ModelRequestParams::default()
             })),
-            Some(4096.5)
+            Some(4096)
         );
     }
 

@@ -65,7 +65,7 @@ pub type WithThinkingHook = Arc<
 pub type PreserveThinkingHook =
     Arc<dyn Fn(&JsonObject, &TraitContext) -> Option<bool> + Send + Sync>;
 pub type WithMaxCompletionTokensHook =
-    Arc<dyn Fn(f64, &TraitContext) -> Option<JsonObject> + Send + Sync>;
+    Arc<dyn Fn(u64, &TraitContext) -> Option<JsonObject> + Send + Sync>;
 pub type CacheKeyHook = Arc<dyn Fn(&str, &TraitContext) -> Option<JsonObject> + Send + Sync>;
 pub type ExtractUsageHook =
     Arc<dyn Fn(&JsonObject, &TraitContext) -> UsageExtraction + Send + Sync>;

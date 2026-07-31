@@ -50,7 +50,7 @@ fn options_from_provides(values: Option<&Map<String, Value>>, model: &str) -> An
     options.api_key = string(values, "apiKey");
     options.base_url = string(values, "baseUrl");
     options.stream = values.get("stream").and_then(Value::as_bool);
-    options.default_max_tokens = values.get("defaultMaxTokens").and_then(Value::as_f64);
+    options.default_max_tokens = values.get("defaultMaxTokens").and_then(Value::as_u64);
     options.beta_features = strings(values, "betaFeatures");
     options.default_headers = string_map(values, "defaultHeaders");
     options.metadata = string_map(values, "metadata");
@@ -138,7 +138,7 @@ mod tests {
             api_key: Some("key".to_owned()),
             default_headers: None,
             provider_options: Some(ProtocolProviderOptions {
-                default_max_tokens: Some(8_192.0),
+                default_max_tokens: Some(8_192),
                 adaptive_thinking: Some(true),
                 support_efforts: Some(vec!["low".to_owned(), "max".to_owned()]),
                 beta_api: Some(true),
@@ -153,6 +153,6 @@ mod tests {
         .unwrap();
         assert_eq!(provider.name(), "anthropic");
         assert_eq!(provider.model_name(), "claude-opus-4-6");
-        assert_eq!(provider.max_completion_tokens(), Some(8_192.0));
+        assert_eq!(provider.max_completion_tokens(), Some(8_192));
     }
 }

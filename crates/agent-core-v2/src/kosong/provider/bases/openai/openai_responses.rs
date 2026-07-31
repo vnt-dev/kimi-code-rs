@@ -398,11 +398,11 @@ pub fn build_openai_responses_request(
     if let Some(mut cap) = options.and_then(|options| options.max_completion_tokens) {
         if let Some((used, maximum)) = options.and_then(|options| {
             Some((options.used_context_tokens?, options.max_context_tokens?))
-                .filter(|(_, maximum)| *maximum > 0.0)
+                .filter(|(_, maximum)| *maximum > 0)
         }) {
-            cap = cap.min(maximum - used);
+            cap = cap.min(maximum.saturating_sub(used));
         }
-        kwargs.insert("max_output_tokens".to_owned(), Value::from(cap.max(1.0)));
+        kwargs.insert("max_output_tokens".to_owned(), Value::from(cap.max(1)));
     }
 
     if let Some(reasoning_effort) = kwargs.remove("reasoning_effort") {
@@ -1128,7 +1128,7 @@ pub struct OpenAiResponsesOptions {
     pub model: String,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
-    pub max_output_tokens: Option<f64>,
+    pub max_output_tokens: Option<u64>,
     pub thinking_effort: Option<ThinkingEffort>,
     pub default_headers: Option<IndexMap<String, String>>,
     pub tool_message_conversion: Option<ToolMessageConversion>,
@@ -1257,10 +1257,10 @@ impl ChatProvider for OpenAiResponsesChatProvider {
         self.thinking_effort.as_ref()
     }
 
-    fn max_completion_tokens(&self) -> Option<f64> {
+    fn max_completion_tokens(&self) -> Option<u64> {
         self.generation_kwargs
             .get("max_output_tokens")
-            .and_then(Value::as_f64)
+            .and_then(Value::as_u64)
     }
 
     async fn generate(
@@ -1398,9 +1398,9 @@ mod tests {
                 effort: ThinkingEffort::from("high"),
                 keep: None,
             }),
-            max_completion_tokens: Some(500.0),
-            used_context_tokens: Some(900.0),
-            max_context_tokens: Some(1_000.0),
+            max_completion_tokens: Some(500),
+            used_context_tokens: Some(900),
+            max_context_tokens: Some(1_000),
             response_format: Some(ResponseFormat::JsonObject),
             ..GenerateOptions::default()
         };
@@ -1417,7 +1417,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(request["max_output_tokens"], 100.0);
+        assert_eq!(request["max_output_tokens"], 100);
         assert_eq!(request["reasoning"]["effort"], "high");
         assert_eq!(request["include"][0], "reasoning.encrypted_content");
         assert_eq!(request["text"]["verbosity"], "low");
@@ -1431,12 +1431,12 @@ mod tests {
     fn provider_preserves_constructor_defaults_and_capability_fallback() {
         let mut options = OpenAiResponsesOptions::new("gpt-5");
         options.api_key = Some("key".to_owned());
-        options.max_output_tokens = Some(2048.0);
+        options.max_output_tokens = Some(2048);
         let provider = OpenAiResponsesChatProvider::new(options);
 
         assert_eq!(provider.name(), "openai-responses");
         assert_eq!(provider.model_name(), "gpt-5");
-        assert_eq!(provider.max_completion_tokens(), Some(2048.0));
+        assert_eq!(provider.max_completion_tokens(), Some(2048));
         assert!(provider.stream);
         assert_eq!(provider.base_url, "https://api.openai.com/v1");
         assert!(std::ptr::eq(

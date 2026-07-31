@@ -44,7 +44,7 @@ pub type AnthropicGenerationKwargs = Map<String, Value>;
 pub const INTERLEAVED_THINKING_BETA: &str = "interleaved-thinking-2025-05-14";
 pub const CONTEXT_MANAGEMENT_BETA: &str = "context-management-2025-06-27";
 pub const CLEAR_THINKING_EDIT: &str = "clear_thinking_20251015";
-pub const FALLBACK_MAX_TOKENS: f64 = 128_000.0;
+pub const FALLBACK_MAX_TOKENS: u64 = 128_000;
 
 pub static ANTHROPIC_TOOL_CALL_ID_POLICY: LazyLock<ToolCallIdPolicy> = LazyLock::new(|| {
     ToolCallIdPolicy::new(Arc::new(|id| sanitize_tool_call_id(id, Some(64))), Some(64))
@@ -148,20 +148,20 @@ fn family_name(family: AnthropicModelFamily) -> &'static str {
     }
 }
 
-fn ceiling_for_key(key: &str) -> Option<f64> {
+fn ceiling_for_key(key: &str) -> Option<u64> {
     Some(match key {
         "fable-5" | "mythos-5" | "opus-4-8" | "opus-4-7" | "opus-4-6" | "sonnet-5"
-        | "sonnet-4-6" => 128_000.0,
-        "opus-4-5" | "sonnet-4-5" | "sonnet-4-0" | "sonnet-4" | "haiku-4-5" | "haiku-4" => 64_000.0,
-        "opus-4-1" | "opus-4-0" | "opus-4" => 32_000.0,
-        "opus-3-5" | "sonnet-3-5" | "sonnet-3-7" | "haiku-3-5" => 8_192.0,
-        "opus-3" | "sonnet-3" | "haiku-3" => 4_096.0,
+        | "sonnet-4-6" => 128_000,
+        "opus-4-5" | "sonnet-4-5" | "sonnet-4-0" | "sonnet-4" | "haiku-4-5" | "haiku-4" => 64_000,
+        "opus-4-1" | "opus-4-0" | "opus-4" => 32_000,
+        "opus-3-5" | "sonnet-3-5" | "sonnet-3-7" | "haiku-3-5" => 8_192,
+        "opus-3" | "sonnet-3" | "haiku-3" => 4_096,
         _ => return None,
     })
 }
 
 // Original: anthropic.ts, lookupClaudeCeiling()
-pub fn lookup_claude_ceiling(version: AnthropicModelVersion) -> Option<f64> {
+pub fn lookup_claude_ceiling(version: AnthropicModelVersion) -> Option<u64> {
     let family = family_name(version.family);
     if let Some(minor) = version.minor {
         for candidate in (0..=minor).rev() {
@@ -176,14 +176,13 @@ pub fn lookup_claude_ceiling(version: AnthropicModelVersion) -> Option<f64> {
 }
 
 // Original: anthropic.ts, resolveDefaultMaxTokens()
-pub fn resolve_default_max_tokens(model: &str, override_tokens: Option<f64>) -> f64 {
+pub fn resolve_default_max_tokens(model: &str, override_tokens: Option<u64>) -> u64 {
     let ceiling = parse_anthropic_model_version(model, true).and_then(lookup_claude_ceiling);
     let Some(ceiling) = ceiling else {
         return override_tokens.unwrap_or(FALLBACK_MAX_TOKENS);
     };
     match override_tokens {
         None => ceiling,
-        Some(value) if value.is_nan() => value,
         Some(value) => value.min(ceiling),
     }
 }
@@ -644,22 +643,6 @@ pub struct AnthropicPreparedRequest {
     pub use_beta_api: bool,
 }
 
-fn javascript_min(left: f64, right: f64) -> f64 {
-    if left.is_nan() || right.is_nan() {
-        f64::NAN
-    } else {
-        left.min(right)
-    }
-}
-
-fn javascript_max(left: f64, right: f64) -> f64 {
-    if left.is_nan() || right.is_nan() {
-        f64::NAN
-    } else {
-        left.max(right)
-    }
-}
-
 fn extend_hook_patch(target: &mut Map<String, Value>, patch: Map<String, Value>) {
     // A trait's JavaScript `undefined` is represented as JSON null inside the
     // Rust-only hook boundary. Keep it in kwargs so it shadows a seeded value;
@@ -762,17 +745,17 @@ pub fn build_anthropic_request(
     if let Some(mut cap) = options.and_then(|options| options.max_completion_tokens) {
         if let Some((used, max)) =
             options.and_then(|options| options.used_context_tokens.zip(options.max_context_tokens))
-            && max > 0.0
+            && max > 0
         {
-            cap = javascript_min(cap, max - used);
+            cap = cap.min(max.saturating_sub(used));
         }
-        cap = javascript_max(1.0, cap);
+        cap = cap.max(1);
         let requested_cap = resolve_default_max_tokens(model, Some(cap));
-        let existing_cap = kwargs.get("max_tokens").and_then(Value::as_f64);
+        let existing_cap = kwargs.get("max_tokens").and_then(Value::as_u64);
         let max_tokens = if existing_cap.is_none() || explicit_max_tokens {
             existing_cap.unwrap_or(requested_cap)
         } else {
-            javascript_min(existing_cap.unwrap_or(requested_cap), requested_cap)
+            existing_cap.unwrap_or(requested_cap).min(requested_cap)
         };
         kwargs.insert("max_tokens".to_owned(), Value::from(max_tokens));
     }
@@ -1144,7 +1127,7 @@ pub struct AnthropicOptions {
     pub stream: Option<bool>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
-    pub default_max_tokens: Option<f64>,
+    pub default_max_tokens: Option<u64>,
     pub beta_features: Option<Vec<String>>,
     pub default_headers: Option<IndexMap<String, String>>,
     pub metadata: Option<IndexMap<String, String>>,
@@ -1301,10 +1284,10 @@ impl ChatProvider for AnthropicChatProvider {
         self.thinking_effort.as_ref()
     }
 
-    fn max_completion_tokens(&self) -> Option<f64> {
+    fn max_completion_tokens(&self) -> Option<u64> {
         self.generation_kwargs
             .get("max_tokens")
-            .and_then(Value::as_f64)
+            .and_then(Value::as_u64)
     }
 
     async fn generate(
@@ -1419,17 +1402,16 @@ mod tests {
 
         assert_eq!(
             resolve_default_max_tokens("claude-opus-4-8", None),
-            128_000.0
+            128_000
         );
         assert_eq!(
-            resolve_default_max_tokens("claude-opus-4-9", Some(200_000.0)),
-            128_000.0
+            resolve_default_max_tokens("claude-opus-4-9", Some(200_000)),
+            128_000
         );
         assert_eq!(
-            resolve_default_max_tokens("vendor-model", Some(12_345.0)),
-            12_345.0
+            resolve_default_max_tokens("vendor-model", Some(12_345)),
+            12_345
         );
-        assert!(resolve_default_max_tokens("claude-opus-4-8", Some(f64::NAN)).is_nan());
     }
 
     #[test]
@@ -1574,9 +1556,9 @@ mod tests {
                 effort: ThinkingEffort::from("max"),
                 keep: Some("recent".to_owned()),
             }),
-            max_completion_tokens: Some(10_000.0),
-            used_context_tokens: Some(95.0),
-            max_context_tokens: Some(100.0),
+            max_completion_tokens: Some(10_000),
+            used_context_tokens: Some(95),
+            max_context_tokens: Some(100),
             ..GenerateOptions::default()
         };
         let request = build_anthropic_request(
@@ -1597,7 +1579,7 @@ mod tests {
         .unwrap();
         assert!(request.use_beta_api);
         assert!(request.extra_headers.is_empty());
-        assert_eq!(request.params["max_tokens"], 5.0);
+        assert_eq!(request.params["max_tokens"], 5);
         assert_eq!(request.params["metadata"]["user_id"], "session-1");
         assert_eq!(request.params["messages"].as_array().unwrap().len(), 1);
         assert_eq!(
@@ -1668,10 +1650,10 @@ mod tests {
     async fn provider_requires_explicit_anthropic_auth_without_shell_fallback() {
         let mut options = AnthropicOptions::new("claude-sonnet-4-6");
         options.api_key = Some(String::new());
-        options.default_max_tokens = Some(4_096.0);
+        options.default_max_tokens = Some(4_096);
         let provider = AnthropicChatProvider::new(options);
         assert_eq!(provider.name(), "anthropic");
-        assert_eq!(provider.max_completion_tokens(), Some(4_096.0));
+        assert_eq!(provider.max_completion_tokens(), Some(4_096));
         let error = match provider.generate("", &[], &[], None).await {
             Ok(_) => panic!("missing auth must fail"),
             Err(error) => error,

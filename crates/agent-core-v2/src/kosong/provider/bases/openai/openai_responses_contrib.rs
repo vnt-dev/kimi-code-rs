@@ -20,8 +20,8 @@ fn string(values: &Map<String, Value>, key: &str) -> Option<String> {
     values.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
-fn number(values: &Map<String, Value>, key: &str) -> Option<f64> {
-    values.get(key).and_then(Value::as_f64)
+fn number(values: &Map<String, Value>, key: &str) -> Option<u64> {
+    values.get(key).and_then(Value::as_u64)
 }
 
 fn headers(values: &Map<String, Value>, key: &str) -> Option<IndexMap<String, String>> {
@@ -138,7 +138,7 @@ mod tests {
             api_key: Some("config-key".to_owned()),
             default_headers: None,
             provider_options: Some(ProtocolProviderOptions {
-                default_max_tokens: Some(4096.0),
+                default_max_tokens: Some(4096),
                 ..ProtocolProviderOptions::default()
             }),
         };
@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(definition.id, Protocol::OpenAiResponses);
         assert_eq!(provider.name(), "openai-responses");
         assert_eq!(provider.model_name(), "o3");
-        assert_eq!(provider.max_completion_tokens(), Some(4096.0));
+        assert_eq!(provider.max_completion_tokens(), Some(4096));
         assert_eq!(provider.thinking_effort().unwrap().as_str(), "high");
     }
 }

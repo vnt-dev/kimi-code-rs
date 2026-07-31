@@ -143,7 +143,7 @@ mod tests {
             None
         }
 
-        fn max_completion_tokens(&self) -> Option<f64> {
+        fn max_completion_tokens(&self) -> Option<u64> {
             None
         }
 

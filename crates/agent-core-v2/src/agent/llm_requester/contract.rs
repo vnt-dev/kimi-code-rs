@@ -43,7 +43,7 @@ pub struct AgentLlmRequestOverrides {
     pub tools: Option<Vec<Tool>>,
     pub system_prompt: Option<String>,
     pub source: Option<AgentLlmRequestSource>,
-    pub max_output_size: Option<f64>,
+    pub max_output_size: Option<u64>,
 }
 pub struct AgentLlmRequestTask {
     pub trace: LlmRequestTrace,

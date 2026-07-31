@@ -372,16 +372,16 @@ impl AgentLlmRequesterService {
         };
         let model_overrides = self.model_overrides();
         let budget = resolve_completion_budget(ResolveCompletionBudgetArgs {
-            max_output_size: overrides
-                .max_output_size
-                .or_else(|| resolved.max_output_size.map(|value| value as f64)),
-            reserved_context_size: resolved.reserved_context_size.map(|value| value as f64),
+            max_output_size: overrides.max_output_size.or(resolved.max_output_size),
+            reserved_context_size: resolved.reserved_context_size,
             max_completion_tokens_cap: model_overrides.max_completion_tokens,
         });
+        // The context-size service tracks token counts as f64 estimates;
+        // convert at this boundary, clamping negative estimates to zero.
         let used_context_tokens = overrides
             .messages
             .is_none()
-            .then(|| self.context_size.get(None, None).measured);
+            .then(|| self.context_size.get(None, None).measured.max(0.0) as u64);
         if let Some(budget_params) = completion_budget_params(
             budget,
             Some(&resolved.model_capabilities),
@@ -389,7 +389,7 @@ impl AgentLlmRequesterService {
         ) {
             params.max_completion_tokens = Some(budget_params.max_completion_tokens);
             params.used_context_tokens = budget_params.used_context_tokens;
-            params.max_context_tokens = budget_params.max_context_tokens.map(|value| value as f64);
+            params.max_context_tokens = budget_params.max_context_tokens;
         }
         let requester = self
             .catalog
@@ -985,7 +985,7 @@ mod tests {
             thinking_keep: Some("all".into()),
             temperature: Some(0.6),
             top_p: Some(0.9),
-            max_tokens: Some(4096.0),
+            max_tokens: Some(4096),
             beta_api: None,
             tool_select: true,
             system_prompt_hash: fingerprint("system"),

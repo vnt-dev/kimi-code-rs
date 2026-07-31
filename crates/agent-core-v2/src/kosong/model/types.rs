@@ -15,7 +15,7 @@ pub struct ModelOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_keep: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_completion_tokens: Option<f64>,
+    pub max_completion_tokens: Option<u64>,
 }
 
 // Original:
@@ -25,9 +25,9 @@ pub struct ModelOverrides {
 #[serde(rename_all = "camelCase")]
 pub struct CompletionBudgetConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hard_cap: Option<f64>,
+    pub hard_cap: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fallback: Option<f64>,
+    pub fallback: Option<u64>,
 }
 
 // Original:
@@ -36,9 +36,9 @@ pub struct CompletionBudgetConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletionBudgetParams {
-    pub max_completion_tokens: f64,
+    pub max_completion_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub used_context_tokens: Option<f64>,
+    pub used_context_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_context_tokens: Option<u64>,
 }
@@ -125,13 +125,13 @@ mod tests {
             "temperature": 0.25,
             "topP": 0.9,
             "thinkingKeep": "all",
-            "maxCompletionTokens": 4096.5,
+            "maxCompletionTokens": 4096,
         });
         let overrides: ModelOverrides = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(overrides.temperature, Some(0.25));
         assert_eq!(overrides.top_p, Some(0.9));
         assert_eq!(overrides.thinking_keep.as_deref(), Some("all"));
-        assert_eq!(overrides.max_completion_tokens, Some(4096.5));
+        assert_eq!(overrides.max_completion_tokens, Some(4096));
         assert_eq!(serde_json::to_value(overrides).unwrap(), value);
         assert_eq!(
             serde_json::to_value(ModelOverrides::default()).unwrap(),

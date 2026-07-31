@@ -484,22 +484,6 @@ pub fn encode_thinking(model: &str, effort: &ThinkingEffort) -> Map<String, Valu
     config
 }
 
-fn javascript_min(left: f64, right: f64) -> f64 {
-    if left.is_nan() || right.is_nan() {
-        f64::NAN
-    } else {
-        left.min(right)
-    }
-}
-
-fn javascript_max(left: f64, right: f64) -> f64 {
-    if left.is_nan() || right.is_nan() {
-        f64::NAN
-    } else {
-        left.max(right)
-    }
-}
-
 // Original: google-genai.ts, GoogleGenAIChatProvider.generate() pre-I/O path.
 #[allow(clippy::too_many_arguments)]
 pub fn build_google_gen_ai_request(
@@ -544,14 +528,11 @@ pub fn build_google_gen_ai_request(
     if let Some(mut cap) = options.and_then(|options| options.max_completion_tokens) {
         if let Some((used, max)) =
             options.and_then(|options| options.used_context_tokens.zip(options.max_context_tokens))
-            && max > 0.0
+            && max > 0
         {
-            cap = javascript_min(cap, max - used);
+            cap = cap.min(max.saturating_sub(used));
         }
-        kwargs.insert(
-            "maxOutputTokens".to_owned(),
-            Value::from(javascript_max(1.0, cap)),
-        );
+        kwargs.insert("maxOutputTokens".to_owned(), Value::from(cap.max(1)));
     }
     let mut config = kwargs;
     config.insert(
@@ -1125,10 +1106,10 @@ impl ChatProvider for GoogleGenAiChatProvider {
         self.thinking_effort.as_ref()
     }
 
-    fn max_completion_tokens(&self) -> Option<f64> {
+    fn max_completion_tokens(&self) -> Option<u64> {
         self.generation_kwargs
             .get("maxOutputTokens")
-            .and_then(Value::as_f64)
+            .and_then(Value::as_u64)
     }
 
     async fn generate(
@@ -1262,9 +1243,9 @@ mod tests {
                 effort: ThinkingEffort::from("high"),
                 keep: Some("ignored-on-this-wire".to_owned()),
             }),
-            max_completion_tokens: Some(9_000.0),
-            used_context_tokens: Some(98.0),
-            max_context_tokens: Some(100.0),
+            max_completion_tokens: Some(9_000),
+            used_context_tokens: Some(98),
+            max_context_tokens: Some(100),
             response_format: Some(ResponseFormat::JsonObject),
             ..GenerateOptions::default()
         };
@@ -1279,7 +1260,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(request["config"]["thinkingConfig"]["thinkingLevel"], "HIGH");
-        assert_eq!(request["config"]["maxOutputTokens"], 2.0);
+        assert_eq!(request["config"]["maxOutputTokens"], 2);
         assert_eq!(request["config"]["responseMimeType"], "application/json");
         assert!(request["config"].get("responseJsonSchema").is_none());
         assert!(

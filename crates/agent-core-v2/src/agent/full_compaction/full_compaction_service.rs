@@ -878,10 +878,7 @@ impl AgentFullCompactionService {
                     .max_context_tokens
                     .min(DEFAULT_COMPACTION_MAX_COMPLETION_TOKENS),
             );
-            let max_output_size = resolved
-                .max_output_size
-                .or(default_cap)
-                .map(|value| value as f64);
+            let max_output_size = resolved.max_output_size.or(default_cap);
             let custom_instruction = data
                 .instruction
                 .as_deref()
