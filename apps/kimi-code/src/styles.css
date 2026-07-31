@@ -2954,7 +2954,7 @@ button.message-skill-chip:hover {
   color: #85838d;
   background: rgba(30, 31, 34, 0.72);
   font-family: inherit;
-  font-size: 9px;
+  font-size: 10.5px;
   line-height: 1.55;
   white-space: pre-wrap;
 }
@@ -3000,7 +3000,7 @@ button.message-skill-chip:hover {
 
 .live-tool-detail p {
   color: #777782;
-  font-size: 9.5px;
+  font-size: 11px;
   line-height: 1.6;
 }
 
@@ -3012,7 +3012,7 @@ button.message-skill-chip:hover {
   color: #a9a9b1;
   background: #1e1f22;
   font-family: "DM Mono", monospace;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.6;
   white-space: pre-wrap;
 }
@@ -3030,13 +3030,91 @@ button.message-skill-chip:hover {
 
 .tool-detail-section > span {
   color: #62626d;
-  font-size: 8.5px;
+  font-size: 10px;
   font-weight: 550;
 }
 
 .tool-detail-section + .tool-detail-section {
   padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.edit-diff {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-deep);
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.edit-diff-header {
+  display: flex;
+  padding: 6px 10px;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+  word-break: break-all;
+}
+
+.edit-diff-body {
+  max-height: 280px;
+  padding: 4px 0;
+  overflow: auto;
+}
+
+.edit-diff-line {
+  display: flex;
+  padding-right: 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.edit-diff-line .edit-diff-lineno {
+  flex: none;
+  width: 40px;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--subtle);
+  user-select: none;
+}
+
+.edit-diff-line .edit-diff-sign {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  user-select: none;
+}
+
+.edit-diff-line .edit-diff-code {
+  flex: 1;
+  min-width: 0;
+}
+
+.edit-diff-line.removed {
+  background: color-mix(in srgb, var(--danger, #e0807a) 9%, transparent);
+}
+
+.edit-diff-line.removed .edit-diff-sign,
+.edit-diff-line.removed .edit-diff-code {
+  color: var(--danger, #e0807a);
+}
+
+.edit-diff-line.added {
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+}
+
+.edit-diff-line.added .edit-diff-sign,
+.edit-diff-line.added .edit-diff-code {
+  color: var(--green);
+}
+
+.edit-diff-line.added .edit-diff-lineno,
+.edit-diff-line.removed .edit-diff-lineno {
+  opacity: 0.65;
 }
 
 .live-tool-progress {
@@ -3048,14 +3126,14 @@ button.message-skill-chip:hover {
   border-radius: 6px;
   color: #85818e;
   background: rgba(139, 124, 246, 0.055);
-  font-size: 9px;
+  font-size: 10.5px;
 }
 
 .live-tool-progress strong {
   margin-left: auto;
   color: #9e92e9;
   font-family: "DM Mono", monospace;
-  font-size: 8.5px;
+  font-size: 10px;
 }
 
 .history-summary-divider {
@@ -3137,7 +3215,7 @@ button.message-skill-chip:hover {
   color: #a9a9b1;
   background: #26282e;
   font-family: "DM Mono", monospace;
-  font-size: 9.5px;
+  font-size: 11px;
   line-height: 1.6;
   white-space: pre-wrap;
 }

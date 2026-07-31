@@ -6793,7 +6793,11 @@ function LiveToolBlock({
           {input !== undefined && (
             <section className="tool-detail-section">
               <span>参数</span>
-              <pre>{structuredValue(input)}</pre>
+              {tool.name === "Edit" && editToolInput(input) ? (
+                <EditToolDiff input={input} />
+              ) : (
+                <pre>{structuredValue(input)}</pre>
+              )}
             </section>
           )}
           {updateLog && <pre className="live-tool-update-log">{updateLog}</pre>}
@@ -7619,6 +7623,77 @@ function PromptAttachmentContent({
   );
 }
 
+function editToolInput(
+  input: unknown,
+): { path?: string; oldString: string; newString: string } | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const record = input as Record<string, unknown>;
+  if (
+    typeof record.old_string !== "string" ||
+    typeof record.new_string !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    path: typeof record.path === "string" ? record.path : undefined,
+    oldString: record.old_string,
+    newString: record.new_string,
+  };
+}
+
+function EditDiffLine({
+  kind,
+  lineno,
+  text,
+}: {
+  kind: "removed" | "added";
+  lineno: number;
+  text: string;
+}) {
+  return (
+    <div className={`edit-diff-line ${kind}`}>
+      <span className="edit-diff-lineno">{lineno}</span>
+      <span className="edit-diff-sign">{kind === "removed" ? "-" : "+"}</span>
+      <span className="edit-diff-code">{text}</span>
+    </div>
+  );
+}
+
+function EditToolDiff({ input }: { input: unknown }) {
+  const edit = editToolInput(input);
+  if (!edit) return null;
+  const removed = edit.oldString.replace(/\r?\n$/, "").split(/\r?\n/);
+  const added = edit.newString.replace(/\r?\n$/, "").split(/\r?\n/);
+  return (
+    <div className="edit-diff">
+      {edit.path && (
+        <div className="edit-diff-header">
+          <FileCode2 size={12} />
+          <span>{edit.path}</span>
+        </div>
+      )}
+      <div className="edit-diff-body">
+        {removed.map((line, index) => (
+          <EditDiffLine
+            kind="removed"
+            lineno={index + 1}
+            text={line}
+            key={`removed-${index}`}
+          />
+        ))}
+        {added.map((line, index) => (
+          <EditDiffLine
+            kind="added"
+            lineno={index + 1}
+            text={line}
+            key={`added-${index}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function HistoryToolCard({
   tool,
   result,
@@ -7670,7 +7745,11 @@ function HistoryToolCard({
         <div className="history-tool-detail">
           <section className="tool-detail-section">
             <span>参数</span>
-            <pre>{structuredValue(tool.input)}</pre>
+            {tool.tool_name === "Edit" && editToolInput(tool.input) ? (
+              <EditToolDiff input={tool.input} />
+            ) : (
+              <pre>{structuredValue(tool.input)}</pre>
+            )}
           </section>
           {result && (
             <section className="tool-detail-section">
