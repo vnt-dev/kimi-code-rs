@@ -1961,16 +1961,12 @@ export default function App() {
   };
 
   const refreshModels = async (): Promise<void> => {
-    setModelsBusy(true);
     try {
       const nextModels = await invoke<Model[]>("refresh_models");
       setModels(nextModels);
       if (nextModels.length === 0) showNotice("当前账号没有可用模型");
     } catch {
-      // 刷新失败时回退到配置中已缓存的模型列表。
-      await loadModels();
-    } finally {
-      setModelsBusy(false);
+      // Keep using the configured model list when the background refresh fails.
     }
   };
 
@@ -2024,15 +2020,18 @@ export default function App() {
       .catch(() => {
         // Vite's browser preview has no Tauri bridge.
       });
-    invoke<AuthStatus>("auth_status")
-      .then((status) => {
-        if (!active) return;
-        setAuth(status);
-        if (status.loggedIn) void refreshModels();
-      })
-      .catch(() => {
-        // Vite's browser preview has no Tauri bridge; the actual desktop app does.
-      });
+    void loadModels().then(() => {
+      if (!active) return;
+      void invoke<AuthStatus>("auth_status")
+        .then((status) => {
+          if (!active) return;
+          setAuth(status);
+          if (status.loggedIn) void refreshModels();
+        })
+        .catch(() => {
+          // Vite's browser preview has no Tauri bridge; the actual desktop app does.
+        });
+    });
     return () => {
       active = false;
     };

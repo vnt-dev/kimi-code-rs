@@ -428,6 +428,12 @@ impl KimiCodeDesktopClient {
     }
 
     pub async fn list_models(&self) -> Result<Vec<DesktopModel>, String> {
+        self.app
+            .get(CONFIG_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .ready()
+            .await
+            .map_err(|error| error.to_string())?;
         self.configured_desktop_models().await
     }
 
