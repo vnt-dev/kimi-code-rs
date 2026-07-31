@@ -427,14 +427,13 @@ impl KimiCodeDesktopClient {
         self.auth_status().await
     }
 
-    pub async fn list_models(&self, refresh: bool) -> Result<Vec<DesktopModel>, String> {
-        if refresh {
-            let models = self.fetch_models().await?;
-            self.configure_models(&models).await?;
-        } else {
-            self.ensure_models_configured().await?;
-        }
+    pub async fn list_models(&self) -> Result<Vec<DesktopModel>, String> {
+        self.configured_desktop_models().await
+    }
 
+    pub async fn refresh_models(&self) -> Result<Vec<DesktopModel>, String> {
+        let models = self.fetch_models().await?;
+        self.configure_models(&models).await?;
         self.configured_desktop_models().await
     }
 

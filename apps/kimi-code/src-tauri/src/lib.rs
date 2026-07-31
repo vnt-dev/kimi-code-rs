@@ -106,11 +106,13 @@ async fn logout(state: State<'_, AppState>) -> Result<DesktopAuthStatus, String>
 }
 
 #[tauri::command]
-async fn list_models(
-    state: State<'_, AppState>,
-    refresh: Option<bool>,
-) -> Result<Vec<DesktopModel>, String> {
-    state.client.list_models(refresh.unwrap_or(false)).await
+async fn list_models(state: State<'_, AppState>) -> Result<Vec<DesktopModel>, String> {
+    state.client.list_models().await
+}
+
+#[tauri::command]
+async fn refresh_models(state: State<'_, AppState>) -> Result<Vec<DesktopModel>, String> {
+    state.client.refresh_models().await
 }
 
 #[tauri::command]
@@ -324,6 +326,7 @@ pub fn run() {
             login,
             logout,
             list_models,
+            refresh_models,
             list_skills,
             get_skill_content,
             upload_file,

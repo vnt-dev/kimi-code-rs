@@ -1947,14 +1947,28 @@ export default function App() {
     });
   };
 
-  const loadModels = async (refresh = false): Promise<void> => {
+  const loadModels = async (): Promise<void> => {
     setModelsBusy(true);
     try {
-      const nextModels = await invoke<Model[]>("list_models", { refresh });
+      const nextModels = await invoke<Model[]>("list_models");
       setModels(nextModels);
       if (nextModels.length === 0) showNotice("当前账号没有可用模型");
     } catch (error) {
       showNotice(conciseError(error));
+    } finally {
+      setModelsBusy(false);
+    }
+  };
+
+  const refreshModels = async (): Promise<void> => {
+    setModelsBusy(true);
+    try {
+      const nextModels = await invoke<Model[]>("refresh_models");
+      setModels(nextModels);
+      if (nextModels.length === 0) showNotice("当前账号没有可用模型");
+    } catch {
+      // 刷新失败时回退到配置中已缓存的模型列表。
+      await loadModels();
     } finally {
       setModelsBusy(false);
     }
@@ -2014,7 +2028,7 @@ export default function App() {
       .then((status) => {
         if (!active) return;
         setAuth(status);
-        if (status.loggedIn) void loadModels();
+        if (status.loggedIn) void refreshModels();
       })
       .catch(() => {
         // Vite's browser preview has no Tauri bridge; the actual desktop app does.
@@ -3085,7 +3099,7 @@ export default function App() {
       if (status.loggedIn) {
         setLoginOpen(false);
         showNotice("已登录 Kimi Code");
-        await loadModels(true);
+        void refreshModels();
       }
     } catch (error) {
       showNotice(conciseError(error));
@@ -4910,17 +4924,6 @@ export default function App() {
                       }))}
                       onChange={chooseModel}
                     />
-                    {auth.loggedIn && (
-                      <button
-                        className="toolbar-icon"
-                        type="button"
-                        title="刷新模型列表"
-                        onClick={() => void loadModels(true)}
-                        disabled={modelsBusy}
-                      >
-                        <RefreshCw size={14} />
-                      </button>
-                    )}
                     {selectedModel?.supportsReasoning &&
                       supportedThinkingLevels.length > 0 && (
                         <ToolbarSelect
