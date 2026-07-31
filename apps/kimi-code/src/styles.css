@@ -1881,85 +1881,38 @@ select:focus-visible {
   }
 }
 
-.compaction-notice {
-  display: grid;
-  width: min(560px, calc(100% - 56px));
-  min-height: 50px;
-  margin: 2px auto 32px;
-  padding: 9px 12px;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid rgba(139, 124, 246, 0.15);
-  border-radius: 11px;
-  color: #8c849e;
-  background:
-    linear-gradient(135deg, rgba(139, 124, 246, 0.045), transparent 55%),
-    rgba(49, 51, 56, 0.9);
-}
-
-.compaction-glyph {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 1px solid rgba(139, 124, 246, 0.18);
-  border-radius: 8px;
-  color: #a99df3;
-  background: rgba(139, 124, 246, 0.075);
-}
-
-.compaction-notice > span:nth-child(2) {
+.compaction-live-divider {
   display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
+  width: 100%;
+  min-height: 28px;
+  margin: 2px 0 34px;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
 }
 
-.compaction-notice strong {
-  color: #c3bfcc;
-  font-size: 9.5px;
-  font-weight: 570;
+.compaction-live-divider > span:first-child,
+.compaction-live-divider > span:last-child {
+  height: 1px;
+  flex: 1;
+  background: var(--line);
 }
 
-.compaction-notice small {
-  overflow: hidden;
-  color: #67636f;
-  font-size: 8.5px;
-  text-overflow: ellipsis;
+.compaction-live-divider strong {
+  font-size: 11px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
-.compaction-notice > i {
+.compaction-live-divider .spinner {
   width: 13px;
   height: 13px;
-  border: 1.5px solid rgba(139, 124, 246, 0.22);
-  border-top-color: #9c8ff0;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  flex: 0 0 auto;
+  border-width: 1.5px;
 }
 
-.compaction-notice.completed {
-  border-color: rgba(74, 194, 143, 0.16);
-  background:
-    linear-gradient(135deg, rgba(74, 194, 143, 0.04), transparent 55%),
-    rgba(49, 51, 56, 0.9);
-}
-
-.compaction-notice.completed .compaction-glyph {
-  border-color: rgba(74, 194, 143, 0.2);
-  color: #6fcba5;
-  background: rgba(74, 194, 143, 0.07);
-}
-
-.compaction-notice.cancelled {
-  border-color: rgba(212, 120, 120, 0.15);
-}
-
-.compaction-notice.cancelled .compaction-glyph {
-  border-color: rgba(212, 120, 120, 0.18);
-  color: #c78383;
-  background: rgba(212, 120, 120, 0.065);
+.compaction-live-divider.cancelled strong {
+  color: var(--danger);
 }
 
 .message-meta {
@@ -2932,40 +2885,41 @@ button.message-skill-chip:hover {
   font-size: 8.5px;
 }
 
-.history-summary {
-  width: min(620px, calc(100% - 56px));
-  margin: 0 auto 34px;
-  padding: 10px 12px;
-  border: 1px solid rgba(139, 124, 246, 0.14);
-  border-radius: 10px;
-  color: #817b91;
-  background: rgba(139, 124, 246, 0.035);
-}
-
-.history-summary-trigger {
-  display: flex;
+.history-summary-divider {
+  display: grid;
   width: 100%;
-  padding: 0;
+  min-height: 28px;
+  margin: 2px 0;
   align-items: center;
-  gap: 7px;
+  grid-template-columns: minmax(24px, 1fr) auto auto minmax(24px, 1fr);
+  gap: 8px;
+  color: var(--muted);
+}
+
+.history-summary-divider > span {
+  height: 1px;
+  background: var(--line);
+}
+
+.history-summary-divider strong {
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.history-summary-divider button {
+  padding: 2px 0;
   border: 0;
-  color: inherit;
+  color: var(--accent);
   background: transparent;
+  font-size: 11px;
   cursor: pointer;
-  font-size: 10px;
-  text-align: left;
+  white-space: nowrap;
 }
 
-.history-summary-trigger svg:last-child {
-  margin-left: auto;
-}
-
-.history-summary .markdown-body {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-  color: #85818d;
-  font-size: 10.5px;
+.history-summary-divider button:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .structured-content {
@@ -6835,8 +6789,6 @@ input:focus-visible {
 }
 
 .suggestion-grid button,
-.compaction-notice,
-.history-summary,
 .live-tool-card,
 .history-tool-card,
 .subagent-panel,
@@ -6869,7 +6821,6 @@ input:focus-visible {
 }
 
 .suggestion-grid button > span,
-.compaction-glyph,
 .tool-status-icon,
 .interaction-card-icon,
 .approval-icon {
@@ -6879,7 +6830,6 @@ input:focus-visible {
 }
 
 .suggestion-grid strong,
-.compaction-notice strong,
 .message-meta,
 .subagent-panel-summary strong,
 .subagent-row-copy strong,
@@ -6892,7 +6842,6 @@ input:focus-visible {
 }
 
 .suggestion-grid small,
-.compaction-notice small,
 .message-meta time,
 .subagent-panel-summary small,
 .subagent-row-copy small,
@@ -6905,7 +6854,6 @@ input:focus-visible {
 }
 
 .history-loading,
-.history-summary-trigger,
 .turn-process-toggle,
 .live-turn-status,
 .live-text,

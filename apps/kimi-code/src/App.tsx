@@ -463,6 +463,12 @@ interface SkillDetailTarget {
   source?: SkillDescriptor["source"];
 }
 
+interface CompactionSummaryDetail {
+  id: string;
+  content: string;
+  createdAt: string;
+}
+
 function decodeSkillAttribute(value: string): string {
   return value
     .replaceAll("&quot;", '"')
@@ -1320,6 +1326,13 @@ function groupHistoryMessages(
   const turns: HistoryConversationTurn[] = [];
 
   for (const message of messages) {
+    if (messageOriginKind(message) === "compaction_summary") {
+      turns.push({
+        id: message.id,
+        responses: [message],
+      });
+      continue;
+    }
     if (message.role === "user") {
       turns.push({
         id: message.prompt_id ?? message.id,
@@ -1330,7 +1343,13 @@ function groupHistoryMessages(
     }
 
     let turn = turns.at(-1);
-    if (!turn) {
+    if (
+      !turn ||
+      turn.responses.some(
+        (response) =>
+          messageOriginKind(response) === "compaction_summary",
+      )
+    ) {
       turn = {
         id: message.prompt_id ?? message.id,
         responses: [],
@@ -1428,6 +1447,8 @@ export default function App() {
   const [skillDetail, setSkillDetail] = useState<SkillContent>();
   const [skillDetailBusy, setSkillDetailBusy] = useState(false);
   const [skillDetailError, setSkillDetailError] = useState<string>();
+  const [compactionSummaryDetail, setCompactionSummaryDetail] =
+    useState<CompactionSummaryDetail>();
   const [composerAddOpen, setComposerAddOpen] = useState(false);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashMenuActiveIndex, setSlashMenuActiveIndex] = useState(0);
@@ -1457,6 +1478,9 @@ export default function App() {
   const [resolvingInteraction, setResolvingInteraction] = useState<string>();
   const [compactions, setCompactions] = useState<
     Record<string, CompactionEvent>
+  >({});
+  const [compactionHistoryReady, setCompactionHistoryReady] = useState<
+    Record<string, boolean>
   >({});
   const [contextUsages, setContextUsages] = useState<
     Record<string, ContextUsage>
@@ -1569,6 +1593,11 @@ export default function App() {
     () => mergeHistoryToolResults(visibleHistoryMessages),
     [visibleHistoryMessages],
   );
+  const latestHistoryCompactionSummaryId = [...visibleHistoryMessages]
+    .reverse()
+    .find(
+      (message) => messageOriginKind(message) === "compaction_summary",
+    )?.id;
   const historyConversationTurns = useMemo(
     () => groupHistoryMessages(historyToolPresentation.messages),
     [historyToolPresentation.messages],
@@ -2029,6 +2058,7 @@ export default function App() {
     setSkillsError(undefined);
     setPromptSkills([]);
     setSlashMenuOpen(false);
+    setCompactionSummaryDetail(undefined);
     setSkillDetailTarget(undefined);
     setSkillDetail(undefined);
     setSkillDetailBusy(false);
@@ -2245,6 +2275,12 @@ export default function App() {
             phase === "completed" ||
             phase === "cancelled"
           ) {
+            if (phase === "started") {
+              setCompactionHistoryReady((current) => ({
+                ...current,
+                [payload.sessionId]: false,
+              }));
+            }
             const result =
               payload.event.result &&
               typeof payload.event.result === "object"
@@ -2634,6 +2670,7 @@ export default function App() {
     }
     setInteractions((current) => omitSessionKeys(current, ids));
     setCompactions((current) => omitSessionKeys(current, ids));
+    setCompactionHistoryReady((current) => omitSessionKeys(current, ids));
     setContextUsages((current) => omitSessionKeys(current, ids));
     setAgentUsages((current) => omitSessionKeys(current, ids));
     setMessageDurations((current) => omitSessionKeys(current, ids));
@@ -3007,6 +3044,7 @@ export default function App() {
       setAccountUsageBusy(false);
       setAccountUsageError(undefined);
       setContextUsages({});
+      setCompactionHistoryReady({});
       setAgentUsages({});
       setSessionTodos({});
       setSubagentRuns({});
@@ -3069,6 +3107,18 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    const conversationId = activeConversation?.id;
+    if (!conversationId || activeCompaction?.phase !== "completed") return;
+    void refreshHistory(conversationId).then((refreshed) => {
+      if (!refreshed) return;
+      setCompactionHistoryReady((current) => ({
+        ...current,
+        [conversationId]: true,
+      }));
+    });
+  }, [activeConversation?.id, activeCompaction?.phase]);
+
   const loadAvailableSkills = async (): Promise<void> => {
     const request = skillsRequest.current + 1;
     skillsRequest.current = request;
@@ -3128,6 +3178,7 @@ export default function App() {
     const scope = activeAgentScope;
 
     setComposerAddOpen(false);
+    setCompactionSummaryDetail(undefined);
     setSkillDetailTarget(skill);
     setSkillDetail(undefined);
     setSkillDetailError(undefined);
@@ -3156,6 +3207,19 @@ export default function App() {
     setSkillDetail(undefined);
     setSkillDetailBusy(false);
     setSkillDetailError(undefined);
+  };
+
+  const openCompactionSummary = (message: RenderMessage): void => {
+    skillDetailRequest.current += 1;
+    setSkillDetailTarget(undefined);
+    setSkillDetail(undefined);
+    setSkillDetailBusy(false);
+    setSkillDetailError(undefined);
+    setCompactionSummaryDetail({
+      id: message.id,
+      content: messageText(message),
+      createdAt: message.created_at,
+    });
   };
 
   const addPromptAttachments = async (
@@ -4059,6 +4123,16 @@ export default function App() {
                       onSkillOpen={(name) =>
                         void openSkillDetail({ name })
                       }
+                      onCompactionSummaryOpen={openCompactionSummary}
+                      compactionEvent={
+                        latestHistoryCompactionSummaryId &&
+                        turn.responses.some(
+                          (message) =>
+                            message.id === latestHistoryCompactionSummaryId,
+                        )
+                          ? activeCompaction
+                          : undefined
+                      }
                     />
                   ))}
                   {activeTurn && (
@@ -4085,7 +4159,9 @@ export default function App() {
                       }
                     />
                   )}
-                  {activeCompaction && (
+                  {activeCompaction &&
+                    (activeCompaction.phase !== "completed" ||
+                      !compactionHistoryReady[activeConversation.id]) && (
                     <CompactionNotice event={activeCompaction} />
                   )}
                 </div>
@@ -4601,7 +4677,12 @@ export default function App() {
           />
         )}
         </main>
-        {skillDetailTarget && (
+        {compactionSummaryDetail ? (
+          <CompactionSummarySidebar
+            summary={compactionSummaryDetail}
+            onClose={() => setCompactionSummaryDetail(undefined)}
+          />
+        ) : skillDetailTarget ? (
           <SkillDetailSidebar
             skill={skillDetail ?? skillDetailTarget}
             content={skillDetail?.content}
@@ -4611,7 +4692,7 @@ export default function App() {
             onClose={closeSkillDetail}
             onRetry={() => void openSkillDetail(skillDetailTarget)}
           />
-        )}
+        ) : null}
       </div>
 
       {loginOpen && (
@@ -5394,47 +5475,52 @@ function BackgroundTaskProgress({
   );
 }
 
+function formatCompactionTokenCount(value: number): string {
+  const amount = Math.max(0, value);
+  const compact = (scaled: number, suffix: string): string =>
+    `${scaled.toFixed(1).replace(/\.0$/, "")}${suffix}`;
+  if (amount >= 1_000_000) return compact(amount / 1_000_000, "m");
+  if (amount >= 1_000) return compact(amount / 1_000, "k");
+  return Math.round(amount).toLocaleString("en-US");
+}
+
+function compactionTokenTransition(
+  event?: CompactionEvent,
+): string | undefined {
+  if (
+    event?.tokensBefore === undefined ||
+    event.tokensAfter === undefined
+  ) {
+    return undefined;
+  }
+  return `${formatCompactionTokenCount(
+    event.tokensBefore,
+  )} → ${formatCompactionTokenCount(event.tokensAfter)} tokens`;
+}
+
 function CompactionNotice({ event }: { event: CompactionEvent }) {
-  const completed = event.phase === "completed";
-  const cancelled = event.phase === "cancelled";
-  const detail = completed
-    ? event.tokensBefore !== undefined && event.tokensAfter !== undefined
-      ? `${formatContext(Math.round(event.tokensBefore))} → ${formatContext(
-          Math.round(event.tokensAfter),
-        )} tokens${
-          event.compactedCount !== undefined
-            ? ` · 整理 ${Math.round(event.compactedCount)} 条上下文`
-            : ""
-        }`
-      : "较早的对话已整理为上下文摘要"
-    : cancelled
-      ? "本次上下文整理未完成，对话内容保持不变"
-      : `${
-          event.trigger === "auto" ? "自动触发" : "手动触发"
-        } · 正在将较早的对话整理为摘要`;
+  const tokenTransition = compactionTokenTransition(event);
 
   return (
-    <div className={`compaction-notice ${event.phase}`} role="status">
-      <span className="compaction-glyph">
-        {completed ? (
-          <Check size={14} />
-        ) : cancelled ? (
-          <X size={14} />
-        ) : (
-          <Minimize2 size={14} />
-        )}
-      </span>
-      <span>
-        <strong>
-          {completed
-            ? "上下文压缩完成"
-            : cancelled
-              ? "上下文压缩已取消"
-              : "正在压缩上下文"}
-        </strong>
-        <small>{detail}</small>
-      </span>
-      {event.phase === "started" && <i />}
+    <div
+      className={`compaction-live-divider ${event.phase}`}
+      role="status"
+    >
+      <span aria-hidden="true" />
+      {event.phase === "started" && (
+        <span className="spinner" aria-hidden="true" />
+      )}
+      <strong>
+        {event.phase === "completed"
+          ? "上下文已压缩"
+          : event.phase === "cancelled"
+            ? "上下文压缩已取消"
+            : "正在压缩上下文"}
+        {event.phase === "completed" && tokenTransition
+          ? `（${tokenTransition}）`
+          : ""}
+      </strong>
+      <span aria-hidden="true" />
     </div>
   );
 }
@@ -6849,6 +6935,8 @@ const HistoryTurnView = memo(function HistoryTurnView({
   copiedMessageId,
   onCopy,
   onSkillOpen,
+  onCompactionSummaryOpen,
+  compactionEvent,
 }: {
   turn: HistoryConversationTurn;
   toolResults: Map<string, ToolResultContent>;
@@ -6858,6 +6946,8 @@ const HistoryTurnView = memo(function HistoryTurnView({
   copiedMessageId?: string;
   onCopy: (message: ProtocolMessage) => void;
   onSkillOpen: (name: string) => void;
+  onCompactionSummaryOpen: (message: RenderMessage) => void;
+  compactionEvent?: CompactionEvent;
 }) {
   const [processOpen, setProcessOpen] = useState(false);
   const finalResponse = finalResponseMessage(turn.responses);
@@ -6930,6 +7020,8 @@ const HistoryTurnView = memo(function HistoryTurnView({
                         toolResults={toolResults}
                         subagentRuns={subagentRuns}
                         subagentLiveTurns={subagentLiveTurns}
+                        onCompactionSummaryOpen={onCompactionSummaryOpen}
+                        compactionEvent={compactionEvent}
                       />
                     ))}
                   </div>
@@ -6939,6 +7031,8 @@ const HistoryTurnView = memo(function HistoryTurnView({
                   toolResults={toolResults}
                   subagentRuns={subagentRuns}
                   subagentLiveTurns={subagentLiveTurns}
+                  onCompactionSummaryOpen={onCompactionSummaryOpen}
+                  compactionEvent={compactionEvent}
                 />
               </>
             ) : (
@@ -6949,6 +7043,8 @@ const HistoryTurnView = memo(function HistoryTurnView({
                   toolResults={toolResults}
                   subagentRuns={subagentRuns}
                   subagentLiveTurns={subagentLiveTurns}
+                  onCompactionSummaryOpen={onCompactionSummaryOpen}
+                  compactionEvent={compactionEvent}
                 />
               ))
             )}
@@ -7020,35 +7116,36 @@ function AssistantMessagePart({
   toolResults,
   subagentRuns,
   subagentLiveTurns,
+  onCompactionSummaryOpen,
+  compactionEvent,
 }: {
   message: RenderMessage;
   toolResults: Map<string, ToolResultContent>;
   subagentRuns?: SubagentRunsByTool;
   subagentLiveTurns?: Record<string, InFlightTurn>;
+  onCompactionSummaryOpen: (message: RenderMessage) => void;
+  compactionEvent?: CompactionEvent;
 }) {
-  const [summaryOpen, setSummaryOpen] = useState(false);
   const text = messageText(message);
   const thinking = messageThinking(message);
   const structured = messageStructuredContent(message);
 
   if (messageOriginKind(message) === "compaction_summary") {
+    const tokenTransition = compactionTokenTransition(compactionEvent);
     return (
-      <div className="history-summary">
+      <div className="history-summary-divider" role="separator">
+        <span aria-hidden="true" />
+        <strong>
+          上下文已压缩
+          {tokenTransition ? `（${tokenTransition}）` : ""}
+        </strong>
         <button
           type="button"
-          className="history-summary-trigger"
-          aria-expanded={summaryOpen}
-          onClick={() => setSummaryOpen((value) => !value)}
+          onClick={() => onCompactionSummaryOpen(message)}
         >
-          <BrainCircuit size={14} />
-          上下文已压缩
-          {summaryOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          查看摘要
         </button>
-        <Collapsible open={summaryOpen}>
-          <div className="markdown-body">
-            <MarkdownMessage content={text} />
-          </div>
-        </Collapsible>
+        <span aria-hidden="true" />
       </div>
     );
   }
@@ -7344,6 +7441,59 @@ function StructuredMessageContent({
         }
       })}
     </div>
+  );
+}
+
+function CompactionSummarySidebar({
+  summary,
+  onClose,
+}: {
+  summary: CompactionSummaryDetail;
+  onClose: () => void;
+}) {
+  return (
+    <aside
+      className="skill-detail-sidebar compaction-summary-sidebar"
+      aria-label="上下文压缩摘要"
+    >
+      <header className="skill-detail-header">
+        <div className="skill-detail-heading">
+          <span className="skill-detail-icon">
+            <BrainCircuit size={16} />
+          </span>
+          <div>
+            <h2>上下文摘要</h2>
+            <span>压缩后保留的会话上下文</span>
+          </div>
+        </div>
+        <button
+          className="icon-button quiet"
+          type="button"
+          aria-label="关闭上下文摘要"
+          title="关闭"
+          onClick={onClose}
+        >
+          <X size={16} />
+        </button>
+      </header>
+
+      <div className="skill-detail-content">
+        {summary.content ? (
+          <div className="markdown-body skill-detail-markdown">
+            <MarkdownMessage content={summary.content} />
+          </div>
+        ) : (
+          <div className="skill-detail-status">该摘要没有可显示的内容。</div>
+        )}
+      </div>
+
+      <footer className="skill-detail-path">
+        <BrainCircuit size={12} />
+        <span>
+          生成于 {new Date(summary.createdAt).toLocaleString("zh-CN")}
+        </span>
+      </footer>
+    </aside>
   );
 }
 
