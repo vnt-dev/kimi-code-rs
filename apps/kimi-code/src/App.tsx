@@ -1429,6 +1429,9 @@ export default function App() {
   const [skillDetailBusy, setSkillDetailBusy] = useState(false);
   const [skillDetailError, setSkillDetailError] = useState<string>();
   const [composerAddOpen, setComposerAddOpen] = useState(false);
+  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
+  const [slashMenuActiveIndex, setSlashMenuActiveIndex] = useState(0);
+  const [compactionCommandBusy, setCompactionCommandBusy] = useState(false);
   const [queuedPrompts, setQueuedPrompts] = useState<
     Record<string, QueuedPrompt[]>
   >({});
@@ -1642,6 +1645,26 @@ export default function App() {
   const activeContextUsage = activeConversation
     ? contextUsages[activeConversation.id]
     : undefined;
+  const activeContextPercent = activeContextUsage
+    ? Math.round(
+        Math.max(
+          0,
+          Math.min(
+            1,
+            activeContextUsage.usageRatio ||
+              (activeContextUsage.maxContextTokens > 0
+                ? activeContextUsage.contextTokens /
+                  activeContextUsage.maxContextTokens
+                : 0),
+          ),
+        ) * 100,
+      )
+    : undefined;
+  const canRunCompaction =
+    activeAgentScope !== undefined &&
+    !isStreaming &&
+    activeCompaction?.phase !== "started" &&
+    !compactionCommandBusy;
   const activeAgentUsage = activeConversation
     ? agentUsages[activeConversation.id]
     : undefined;
@@ -1994,6 +2017,10 @@ export default function App() {
   }, [composerAddOpen]);
 
   useEffect(() => {
+    if (slashMenuOpen) setSlashMenuActiveIndex(0);
+  }, [slashMenuOpen]);
+
+  useEffect(() => {
     skillsRequest.current += 1;
     skillDetailRequest.current += 1;
     setComposerAddOpen(false);
@@ -2001,6 +2028,7 @@ export default function App() {
     setSkillsBusy(false);
     setSkillsError(undefined);
     setPromptSkills([]);
+    setSlashMenuOpen(false);
     setSkillDetailTarget(undefined);
     setSkillDetail(undefined);
     setSkillDetailBusy(false);
@@ -2562,6 +2590,7 @@ export default function App() {
     promptCompositionRef.current = false;
     promptUndoHistoryRef.current = createPromptUndoHistory(value);
     setPrompt(value);
+    setSlashMenuOpen(false);
   };
 
   const updatePrompt = (value: string, isComposing = false): void => {
@@ -2570,6 +2599,16 @@ export default function App() {
     });
     promptUndoHistoryRef.current = history;
     setPrompt(value);
+  };
+
+  const syncSlashMenu = (textarea: HTMLTextAreaElement): void => {
+    const open =
+      document.activeElement === textarea &&
+      textarea.value.startsWith("/") &&
+      textarea.selectionStart === 1 &&
+      textarea.selectionEnd === 1;
+    setSlashMenuOpen(open);
+    if (open) setComposerAddOpen(false);
   };
 
   const undoPrompt = (): void => {
@@ -3547,10 +3586,65 @@ export default function App() {
     }
   };
 
+  const runCompactionCommand = async (): Promise<void> => {
+    const scope = activeAgentScope;
+    if (!scope) {
+      showNotice("会话正在准备，请稍后再试");
+      return;
+    }
+    if (isStreaming) {
+      showNotice("任务执行期间不能压缩上下文");
+      return;
+    }
+    if (activeCompaction?.phase === "started" || compactionCommandBusy) {
+      showNotice("上下文正在压缩");
+      return;
+    }
+
+    const nextPrompt = prompt.startsWith("/") ? prompt.slice(1) : prompt;
+    resetPrompt(nextPrompt);
+    setCompactionCommandBusy(true);
+    try {
+      await createAgentClient(scope).beginCompaction();
+    } catch (error) {
+      showNotice(conciseError(error));
+    } finally {
+      setCompactionCommandBusy(false);
+      window.requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        textarea.focus();
+        textarea.setSelectionRange(0, 0);
+      });
+    }
+  };
+
   const handlePromptKeyDown = (
     event: KeyboardEvent<HTMLTextAreaElement>,
   ): void => {
     if (event.nativeEvent.isComposing || promptCompositionRef.current) return;
+    if (slashMenuOpen && event.key === "Escape") {
+      event.preventDefault();
+      setSlashMenuOpen(false);
+      return;
+    }
+    if (
+      slashMenuOpen &&
+      (event.key === "ArrowDown" || event.key === "ArrowUp")
+    ) {
+      event.preventDefault();
+      setSlashMenuActiveIndex(0);
+      return;
+    }
+    if (
+      slashMenuOpen &&
+      event.key === "Enter" &&
+      !event.shiftKey
+    ) {
+      event.preventDefault();
+      void runCompactionCommand();
+      return;
+    }
     if (
       event.key.toLowerCase() === "z" &&
       (event.ctrlKey || event.metaKey) &&
@@ -4064,6 +4158,43 @@ export default function App() {
                 </div>
               )}
               <form className="composer" onSubmit={handleSubmit}>
+                {slashMenuOpen && (
+                  <div
+                    className="slash-command-menu"
+                    id="slash-command-menu"
+                    role="menu"
+                    aria-label="斜杠命令"
+                    onMouseDown={(event) => event.preventDefault()}
+                  >
+                    <button
+                      className={
+                        slashMenuActiveIndex === 0 ? "selected" : undefined
+                      }
+                      id="slash-command-compact"
+                      type="button"
+                      role="menuitem"
+                      disabled={!canRunCompaction}
+                      onMouseEnter={() => setSlashMenuActiveIndex(0)}
+                      onClick={() => void runCompactionCommand()}
+                    >
+                      <span className="slash-command-icon" aria-hidden="true">
+                        {activeCompaction?.phase === "started" ? (
+                          <span className="spinner" />
+                        ) : (
+                          <Minimize2 size={14} />
+                        )}
+                      </span>
+                      <strong>压缩</strong>
+                      <small>
+                        {activeCompaction?.phase === "started"
+                          ? "正在压缩此任务的上下文"
+                          : activeContextPercent === undefined
+                            ? "压缩此任务的上下文"
+                            : `压缩此任务的上下文（已占用 ${activeContextPercent}%）`}
+                      </small>
+                    </button>
+                  </div>
+                )}
                 {promptAttachments.length > 0 && (
                   <div className="prompt-attachment-list">
                     {promptAttachments.map((attachment) => (
@@ -4158,13 +4289,14 @@ export default function App() {
                 <textarea
                   ref={textareaRef}
                   value={prompt}
-                  onChange={(event) =>
+                  onChange={(event) => {
                     updatePrompt(
                       event.target.value,
                       promptCompositionRef.current ||
                         (event.nativeEvent as InputEvent).isComposing,
-                    )
-                  }
+                    );
+                    syncSlashMenu(event.currentTarget);
+                  }}
                   onCompositionStart={() => {
                     promptCompositionRef.current = true;
                   }}
@@ -4172,11 +4304,26 @@ export default function App() {
                     promptCompositionRef.current = false;
                     window.requestAnimationFrame(() => {
                       const textarea = textareaRef.current;
-                      if (textarea) updatePrompt(textarea.value);
+                      if (textarea) {
+                        updatePrompt(textarea.value);
+                        syncSlashMenu(textarea);
+                      }
                     });
                   }}
+                  onFocus={(event) => syncSlashMenu(event.currentTarget)}
+                  onSelect={(event) => syncSlashMenu(event.currentTarget)}
+                  onBlur={() => setSlashMenuOpen(false)}
                   onKeyDown={handlePromptKeyDown}
                   onPaste={handlePromptPaste}
+                  aria-expanded={slashMenuOpen}
+                  aria-controls={
+                    slashMenuOpen ? "slash-command-menu" : undefined
+                  }
+                  aria-activedescendant={
+                    slashMenuOpen && slashMenuActiveIndex === 0
+                      ? "slash-command-compact"
+                      : undefined
+                  }
                   placeholder={
                     activePlan
                       ? "计划模式：描述需要分析和规划的任务…"
