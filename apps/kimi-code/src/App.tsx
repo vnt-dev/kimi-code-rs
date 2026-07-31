@@ -4918,9 +4918,7 @@ export default function App() {
                       options={models.map((model) => ({
                         value: model.id,
                         label: model.displayName,
-                        description: `${formatContext(model.contextLength)} 上下文${
-                          model.supportsReasoning ? " · 支持深度思考" : ""
-                        }`,
+                        description: `${formatContext(model.contextLength)} 上下文`,
                       }))}
                       onChange={chooseModel}
                     />

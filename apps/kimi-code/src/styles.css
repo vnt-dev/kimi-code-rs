@@ -5571,6 +5571,16 @@ button.message-skill-chip:hover {
   width: 275px;
 }
 
+.model-select .toolbar-select-menu strong,
+.permission-select .toolbar-select-menu strong {
+  font-size: 12px;
+}
+
+.model-select .toolbar-select-menu small,
+.permission-select .toolbar-select-menu small {
+  font-size: 10.5px;
+}
+
 .effort-select .toolbar-select-trigger {
   max-width: 183px;
 }
