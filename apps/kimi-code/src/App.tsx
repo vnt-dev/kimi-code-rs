@@ -1952,7 +1952,7 @@ export default function App() {
     try {
       const nextModels = await invoke<Model[]>("list_models");
       setModels(nextModels);
-      if (nextModels.length === 0) showNotice("当前账号没有可用模型");
+      if (nextModels.length === 0) showNotice("配置中没有可用模型");
     } catch (error) {
       showNotice(conciseError(error));
     } finally {
@@ -2117,12 +2117,7 @@ export default function App() {
 
   useEffect(() => {
     setActiveAgentScope(undefined);
-    if (
-      !auth.loggedIn ||
-      !activeProject ||
-      !activeConversation ||
-      !selectedModel
-    ) {
+    if (!activeProject || !activeConversation || !selectedModel) {
       return;
     }
     let disposed = false;
@@ -2182,7 +2177,6 @@ export default function App() {
   }, [
     activeConversation?.id,
     activeProject?.path,
-    auth.loggedIn,
     models.length,
     refreshBackgroundTasks,
   ]);
@@ -2525,7 +2519,7 @@ export default function App() {
 
   useEffect(() => {
     const conversationId = activeConversation?.id;
-    if (!conversationId || !auth.loggedIn) return;
+    if (!conversationId) return;
     let active = true;
     invoke<ContextUsage | null>("conversation_context_usage", {
       sessionId: conversationId,
@@ -2543,7 +2537,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [activeConversation?.id, auth.loggedIn]);
+  }, [activeConversation?.id]);
 
   const updateActiveOutlineTurn = useCallback((): void => {
     const scroll = scrollRef.current;
@@ -2879,13 +2873,9 @@ export default function App() {
     event?: MouseEvent<HTMLButtonElement>,
   ): Promise<void> => {
     event?.stopPropagation();
-    if (!auth.loggedIn) {
-      void startLogin();
-      return;
-    }
     const model = selectedModel ?? models[0];
     if (!model) {
-      showNotice("请先同步并选择一个模型");
+      showNotice("请先配置并选择一个模型");
       return;
     }
     try {
@@ -3111,23 +3101,12 @@ export default function App() {
     try {
       const status = await invoke<AuthStatus>("logout");
       setAuth(status);
-      releaseAllAgentSubscriptions();
-      setModels([]);
       accountUsageRequest.current += 1;
       setAccountUsage(undefined);
       setAccountUsageBusy(false);
       setAccountUsageError(undefined);
-      setContextUsages({});
-      setCompactionHistoryReady({});
-      setAgentUsages({});
-      setSessionTodos({});
-      setSubagentRuns({});
-      setSubagentLiveTurns({});
-      setQueuedPrompts({});
-      setMessageDurations({});
       setProfileOpen(false);
-      closeSideChat();
-      showNotice("已退出登录");
+      showNotice("已退出 Kimi Code 登录");
     } catch (error) {
       showNotice(conciseError(error));
     }
@@ -3376,12 +3355,8 @@ export default function App() {
     ) {
       return;
     }
-    if (!auth.loggedIn) {
-      void startLogin();
-      return;
-    }
     if (!selectedModel) {
-      showNotice("请先同步并选择一个模型");
+      showNotice("请先配置并选择一个模型");
       return;
     }
     if (
@@ -4371,8 +4346,8 @@ export default function App() {
               </div>
               <div className="header-actions">
                 <span className="connection-pill">
-                  <i className={auth.loggedIn ? "online" : ""} />
-                  {auth.loggedIn ? "Core v2 已连接" : "等待登录"}
+                  <i className="online" />
+                  Core v2 已连接
                 </span>
                 <button className="icon-button" title="新建对话" onClick={() => void createConversation(activeProject)}>
                   <SquarePen size={17} />
@@ -4767,9 +4742,7 @@ export default function App() {
                       ? "计划模式：描述需要分析和规划的任务…"
                       : isStreaming
                         ? "继续输入；发送后将加入队列…"
-                      : auth.loggedIn
-                      ? "告诉 Kimi 你想完成什么…"
-                      : "登录后开始与 Kimi Code 对话…"
+                        : "告诉模型你想完成什么…"
                   }
                   rows={1}
                   disabled={modelBusy || hasBlockingInteraction}
@@ -4905,8 +4878,7 @@ export default function App() {
                       label={
                         modelsBusy
                           ? "同步模型中…"
-                          : selectedModel?.displayName ??
-                            (auth.loggedIn ? "暂无模型" : "登录后选择模型")
+                          : selectedModel?.displayName ?? "暂无可用模型"
                       }
                       disabled={
                         modelsBusy ||
@@ -5023,7 +4995,7 @@ export default function App() {
                 </div>
               </form>
               <p className="composer-caption">
-                Kimi 可能会犯错，请检查生成的代码和重要信息。
+                模型可能会犯错，请检查生成的代码和重要信息。
               </p>
             </div>
           </>
