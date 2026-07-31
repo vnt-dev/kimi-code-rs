@@ -6793,11 +6793,7 @@ function LiveToolBlock({
           {input !== undefined && (
             <section className="tool-detail-section">
               <span>参数</span>
-              {tool.name === "Edit" && editToolInput(input) ? (
-                <EditToolDiff input={input} />
-              ) : (
-                <pre>{structuredValue(input)}</pre>
-              )}
+              <ToolInputView name={tool.name} input={input} />
             </section>
           )}
           {updateLog && <pre className="live-tool-update-log">{updateLog}</pre>}
@@ -7694,6 +7690,58 @@ function EditToolDiff({ input }: { input: unknown }) {
   );
 }
 
+function writeToolInput(
+  input: unknown,
+): { path?: string; content: string } | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const record = input as Record<string, unknown>;
+  if (typeof record.content !== "string") return undefined;
+  return {
+    path: typeof record.path === "string" ? record.path : undefined,
+    content: record.content,
+  };
+}
+
+function WriteToolContent({ input }: { input: unknown }) {
+  const write = writeToolInput(input);
+  if (!write) return null;
+  const lines = write.content.replace(/\r?\n$/, "").split(/\r?\n/);
+  return (
+    <div className="edit-diff">
+      {write.path && (
+        <div className="edit-diff-header">
+          <FileCode2 size={12} />
+          <span>{write.path}</span>
+        </div>
+      )}
+      <div className="edit-diff-body">
+        {lines.map((line, index) => (
+          <div className="edit-diff-line context" key={index}>
+            <span className="edit-diff-lineno">{index + 1}</span>
+            <span className="edit-diff-code">{line}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ToolInputView({
+  name,
+  input,
+}: {
+  name: string | undefined;
+  input: unknown;
+}) {
+  if (name === "Edit" && editToolInput(input)) {
+    return <EditToolDiff input={input} />;
+  }
+  if (name === "Write" && writeToolInput(input)) {
+    return <WriteToolContent input={input} />;
+  }
+  return <pre>{structuredValue(input)}</pre>;
+}
+
 function HistoryToolCard({
   tool,
   result,
@@ -7745,11 +7793,7 @@ function HistoryToolCard({
         <div className="history-tool-detail">
           <section className="tool-detail-section">
             <span>参数</span>
-            {tool.tool_name === "Edit" && editToolInput(tool.input) ? (
-              <EditToolDiff input={tool.input} />
-            ) : (
-              <pre>{structuredValue(tool.input)}</pre>
-            )}
+            <ToolInputView name={tool.tool_name} input={tool.input} />
           </section>
           {result && (
             <section className="tool-detail-section">

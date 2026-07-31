@@ -3117,6 +3117,14 @@ button.message-skill-chip:hover {
   opacity: 0.65;
 }
 
+.edit-diff-line.context {
+  padding-left: 14px;
+}
+
+.edit-diff-line.context .edit-diff-code {
+  color: var(--text);
+}
+
 .live-tool-progress {
   display: flex;
   min-height: 24px;
