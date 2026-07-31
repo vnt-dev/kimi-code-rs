@@ -63,7 +63,11 @@ pub struct LlmRequestPayload {
     pub temperature: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_lenient_u64"
+    )]
     pub max_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beta_api: Option<bool>,
@@ -81,6 +85,16 @@ pub struct LlmRequestPayload {
     pub projection: Option<LlmRequestProjection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dropped_count: Option<f64>,
+}
+
+// Legacy wire journals wrote maxTokens as f64 (e.g. `131072.0`); accept
+// integer-valued floats so those records still replay after the u64 switch.
+fn deserialize_lenient_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<f64>::deserialize(deserializer)?;
+    Ok(value.map(|value| value.max(0.0) as u64))
 }
 
 pub static LLM_REQUEST_TRACE_MODEL: LazyLock<ModelDef<LlmRequestTraceState>> =
@@ -274,6 +288,17 @@ mod tests {
             .downcast::<LlmRequestTraceState>()
             .unwrap();
         assert_eq!(*state, initial);
+    }
+
+    #[test]
+    fn legacy_float_max_tokens_still_replays() {
+        LazyLock::force(&LLM_REQUEST);
+        let descriptor = registered_op("llm.request").unwrap();
+        let mut payload = serde_json::to_value(request()).unwrap();
+        payload["maxTokens"] = serde_json::json!(131072.0);
+        let parsed: LlmRequestPayload = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(parsed.max_tokens, Some(131_072));
+        assert!(Op::from_wire(descriptor, payload).is_ok());
     }
 
     #[test]
