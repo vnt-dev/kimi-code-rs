@@ -1,6 +1,6 @@
 [package]
 name = "kimi-code-desktop"
-version = "0.1.3"
+version = "0.1.4"
 description = "Kimi Code desktop agent client"
 authors = ["Moonshot AI"]
 edition = "2024"
