@@ -21,8 +21,8 @@ use kimi_code_agent_core_v2::{
     },
 };
 use kimi_code_web_server::{
-    AgentRpcRequest, AssetProvider, RpcError, WebAsset, WebServerController, WebServerSettings,
-    WebServerStatus, dispatch_agent_rpc,
+    AgentRpcRequest, AssetProvider, DesktopStateChange, RpcError, WebAsset, WebServerController,
+    WebServerSettings, WebServerStatus, dispatch_agent_rpc,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -34,6 +34,7 @@ struct AppState {
     web_server: Arc<WebServerController>,
     subscriptions: Mutex<HashMap<String, DisposableHandle>>,
     next_subscription_id: AtomicU64,
+    _application_event_subscription: DisposableHandle,
 }
 
 #[derive(Clone, Serialize)]
@@ -167,15 +168,25 @@ async fn create_or_touch_workspace(
     root: String,
     name: Option<String>,
 ) -> Result<DesktopWorkspace, String> {
-    state
+    let workspace = state
         .client
         .create_or_touch_workspace(&root, name.as_deref())
-        .await
+        .await?;
+    state
+        .web_server
+        .desktop_state_changed(DesktopStateChange::WorkspaceUpserted {
+            workspace_id: workspace.id.clone(),
+        });
+    Ok(workspace)
 }
 
 #[tauri::command]
 async fn remove_workspace(state: State<'_, AppState>, workspace_id: String) -> Result<(), String> {
-    state.client.remove_workspace(&workspace_id).await
+    state.client.remove_workspace(&workspace_id).await?;
+    state
+        .web_server
+        .desktop_state_changed(DesktopStateChange::WorkspaceRemoved { workspace_id });
+    Ok(())
 }
 
 #[tauri::command]
@@ -188,12 +199,22 @@ async fn list_workspace_sessions(
 
 #[tauri::command]
 async fn fork_session(state: State<'_, AppState>, session_id: String) -> Result<String, String> {
-    state.client.fork_session(&session_id).await
+    let session_id = state.client.fork_session(&session_id).await?;
+    state
+        .web_server
+        .desktop_state_changed(DesktopStateChange::SessionForked {
+            session_id: session_id.clone(),
+        });
+    Ok(session_id)
 }
 
 #[tauri::command]
 async fn archive_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
-    state.client.archive_session(&session_id).await
+    state.client.archive_session(&session_id).await?;
+    state
+        .web_server
+        .desktop_state_changed(DesktopStateChange::SessionArchived { session_id });
+    Ok(())
 }
 
 #[tauri::command]
@@ -201,7 +222,21 @@ async fn prepare_session(
     state: State<'_, AppState>,
     request: DesktopPrepareSessionRequest,
 ) -> Result<DesktopPreparedSession, String> {
-    state.client.prepare_session(request).await
+    let creating = request
+        .session_id
+        .as_deref()
+        .is_none_or(|session_id| session_id.trim().is_empty());
+    let workspace_root = request.work_dir.clone();
+    let session = state.client.prepare_session(request).await?;
+    if creating {
+        state
+            .web_server
+            .desktop_state_changed(DesktopStateChange::SessionCreated {
+                session_id: session.session_id.clone(),
+                workspace_root,
+            });
+    }
+    Ok(session)
 }
 
 #[tauri::command]
@@ -356,11 +391,17 @@ pub fn run() {
                 app_config_dir.join("web-server.json"),
                 kimi_home.join("server.token"),
             ));
+            let app_for_events = app.handle().clone();
+            let application_event_subscription =
+                web_server.subscribe_application_events(Arc::new(move |event, payload| {
+                    let _ = app_for_events.emit(event, payload);
+                }));
             app.manage(AppState {
                 client,
                 web_server: Arc::clone(&web_server),
                 subscriptions: Mutex::new(HashMap::new()),
                 next_subscription_id: AtomicU64::new(1),
+                _application_event_subscription: application_event_subscription,
             });
             tauri::async_runtime::spawn(async move {
                 web_server.restore().await;

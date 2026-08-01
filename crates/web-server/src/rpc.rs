@@ -6,7 +6,10 @@ use kimi_code_agent_core_v2::app::desktop_client::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::{AgentRpcRequest, RpcError, dispatch_agent_rpc, server::RpcConnection};
+use crate::{
+    AgentRpcRequest, DesktopStateChange, RpcError, app_events::ApplicationEventBus,
+    dispatch_agent_rpc, server::RpcConnection,
+};
 
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, RpcError> {
     serde_json::from_value(value).map_err(|error| RpcError::invalid_request(error.to_string()))
@@ -90,6 +93,7 @@ struct BrowseFoldersArgs {
 
 pub(crate) async fn dispatch_rpc(
     client: &Arc<KimiCodeDesktopClient>,
+    events: &ApplicationEventBus,
     connection: &Arc<RpcConnection>,
     command: &str,
     args: Value,
@@ -156,12 +160,14 @@ pub(crate) async fn dispatch_rpc(
         ),
         "create_or_touch_workspace" => {
             let args: CreateWorkspaceArgs = decode(args)?;
-            encode(
-                client
-                    .create_or_touch_workspace(&args.root, args.name.as_deref())
-                    .await
-                    .map_err(RpcError::transport)?,
-            )
+            let workspace = client
+                .create_or_touch_workspace(&args.root, args.name.as_deref())
+                .await
+                .map_err(RpcError::transport)?;
+            events.desktop_state_changed(DesktopStateChange::WorkspaceUpserted {
+                workspace_id: workspace.id.clone(),
+            });
+            encode(workspace)
         }
         "remove_workspace" => {
             let args: WorkspaceArgs = decode(args)?;
@@ -169,6 +175,9 @@ pub(crate) async fn dispatch_rpc(
                 .remove_workspace(&args.workspace_id)
                 .await
                 .map_err(RpcError::transport)?;
+            events.desktop_state_changed(DesktopStateChange::WorkspaceRemoved {
+                workspace_id: args.workspace_id,
+            });
             Ok(Value::Null)
         }
         "list_workspace_sessions" => {
@@ -182,12 +191,14 @@ pub(crate) async fn dispatch_rpc(
         }
         "fork_session" => {
             let args: SessionArgs = decode(args)?;
-            encode(
-                client
-                    .fork_session(&args.session_id)
-                    .await
-                    .map_err(RpcError::transport)?,
-            )
+            let session_id = client
+                .fork_session(&args.session_id)
+                .await
+                .map_err(RpcError::transport)?;
+            events.desktop_state_changed(DesktopStateChange::SessionForked {
+                session_id: session_id.clone(),
+            });
+            encode(session_id)
         }
         "archive_session" => {
             let args: SessionArgs = decode(args)?;
@@ -195,16 +206,30 @@ pub(crate) async fn dispatch_rpc(
                 .archive_session(&args.session_id)
                 .await
                 .map_err(RpcError::transport)?;
+            events.desktop_state_changed(DesktopStateChange::SessionArchived {
+                session_id: args.session_id,
+            });
             Ok(Value::Null)
         }
         "prepare_session" => {
             let args: PrepareSessionArgs = decode(args)?;
-            encode(
-                client
-                    .prepare_session(args.request)
-                    .await
-                    .map_err(RpcError::transport)?,
-            )
+            let creating = args
+                .request
+                .session_id
+                .as_deref()
+                .is_none_or(|session_id| session_id.trim().is_empty());
+            let workspace_root = args.request.work_dir.clone();
+            let session = client
+                .prepare_session(args.request)
+                .await
+                .map_err(RpcError::transport)?;
+            if creating {
+                events.desktop_state_changed(DesktopStateChange::SessionCreated {
+                    session_id: session.session_id.clone(),
+                    workspace_root,
+                });
+            }
+            encode(session)
         }
         "conversation_context_usage" => {
             let args: SessionArgs = decode(args)?;

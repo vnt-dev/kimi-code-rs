@@ -82,6 +82,7 @@ import {
   loadDesktopState,
   projectFromWorkspace,
 } from "./store";
+import { mergeDesktopInventory } from "./desktopInventory";
 import {
   normalizeThinkingLevel,
   thinkingLevelDescription,
@@ -1666,6 +1667,7 @@ export default function App() {
   const noticeTimer = useRef<number | undefined>(undefined);
   const accountUsageRequest = useRef(0);
   const historyRequests = useRef<Record<string, number>>({});
+  const desktopInventoryRequest = useRef(0);
   const backgroundTaskRequests = useRef<Record<string, number>>({});
   const skillsRequest = useRef(0);
   const skillDetailRequest = useRef(0);
@@ -2153,9 +2155,13 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    const request = desktopInventoryRequest.current + 1;
+    desktopInventoryRequest.current = request;
     loadDesktopState()
       .then((state) => {
-        if (active) setDesktop(state);
+        if (active && request === desktopInventoryRequest.current) {
+          setDesktop((current) => mergeDesktopInventory(current, state));
+        }
       })
       .catch(() => {
         // Vite's browser preview has no Tauri bridge.
@@ -2341,6 +2347,17 @@ export default function App() {
   );
 
   useEffect(() => {
+    const refreshDesktopInventory = async (): Promise<void> => {
+      const request = desktopInventoryRequest.current + 1;
+      desktopInventoryRequest.current = request;
+      try {
+        const inventory = await loadDesktopState();
+        if (request !== desktopInventoryRequest.current) return;
+        setDesktop((current) => mergeDesktopInventory(current, inventory));
+      } catch {
+        // A later state-change event or explicit action will retry the refresh.
+      }
+    };
     const unlistenDevice = listen<DeviceCode>("auth-device-code", (event) => {
       setDeviceCode(event.payload);
       setLoginOpen(true);
@@ -2351,6 +2368,7 @@ export default function App() {
     const unlistenReplayReset = listen<ReplayResetEvent>(
       TRANSPORT_REPLAY_RESET,
       async (event) => {
+        await refreshDesktopInventory();
         const sessionIds = new Set(
           event.payload.scopes.map((scope) => scope.sessionId),
         );
@@ -2405,6 +2423,10 @@ export default function App() {
           }),
         );
       },
+    );
+    const unlistenDesktopStateChanged = listen(
+      "desktop-state-changed",
+      refreshDesktopInventory,
     );
     const unlistenBrowserError = listen<string>(
       "auth-browser-open-failed",
@@ -2785,6 +2807,7 @@ export default function App() {
       void unlistenDevice.then((unlisten) => unlisten());
       void unlistenAuthRequired.then((unlisten) => unlisten());
       void unlistenReplayReset.then((unlisten) => unlisten());
+      void unlistenDesktopStateChanged.then((unlisten) => unlisten());
       void unlistenBrowserError.then((unlisten) => unlisten());
       void unlistenChatEvent.then((unlisten) => unlisten());
       void unlistenInteractions.then((unlisten) => unlisten());
@@ -3170,32 +3193,32 @@ export default function App() {
   const addProjectPath = async (selection: string): Promise<void> => {
     try {
       const workspace = await createOrTouchWorkspace(selection);
-      const existing = desktop.projects.find(
-        (item) => item.id === workspace.id || item.path === selection,
-      );
-      if (existing) {
-        updateDesktop((current) => ({
-          ...current,
-          activeProjectId: existing.id,
-          activeConversationId: existing.conversations[0]?.id,
-          projects: current.projects.map((item) => ({
-            ...item,
-            expanded: item.id === existing.id ? true : item.expanded,
-          })),
-        }));
-        return;
-      }
       const sessions = await listWorkspaceSessions(workspace.id);
       const project = projectFromWorkspace(
         workspace,
         desktop.projects.length,
         sessions,
       );
-      updateDesktop((current) => ({
-        projects: [...current.projects, project],
-        activeProjectId: project.id,
-        activeConversationId: undefined,
-      }));
+      updateDesktop((current) => {
+        const existing = current.projects.find(
+          (item) => item.id === workspace.id || item.path === selection,
+        );
+        if (existing) {
+          return {
+            ...current,
+            activeProjectId: existing.id,
+            activeConversationId: existing.conversations[0]?.id,
+            projects: current.projects.map((item) =>
+              item.id === existing.id ? { ...item, expanded: true } : item,
+            ),
+          };
+        }
+        return {
+          projects: [...current.projects, project],
+          activeProjectId: project.id,
+          activeConversationId: undefined,
+        };
+      });
       setSidebarCollapsed(false);
     } catch (error) {
       showNotice(conciseError(error));
@@ -3247,7 +3270,12 @@ export default function App() {
             ? {
                 ...item,
                 expanded: true,
-                conversations: [conversation, ...item.conversations],
+                conversations: [
+                  conversation,
+                  ...item.conversations.filter(
+                    (candidate) => candidate.id !== conversation.id,
+                  ),
+                ],
               }
             : item,
         ),

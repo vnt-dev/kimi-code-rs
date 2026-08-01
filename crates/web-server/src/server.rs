@@ -25,7 +25,10 @@ use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{RpcError, RpcRequest, RpcResponse, rpc::dispatch_rpc, wire::ServerFrame};
+use crate::{
+    RpcError, RpcRequest, RpcResponse, app_events::ApplicationEventBus, rpc::dispatch_rpc,
+    wire::ServerFrame,
+};
 
 const WS_BEARER_PROTOCOL_PREFIX: &str = "kimi-code.bearer.";
 const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
@@ -116,6 +119,7 @@ struct ServerState {
     client: Arc<KimiCodeDesktopClient>,
     assets: Arc<dyn AssetProvider>,
     connections: Arc<Mutex<HashMap<String, Arc<RpcConnection>>>>,
+    events: Arc<ApplicationEventBus>,
     token: Arc<str>,
     version: Arc<str>,
     port: u16,
@@ -126,6 +130,7 @@ pub(crate) struct RunningServer {
     cancellation: CancellationToken,
     task: JoinHandle<()>,
     connections: Arc<Mutex<HashMap<String, Arc<RpcConnection>>>>,
+    event_subscription: DisposableHandle,
 }
 
 impl RunningServer {
@@ -139,6 +144,7 @@ impl RunningServer {
         for connection in connections {
             connection.dispose_all();
         }
+        let _ = self.event_subscription.dispose();
         let mut task = self.task;
         if tokio::time::timeout(Duration::from_secs(2), &mut task)
             .await
@@ -152,6 +158,7 @@ impl RunningServer {
 pub(crate) async fn start_server(
     client: Arc<KimiCodeDesktopClient>,
     assets: Arc<dyn AssetProvider>,
+    events: Arc<ApplicationEventBus>,
     token: String,
     version: String,
     port: u16,
@@ -163,11 +170,23 @@ pub(crate) async fn start_server(
         .local_addr()
         .map_err(|error| error.to_string())?
         .port();
-    let connections = Arc::new(Mutex::new(HashMap::new()));
+    let connections: Arc<Mutex<HashMap<String, Arc<RpcConnection>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let connections_for_events = Arc::clone(&connections);
+    let event_subscription = events.subscribe(Arc::new(move |event, payload| {
+        let connections = connections_for_events
+            .lock()
+            .map(|connections| connections.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for connection in connections {
+            connection.emit(event, payload.clone());
+        }
+    }));
     let state = ServerState {
         client,
         assets,
         connections: Arc::clone(&connections),
+        events,
         token: token.into(),
         version: version.into(),
         port,
@@ -192,6 +211,7 @@ pub(crate) async fn start_server(
         cancellation,
         task,
         connections,
+        event_subscription,
     })
 }
 
@@ -218,7 +238,15 @@ async fn rpc_handler(
         Err(response) => return response,
     };
     let id = request.id;
-    match dispatch_rpc(&state.client, &connection, &request.command, request.args).await {
+    match dispatch_rpc(
+        &state.client,
+        &state.events,
+        &connection,
+        &request.command,
+        request.args,
+    )
+    .await
+    {
         Ok(result) => Json(RpcResponse::success(id, result)).into_response(),
         Err(error) => Json(RpcResponse::error(
             id,
@@ -571,9 +599,17 @@ mod tests {
             _ => None,
         });
         let token = "test-token-that-must-never-appear-in-errors";
-        let server = start_server(client, assets, token.into(), "1.2.3".into(), 0)
-            .await
-            .unwrap();
+        let events = Arc::new(ApplicationEventBus::default());
+        let server = start_server(
+            client,
+            assets,
+            Arc::clone(&events),
+            token.into(),
+            "1.2.3".into(),
+            0,
+        )
+        .await
+        .unwrap();
         let origin = format!("http://127.0.0.1:{}", server.port);
         let http = Client::new();
 
@@ -674,6 +710,54 @@ mod tests {
             serde_json::from_str(websocket.next().await.unwrap().unwrap().to_text().unwrap())
                 .unwrap();
         let connection_id = ready["connectionId"].as_str().unwrap().to_owned();
+
+        events.desktop_state_changed(crate::DesktopStateChange::WorkspaceUpserted {
+            workspace_id: "workspace-from-desktop".into(),
+        });
+        let desktop_change: Value = loop {
+            let message = websocket.next().await.unwrap().unwrap();
+            if !message.is_text() {
+                continue;
+            }
+            break serde_json::from_str(message.to_text().unwrap()).unwrap();
+        };
+        assert_eq!(desktop_change["event"], crate::DESKTOP_STATE_CHANGED_EVENT);
+        assert_eq!(
+            desktop_change["payload"]["workspaceId"],
+            "workspace-from-desktop"
+        );
+
+        let workspace_root = root.join("workspace");
+        std::fs::create_dir_all(&workspace_root).unwrap();
+        let workspace: Value = http
+            .post(format!("{origin}/_kimi/v1/rpc"))
+            .bearer_auth(token)
+            .header("x-kimi-connection-id", &connection_id)
+            .json(&json!({
+                "id":"rpc-workspace",
+                "command":"create_or_touch_workspace",
+                "args":{"root": workspace_root.to_string_lossy()}
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(workspace["ok"], true);
+        let web_change: Value = loop {
+            let message = websocket.next().await.unwrap().unwrap();
+            if !message.is_text() {
+                continue;
+            }
+            break serde_json::from_str(message.to_text().unwrap()).unwrap();
+        };
+        assert_eq!(web_change["event"], crate::DESKTOP_STATE_CHANGED_EVENT);
+        assert_eq!(web_change["payload"]["kind"], "workspace_upserted");
+        assert_eq!(
+            web_change["payload"]["workspaceId"],
+            workspace["result"]["id"]
+        );
 
         let unknown: Value = http
             .post(format!("{origin}/_kimi/v1/rpc"))

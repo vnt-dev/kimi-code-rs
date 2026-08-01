@@ -1,11 +1,13 @@
 use std::{path::PathBuf, sync::Arc};
 
+use kimi_code_agent_core_v2::_base::di::lifecycle::DisposableHandle;
 use kimi_code_agent_core_v2::app::desktop_client::KimiCodeDesktopClient;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
 use crate::{
-    AssetProvider, WebServerSettings,
+    ApplicationEventHandler, AssetProvider, DesktopStateChange, WebServerSettings,
+    app_events::ApplicationEventBus,
     server::{RunningServer, start_server},
     settings::{load_or_create_token, load_settings, save_settings, validate_settings},
 };
@@ -49,6 +51,7 @@ pub struct WebServerController {
     version: String,
     settings_path: PathBuf,
     token_path: PathBuf,
+    events: Arc<ApplicationEventBus>,
     operation: Mutex<()>,
     inner: Mutex<ControllerState>,
 }
@@ -72,6 +75,7 @@ impl WebServerController {
             version: version.into(),
             settings_path,
             token_path: token_path.into(),
+            events: Arc::new(ApplicationEventBus::default()),
             operation: Mutex::new(()),
             inner: Mutex::new(ControllerState {
                 settings,
@@ -127,6 +131,17 @@ impl WebServerController {
         inner.error = None;
     }
 
+    pub fn subscribe_application_events(
+        &self,
+        handler: ApplicationEventHandler,
+    ) -> DisposableHandle {
+        self.events.subscribe(handler)
+    }
+
+    pub fn desktop_state_changed(&self, change: DesktopStateChange) {
+        self.events.desktop_state_changed(change);
+    }
+
     async fn apply(&self, settings: WebServerSettings, persist: bool) -> Result<(), String> {
         validate_settings(settings)?;
         let _operation = self.operation.lock().await;
@@ -178,6 +193,7 @@ impl WebServerController {
         let next = match start_server(
             Arc::clone(&self.client),
             Arc::clone(&self.assets),
+            Arc::clone(&self.events),
             token.clone(),
             self.version.clone(),
             settings.port,
