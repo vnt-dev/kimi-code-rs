@@ -44,9 +44,10 @@ pnpm tauri build
 
 Build artifacts are written to `target/release/bundle`.
 
-Tagged releases build both Windows installers and a Linux AppImage. The in-app
-updater is available on both platforms; Linux automatic updates require running
-the AppImage distributed on the GitHub release page.
+Tagged releases build Windows installers, a Linux AppImage, and macOS disk
+images for both Apple Silicon and Intel Macs. The in-app updater is available
+on all three platforms; Linux automatic updates require running the AppImage
+distributed on the GitHub release page.
 
 ## Project Structure
 

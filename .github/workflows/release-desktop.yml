@@ -54,7 +54,7 @@ jobs:
           projectPath: apps/kimi-code
           tagName: ${{ github.ref_name }}
           releaseName: Kimi Code ${{ github.ref_name }}
-          releaseBody: Windows and Linux builds for Kimi Code ${{ github.ref_name }}.
+          releaseBody: Windows, Linux, and macOS builds for Kimi Code ${{ github.ref_name }}.
           releaseDraft: false
           prerelease: false
 
@@ -110,7 +110,75 @@ jobs:
           projectPath: apps/kimi-code
           tagName: ${{ github.ref_name }}
           releaseName: Kimi Code ${{ github.ref_name }}
-          releaseBody: Windows and Linux builds for Kimi Code ${{ github.ref_name }}.
+          releaseBody: Windows, Linux, and macOS builds for Kimi Code ${{ github.ref_name }}.
           releaseDraft: false
           prerelease: false
           args: --bundles appimage
+
+  release-macos:
+    name: Build and publish macOS
+    needs: release-linux
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/kimi-code/pnpm-lock.yaml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install frontend dependencies
+        working-directory: apps/kimi-code
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches app version
+        shell: bash
+        run: |
+          app_version="$(node -p "require('./apps/kimi-code/src-tauri/tauri.conf.json').version")"
+          expected_tag="v${app_version}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match app version ${expected_tag}" >&2
+            exit 1
+          fi
+
+      - name: Build and publish Kimi Code for Apple Silicon
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          projectPath: apps/kimi-code
+          tagName: ${{ github.ref_name }}
+          releaseName: Kimi Code ${{ github.ref_name }}
+          releaseBody: Windows, Linux, and macOS builds for Kimi Code ${{ github.ref_name }}.
+          releaseDraft: false
+          prerelease: false
+          args: --target aarch64-apple-darwin
+
+      - name: Build and publish Kimi Code for Intel Mac
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          projectPath: apps/kimi-code
+          tagName: ${{ github.ref_name }}
+          releaseName: Kimi Code ${{ github.ref_name }}
+          releaseBody: Windows, Linux, and macOS builds for Kimi Code ${{ github.ref_name }}.
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-apple-darwin
