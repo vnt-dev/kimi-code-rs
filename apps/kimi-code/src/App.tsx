@@ -7381,10 +7381,13 @@ function Collapsible({
 }
 
 function lastThinkingSentence(content: string): string {
-  const normalized = content.replace(/\s+/g, " ").trim();
+  const normalized = content
+    .replace(/[^\S\r\n]+/g, " ")
+    .replace(/\r\n?/g, "\n")
+    .trim();
   if (!normalized) return "";
   const sentences = normalized
-    .split(/(?<=[。！？!?])\s*|(?<=\.)\s+(?=[A-Z\u3400-\u9fff])/u)
+    .split(/\n+|(?<=[。！？!?])[^\S\r\n]*|(?<=\.)[^\S\r\n]+(?=[A-Z\u3400-\u9fff])/u)
     .map((sentence) => sentence.trim())
     .filter(Boolean);
   return sentences.at(-1) ?? normalized;
