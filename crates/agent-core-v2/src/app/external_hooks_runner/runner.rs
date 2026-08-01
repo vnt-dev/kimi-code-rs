@@ -201,6 +201,8 @@ fn trim_ecmascript(value: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::sync::Mutex;
 
     use super::*;
     use crate::kosong::contract::message::MediaUrl;

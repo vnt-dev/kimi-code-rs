@@ -87,8 +87,7 @@ use super::{
     PromptSubmitStatus, RegisterToolPayload, RenameSessionPayload, RunShellCommandPayload,
     SetActiveToolsPayload, SetModelPayload, SetModelResult, SetPermissionPayload,
     SetThinkingPayload, ShellCommandResult, SteerPayload, StopTaskPayload, UndoHistoryPayload,
-    UnregisterToolPayload,
-    apply_prompt_metadata_update, prompt_metadata_text_from_content_parts,
+    UnregisterToolPayload, apply_prompt_metadata_update, prompt_metadata_text_from_content_parts,
     prompt_metadata_text_from_plugin_command, prompt_metadata_text_from_skill,
     resolve_prompt_attachments,
 };

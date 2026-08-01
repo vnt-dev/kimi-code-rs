@@ -42,6 +42,9 @@ pnpm tauri build
 
 产物位于 `target/release/bundle`。
 
+推送版本标签后，发布流水线会同时构建 Windows 安装包和 Linux AppImage。两种平台均可使用
+应用内更新；Linux 自动更新需要运行 GitHub Release 页面提供的 AppImage。
+
 ## 项目结构
 
 | 目录 | 说明 |

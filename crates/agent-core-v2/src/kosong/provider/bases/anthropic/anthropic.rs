@@ -1400,10 +1400,7 @@ mod tests {
         assert_eq!(kwargs["output_config"]["format"]["type"], "json_schema");
         assert!(apply_response_format(&mut kwargs, Some(&ResponseFormat::JsonObject)).is_err());
 
-        assert_eq!(
-            resolve_default_max_tokens("claude-opus-4-8", None),
-            128_000
-        );
+        assert_eq!(resolve_default_max_tokens("claude-opus-4-8", None), 128_000);
         assert_eq!(
             resolve_default_max_tokens("claude-opus-4-9", Some(200_000)),
             128_000
