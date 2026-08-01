@@ -106,6 +106,7 @@ import {
   type ColorScheme,
 } from "./appearance";
 import SettingsDialog from "./SettingsDialog";
+import { resolveAccountMenuVisibility } from "./accountMenu";
 import {
   TRANSPORT_AUTH_REQUIRED,
   TRANSPORT_REPLAY_RESET,
@@ -2227,7 +2228,7 @@ export default function App() {
   const toggleProfile = (): void => {
     const opening = !profileOpen;
     setProfileOpen(opening);
-    if (opening) void loadAccountUsage();
+    if (opening && auth.loggedIn) void loadAccountUsage();
   };
 
   const openSettings = (): void => {
@@ -3617,6 +3618,7 @@ export default function App() {
   };
 
   const startLogin = async (): Promise<void> => {
+    setProfileOpen(false);
     setLoginOpen(true);
     setLoginBusy(true);
     setDeviceCode(undefined);
@@ -4810,74 +4812,82 @@ export default function App() {
         </div>
 
         <div className="account-area">
-          {auth.loggedIn ? (
-            <div className="profile-wrap" ref={profileRef}>
-              <button
-                className="account-button"
-                tabIndex={sidebarCollapsed ? -1 : 0}
-                aria-expanded={profileOpen}
-                aria-controls="account-usage-popover"
-                onClick={toggleProfile}
-              >
-                <span className="avatar">
+          <div className="profile-wrap" ref={profileRef}>
+            <button
+              className={auth.loggedIn ? "account-button" : "account-button login"}
+              tabIndex={sidebarCollapsed ? -1 : 0}
+              aria-label={t("account.openMenu")}
+              aria-expanded={profileOpen}
+              aria-controls="account-popover"
+              onClick={toggleProfile}
+            >
+              <span className={auth.loggedIn ? "avatar" : "avatar signed-out"}>
+                {auth.loggedIn ? (
                   <Sparkles size={15} />
-                  <i />
-                </span>
-                <span className="account-copy" aria-hidden={sidebarCollapsed}>
-                  <strong>Kimi Code</strong>
-                  <small>{t("account.connected")}</small>
-                </span>
+                ) : (
+                  <CircleUserRound size={18} />
+                )}
+                {auth.loggedIn && <i />}
+              </span>
+              <span className="account-copy" aria-hidden={sidebarCollapsed}>
+                <strong>
+                  {auth.loggedIn ? "Kimi Code" : t("account.login")}
+                </strong>
+                <small>
+                  {auth.loggedIn
+                    ? t("account.connected")
+                    : t("account.loginHint")}
+                </small>
+              </span>
+              {auth.loggedIn ? (
                 <MoreHorizontal
                   className="account-trailing-icon"
                   size={16}
                   aria-hidden={sidebarCollapsed}
                 />
-              </button>
-              <div
-                className="account-compact-actions"
-                aria-hidden={!sidebarCollapsed}
-                inert={!sidebarCollapsed}
-              >
-                <button
-                  className="account-compact-kimi"
-                  type="button"
-                  title={t("account.kimiAccount")}
-                  aria-label={t("account.openMenu")}
-                  aria-expanded={profileOpen}
-                  aria-controls="account-usage-popover"
-                  onClick={toggleProfile}
-                >
-                  <Sparkles size={14} />
-                </button>
-              </div>
-              {profileOpen && (
-                <AccountUsagePopover
-                  appVersion={appVersion}
-                  usage={accountUsage}
-                  busy={accountUsageBusy}
-                  error={accountUsageError}
-                  onRefresh={() => void loadAccountUsage()}
-                  onOpenSettings={openSettings}
-                  onSignOut={() => void signOut()}
+              ) : (
+                <LogIn
+                  className="account-trailing-icon"
+                  size={16}
+                  aria-hidden={sidebarCollapsed}
                 />
               )}
-            </div>
-          ) : (
-            <button className="account-button login" onClick={startLogin}>
-              <span className="avatar signed-out">
-                <CircleUserRound size={18} />
-              </span>
-              <span className="account-copy" aria-hidden={sidebarCollapsed}>
-                <strong>{t("account.login")}</strong>
-                <small>{t("account.loginHint")}</small>
-              </span>
-              <LogIn
-                className="account-trailing-icon"
-                size={16}
-                aria-hidden={sidebarCollapsed}
-              />
             </button>
-          )}
+            <div
+              className="account-compact-actions"
+              aria-hidden={!sidebarCollapsed}
+              inert={!sidebarCollapsed}
+            >
+              <button
+                className="account-compact-kimi"
+                type="button"
+                title={t("account.kimiAccount")}
+                aria-label={t("account.openMenu")}
+                aria-expanded={profileOpen}
+                aria-controls="account-popover"
+                onClick={toggleProfile}
+              >
+                {auth.loggedIn ? (
+                  <Sparkles size={14} />
+                ) : (
+                  <CircleUserRound size={15} />
+                )}
+              </button>
+            </div>
+            {profileOpen && (
+              <AccountUsagePopover
+                appVersion={appVersion}
+                loggedIn={auth.loggedIn}
+                usage={accountUsage}
+                busy={accountUsageBusy}
+                error={accountUsageError}
+                onRefresh={() => void loadAccountUsage()}
+                onLogin={() => void startLogin()}
+                onOpenSettings={openSettings}
+                onSignOut={() => void signOut()}
+              />
+            )}
+          </div>
         </div>
         </aside>
 
@@ -5677,31 +5687,40 @@ export default function App() {
 
 function AccountUsagePopover({
   appVersion,
+  loggedIn,
   usage,
   busy,
   error,
   onRefresh,
+  onLogin,
   onOpenSettings,
   onSignOut,
 }: {
   appVersion?: string;
+  loggedIn: boolean;
   usage?: AccountUsage;
   busy: boolean;
   error?: string;
   onRefresh: () => void;
+  onLogin: () => void;
   onOpenSettings: () => void;
   onSignOut: () => void;
 }) {
+  const visibility = resolveAccountMenuVisibility(loggedIn);
   const rows = usage
     ? [...(usage.summary ? [usage.summary] : []), ...usage.limits]
     : [];
 
   return (
     <div
-      id="account-usage-popover"
+      id="account-popover"
       className="profile-popover"
       role="dialog"
-      aria-label={t("account.usageTitle")}
+      aria-label={
+        visibility.showUsage
+          ? t("account.usageTitle")
+          : t("account.openMenu")
+      }
     >
       <div className="profile-popover-header">
         <div className="profile-identity">
@@ -5713,63 +5732,72 @@ function AccountUsagePopover({
               <strong>Kimi Code</strong>
               {appVersion && <small>v{appVersion}</small>}
             </span>
-            <small>{t("account.oauthAccount")}</small>
           </span>
         </div>
-        <button
-          className="profile-refresh"
-          type="button"
-          title={t("account.refreshUsage")}
-          aria-label={t("account.refreshUsage")}
-          disabled={busy}
-          onClick={onRefresh}
-        >
-          <RefreshCw className={busy ? "spinning" : ""} size={13} />
-        </button>
+        {visibility.showUsage && (
+          <button
+            className="profile-refresh"
+            type="button"
+            title={t("account.refreshUsage")}
+            aria-label={t("account.refreshUsage")}
+            disabled={busy}
+            onClick={onRefresh}
+          >
+            <RefreshCw className={busy ? "spinning" : ""} size={13} />
+          </button>
+        )}
       </div>
 
-      <div className="account-usage-content" aria-live="polite">
-        <div className="account-usage-heading">
-          <span>{t("account.planUsage")}</span>
-          {busy && usage && <small>{t("account.updating")}</small>}
+      {visibility.showUsage && (
+        <div className="account-usage-content" aria-live="polite">
+          <div className="account-usage-heading">
+            <span>{t("account.planUsage")}</span>
+            {busy && usage && <small>{t("account.updating")}</small>}
+          </div>
+
+          {busy && !usage ? (
+            <div className="account-usage-skeleton" aria-label={t("account.loadingUsage")}>
+              <i />
+              <i />
+            </div>
+          ) : rows.length > 0 ? (
+            <div className="account-usage-list">
+              {rows.map((row, index) => (
+                <ManagedUsageProgress
+                  key={`${row.label}-${String(index)}`}
+                  row={row}
+                  primary={index === 0 && usage?.summary !== null}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="account-usage-empty">
+              {error ? t("account.usageError") : t("account.noUsage")}
+            </div>
+          )}
+
+          {error && (
+            <div className="account-usage-error">
+              <span>{error}</span>
+              <button type="button" disabled={busy} onClick={onRefresh}>
+                {t("common.retry")}
+              </button>
+            </div>
+          )}
+
+          {usage?.extraUsage && (
+            <BoosterWalletSummary wallet={usage.extraUsage} />
+          )}
         </div>
-
-        {busy && !usage ? (
-          <div className="account-usage-skeleton" aria-label={t("account.loadingUsage")}>
-            <i />
-            <i />
-          </div>
-        ) : rows.length > 0 ? (
-          <div className="account-usage-list">
-            {rows.map((row, index) => (
-              <ManagedUsageProgress
-                key={`${row.label}-${String(index)}`}
-                row={row}
-                primary={index === 0 && usage?.summary !== null}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="account-usage-empty">
-            {error ? t("account.usageError") : t("account.noUsage")}
-          </div>
-        )}
-
-        {error && (
-          <div className="account-usage-error">
-            <span>{error}</span>
-            <button type="button" disabled={busy} onClick={onRefresh}>
-              {t("common.retry")}
-            </button>
-          </div>
-        )}
-
-        {usage?.extraUsage && (
-          <BoosterWalletSummary wallet={usage.extraUsage} />
-        )}
-      </div>
+      )}
 
       <div className="profile-popover-footer">
+        {visibility.showLogin && (
+          <button className="profile-login" type="button" onClick={onLogin}>
+            <LogIn size={14} />
+            {t("account.login")}
+          </button>
+        )}
         <button
           className="profile-settings"
           type="button"
@@ -5778,10 +5806,12 @@ function AccountUsagePopover({
           <SettingsIcon size={14} />
           {t("settings.title")}
         </button>
-        <button className="profile-signout" type="button" onClick={onSignOut}>
-          <LogOut size={14} />
-          {t("account.signOut")}
-        </button>
+        {visibility.showSignOut && (
+          <button className="profile-signout" type="button" onClick={onSignOut}>
+            <LogOut size={14} />
+            {t("account.signOut")}
+          </button>
+        )}
       </div>
     </div>
   );

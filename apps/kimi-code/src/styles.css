@@ -7005,6 +7005,7 @@ input:focus-visible {
 }
 
 .profile-settings,
+.profile-login,
 .profile-signout {
   display: flex;
   width: 100%;
@@ -7021,6 +7022,15 @@ input:focus-visible {
 
 .profile-settings {
   color: var(--text);
+}
+
+.profile-login {
+  color: var(--accent-2);
+}
+
+.profile-login:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .profile-settings:hover {
