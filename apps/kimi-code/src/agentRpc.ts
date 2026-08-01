@@ -160,6 +160,9 @@ export function createAgentClient(scope: AgentScope) {
     setPermission(mode: PermissionMode) {
       return callAgentRpc<void>(scope, "setPermission", { mode });
     },
+    getPermission() {
+      return callAgentRpc<{ mode: PermissionMode }>(scope, "getPermission");
+    },
     renameSession(title: string) {
       return callAgentRpc<void>(scope, "renameSession", { title });
     },

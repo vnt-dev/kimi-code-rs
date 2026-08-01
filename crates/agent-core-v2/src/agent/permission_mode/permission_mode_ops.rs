@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -42,11 +42,16 @@ pub static PERMISSION_MODE_CONFIGURED_MODEL: LazyLock<ModelDef<bool>> = LazyLock
 
 pub static SET_PERMISSION_MODE: LazyLock<DefinedOp<PermissionMode, SetPermissionModePayload>> =
     LazyLock::new(|| {
+        let mut options =
+            DefineOpOptions::new(|_state, payload: &SetPermissionModePayload| payload.mode);
+        options.to_event = Some(Arc::new(|payload, _state| {
+            Some(serde_json::json!({
+                "type": "agent.status.updated",
+                "permission": payload.mode,
+            }))
+        }));
         PERMISSION_MODE_MODEL
-            .define_op(
-                "permission.set_mode",
-                DefineOpOptions::new(|_state, payload: &SetPermissionModePayload| payload.mode),
-            )
+            .define_op("permission.set_mode", options)
             .expect("permission.set_mode must have one global definition")
     });
 
@@ -84,6 +89,16 @@ mod tests {
             .downcast::<PermissionMode>()
             .unwrap();
         assert_eq!(*next, PermissionMode::Auto);
+        assert_eq!(
+            SET_PERMISSION_MODE
+                .descriptor()
+                .to_event(op.payload(), &PermissionMode::Auto)
+                .unwrap(),
+            Some(serde_json::json!({
+                "type": "agent.status.updated",
+                "permission": "auto",
+            }))
+        );
     }
 
     #[test]

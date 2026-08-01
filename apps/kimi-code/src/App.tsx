@@ -1994,10 +1994,11 @@ export default function App() {
     agentId: string;
   }): Promise<void> => {
     const agent = createAgentClient(scope);
-    const [plan, todos, usage] = await Promise.all([
+    const [plan, todos, usage, permission] = await Promise.all([
       agent.getPlan(),
       agent.getTodos(),
       agent.getUsage(),
+      agent.getPermission(),
     ]);
     setPlans((current) => ({ ...current, [scope.sessionId]: plan }));
     setSessionTodos((current) => ({
@@ -2007,6 +2008,17 @@ export default function App() {
     setAgentUsages((current) => ({
       ...current,
       [scope.sessionId]: usage,
+    }));
+    updateDesktop((current) => ({
+      ...current,
+      projects: current.projects.map((project) => ({
+        ...project,
+        conversations: project.conversations.map((conversation) =>
+          conversation.id === scope.sessionId
+            ? { ...conversation, permissionMode: permission.mode }
+            : conversation,
+        ),
+      })),
     }));
   };
 
@@ -2369,6 +2381,29 @@ export default function App() {
       TRANSPORT_REPLAY_RESET,
       async (event) => {
         await refreshDesktopInventory();
+        const scopes = new Map(
+          event.payload.scopes.map((scope) => [scope.sessionId, scope]),
+        );
+        await Promise.all(
+          [...scopes.values()].map(async (scope) => {
+            try {
+              const permission = await createAgentClient(scope).getPermission();
+              updateDesktop((current) => ({
+                ...current,
+                projects: current.projects.map((project) => ({
+                  ...project,
+                  conversations: project.conversations.map((conversation) =>
+                    conversation.id === scope.sessionId
+                      ? { ...conversation, permissionMode: permission.mode }
+                      : conversation,
+                  ),
+                })),
+              }));
+            } catch {
+              // Session preparation or a later status event will retry it.
+            }
+          }),
+        );
         const sessionIds = new Set(
           event.payload.scopes.map((scope) => scope.sessionId),
         );
