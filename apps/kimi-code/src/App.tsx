@@ -3053,6 +3053,37 @@ export default function App() {
       .catch((error) => showNotice(conciseError(error)));
   };
 
+  const renameConversation = (nextTitle: string): void => {
+    if (!activeConversation || !activeProject) return;
+    if (activeAgentScope?.sessionId !== activeConversation.id) {
+      showNotice(t("notice.sessionPreparing"));
+      return;
+    }
+    const projectId = activeProject.id;
+    const conversationId = activeConversation.id;
+    const scope = activeAgentScope;
+    void createAgentClient(scope)
+      .renameSession(nextTitle)
+      .then(() => {
+        updateDesktop((current) => ({
+          ...current,
+          projects: current.projects.map((project) =>
+            project.id !== projectId
+              ? project
+              : {
+                  ...project,
+                  conversations: project.conversations.map((conversation) =>
+                    conversation.id === conversationId
+                      ? { ...conversation, title: nextTitle }
+                      : conversation,
+                  ),
+                },
+          ),
+        }));
+      })
+      .catch((error) => showNotice(conciseError(error)));
+  };
+
   const chooseEffort = (level: string): void => {
     if (!activeConversation || !activeProject || modelBusy) return;
     if (!thinkingLevelsForModel(selectedModel).includes(level)) return;
@@ -4095,10 +4126,7 @@ export default function App() {
         sidebarCollapsed ? "sidebar-is-collapsed" : ""
       }`}
     >
-      <WindowTitleBar
-        projectName={activeProject?.name}
-        conversationTitle={activeConversation?.title}
-      />
+      <WindowTitleBar />
 
       <div className="app-body">
         <aside className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
@@ -4365,7 +4393,10 @@ export default function App() {
                   </button>
                 )}
                 <div>
-                  <h1>{activeConversation.title}</h1>
+                  <ChatHeaderTitle
+                    title={activeConversation.title}
+                    onRename={renameConversation}
+                  />
                   <div className="path-line">
                     <Folder size={12} />
                     <span>{activeProject.path}</span>
@@ -4373,10 +4404,6 @@ export default function App() {
                 </div>
               </div>
               <div className="header-actions">
-                <span className="connection-pill">
-                  <i className="online" />
-                  {t("header.coreConnected")}
-                </span>
                 <button className="icon-button" title={t("conversation.create")} onClick={() => void createConversation(activeProject)}>
                   <SquarePen size={17} />
                 </button>
@@ -4956,7 +4983,7 @@ export default function App() {
                             ? t("permission.auto")
                             : t("permission.manual")
                       }
-                      disabled={isStreaming || modelBusy}
+                      disabled={modelBusy}
                       options={[
                         {
                           value: "manual",
@@ -5334,13 +5361,95 @@ interface ToolbarSelectOption {
   danger?: boolean;
 }
 
-function WindowTitleBar({
-  projectName,
-  conversationTitle,
+function ChatHeaderTitle({
+  title,
+  onRename,
 }: {
-  projectName?: string;
-  conversationTitle?: string;
+  title: string;
+  onRename: (nextTitle: string) => void;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event: PointerEvent): void => {
+      if (!rootRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!editing) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [editing]);
+
+  const startEditing = (): void => {
+    setDraft(title);
+    setMenuOpen(false);
+    setEditing(true);
+  };
+
+  const commitRename = (): void => {
+    const nextTitle = draft.trim();
+    setEditing(false);
+    if (nextTitle && nextTitle !== title) onRename(nextTitle);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="chat-title-input"
+        value={draft}
+        placeholder={t("conversation.renamePlaceholder")}
+        aria-label={t("conversation.rename")}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commitRename}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitRename();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setEditing(false);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="chat-title" ref={rootRef}>
+      <h1 title={title}>{title}</h1>
+      <button
+        className="icon-button chat-title-more"
+        type="button"
+        aria-label={t("conversation.rename")}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        onClick={() => setMenuOpen((current) => !current)}
+      >
+        <MoreHorizontal size={16} />
+      </button>
+      {menuOpen && (
+        <div className="chat-title-menu" role="menu" aria-label={title}>
+          <button type="button" role="menuitem" onClick={startEditing}>
+            <SquarePen size={13} />
+            {t("conversation.rename")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WindowTitleBar() {
   const [maximized, setMaximized] = useState(false);
   const appWindow = useMemo(
     () => (isTauri() ? getCurrentWindow() : undefined),
@@ -5390,9 +5499,6 @@ function WindowTitleBar({
       .catch(() => undefined);
   };
 
-  const contextTitle =
-    conversationTitle ?? projectName ?? t("titlebar.defaultContext");
-
   return (
     <header className="window-titlebar" data-tauri-drag-region>
       <div
@@ -5408,17 +5514,6 @@ function WindowTitleBar({
           <strong data-tauri-drag-region>Kimi Code</strong>
           <span data-tauri-drag-region>Agent Desktop</span>
         </div>
-      </div>
-
-      <div className="window-titlebar-context" data-tauri-drag-region>
-        <span className="window-context-project" data-tauri-drag-region>
-          <i data-tauri-drag-region />
-          <span data-tauri-drag-region>{projectName ?? "Local workspace"}</span>
-        </span>
-        <span className="window-context-divider" data-tauri-drag-region />
-        <strong data-tauri-drag-region title={contextTitle}>
-          {contextTitle}
-        </strong>
       </div>
 
       <div className="window-controls">

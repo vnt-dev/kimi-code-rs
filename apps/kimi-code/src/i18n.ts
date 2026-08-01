@@ -135,6 +135,8 @@ const zh = {
   "conversation.running": "对话进行中",
   "conversation.archive": "归档对话",
   "conversation.archiveNamed": "归档对话 {title}",
+  "conversation.rename": "重命名对话",
+  "conversation.renamePlaceholder": "输入新的对话名称",
 
   "dialog.pickProjectDirectory": "选择一个项目目录",
 
@@ -168,7 +170,7 @@ const zh = {
   "account.monthlyLimit": "上限 {amount}",
   "account.monthlyLimitUnlimited": "月度上限：不限",
 
-  "header.coreConnected": "Core v2 已连接",
+
 
   "history.loading": "正在读取会话历史…",
   "history.processed": "已处理",
@@ -247,7 +249,7 @@ const zh = {
   "window.close": "关闭",
   "window.closeWindow": "关闭窗口",
 
-  "titlebar.defaultContext": "准备开始新的编码任务",
+
 
   "context.window": "上下文窗口",
   "context.unknownLimit": "上下文窗口上限未知",
@@ -525,6 +527,8 @@ const en: Record<TranslationKey, string> = {
   "conversation.running": "Conversation in progress",
   "conversation.archive": "Archive conversation",
   "conversation.archiveNamed": "Archive conversation {title}",
+  "conversation.rename": "Rename conversation",
+  "conversation.renamePlaceholder": "Enter a new conversation name",
 
   "dialog.pickProjectDirectory": "Choose a project directory",
 
@@ -558,7 +562,7 @@ const en: Record<TranslationKey, string> = {
   "account.monthlyLimit": "Limit {amount}",
   "account.monthlyLimitUnlimited": "Monthly limit: none",
 
-  "header.coreConnected": "Core v2 connected",
+
 
   "history.loading": "Loading conversation history…",
   "history.processed": "Processed",
@@ -637,7 +641,7 @@ const en: Record<TranslationKey, string> = {
   "window.close": "Close",
   "window.closeWindow": "Close window",
 
-  "titlebar.defaultContext": "Ready for a new coding task",
+
 
   "context.window": "Context window",
   "context.unknownLimit": "Context window limit unknown",

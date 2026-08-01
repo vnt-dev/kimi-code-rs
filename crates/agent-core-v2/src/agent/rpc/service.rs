@@ -84,9 +84,10 @@ use super::{
     BeginCompactionPayload, CancelPayload, CancelPlanPayload, CancelShellCommandPayload,
     CreateGoalPayload, DetachTaskPayload, EmptyPayload, EnterSwarmPayload, GetTaskOutputPayload,
     GetTasksPayload, PromptMetadataUpdateTarget, PromptPayload, PromptSubmitResult,
-    PromptSubmitStatus, RegisterToolPayload, RunShellCommandPayload, SetActiveToolsPayload,
-    SetModelPayload, SetModelResult, SetPermissionPayload, SetThinkingPayload, ShellCommandResult,
-    SteerPayload, StopTaskPayload, UndoHistoryPayload, UnregisterToolPayload,
+    PromptSubmitStatus, RegisterToolPayload, RenameSessionPayload, RunShellCommandPayload,
+    SetActiveToolsPayload, SetModelPayload, SetModelResult, SetPermissionPayload,
+    SetThinkingPayload, ShellCommandResult, SteerPayload, StopTaskPayload, UndoHistoryPayload,
+    UnregisterToolPayload,
     apply_prompt_metadata_update, prompt_metadata_text_from_content_parts,
     prompt_metadata_text_from_plugin_command, prompt_metadata_text_from_skill,
     resolve_prompt_attachments,
@@ -428,6 +429,11 @@ impl AgentRpcServiceContract for AgentRpcService {
             model: result.model,
             provider_name: result.provider_name,
         })
+    }
+
+    async fn rename_session(&self, payload: RenameSessionPayload) -> AgentRpcResult<()> {
+        self.metadata.set_title(payload.title).await?;
+        Ok(())
     }
 
     async fn get_model(&self, _payload: EmptyPayload) -> AgentRpcResult<String> {

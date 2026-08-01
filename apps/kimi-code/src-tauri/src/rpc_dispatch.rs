@@ -19,6 +19,7 @@ pub enum AgentRpcMethod {
     UndoHistory,
     SetThinking,
     SetPermission,
+    RenameSession,
     SetModel,
     GetModel,
     EnterPlan,
@@ -158,6 +159,9 @@ pub async fn dispatch(
         AgentRpcMethod::SetPermission => {
             invoke!(rpc, payload, set_permission, SetPermissionPayload)
         }
+        AgentRpcMethod::RenameSession => {
+            invoke!(rpc, payload, rename_session, RenameSessionPayload)
+        }
         AgentRpcMethod::SetModel => invoke!(rpc, payload, set_model, SetModelPayload),
         AgentRpcMethod::GetModel => invoke!(rpc, payload, get_model, EmptyPayload),
         AgentRpcMethod::EnterPlan => invoke!(rpc, payload, enter_plan, EmptyPayload),
@@ -236,6 +240,10 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<AgentRpcMethod>("\"getTodos\"").unwrap(),
             AgentRpcMethod::GetTodos
+        ));
+        assert!(matches!(
+            serde_json::from_str::<AgentRpcMethod>("\"renameSession\"").unwrap(),
+            AgentRpcMethod::RenameSession
         ));
     }
 

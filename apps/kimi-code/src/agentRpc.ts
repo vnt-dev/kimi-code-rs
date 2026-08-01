@@ -29,6 +29,7 @@ export type AgentRpcMethod =
   | "undoHistory"
   | "setThinking"
   | "setPermission"
+  | "renameSession"
   | "setModel"
   | "getModel"
   | "enterPlan"
@@ -154,6 +155,9 @@ export function createAgentClient(scope: AgentScope) {
     },
     setPermission(mode: PermissionMode) {
       return callAgentRpc<void>(scope, "setPermission", { mode });
+    },
+    renameSession(title: string) {
+      return callAgentRpc<void>(scope, "renameSession", { title });
     },
     enterPlan() {
       return callAgentRpc<void>(scope, "enterPlan");

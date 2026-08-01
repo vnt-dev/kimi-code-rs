@@ -81,7 +81,8 @@ select:focus-visible {
   display: grid;
   height: 40px;
   min-height: 40px;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) auto;
+  grid-template-columns: var(--sidebar-width) auto;
+  justify-content: space-between;
   border-bottom: 1px solid var(--line);
   background: #1e1f22;
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
@@ -167,59 +168,6 @@ select:focus-visible {
   max-width: 0;
   opacity: 0;
   transform: translateX(-5px);
-}
-
-.window-titlebar-context {
-  display: flex;
-  min-width: 0;
-  padding: 0 16px;
-  align-items: center;
-  gap: 9px;
-  overflow: hidden;
-  color: #686873;
-}
-
-.window-context-project {
-  display: flex;
-  min-width: 0;
-  max-width: 220px;
-  align-items: center;
-  gap: 7px;
-  font-family: "DM Mono", monospace;
-  font-size: 8.5px;
-  letter-spacing: 0.025em;
-  white-space: nowrap;
-}
-
-.window-context-project > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.window-context-project i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #6f61d1;
-  box-shadow: 0 0 7px rgba(139, 124, 246, 0.52);
-  flex: 0 0 auto;
-}
-
-.window-context-divider {
-  width: 1px;
-  height: 12px;
-  background: var(--line-strong);
-  flex: 0 0 auto;
-}
-
-.window-titlebar-context strong {
-  min-width: 0;
-  overflow: hidden;
-  color: #8d8d98;
-  font-size: 9.5px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .window-controls {
@@ -1639,6 +1587,68 @@ select:focus-visible {
   letter-spacing: -0.01em;
 }
 
+.chat-title {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.chat-title-more {
+  flex: 0 0 auto;
+}
+
+.chat-title-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
+  z-index: 30;
+  animation: select-menu-in 120ms ease-out;
+}
+
+.chat-title-menu > button {
+  display: flex;
+  width: 100%;
+  padding: 6px 10px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.chat-title-menu > button:hover {
+  background: var(--segment-active);
+}
+
+.chat-title-menu > button > svg {
+  color: var(--muted);
+}
+
+.chat-title-input {
+  width: min(420px, 100%);
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--segment-surface);
+  font-size: 13.5px;
+  font-weight: 590;
+  letter-spacing: -0.01em;
+}
+
 .path-line {
   display: flex;
   max-width: 520px;
@@ -1660,31 +1670,6 @@ select:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.connection-pill {
-  display: flex;
-  height: 28px;
-  padding: 0 10px;
-  align-items: center;
-  gap: 7px;
-  border: 1px solid var(--line);
-  border-radius: 99px;
-  color: #74747f;
-  background: rgba(255, 255, 255, 0.018);
-  font-size: 9.5px;
-}
-
-.connection-pill i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #5b5b64;
-}
-
-.connection-pill i.online {
-  background: var(--green);
-  box-shadow: 0 0 8px rgba(84, 207, 154, 0.55);
 }
 
 .chat-scroll {
@@ -6503,7 +6488,6 @@ button.message-skill-chip:hover {
     box-shadow: -20px 0 60px rgba(0, 0, 0, 0.38);
   }
 
-  .connection-pill,
   .send-zone > span {
     display: none;
   }
@@ -6786,29 +6770,6 @@ input:focus-visible {
   letter-spacing: 0.08em;
 }
 
-.window-titlebar-context {
-  color: var(--muted);
-}
-
-.window-context-project {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.window-context-project i {
-  background: var(--accent);
-  box-shadow: none;
-}
-
-.window-titlebar-context strong {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.window-context-divider {
-  background: var(--line);
-}
-
 .window-control {
   color: var(--muted);
 }
@@ -6831,8 +6792,7 @@ input:focus-visible {
 .icon-button,
 .toolbar-icon,
 .toolbar-select-trigger,
-.mode-toolbar-button,
-.connection-pill {
+.mode-toolbar-button {
   border-color: transparent;
   color: var(--muted);
   background: transparent;
@@ -7089,11 +7049,6 @@ input:focus-visible {
 
 .path-line {
   color: var(--muted);
-  font-size: 12px;
-}
-
-.connection-pill {
-  color: var(--subtle);
   font-size: 12px;
 }
 
