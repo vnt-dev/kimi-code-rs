@@ -213,12 +213,10 @@ impl WebServerController {
             }
         };
 
-        if persist {
-            if let Err(error) = save_settings(&self.settings_path, settings) {
-                next.close().await;
-                self.mark_error(&error).await;
-                return Err(error);
-            }
+        if persist && let Err(error) = save_settings(&self.settings_path, settings) {
+            next.close().await;
+            self.mark_error(&error).await;
+            return Err(error);
         }
         let previous = {
             let mut inner = self.inner.lock().await;

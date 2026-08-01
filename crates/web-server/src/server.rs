@@ -223,7 +223,7 @@ pub(crate) async fn start_server(
 
 async fn meta_handler(State(state): State<ServerState>, headers: HeaderMap) -> Response {
     if let Err(response) = authenticate_bearer(&state, &headers) {
-        return response;
+        return *response;
     }
     Json(serde_json::json!({
         "serverVersion": state.version,
@@ -241,7 +241,7 @@ async fn rpc_handler(
 ) -> Response {
     let connection = match authenticate_connection(&state, &headers) {
         Ok(connection) => connection,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let id = request.id;
     match dispatch_rpc(
@@ -270,7 +270,7 @@ async fn upload_handler(
     mut multipart: Multipart,
 ) -> Response {
     if let Err(response) = authenticate_connection(&state, &headers) {
-        return response;
+        return *response;
     }
     let request_id = Uuid::new_v4().to_string();
     let mut filename = None;
@@ -336,7 +336,7 @@ async fn websocket_handler(
     websocket: WebSocketUpgrade,
 ) -> Response {
     if let Err(response) = validate_host_and_origin(&state, &headers) {
-        return response;
+        return *response;
     }
     let Some(protocol) = websocket_bearer_protocol(&headers) else {
         return rpc_http_error(
@@ -409,7 +409,7 @@ async fn static_handler(
     uri: Uri,
 ) -> Response {
     if let Err(response) = validate_host(&state, &headers) {
-        return response;
+        return *response;
     }
     if uri.path().starts_with("/_kimi/") {
         return StatusCode::NOT_FOUND.into_response();
@@ -464,18 +464,18 @@ fn normalized_asset_path(path: &str) -> Option<String> {
 fn authenticate_connection(
     state: &ServerState,
     headers: &HeaderMap,
-) -> Result<Arc<RpcConnection>, Response> {
+) -> Result<Arc<RpcConnection>, Box<Response>> {
     authenticate_bearer(state, headers)?;
     let Some(connection_id) = headers
         .get("x-kimi-connection-id")
         .and_then(|value| value.to_str().ok())
     else {
-        return Err(rpc_http_error(
+        return Err(Box::new(rpc_http_error(
             StatusCode::CONFLICT,
             "",
             "connection.required",
             "an active WebSocket connection is required",
-        ));
+        )));
     };
     state
         .connections
@@ -483,33 +483,33 @@ fn authenticate_connection(
         .ok()
         .and_then(|connections| connections.get(connection_id).cloned())
         .ok_or_else(|| {
-            rpc_http_error(
+            Box::new(rpc_http_error(
                 StatusCode::CONFLICT,
                 "",
                 "connection.stale",
                 "the WebSocket connection is no longer active",
-            )
+            ))
         })
 }
 
-fn authenticate_bearer(state: &ServerState, headers: &HeaderMap) -> Result<(), Response> {
+fn authenticate_bearer(state: &ServerState, headers: &HeaderMap) -> Result<(), Box<Response>> {
     validate_host_and_origin(state, headers)?;
     let credential = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
     if !credential.is_some_and(|value| token_matches(&state.token, value)) {
-        return Err(rpc_http_error(
+        return Err(Box::new(rpc_http_error(
             StatusCode::UNAUTHORIZED,
             "",
             "auth.invalid",
             "a valid bearer credential is required",
-        ));
+        )));
     }
     Ok(())
 }
 
-fn validate_host_and_origin(state: &ServerState, headers: &HeaderMap) -> Result<(), Response> {
+fn validate_host_and_origin(state: &ServerState, headers: &HeaderMap) -> Result<(), Box<Response>> {
     validate_host(state, headers)?;
     let host = headers
         .get(header::HOST)
@@ -518,31 +518,30 @@ fn validate_host_and_origin(state: &ServerState, headers: &HeaderMap) -> Result<
     if let Some(origin) = headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())
+        && !origin_allowed(state.listen_scope, state.port, host, origin)
     {
-        if !origin_allowed(state.listen_scope, state.port, host, origin) {
-            return Err(rpc_http_error(
-                StatusCode::FORBIDDEN,
-                "",
-                "origin.rejected",
-                "request origin is not allowed",
-            ));
-        }
+        return Err(Box::new(rpc_http_error(
+            StatusCode::FORBIDDEN,
+            "",
+            "origin.rejected",
+            "request origin is not allowed",
+        )));
     }
     Ok(())
 }
 
-fn validate_host(state: &ServerState, headers: &HeaderMap) -> Result<(), Response> {
+fn validate_host(state: &ServerState, headers: &HeaderMap) -> Result<(), Box<Response>> {
     let host = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
     if !host_allowed(state.listen_scope, state.port, host) {
-        return Err(rpc_http_error(
+        return Err(Box::new(rpc_http_error(
             StatusCode::BAD_REQUEST,
             "",
             "host.rejected",
             "request host is not allowed",
-        ));
+        )));
     }
     Ok(())
 }
