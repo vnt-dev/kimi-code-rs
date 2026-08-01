@@ -1,175 +1,70 @@
 # Kimi Code for Rust
 
-[中文文档](README.zh-CN.md)
+[简体中文](README.zh-CN.md) | English
 
-Kimi Code for Rust is a native desktop coding agent built with Rust, Tauri,
-React, and TypeScript. The desktop client uses `kimi-code-agent-core-v2` for
-authentication, model discovery, agent execution, tool interactions, and
-conversation context management.
+**A Rust rewrite of Kimi Code — fully compatible with the official Kimi CLI, with both desktop and Web access.**
 
-This project is a Rust implementation of the original
-[kimi-code](https://github.com/MoonshotAI/kimi-code) repository, corresponding to
-commit
-[e45832398d0d9cad98dbad1cbf1e5b103a20aace](https://github.com/MoonshotAI/kimi-code/commit/e45832398d0d9cad98dbad1cbf1e5b103a20aace).
+Kimi Code for Rust is built with **Tauri 2 + React 19 + Rust 2024**. It is fully compatible with the capabilities and data of the official Kimi CLI, while bringing the Agent runtime, conversation management, and permission system into a lightweight native desktop application. Enable the built-in Web server to access it directly from a browser and view or control the same conversation in real time from both desktop and Web clients.
 
-## Features
+<p align="center">
+  <img src="https://github.com/vnt-dev/kimi-code-rs/blob/master/docs/kimi-code-desktop-mobile-showcase-en.png?raw=true" alt="Kimi Code desktop and mobile Web interfaces" width="720">
+</p>
 
-- Organize local workspaces as projects with multiple conversations.
-- Sign in to Kimi Code through the OAuth device flow, with automatic browser
-  opening and a visible fallback code.
-- Discover available models and select model-specific reasoning effort.
-- Stream assistant reasoning and responses into the conversation.
-- Render assistant messages as Markdown with GitHub Flavored Markdown support.
-- Review command and tool requests directly in the client.
-- Choose between three permission modes:
-  - **Request Approval** asks before protected operations.
-  - **Auto** lets the permission policy decide whether an operation can run.
-  - **Full Access** bypasses approval and executes operations immediately.
-- Display automatic and manual context-compaction lifecycle events.
-- Persist the desktop project and conversation layout locally.
+## Why Kimi Code for Rust?
 
-> [!CAUTION]
-> Full Access allows the agent to execute commands without approval. Use it only
-> in workspaces you trust and understand.
+- 🦀 **Pure Rust core**: The Agent loop, tool execution, permission gates, and context compaction are all implemented in Rust for high performance and memory safety.
+- 🖥️ **Native desktop experience**: Powered by Tauri 2 without Electron's overhead. Manage multiple projects and conversations in the sidebar while following streaming responses in the main view.
+- 🌐 **Desktop and Web access**: Enable the built-in Web server to access Kimi Code from a computer or mobile browser, with the same conversation synchronized with the desktop client in real time.
+- 🔐 **Three permission modes**: `Request Approval` confirms protected operations, `Auto` lets the policy decide, and `Full Access` runs without approval—putting you in control of safety and speed.
+- 🧠 **Complete Agent capabilities**: Plan mode, Subagents/Swarm, MCP, skills, scheduled tasks, and automatic context compaction are all included.
+- 🔑 **One-click sign-in**: The OAuth device authorization flow opens your browser automatically, so you can connect to Kimi models by scanning a QR code or entering a device code.
+- 📡 **Streaming responses**: Reasoning and answers render in real time, with full Markdown/GFM support for code, tables, task lists, and more.
+- 💾 **Local-first data**: Conversation history and project layouts stay on your machine, while credentials are stored under `~/.kimi-code/`, keeping your data under your control.
 
-## Repository Layout
+> This project is a Rust implementation of [MoonshotAI/kimi-code](https://github.com/MoonshotAI/kimi-code).
 
-| Path | Purpose |
-| --- | --- |
-| `apps/kimi-code` | Tauri 2 desktop application with a React and Vite frontend |
-| `crates/agent-core-v2` | Agent runtime, sessions, tools, providers, permissions, and desktop facade |
-| `crates/oauth` | OAuth device flow, credential storage, model discovery, and managed authentication |
-| `crates/protocol` | Shared domain models and wire-format definitions |
-| `crates/transcript` | Transcript models, reduction, history, and pagination |
-| `crates/minidb` | Embedded log-structured key-value and document database |
+## Quick Start
 
-## Prerequisites
-
-Install the following before building the project:
-
-- A stable Rust toolchain that supports Rust 2024 edition
-- A current Node.js LTS release
-- [pnpm](https://pnpm.io/) 10.x
-- The platform-specific [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
-
-On Windows, Tauri also requires the Microsoft C++ Build Tools and WebView2
-components described in the prerequisites above.
-
-## Getting Started
-
-Clone the repository:
+Requirements: a Rust toolchain with Rust 2024 edition support, Node.js LTS, pnpm 10.x, and the platform-specific [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```shell
 git clone https://github.com/vnt-dev/kimi-code-rs.git
-cd kimi-code-rs
-```
-
-Install the desktop frontend dependencies:
-
-```shell
-cd apps/kimi-code
+cd kimi-code-rs/apps/kimi-code
 pnpm install
-```
-
-Start the desktop application in development mode:
-
-```shell
 pnpm tauri dev
 ```
 
-The first Rust build can take several minutes because Cargo must compile the
-Tauri application and the agent runtime.
+The first build may take a few minutes. Once the application starts, sign in to your Kimi account and open a local project directory. The Agent can then help you read code, fix bugs, and run commands.
 
-## Building
-
-Create a production desktop bundle from `apps/kimi-code`:
+To build a release bundle:
 
 ```shell
 pnpm tauri build
 ```
 
-Installers and bundles are written under `target/release/bundle` when Cargo
-uses the workspace's default target directory.
+Build artifacts are written to `target/release/bundle`.
 
-## Releasing and application updates
+## Project Structure
 
-The desktop client checks the latest GitHub Release through Tauri Updater. The
-release workflow builds signed Windows installers and uploads `latest.json`
-when a `v*` tag is pushed.
+| Path | Description |
+| --- | --- |
+| `apps/kimi-code` | Tauri 2 desktop application (React + Vite frontend and Rust shell) |
+| `crates/agent-core-v2` | Agent runtime core: loop, tools, permissions, conversations, MCP, and Subagents |
+| `crates/oauth` | OAuth device flow, credential storage, and model discovery |
+| `crates/protocol` | Shared data models and communication protocols |
+| `crates/transcript` | Conversation transcript models, compaction, and pagination |
+| `crates/minidb` | Embedded log-structured key-value/document database |
 
-The updater signing private key is generated locally at
-`.tauri/kimi-code.key`. This directory is ignored by Git. Back up the key in a
-secure location: losing it prevents existing installations from accepting
-future updates.
-
-Before the first release, add the private key to the repository's GitHub
-Actions secrets:
-
-```powershell
-Get-Content .tauri\kimi-code.key -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY
-```
-
-For every release, keep the version in these files synchronized:
-
-- `apps/kimi-code/package.json`
-- `apps/kimi-code/src-tauri/Cargo.toml`
-- `apps/kimi-code/src-tauri/tauri.conf.json`
-
-Then commit the version change and push the matching tag:
-
-```powershell
-git tag v0.1.3
-git push origin v0.1.3
-```
-
-The workflow rejects a tag that does not match `tauri.conf.json`. Clients
-without the updater feature must install the first updater-enabled release
-manually; application updates work automatically after that.
-
-## Development
-
-Build the frontend:
+## Contributing
 
 ```shell
-cd apps/kimi-code
-pnpm build
+cargo test --workspace          # Run the full test suite
+cargo fmt --all --check         # Check formatting
+cargo clippy --workspace --all-targets -- -D warnings   # Run lints
 ```
 
-Run the Rust test suite from the repository root:
-
-```shell
-cargo test --workspace
-```
-
-Check formatting and lints:
-
-```shell
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-Individual crates can also be tested by package name:
-
-```shell
-cargo test -p kimi-code-agent-core-v2
-cargo test -p kimi-code-minidb
-cargo test -p kimi-code-oauth
-cargo test -p kimi-code-protocol
-cargo test -p kimi-code-transcript
-```
-
-## Local Data and Credentials
-
-The desktop shell stores project and conversation metadata in the WebView's
-local storage. Message history is owned by agent-core and loaded from its
-persisted transcript when a conversation is opened. Kimi Code credentials are
-stored under `~/.kimi-code/credentials` by default. Do not commit credentials,
-access tokens, refresh tokens, or exported conversation data.
-
-The selected project directory becomes the agent's working directory. Commands
-and file operations therefore run against that local workspace according to
-the active permission mode.
+Issues and pull requests are welcome. If you enjoy the project, giving it a Star is the best way to show your support!
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT License](LICENSE)

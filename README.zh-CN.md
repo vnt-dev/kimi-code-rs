@@ -1,17 +1,18 @@
 # Kimi Code for Rust
 
-**用 Rust 重写的 Kimi Code —— 一款跑在桌面上的 AI 编程智能体。**
+**用 Rust 重写的 Kimi Code —— 完全兼容官方 Kimi CLI，并支持桌面端与 Web 端访问。**
 
-不再是命令行，也不依赖 Electron。Kimi Code for Rust 基于 **Tauri 2 + React 19 + Rust 2024** 打造，把完整的 Agent 运行时、会话管理、权限体系全部收进一个轻量的原生桌面应用里，启动快、占用小、体验顺滑。
+Kimi Code for Rust 基于 **Tauri 2 + React 19 + Rust 2024** 打造，完整兼容官方 Kimi CLI 的能力与数据，并把 Agent 运行时、会话管理、权限体系全部收进一个轻量的原生桌面应用。开启内置 Web 服务后，还可以直接通过浏览器访问，在桌面端和 Web 端实时查看、操作同一个会话。
 
 <p align="center">
-  <img src="https://github.com/vnt-dev/kimi-code-rs/blob/master/docs/main-interface.jpg?raw=true" alt="主界面" width="720">
+  <img src="https://github.com/vnt-dev/kimi-code-rs/blob/master/docs/kimi-code-desktop-mobile-showcase.png?raw=true" alt="Kimi Code 桌面端与移动 Web 端界面" width="720">
 </p>
 
 ## 为什么选择它
 
 - 🦀 **纯 Rust 内核**：Agent 主循环、工具执行、权限闸门、上下文压缩全部由 Rust 实现，性能与内存安全兼得。
 - 🖥️ **原生桌面体验**：Tauri 2 驱动，告别 Electron 的臃肿；左侧工作区管理多个项目与会话，右侧流式对话一目了然。
+- 🌐 **桌面与 Web 双端访问**：开启内置 Web 服务后，可通过电脑或手机浏览器访问，并与桌面端实时同步同一个会话。
 - 🔐 **三种权限模式**：`请求审批` 逐步确认、`自动` 交给策略判断、`完全访问` 全速执行——安全与效率由你掌控。
 - 🧠 **完整的 Agent 能力**：计划模式、子代理（Subagent/Swarm）、MCP、技能、定时任务、上下文自动压缩，一个不少。
 - 🔑 **一键登录**：OAuth 设备授权流程，自动拉起浏览器，扫码或输入设备码即可接入 Kimi 模型。
