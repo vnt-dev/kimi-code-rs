@@ -47,8 +47,10 @@ fn map_content_part(part: &ContentPart) -> MessageContent {
         ContentPart::AudioUrl { audio_url } => MessageContent::Text {
             text: format!("[audio:{}]", audio_url.url),
         },
-        ContentPart::VideoUrl { video_url } => MessageContent::Text {
-            text: format!("[video:{}]", video_url.url),
+        ContentPart::VideoUrl { video_url } => MessageContent::Video {
+            source: ImageSource::Url {
+                url: video_url.url.clone(),
+            },
         },
     }
 }
@@ -71,7 +73,7 @@ fn map_message_content(message: &ContextMessage, part: &ContentPart) -> MessageC
 }
 
 // Original: messageProjection.ts, buildProtocolContent().
-fn build_protocol_content(
+pub(crate) fn to_protocol_message_content(
     message: &ContextMessage,
 ) -> Result<Vec<MessageContent>, serde_json::Error> {
     if message.message.role == Role::Tool {
@@ -176,7 +178,7 @@ pub fn to_protocol_message(
             .unwrap_or_else(|| derive_message_id(session_id, index)),
         session_id: session_id.to_owned(),
         role: to_protocol_role(message.message.role),
-        content: build_protocol_content(message)?,
+        content: to_protocol_message_content(message)?,
         created_at,
         prompt_id: None,
         parent_message_id: None,
@@ -296,7 +298,7 @@ mod tests {
                 { "type": "thinking", "thinking": "reason", "signature": "signature" },
                 { "type": "image", "source": { "kind": "url", "url": "image.png" } },
                 { "type": "text", "text": "[audio:audio.wav]" },
-                { "type": "text", "text": "[video:video.mp4]" }
+                { "type": "video", "source": { "kind": "url", "url": "video.mp4" } }
             ])
         );
     }

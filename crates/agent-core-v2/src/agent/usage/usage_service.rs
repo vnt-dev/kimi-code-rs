@@ -234,6 +234,9 @@ mod tests {
         fn subscribe(&self, _: DomainEventHandler) -> DisposableHandle {
             disposable_none()
         }
+        fn subscribe_with_replay(&self, _: DomainEventHandler) -> DisposableHandle {
+            disposable_none()
+        }
         fn subscribe_type(&self, _: &str, _: DomainEventHandler) -> DisposableHandle {
             disposable_none()
         }

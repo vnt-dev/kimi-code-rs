@@ -815,6 +815,29 @@ impl KimiCodeDesktopClient {
         on_event: Arc<dyn Fn(String, Value) + Send + Sync>,
         on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
     ) -> Result<DisposableHandle, String> {
+        self.subscribe_agent_events_inner(session_id, agent_id, on_event, on_interactions, false)
+            .await
+    }
+
+    pub async fn subscribe_agent_events_with_replay(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        on_event: Arc<dyn Fn(String, Value) + Send + Sync>,
+        on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
+    ) -> Result<DisposableHandle, String> {
+        self.subscribe_agent_events_inner(session_id, agent_id, on_event, on_interactions, true)
+            .await
+    }
+
+    async fn subscribe_agent_events_inner(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        on_event: Arc<dyn Fn(String, Value) + Send + Sync>,
+        on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
+        replay: bool,
+    ) -> Result<DisposableHandle, String> {
         let sessions = self
             .app
             .get(SESSION_LIFECYCLE_SERVICE_ID)
@@ -849,6 +872,7 @@ impl KimiCodeDesktopClient {
                     &attached_for_create,
                     handle,
                     &on_event_for_create,
+                    replay,
                 );
             }));
             let attached_for_dispose = Arc::clone(&attached);
@@ -863,11 +887,11 @@ impl KimiCodeDesktopClient {
                     }),
             );
             for handle in lifecycle.list(None) {
-                attach_desktop_agent_events(&subscriptions, &attached, &handle, &on_event)?;
+                attach_desktop_agent_events(&subscriptions, &attached, &handle, &on_event, replay)?;
             }
         } else {
             let attached = Mutex::new(HashSet::new());
-            attach_desktop_agent_events(&subscriptions, &attached, &agent, &on_event)?;
+            attach_desktop_agent_events(&subscriptions, &attached, &agent, &on_event, replay)?;
         }
 
         let todo = session
@@ -1239,6 +1263,7 @@ fn attach_desktop_agent_events(
     attached: &Mutex<HashSet<String>>,
     agent: &ScopeHandle,
     on_event: &Arc<dyn Fn(String, Value) + Send + Sync>,
+    replay: bool,
 ) -> Result<(), String> {
     let agent_id = agent.id().to_owned();
     {
@@ -1255,9 +1280,14 @@ fn attach_desktop_agent_events(
         }
     };
     let on_event = Arc::clone(on_event);
-    subscriptions.add(event_bus.subscribe(Arc::new(move |event| {
+    let handler = Arc::new(move |event: &crate::app::event::event_bus::DomainEvent| {
         on_event(agent_id.clone(), event.clone().into_value());
-    })));
+    });
+    subscriptions.add(if replay {
+        event_bus.subscribe_with_replay(handler)
+    } else {
+        event_bus.subscribe(handler)
+    });
     Ok(())
 }
 
@@ -1475,6 +1505,126 @@ mod tests {
         assert!(received.lock().unwrap().iter().any(|(agent_id, event)| {
             agent_id == "child-live" && event["type"] == "test.child-live"
         }));
+
+        subscription.dispose().unwrap();
+        drop(client);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn replay_subscription_backfills_main_and_existing_subagent_then_stays_live() {
+        let root = std::env::temp_dir().join(format!(
+            "kimi-desktop-replay-events-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let home = root.join("home");
+        let work_dir = root.join("workspace");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let client = KimiCodeDesktopClient::new(&home, "test").unwrap();
+        client
+            .configure_models(&[managed_model("first")])
+            .await
+            .unwrap();
+        let prepared = client
+            .prepare_session(DesktopPrepareSessionRequest {
+                session_id: None,
+                work_dir: work_dir.to_string_lossy().into_owned(),
+                model: Some("kimi-code/first".into()),
+                thinking: Some("high".into()),
+                permission: Some(PermissionMode::Yolo),
+            })
+            .await
+            .unwrap();
+
+        let sessions = client.app.get(SESSION_LIFECYCLE_SERVICE_ID).unwrap();
+        let session = sessions.get(&prepared.session_id).unwrap();
+        let lifecycle = session.get(AGENT_LIFECYCLE_SERVICE_ID).unwrap();
+        let main = lifecycle.get(MAIN_AGENT_ID).unwrap();
+        let child = lifecycle
+            .create(CreateAgentOptions {
+                agent_id: Some("child-replay".into()),
+                ..CreateAgentOptions::default()
+            })
+            .await
+            .unwrap();
+
+        for (agent, turn_id, delta) in [
+            (&main, 1_i64, "main-before"),
+            (&child, 2_i64, "child-before"),
+        ] {
+            let bus = agent.get(EVENT_BUS_SERVICE_ID).unwrap();
+            bus.publish(
+                DomainEvent::try_from(json!({
+                    "type": "turn.started",
+                    "turnId": turn_id
+                }))
+                .unwrap(),
+            );
+            bus.publish(
+                DomainEvent::try_from(json!({
+                    "type": "assistant.delta",
+                    "turnId": turn_id,
+                    "delta": delta
+                }))
+                .unwrap(),
+            );
+        }
+
+        let received = Arc::new(Mutex::new(Vec::<(String, serde_json::Value)>::new()));
+        let received_for_events = Arc::clone(&received);
+        let subscription = client
+            .subscribe_agent_events_with_replay(
+                &prepared.session_id,
+                MAIN_AGENT_ID,
+                Arc::new(move |agent_id, event| {
+                    received_for_events.lock().unwrap().push((agent_id, event));
+                }),
+                Arc::new(|_| {}),
+            )
+            .await
+            .unwrap();
+
+        for (agent_id, expected_delta) in [
+            (MAIN_AGENT_ID, "main-before"),
+            ("child-replay", "child-before"),
+        ] {
+            let types = received
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(id, _)| id == agent_id)
+                .map(|(_, event)| event["type"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(types, ["turn.started", "assistant.delta"]);
+            assert!(
+                received
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(id, event)| { id == agent_id && event["delta"] == expected_delta })
+            );
+        }
+
+        main.get(EVENT_BUS_SERVICE_ID).unwrap().publish(
+            DomainEvent::try_from(json!({
+                "type": "assistant.delta",
+                "turnId": 1,
+                "delta": "main-live"
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            received
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(agent_id, event)| {
+                    agent_id == MAIN_AGENT_ID && event["delta"] == "main-live"
+                })
+                .count(),
+            1
+        );
 
         subscription.dispose().unwrap();
         drop(client);

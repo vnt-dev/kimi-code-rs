@@ -15,10 +15,29 @@ use crate::{
     },
     agent::{
         context_memory::ContextMessage,
-        loop_::{LoopRunResult, TurnHandle},
+        loop_::{LiveUserMessage, LoopRunResult, TurnHandle},
     },
+    app::event::event_bus::DomainEventPayload,
     hooks::OrderedHookSlot,
 };
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptSubmittedStatus {
+    Queued,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSubmittedEvent {
+    #[serde(flatten)]
+    pub user_message: LiveUserMessage,
+    pub status: PromptSubmittedStatus,
+}
+
+impl DomainEventPayload for PromptSubmittedEvent {
+    const TYPE: &'static str = "prompt.submitted";
+}
 
 pub type PromptServiceError = Box<dyn Error + Send + Sync>;
 pub type PromptServiceResult<T> = Result<T, PromptServiceError>;
@@ -153,7 +172,7 @@ pub const AGENT_PROMPT_SERVICE_ID: ServiceIdentifier<AgentPromptServiceHandle> =
 #[cfg(test)]
 mod tests {
     use crate::{
-        agent::context_memory::{PromptOrigin, USER_PROMPT_ORIGIN},
+        agent::context_memory::{ImageSource, MessageContent, PromptOrigin, USER_PROMPT_ORIGIN},
         kosong::contract::message::{ContentPart, Message, Role},
     };
 
@@ -214,6 +233,61 @@ mod tests {
         assert_eq!(
             serde_json::to_value(PromptState::Steered).unwrap(),
             "steered"
+        );
+    }
+
+    #[test]
+    fn submitted_event_flattens_structured_user_message_fields() {
+        let event = PromptSubmittedEvent {
+            user_message: LiveUserMessage {
+                prompt_id: "prompt-1".into(),
+                user_message_id: "message-1".into(),
+                created_at: "2026-01-01T00:00:00.000Z".into(),
+                content: vec![
+                    MessageContent::Text {
+                        text: "inspect these".into(),
+                    },
+                    MessageContent::Image {
+                        source: ImageSource::Url {
+                            url: "image.png".into(),
+                        },
+                    },
+                    MessageContent::Video {
+                        source: ImageSource::Url {
+                            url: "video.mp4".into(),
+                        },
+                    },
+                    MessageContent::File {
+                        file_id: "file-1".into(),
+                        name: "notes.txt".into(),
+                        media_type: "text/plain".into(),
+                        size: 12,
+                    },
+                ],
+            },
+            status: PromptSubmittedStatus::Queued,
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "promptId": "prompt-1",
+                "userMessageId": "message-1",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "content": [
+                    { "type": "text", "text": "inspect these" },
+                    { "type": "image", "source": { "kind": "url", "url": "image.png" } },
+                    { "type": "video", "source": { "kind": "url", "url": "video.mp4" } },
+                    {
+                        "type": "file",
+                        "file_id": "file-1",
+                        "name": "notes.txt",
+                        "media_type": "text/plain",
+                        "size": 12
+                    }
+                ],
+                "status": "queued"
+            })
         );
     }
 }

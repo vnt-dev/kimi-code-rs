@@ -205,7 +205,10 @@ pub type TypedDomainEventHandler<T> = Arc<dyn Fn(&T) + Send + Sync>;
 
 pub trait EventBusContract: Disposable + Send + Sync {
     fn publish(&self, event: DomainEvent);
+    /// Subscribes to future events only.
     fn subscribe(&self, handler: DomainEventHandler) -> DisposableHandle;
+    /// Replays the unfinished turn, then continues with future events.
+    fn subscribe_with_replay(&self, handler: DomainEventHandler) -> DisposableHandle;
     fn subscribe_type(&self, event_type: &str, handler: DomainEventHandler) -> DisposableHandle;
 }
 

@@ -9,6 +9,8 @@ use crate::{
     kosong::contract::message::ContentPart,
 };
 
+use super::LiveUserMessage;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum StepRequestState {
@@ -30,6 +32,7 @@ pub enum StepRequestAdmission {
 pub struct TurnSeed {
     pub input: Vec<ContentPart>,
     pub origin: PromptOrigin,
+    pub user_message: Option<LiveUserMessage>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -170,6 +173,7 @@ impl StepRequest for MessageStepRequest {
         Some(TurnSeed {
             input: self.message.message.content.clone(),
             origin: self.message.origin.clone().unwrap_or(PromptOrigin::User),
+            user_message: None,
         })
     }
 
@@ -288,6 +292,7 @@ mod tests {
                 origin: PromptOrigin::SystemTrigger {
                     name: "goal".into()
                 },
+                user_message: None,
             })
         );
 

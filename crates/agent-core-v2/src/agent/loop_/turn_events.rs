@@ -6,10 +6,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     _base::errors::serialize::KimiErrorPayload,
-    agent::context_memory::{PluginCommandTrigger, PromptOrigin, SkillActivationTrigger},
+    agent::context_memory::{
+        PluginCommandTrigger, PromptOrigin, SkillActivationTrigger,
+        protocol_message::MessageContent,
+    },
     app::event::event_bus::DomainEventPayload,
     kosong::contract::{message::ContentPart, provider::FinishReason, usage::TokenUsage},
 };
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveUserMessage {
+    pub prompt_id: String,
+    pub user_message_id: String,
+    pub created_at: String,
+    pub content: Vec<MessageContent>,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -27,6 +39,8 @@ pub struct TurnStartedEvent {
     pub origin: PromptOrigin,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_message: Option<LiveUserMessage>,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -163,7 +177,7 @@ pub fn is_displayable_prompt_origin(origin: &PromptOrigin) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kosong::contract::message::MediaUrl;
+    use crate::{agent::context_memory::MessageContent, kosong::contract::message::MediaUrl};
     #[test]
     fn extracts_only_nonempty_text_and_limits_prompt_visibility_to_user_origins() {
         assert_eq!(
@@ -190,5 +204,37 @@ mod tests {
                 name: "goal".into()
             }
         ));
+    }
+
+    #[test]
+    fn turn_started_keeps_prompt_text_and_structured_user_message() {
+        let event = TurnStartedEvent {
+            turn_id: 42,
+            origin: PromptOrigin::User,
+            prompt: Some("hello".into()),
+            user_message: Some(LiveUserMessage {
+                prompt_id: "prompt-1".into(),
+                user_message_id: "message-1".into(),
+                created_at: "2026-01-01T00:00:00.000Z".into(),
+                content: vec![MessageContent::Text {
+                    text: "hello".into(),
+                }],
+            }),
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "turnId": 42,
+                "origin": { "kind": "user" },
+                "prompt": "hello",
+                "userMessage": {
+                    "promptId": "prompt-1",
+                    "userMessageId": "message-1",
+                    "createdAt": "2026-01-01T00:00:00.000Z",
+                    "content": [{ "type": "text", "text": "hello" }]
+                }
+            })
+        );
     }
 }

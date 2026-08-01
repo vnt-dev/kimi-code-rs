@@ -34,18 +34,18 @@ use crate::{
         context_memory::{
             AGENT_CONTEXT_MEMORY_SERVICE_ID, AgentContextMemoryServiceHandle, ContextMessage,
             PromptOrigin, UndoPrecheck, format_undo_unavailable_message, new_message_id,
-            precheck_undo,
+            precheck_undo, to_protocol_message_content,
         },
         full_compaction::{AGENT_FULL_COMPACTION_SERVICE_ID, AgentFullCompactionServiceHandle},
         loop_::{
-            AGENT_LOOP_SERVICE_ID, AgentLoopServiceHandle, AgentLoopState, LoopRunResult,
-            LoopValue, StepRequestAdmission, TurnHandle, TurnSeed,
+            AGENT_LOOP_SERVICE_ID, AgentLoopServiceHandle, AgentLoopState, LiveUserMessage,
+            LoopRunResult, LoopValue, StepRequestAdmission, TurnHandle, TurnSeed,
         },
         media::extract_image_compression_captions,
         system_reminder::{AGENT_SYSTEM_REMINDER_SERVICE_ID, AgentSystemReminderServiceHandle},
         tool_executor::{AGENT_TOOL_EXECUTOR_SERVICE_ID, AgentToolExecutorServiceHandle},
     },
-    app::event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusHandle},
+    app::event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID, EventBusHandle, TypedEventBusExt},
     kosong::contract::message::{ContentPart, Message, Role},
     wire::contract::{WIRE_SERVICE_ID, WireServiceHandle},
 };
@@ -56,6 +56,7 @@ use super::{
         AgentPromptServiceHandle, PromptCompletion, PromptCompletionFuture, PromptCompletionState,
         PromptHandle, PromptHandleContract, PromptInput, PromptLaunchedFuture, PromptQueueSnapshot,
         PromptServiceResult, PromptSnapshot, PromptState, PromptSubmitContext,
+        PromptSubmittedEvent, PromptSubmittedStatus,
     },
     errors::{
         PROMPT_NOT_FOUND, REQUEST_INVALID, SESSION_UNDO_UNAVAILABLE,
@@ -89,6 +90,7 @@ impl<T: Clone + Send + 'static> Deferred<T> {
 
 struct PromptRecord {
     snapshot: Mutex<PromptSnapshot>,
+    user_message: LiveUserMessage,
     launched: Deferred<Option<TurnHandle>>,
     completion: Deferred<PromptCompletion>,
 }
@@ -246,14 +248,22 @@ impl AgentPromptServiceContract for AgentPromptService {
             .unwrap_or_else(new_message_id);
         let mut message = input.message;
         message.id = Some(id.clone());
+        let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let user_message = LiveUserMessage {
+            prompt_id: id.clone(),
+            user_message_id: id.clone(),
+            created_at: created_at.clone(),
+            content: to_protocol_message_content(&message)?,
+        };
         let record = Arc::new(PromptRecord {
             snapshot: Mutex::new(PromptSnapshot {
                 id: id.clone(),
                 user_message_id: id,
-                created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                created_at,
                 state: PromptState::Pending,
                 message,
             }),
+            user_message: user_message.clone(),
             launched: Deferred::new(),
             completion: Deferred::new(),
         });
@@ -262,6 +272,10 @@ impl AgentPromptServiceContract for AgentPromptService {
             state.pending.push_back(Arc::clone(&record));
             state.active.is_none() && state.launching.is_none()
         };
+        self.runtime.event_bus.publish_typed(PromptSubmittedEvent {
+            user_message,
+            status: PromptSubmittedStatus::Queued,
+        });
         if should_start {
             if full_compaction(&self.runtime).is_some_and(|service| service.compacting().is_some())
                 && self.runtime.loop_service.status().state != AgentLoopState::Running
@@ -651,6 +665,7 @@ fn start_next(runtime: Arc<Runtime>) -> BoxFuture<'static, ()> {
                     hook.prompt_message,
                     extracted.1,
                     runtime.reminders.0.clone(),
+                    record.user_message.clone(),
                 )),
                 None,
             ) {
@@ -888,6 +903,7 @@ async fn enqueue_steer(
             let seed = TurnSeed {
                 input: materialized.message.content.clone(),
                 origin: materialized.origin.clone().unwrap_or(PromptOrigin::User),
+                user_message: None,
             };
             if let Ok(operation) = crate::agent::loop_::steer_turn(seed) {
                 let _ = wire.dispatch([operation]);

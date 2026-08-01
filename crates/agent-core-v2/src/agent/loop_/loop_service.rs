@@ -509,6 +509,7 @@ impl AgentLoopService {
             prompt: is_displayable_prompt_origin(&job.seed.origin)
                 .then(|| turn_prompt_text(&job.seed.input))
                 .flatten(),
+            user_message: job.seed.user_message.clone(),
         });
         let _ = start_worker.send(());
     }

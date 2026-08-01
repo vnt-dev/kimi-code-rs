@@ -7,7 +7,10 @@ use std::sync::Arc;
 use crate::{
     agent::{
         context_memory::{ContextMessage, PromptOrigin},
-        loop_::{StepRequest, StepRequestAdmission, StepRequestCore, StepRequestOptions, TurnSeed},
+        loop_::{
+            LiveUserMessage, StepRequest, StepRequestAdmission, StepRequestCore,
+            StepRequestOptions, TurnSeed,
+        },
         media::gate_image_format_parts,
         system_reminder::AgentSystemReminderServiceContract,
     },
@@ -23,6 +26,7 @@ struct UserMessageStepRequest {
     message: ContextMessage,
     captions: Vec<String>,
     reminders: Arc<dyn AgentSystemReminderServiceContract>,
+    user_message: Option<LiveUserMessage>,
 }
 
 impl UserMessageStepRequest {
@@ -31,6 +35,7 @@ impl UserMessageStepRequest {
         message: ContextMessage,
         captions: Vec<String>,
         reminders: Arc<dyn AgentSystemReminderServiceContract>,
+        user_message: Option<LiveUserMessage>,
         options: StepRequestOptions,
     ) -> Self {
         let mut message = message;
@@ -41,12 +46,14 @@ impl UserMessageStepRequest {
             message,
             captions,
             reminders,
+            user_message,
         }
     }
     fn seed(&self) -> TurnSeed {
         TurnSeed {
             input: self.message.message.content.clone(),
             origin: self.message.origin.clone().unwrap_or(PromptOrigin::User),
+            user_message: self.user_message.clone(),
         }
     }
     fn before_materialize(&self) {
@@ -74,12 +81,14 @@ impl PromptStepRequest {
         message: ContextMessage,
         captions: Vec<String>,
         reminders: Arc<dyn AgentSystemReminderServiceContract>,
+        user_message: LiveUserMessage,
     ) -> Self {
         Self(UserMessageStepRequest::new(
             "prompt",
             message,
             captions,
             reminders,
+            Some(user_message),
             StepRequestOptions {
                 admission: Some(StepRequestAdmission::NewTurn),
                 ..Default::default()
@@ -125,6 +134,7 @@ impl SteerStepRequest {
                 message,
                 captions,
                 reminders,
+                None,
                 StepRequestOptions {
                     mergeable: Some(true),
                     turn_scoped: Some(false),
@@ -187,6 +197,7 @@ impl StepRequest for RetryStepRequest {
         Some(TurnSeed {
             input: Vec::<ContentPart>::new(),
             origin: PromptOrigin::Retry { trigger: None },
+            user_message: None,
         })
     }
     fn resolve_context_messages(&self) -> Vec<ContextMessage> {
@@ -240,6 +251,12 @@ mod tests {
             }]),
             Vec::new(),
             reminders.clone(),
+            LiveUserMessage {
+                prompt_id: "prompt-1".into(),
+                user_message_id: "message-1".into(),
+                created_at: "2026-01-01T00:00:00.000Z".into(),
+                content: Vec::new(),
+            },
         );
         assert_eq!(prompt.admission(), StepRequestAdmission::NewTurn);
         assert_eq!(prompt.kind(), "prompt");

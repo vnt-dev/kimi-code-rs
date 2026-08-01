@@ -17,6 +17,7 @@ pub use context_ops::*;
 pub use context_transcript::*;
 pub use loop_event_fold::*;
 pub use message_id::new_message_id;
+pub(crate) use message_projection::to_protocol_message_content;
 pub use message_projection::{MessageProjectionError, to_protocol_message};
 pub use protocol_message::*;
 pub use tool_result_render::{
