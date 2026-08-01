@@ -11,7 +11,7 @@ use axum::{
         DefaultBodyLimit, Multipart, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header, uri::Authority},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use crate::{
     RpcError, RpcRequest, RpcResponse, app_events::ApplicationEventBus, rpc::dispatch_rpc,
-    wire::ServerFrame,
+    settings::WebServerListenScope, wire::ServerFrame,
 };
 
 const WS_BEARER_PROTOCOL_PREFIX: &str = "kimi-code.bearer.";
@@ -123,10 +123,12 @@ struct ServerState {
     token: Arc<str>,
     version: Arc<str>,
     port: u16,
+    listen_scope: WebServerListenScope,
 }
 
 pub(crate) struct RunningServer {
     pub port: u16,
+    pub listen_scope: WebServerListenScope,
     cancellation: CancellationToken,
     task: JoinHandle<()>,
     connections: Arc<Mutex<HashMap<String, Arc<RpcConnection>>>>,
@@ -162,10 +164,12 @@ pub(crate) async fn start_server(
     token: String,
     version: String,
     port: u16,
+    listen_scope: WebServerListenScope,
 ) -> Result<RunningServer, String> {
-    let listener = TcpListener::bind(("127.0.0.1", port))
+    let bind_address = listen_scope.bind_address();
+    let listener = TcpListener::bind((bind_address, port))
         .await
-        .map_err(|error| format!("failed to listen on 127.0.0.1:{port}: {error}"))?;
+        .map_err(|error| format!("failed to listen on {bind_address}:{port}: {error}"))?;
     let port = listener
         .local_addr()
         .map_err(|error| error.to_string())?
@@ -190,6 +194,7 @@ pub(crate) async fn start_server(
         token: token.into(),
         version: version.into(),
         port,
+        listen_scope,
     };
     let router = Router::new()
         .route("/_kimi/v1/meta", get(meta_handler))
@@ -208,6 +213,7 @@ pub(crate) async fn start_server(
     });
     Ok(RunningServer {
         port,
+        listen_scope,
         cancellation,
         task,
         connections,
@@ -505,13 +511,15 @@ fn authenticate_bearer(state: &ServerState, headers: &HeaderMap) -> Result<(), R
 
 fn validate_host_and_origin(state: &ServerState, headers: &HeaderMap) -> Result<(), Response> {
     validate_host(state, headers)?;
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
     if let Some(origin) = headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())
     {
-        let expected = format!("http://127.0.0.1:{}", state.port);
-        let localhost = format!("http://localhost:{}", state.port);
-        if origin != expected && origin != localhost {
+        if !origin_allowed(state.listen_scope, state.port, host, origin) {
             return Err(rpc_http_error(
                 StatusCode::FORBIDDEN,
                 "",
@@ -528,9 +536,7 @@ fn validate_host(state: &ServerState, headers: &HeaderMap) -> Result<(), Respons
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let expected = format!("127.0.0.1:{}", state.port);
-    let localhost = format!("localhost:{}", state.port);
-    if host != expected && host != localhost {
+    if !host_allowed(state.listen_scope, state.port, host) {
         return Err(rpc_http_error(
             StatusCode::BAD_REQUEST,
             "",
@@ -539,6 +545,51 @@ fn validate_host(state: &ServerState, headers: &HeaderMap) -> Result<(), Respons
         ));
     }
     Ok(())
+}
+
+fn host_allowed(scope: WebServerListenScope, port: u16, host: &str) -> bool {
+    match scope {
+        WebServerListenScope::Local => {
+            host.eq_ignore_ascii_case(&format!("127.0.0.1:{port}"))
+                || host.eq_ignore_ascii_case(&format!("localhost:{port}"))
+        }
+        WebServerListenScope::Global => authority_for_port(host, port).is_some(),
+    }
+}
+
+fn origin_allowed(scope: WebServerListenScope, port: u16, host: &str, origin: &str) -> bool {
+    if scope == WebServerListenScope::Local {
+        return origin.eq_ignore_ascii_case(&format!("http://127.0.0.1:{port}"))
+            || origin.eq_ignore_ascii_case(&format!("http://localhost:{port}"));
+    }
+    let Ok(uri) = origin.parse::<Uri>() else {
+        return false;
+    };
+    if uri.scheme_str() != Some("http") || uri.query().is_some() {
+        return false;
+    }
+    let Some(origin_authority) = uri.authority() else {
+        return false;
+    };
+    let Some(host_authority) = authority_for_port(host, port) else {
+        return false;
+    };
+    authority_port(origin_authority) == port
+        && origin_authority
+            .host()
+            .eq_ignore_ascii_case(host_authority.host())
+}
+
+fn authority_for_port(value: &str, port: u16) -> Option<Authority> {
+    if value.contains('@') {
+        return None;
+    }
+    let authority = value.parse::<Authority>().ok()?;
+    (authority_port(&authority) == port).then_some(authority)
+}
+
+fn authority_port(authority: &Authority) -> u16 {
+    authority.port_u16().unwrap_or(80)
 }
 
 fn websocket_bearer_protocol(headers: &HeaderMap) -> Option<String> {
@@ -607,6 +658,7 @@ mod tests {
             token.into(),
             "1.2.3".into(),
             0,
+            WebServerListenScope::Local,
         )
         .await
         .unwrap();
@@ -817,6 +869,34 @@ mod tests {
         assert!(token_matches("abc", "abc"));
         assert!(!token_matches("abc", "abd"));
         assert!(!token_matches("abc", "abc0"));
+        assert!(host_allowed(
+            WebServerListenScope::Global,
+            58627,
+            "example.test:58627"
+        ));
+        assert!(!host_allowed(
+            WebServerListenScope::Global,
+            58627,
+            "example.test:1234"
+        ));
+        assert!(origin_allowed(
+            WebServerListenScope::Global,
+            58627,
+            "example.test:58627",
+            "http://example.test:58627"
+        ));
+        assert!(!origin_allowed(
+            WebServerListenScope::Global,
+            58627,
+            "example.test:58627",
+            "http://malicious.test:58627"
+        ));
+        assert!(!origin_allowed(
+            WebServerListenScope::Global,
+            58627,
+            "example.test:58627",
+            "https://example.test:58627"
+        ));
     }
 
     #[test]

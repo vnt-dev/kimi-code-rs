@@ -1,4 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    net::{IpAddr, Ipv4Addr, UdpSocket},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use kimi_code_agent_core_v2::_base::di::lifecycle::DisposableHandle;
 use kimi_code_agent_core_v2::app::desktop_client::KimiCodeDesktopClient;
@@ -6,7 +10,8 @@ use serde::Serialize;
 use tokio::sync::Mutex;
 
 use crate::{
-    ApplicationEventHandler, AssetProvider, DesktopStateChange, WebServerSettings,
+    ApplicationEventHandler, AssetProvider, DesktopStateChange, WebServerListenScope,
+    WebServerSettings,
     app_events::ApplicationEventBus,
     server::{RunningServer, start_server},
     settings::{load_or_create_token, load_settings, save_settings, validate_settings},
@@ -29,6 +34,8 @@ pub struct WebServerStatus {
     pub state: WebServerState,
     pub enabled: bool,
     pub port: u16,
+    pub listen_scope: WebServerListenScope,
+    pub listen_address: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -166,11 +173,9 @@ impl WebServerController {
 
         {
             let mut inner = self.inner.lock().await;
-            if inner
-                .running
-                .as_ref()
-                .is_some_and(|running| running.port == settings.port)
-            {
+            if inner.running.as_ref().is_some_and(|running| {
+                running.port == settings.port && running.listen_scope == settings.listen_scope
+            }) {
                 if persist {
                     save_settings(&self.settings_path, settings)?;
                 }
@@ -197,6 +202,7 @@ impl WebServerController {
             token.clone(),
             self.version.clone(),
             settings.port,
+            settings.listen_scope,
         )
         .await
         {
@@ -244,10 +250,18 @@ fn status_from(inner: &ControllerState) -> WebServerStatus {
         .running
         .as_ref()
         .map_or(inner.settings.port, |server| server.port);
-    let origin = inner
+    let listen_scope = inner
         .running
         .as_ref()
-        .map(|_| format!("http://127.0.0.1:{port}"));
+        .map_or(inner.settings.listen_scope, |server| server.listen_scope);
+    let listen_address = listen_scope.bind_address().to_owned();
+    let origin = inner.running.as_ref().map(|_| {
+        let host = match listen_scope {
+            WebServerListenScope::Local => "127.0.0.1".to_owned(),
+            WebServerListenScope::Global => global_access_host(),
+        };
+        format!("http://{host}:{port}")
+    });
     let access_url = origin.as_ref().and_then(|origin| {
         inner
             .token
@@ -258,10 +272,26 @@ fn status_from(inner: &ControllerState) -> WebServerStatus {
         state: inner.state,
         enabled: inner.settings.enabled,
         port,
+        listen_scope,
+        listen_address,
         origin,
         access_url,
         error: inner.error.clone(),
     }
+}
+
+fn global_access_host() -> String {
+    UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+        .and_then(|socket| {
+            socket.connect((Ipv4Addr::new(192, 0, 2, 1), 80))?;
+            socket.local_addr()
+        })
+        .ok()
+        .and_then(|address| match address.ip() {
+            IpAddr::V4(ip) if !ip.is_unspecified() && !ip.is_loopback() => Some(ip.to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "127.0.0.1".into())
 }
 
 #[cfg(test)]
@@ -316,11 +346,14 @@ mod tests {
             .set_settings(WebServerSettings {
                 enabled: true,
                 port: first_port,
+                listen_scope: WebServerListenScope::Local,
             })
             .await
             .unwrap();
         assert_eq!(running.state, WebServerState::Running);
         assert_eq!(running.port, first_port);
+        assert_eq!(running.listen_scope, WebServerListenScope::Local);
+        assert_eq!(running.listen_address, "127.0.0.1");
         let expected_origin = format!("http://127.0.0.1:{first_port}");
         assert_eq!(running.origin.as_deref(), Some(expected_origin.as_str()));
         assert!(running.access_url.as_deref().unwrap().contains("/#token="));
@@ -331,6 +364,7 @@ mod tests {
             .set_settings(WebServerSettings {
                 enabled: true,
                 port: occupied_port,
+                listen_scope: WebServerListenScope::Local,
             })
             .await
             .unwrap_err();
@@ -345,12 +379,25 @@ mod tests {
             .set_settings(WebServerSettings {
                 enabled: false,
                 port: first_port,
+                listen_scope: WebServerListenScope::Local,
             })
             .await
             .unwrap();
         assert_eq!(stopped.state, WebServerState::Stopped);
         assert!(!stopped.enabled);
         assert!(stopped.origin.is_none());
+
+        let global = controller
+            .set_settings(WebServerSettings {
+                enabled: true,
+                port: available_port(),
+                listen_scope: WebServerListenScope::Global,
+            })
+            .await
+            .unwrap();
+        assert_eq!(global.state, WebServerState::Running);
+        assert_eq!(global.listen_scope, WebServerListenScope::Global);
+        assert_eq!(global.listen_address, "0.0.0.0");
         controller.shutdown().await;
         let _ = std::fs::remove_dir_all(root);
     }
@@ -365,6 +412,7 @@ mod tests {
             WebServerSettings {
                 enabled: true,
                 port,
+                listen_scope: WebServerListenScope::Local,
             },
         )
         .unwrap();

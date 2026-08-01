@@ -8,11 +8,14 @@ import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
 import { invoke, isDesktop, openExternalUrl } from "./transport";
 
 type SettingsTab = "general" | "web" | "about";
+type WebServerListenScope = "local" | "global";
 
 interface WebServerStatus {
   state: "stopped" | "starting" | "running" | "error";
   enabled: boolean;
   port: number;
+  listenScope: WebServerListenScope;
+  listenAddress: string;
   origin?: string;
   accessUrl?: string;
   error?: string;
@@ -35,12 +38,25 @@ function webServerStateLabel(state: WebServerStatus["state"] = "stopped"): strin
   }
 }
 
-function LanguageSelect({
-  language,
-  onLanguageChange,
+interface SettingsSelectOption<T extends string> {
+  value: T;
+  label: string;
+}
+
+function SettingsSelect<T extends string>({
+  value,
+  options,
+  ariaLabel,
+  className,
+  disabled = false,
+  onChange,
 }: {
-  language: Language;
-  onLanguageChange: (language: Language) => void;
+  value: T;
+  options: readonly SettingsSelectOption<T>[];
+  ariaLabel: string;
+  className?: string;
+  disabled?: boolean;
+  onChange: (value: T) => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -54,13 +70,23 @@ function LanguageSelect({
     return () => document.removeEventListener("pointerdown", close);
   }, [open]);
 
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
   const activeLabel =
-    LANGUAGE_OPTIONS.find((option) => option.value === language)?.label ??
-    language;
+    options.find((option) => option.value === value)?.label ?? value;
 
   return (
     <div
-      className={`settings-select ${open ? "open" : ""}`}
+      className={[
+        "settings-select",
+        className,
+        open ? "open" : undefined,
+        disabled ? "disabled" : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ")}
       ref={rootRef}
       onKeyDown={(event) => {
         if (event.key === "Escape" && open) {
@@ -72,9 +98,10 @@ function LanguageSelect({
       <button
         className="settings-select-trigger"
         type="button"
-        aria-label={t("settings.language")}
+        aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
+        disabled={disabled}
         onClick={() => setOpen((current) => !current)}
       >
         <span>{activeLabel}</span>
@@ -84,18 +111,19 @@ function LanguageSelect({
         <div
           className="settings-select-menu"
           role="listbox"
-          aria-label={t("settings.language")}
+          aria-label={ariaLabel}
         >
-          {LANGUAGE_OPTIONS.map((option) => {
-            const selected = option.value === language;
+          {options.map((option) => {
+            const selected = option.value === value;
             return (
               <button
                 key={option.value}
+                className={selected ? "selected" : undefined}
                 type="button"
                 role="option"
                 aria-selected={selected}
                 onClick={() => {
-                  onLanguageChange(option.value);
+                  onChange(option.value);
                   setOpen(false);
                 }}
               >
@@ -135,7 +163,9 @@ export default function SettingsDialog({
   const [webStatus, setWebStatus] = useState<WebServerStatus>();
   const [webEnabled, setWebEnabled] = useState(false);
   const [webPort, setWebPort] = useState("58627");
-  const [webBusy, setWebBusy] = useState(false);
+  const [webListenScope, setWebListenScope] =
+    useState<WebServerListenScope>("local");
+  const [webBusy, setWebBusy] = useState(true);
   const [webError, setWebError] = useState<string>();
   const [webCopied, setWebCopied] = useState(false);
   const updateToastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -185,10 +215,14 @@ export default function SettingsDialog({
         setWebStatus(status);
         setWebEnabled(status.enabled);
         setWebPort(String(status.port));
+        setWebListenScope(status.listenScope);
         setWebError(status.error);
       })
       .catch((error) => {
         if (active) setWebError(errorMessage(error));
+      })
+      .finally(() => {
+        if (active) setWebBusy(false);
       });
     return () => {
       active = false;
@@ -266,27 +300,38 @@ export default function SettingsDialog({
     }
   };
 
-  const applyWebSettings = async (): Promise<void> => {
+  const toggleWebServer = async (): Promise<void> => {
+    if (webBusy) return;
+    const enabled = !webEnabled;
     const port = Number(webPort);
-    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    if (enabled && (!Number.isInteger(port) || port < 1 || port > 65_535)) {
       setWebError(t("settings.webPortInvalid"));
       return;
     }
+    const previousEnabled = webEnabled;
     setWebBusy(true);
+    setWebEnabled(enabled);
     setWebError(undefined);
     try {
       const status = await invoke<WebServerStatus>("set_web_server_settings", {
-        settings: { enabled: webEnabled, port },
+        settings: { enabled, port, listenScope: webListenScope },
       });
       setWebStatus(status);
       setWebEnabled(status.enabled);
       setWebPort(String(status.port));
+      setWebListenScope(status.listenScope);
       setWebError(status.error);
     } catch (error) {
+      setWebEnabled(previousEnabled);
       setWebError(errorMessage(error));
       try {
         const status = await invoke<WebServerStatus>("get_web_server_status");
         setWebStatus(status);
+        setWebEnabled(status.enabled);
+        if (status.enabled) {
+          setWebPort(String(status.port));
+          setWebListenScope(status.listenScope);
+        }
       } catch {
         // Preserve the actionable settings error.
       }
@@ -294,6 +339,8 @@ export default function SettingsDialog({
       setWebBusy(false);
     }
   };
+
+  const webConfigurationLocked = webEnabled || webBusy;
 
   const copyProtectedWebUrl = async (): Promise<void> => {
     if (!webStatus?.accessUrl) return;
@@ -438,9 +485,11 @@ export default function SettingsDialog({
                   <span className="settings-row-label">
                     {t("settings.language")}
                   </span>
-                  <LanguageSelect
-                    language={language}
-                    onLanguageChange={onLanguageChange}
+                  <SettingsSelect
+                    value={language}
+                    options={LANGUAGE_OPTIONS}
+                    ariaLabel={t("settings.language")}
+                    onChange={onLanguageChange}
                   />
                 </div>
               </section>
@@ -458,14 +507,21 @@ export default function SettingsDialog({
                     <span className="settings-row-label">
                       {t("settings.webEnabled")}
                     </span>
-                    <small>{t("settings.webLoopback")}</small>
+                    <small>
+                      {webEnabled
+                        ? t("settings.webConfigurationLocked")
+                        : webListenScope === "global"
+                          ? t("settings.webGlobalDescription")
+                          : t("settings.webLocalDescription")}
+                    </small>
                   </div>
                   <button
                     className={`settings-toggle ${webEnabled ? "active" : ""}`}
                     type="button"
                     role="switch"
                     aria-checked={webEnabled}
-                    onClick={() => setWebEnabled((enabled) => !enabled)}
+                    disabled={webBusy}
+                    onClick={() => void toggleWebServer()}
                   >
                     <span />
                   </button>
@@ -481,7 +537,24 @@ export default function SettingsDialog({
                     min={1}
                     max={65535}
                     value={webPort}
+                    disabled={webConfigurationLocked}
                     onChange={(event) => setWebPort(event.target.value)}
+                  />
+                </div>
+                <div className="settings-row">
+                  <span className="settings-row-label">
+                    {t("settings.webListenScope")}
+                  </span>
+                  <SettingsSelect<WebServerListenScope>
+                    className="settings-scope-select"
+                    value={webListenScope}
+                    options={[
+                      { value: "local", label: t("settings.webScopeLocal") },
+                      { value: "global", label: t("settings.webScopeGlobal") },
+                    ]}
+                    ariaLabel={t("settings.webListenScope")}
+                    disabled={webConfigurationLocked}
+                    onChange={setWebListenScope}
                   />
                 </div>
                 <div className="settings-web-status">
@@ -490,7 +563,11 @@ export default function SettingsDialog({
                     <strong>
                       {webServerStateLabel(webStatus?.state)}
                     </strong>
-                    <small>{webStatus?.origin ?? t("settings.webUnavailable")}</small>
+                    <small>
+                      {webStatus?.origin
+                        ? `${webStatus.origin} · ${webStatus.listenAddress}:${webStatus.port}`
+                        : t("settings.webUnavailable")}
+                    </small>
                   </div>
                 </div>
                 {(webError || webStatus?.error) && (
@@ -499,15 +576,6 @@ export default function SettingsDialog({
                   </div>
                 )}
                 <div className="settings-web-actions">
-                  <button
-                    className="settings-update-button"
-                    type="button"
-                    disabled={webBusy}
-                    onClick={() => void applyWebSettings()}
-                  >
-                    {webBusy && <RefreshCw size={14} className="spinning" />}
-                    {t("settings.webApply")}
-                  </button>
                   <button
                     className="settings-update-button"
                     type="button"

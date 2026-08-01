@@ -12,5 +12,5 @@ pub use controller::{
     DEFAULT_WEB_SERVER_PORT, WebServerController, WebServerState, WebServerStatus,
 };
 pub use server::{AssetProvider, WebAsset};
-pub use settings::WebServerSettings;
+pub use settings::{WebServerListenScope, WebServerSettings};
 pub use wire::{RpcRequest, RpcResponse, RpcResponseError};

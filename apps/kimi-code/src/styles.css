@@ -7980,6 +7980,15 @@ input:focus-visible {
   border-color: var(--muted);
 }
 
+.settings-select-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.settings-select.disabled .settings-select-trigger:hover {
+  border-color: var(--line);
+}
+
 .settings-select-trigger > svg {
   color: var(--muted);
   transition: transform 140ms ease;
@@ -8019,7 +8028,8 @@ input:focus-visible {
   white-space: nowrap;
 }
 
-.settings-select-menu > button:hover {
+.settings-select-menu > button:hover,
+.settings-select-menu > button.selected {
   background: var(--segment-active);
 }
 
@@ -8149,6 +8159,11 @@ input:focus-visible {
   background: var(--accent);
 }
 
+.settings-toggle:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .settings-port-input {
   width: 100px;
   height: 32px;
@@ -8163,6 +8178,20 @@ input:focus-visible {
 
 .settings-port-input:focus {
   border-color: var(--accent);
+}
+
+.settings-port-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.settings-scope-select {
+  width: 132px;
+}
+
+.settings-scope-select .settings-select-trigger {
+  width: 100%;
+  justify-content: space-between;
 }
 
 .settings-web-status {

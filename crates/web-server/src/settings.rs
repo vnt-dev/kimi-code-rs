@@ -9,11 +9,30 @@ use uuid::Uuid;
 
 use crate::DEFAULT_WEB_SERVER_PORT;
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WebServerListenScope {
+    #[default]
+    Local,
+    Global,
+}
+
+impl WebServerListenScope {
+    pub(crate) fn bind_address(self) -> &'static str {
+        match self {
+            Self::Local => "127.0.0.1",
+            Self::Global => "0.0.0.0",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebServerSettings {
     pub enabled: bool,
     pub port: u16,
+    #[serde(default)]
+    pub listen_scope: WebServerListenScope,
 }
 
 impl Default for WebServerSettings {
@@ -21,6 +40,7 @@ impl Default for WebServerSettings {
         Self {
             enabled: false,
             port: DEFAULT_WEB_SERVER_PORT,
+            listen_scope: WebServerListenScope::Local,
         }
     }
 }
@@ -158,9 +178,16 @@ mod tests {
         let expected = WebServerSettings {
             enabled: true,
             port: 61234,
+            listen_scope: WebServerListenScope::Global,
         };
         save_settings(&path, expected).unwrap();
         assert_eq!(load_settings(&path).unwrap(), expected);
+
+        fs::write(&path, br#"{"enabled":false,"port":58627}"#).unwrap();
+        assert_eq!(
+            load_settings(&path).unwrap().listen_scope,
+            WebServerListenScope::Local
+        );
         let _ = fs::remove_dir_all(directory);
     }
 
