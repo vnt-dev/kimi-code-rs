@@ -1,4 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import {
+  invoke,
+  subscribeAgentEventsTransport,
+  unsubscribeAgentEventsTransport,
+} from "./transport";
 
 import type {
   AgentConfig,
@@ -246,12 +250,9 @@ export function prepareSession(input: {
 }
 
 export function subscribeAgentEvents(scope: AgentScope): Promise<string> {
-  return invoke<string>("subscribe_agent_events", {
-    sessionId: scope.sessionId,
-    agentId: scope.agentId,
-  });
+  return subscribeAgentEventsTransport(scope);
 }
 
 export function unsubscribeAgentEvents(subscriptionId: string): Promise<void> {
-  return invoke<void>("unsubscribe_agent_events", { subscriptionId });
+  return unsubscribeAgentEventsTransport(subscriptionId);
 }

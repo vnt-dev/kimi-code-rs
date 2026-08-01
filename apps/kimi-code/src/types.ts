@@ -250,6 +250,7 @@ export type AgentChatEvent =
       turnId: number;
       origin: unknown;
       prompt?: string;
+      userMessage?: LiveUserMessage;
     }
   | {
       type: "turn.ended";
@@ -319,6 +320,18 @@ export type AgentChatEvent =
       isError?: boolean;
       synthetic?: boolean;
     };
+
+export interface LiveUserMessage {
+  promptId: string;
+  userMessageId: string;
+  createdAt: string;
+  content: MessageContent[];
+}
+
+export interface PromptSubmittedEvent extends LiveUserMessage {
+  type: "prompt.submitted";
+  status: "queued";
+}
 
 export interface AgentChatEventEnvelope {
   sessionId: string;

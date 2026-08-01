@@ -82,12 +82,16 @@ impl RpcError {
         }
     }
 
-    fn invalid_payload(error: serde_json::Error) -> Self {
+    pub fn invalid_request(message: impl Into<String>) -> Self {
         Self {
             code: "request.invalid".into(),
-            message: error.to_string(),
+            message: message.into(),
             details: None,
         }
+    }
+
+    fn invalid_payload(error: serde_json::Error) -> Self {
+        Self::invalid_request(error.to_string())
     }
 
     fn core(error: &(dyn Error + 'static)) -> Self {
@@ -129,7 +133,7 @@ macro_rules! invoke {
     }};
 }
 
-pub async fn dispatch(
+pub async fn dispatch_agent_rpc(
     client: &KimiCodeDesktopClient,
     request: AgentRpcRequest,
 ) -> Result<Value, RpcError> {
@@ -174,9 +178,7 @@ pub async fn dispatch(
         AgentRpcMethod::BeginCompaction => {
             invoke!(rpc, payload, begin_compaction, BeginCompactionPayload)
         }
-        AgentRpcMethod::CancelCompaction => {
-            invoke!(rpc, payload, cancel_compaction, EmptyPayload)
-        }
+        AgentRpcMethod::CancelCompaction => invoke!(rpc, payload, cancel_compaction, EmptyPayload),
         AgentRpcMethod::RegisterTool => invoke!(rpc, payload, register_tool, RegisterToolPayload),
         AgentRpcMethod::UnregisterTool => {
             invoke!(rpc, payload, unregister_tool, UnregisterToolPayload)

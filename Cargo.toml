@@ -7,7 +7,7 @@ members = [
     "crates/oauth",
     "crates/protocol",
     "crates/transcript",
+    "crates/web-server",
 ]
 resolver = "3"
-
 

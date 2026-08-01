@@ -16,12 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { getVersion } from "@tauri-apps/api/app";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Archive,
   ArrowUp,
@@ -94,6 +89,10 @@ import {
 } from "./modelControls";
 import { resolveMarkdownExternalUrl } from "./markdownLinks";
 import {
+  isSameLiveUserMessage,
+  projectLiveUserMessage,
+} from "./liveUserMessage";
+import {
   canUndoPromptEdit,
   createPromptUndoHistory,
   recordPromptInput,
@@ -106,6 +105,20 @@ import {
   type ColorScheme,
 } from "./appearance";
 import SettingsDialog from "./SettingsDialog";
+import {
+  TRANSPORT_AUTH_REQUIRED,
+  TRANSPORT_REPLAY_RESET,
+  getAppVersion,
+  invoke,
+  isDesktop,
+  listen,
+  openExternalUrl,
+  pickNativeDirectory,
+  setWebCredential,
+  uploadFileTransport,
+  webCredentialRequired,
+  type ReplayResetEvent,
+} from "./transport";
 import {
   applyLanguage,
   loadLanguage,
@@ -141,6 +154,8 @@ import type {
   DesktopState,
   DeviceCode,
   MessageContent,
+  LiveUserMessage,
+  PromptSubmittedEvent,
   MessagePage,
   ManagedUsageRow,
   Model,
@@ -267,6 +282,8 @@ interface LiveStep {
 }
 
 interface InFlightTurn {
+  promptId?: string;
+  userMessageId?: string;
   prompt: string;
   attachments: readonly PromptAttachment[];
   skills: readonly string[];
@@ -307,6 +324,26 @@ interface QueuedPrompt {
   skills: readonly SkillDescriptor[];
   createdAt: string;
   steering?: boolean;
+}
+
+interface RemoteQueuedPrompt {
+  promptId: string;
+  userMessageId: string;
+  text: string;
+  attachments: readonly PromptAttachment[];
+  skills: readonly string[];
+  createdAt: string;
+}
+
+interface FolderHome {
+  home: string;
+  recent_roots: string[];
+}
+
+interface FolderBrowse {
+  path: string;
+  parent: string | null;
+  entries: Array<{ name: string; path: string; is_dir: true }>;
 }
 
 interface LiveSteeredPrompt {
@@ -367,12 +404,10 @@ async function preparePromptAttachment(file: File): Promise<PromptAttachment> {
   }
 
   if (kind === "file") {
-    const mediaType = file.type || "application/octet-stream";
-    const uploaded = await invoke<UploadedFileMeta>("upload_file", {
-      filename: file.name || "attachment",
-      mediaType,
-      bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
-    });
+    const uploaded = (await uploadFileTransport(
+      file,
+      file.name || "attachment",
+    )) as UploadedFileMeta;
     return {
       id: uploaded.id,
       fileId: uploaded.id,
@@ -762,6 +797,38 @@ function newInFlightTurn(
   };
 }
 
+function inFlightTurnFromUserMessage(message: LiveUserMessage): InFlightTurn {
+  const projected = projectLiveUserMessage(message);
+  const display = parseSkillPromptDisplay(projected.text);
+  return {
+    ...newInFlightTurn(
+      display.text,
+      projected.attachments,
+      undefined,
+      display.skills,
+    ),
+    promptId: message.promptId,
+    userMessageId: message.userMessageId,
+    createdAt: message.createdAt,
+  };
+}
+
+function readPromptSubmittedEvent(
+  event: { type: string; [key: string]: unknown },
+): PromptSubmittedEvent | undefined {
+  if (
+    event.type !== "prompt.submitted" ||
+    event.status !== "queued" ||
+    typeof event.promptId !== "string" ||
+    typeof event.userMessageId !== "string" ||
+    typeof event.createdAt !== "string" ||
+    !Array.isArray(event.content)
+  ) {
+    return undefined;
+  }
+  return event as unknown as PromptSubmittedEvent;
+}
+
 function isTurnRunning(turn?: InFlightTurn): boolean {
   return turn?.status === "queued" || turn?.status === "running";
 }
@@ -899,8 +966,25 @@ function reduceAgentChatEvent(
     turn.turnId === undefined ? { ...turn, turnId: event.turnId } : turn;
 
   switch (event.type) {
-    case "turn.started":
-      return { ...next, status: "running" };
+    case "turn.started": {
+      const projected = event.userMessage
+        ? inFlightTurnFromUserMessage(event.userMessage)
+        : undefined;
+      return {
+        ...next,
+        ...(projected
+          ? {
+              promptId: projected.promptId,
+              userMessageId: projected.userMessageId,
+              prompt: projected.prompt,
+              attachments: projected.attachments,
+              skills: projected.skills,
+              createdAt: projected.createdAt,
+            }
+          : {}),
+        status: "running",
+      };
+    }
     case "turn.ended":
       return {
         ...next,
@@ -1074,21 +1158,23 @@ function reduceQueuedAgentChatEvents(
   let next = current;
   for (const [sessionId, events] of eventsBySession) {
     const turn = current[sessionId];
-    if (!turn) continue;
-    const reduced = events.reduce((active, event) => {
+    let reduced = turn;
+    for (const event of events) {
+      if (!reduced) {
+        if (event.type !== "turn.started") continue;
+        reduced = newSubagentTurn(event);
+      }
       if (
         event.type === "turn.started" &&
-        active.turnId !== undefined &&
-        active.turnId !== event.turnId &&
-        !isTurnRunning(active)
+        reduced.turnId !== undefined &&
+        reduced.turnId !== event.turnId &&
+        !isTurnRunning(reduced)
       ) {
-        return reduceAgentChatEvent(
-          newInFlightTurn(event.prompt ?? "", []),
-          event,
-        );
+        reduced = newSubagentTurn(event);
       }
-      return reduceAgentChatEvent(active, event);
-    }, turn);
+      reduced = reduceAgentChatEvent(reduced, event);
+    }
+    if (!reduced) continue;
     if (reduced === turn) continue;
     if (next === current) next = { ...current };
     next[sessionId] = reduced;
@@ -1097,6 +1183,9 @@ function reduceQueuedAgentChatEvents(
 }
 
 function newSubagentTurn(event: AgentChatEvent): InFlightTurn {
+  if (event.type === "turn.started" && event.userMessage) {
+    return inFlightTurnFromUserMessage(event.userMessage);
+  }
   return newInFlightTurn(
     event.type === "turn.started" ? event.prompt ?? "" : "",
     [],
@@ -1262,6 +1351,12 @@ function historyBeforeInFlightTurn(
   items: ProtocolMessage[],
   turn: InFlightTurn,
 ): ProtocolMessage[] {
+  if (turn.userMessageId) {
+    const userMessage = items.findIndex(
+      (message) => message.id === turn.userMessageId,
+    );
+    if (userMessage >= 0) return items.slice(0, userMessage);
+  }
   if (turn.historyBoundaryId) {
     const boundary = items.findIndex(
       (message) => message.id === turn.historyBoundaryId,
@@ -1284,7 +1379,12 @@ function completedTurnMessageId(
   turn: InFlightTurn,
 ): string | undefined {
   let startIndex = 0;
-  if (turn.historyBoundaryId) {
+  if (turn.userMessageId) {
+    const userMessage = items.findIndex(
+      (message) => message.id === turn.userMessageId,
+    );
+    if (userMessage >= 0) startIndex = userMessage + 1;
+  } else if (turn.historyBoundaryId) {
     const boundary = items.findIndex(
       (message) => message.id === turn.historyBoundaryId,
     );
@@ -1483,8 +1583,13 @@ export default function App() {
   const [queuedPrompts, setQueuedPrompts] = useState<
     Record<string, QueuedPrompt[]>
   >({});
+  const [remoteQueuedPrompts, setRemoteQueuedPrompts] = useState<
+    Record<string, RemoteQueuedPrompt[]>
+  >({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
+  const [webAuthOpen, setWebAuthOpen] = useState(webCredentialRequired);
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
   const [deviceCode, setDeviceCode] = useState<DeviceCode>();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -1539,6 +1644,7 @@ export default function App() {
   const [inFlightTurns, setInFlightTurns] = useState<
     Record<string, InFlightTurn>
   >({});
+  const inFlightTurnsRef = useRef(inFlightTurns);
   const [activeAgentScope, setActiveAgentScope] = useState<{
     sessionId: string;
     agentId: string;
@@ -1597,6 +1703,9 @@ export default function App() {
   const activeQueuedPrompts = activeConversation
     ? queuedPrompts[activeConversation.id] ?? []
     : [];
+  const activeRemoteQueuedPrompts = activeConversation
+    ? remoteQueuedPrompts[activeConversation.id] ?? []
+    : [];
   const activeSubagentRuns = activeConversation
     ? subagentRuns[activeConversation.id]
     : undefined;
@@ -1606,6 +1715,10 @@ export default function App() {
   const activeHistory = activeConversation
     ? historyByConversation[activeConversation.id]
     : undefined;
+
+  useEffect(() => {
+    inFlightTurnsRef.current = inFlightTurns;
+  }, [inFlightTurns]);
   const visibleHistoryMessages = useMemo(
     () =>
       (activeHistory
@@ -1617,6 +1730,7 @@ export default function App() {
     [
       activeHistory?.items,
       activeTurn?.historyBoundaryId,
+      activeTurn?.userMessageId,
       activeTurn?.prompt,
     ],
   );
@@ -1677,7 +1791,8 @@ export default function App() {
   const hasVisibleMessages =
     historyToolPresentation.messages.length > 0 ||
     activeTurn !== undefined ||
-    activeQueuedPrompts.length > 0;
+    activeQueuedPrompts.length > 0 ||
+    activeRemoteQueuedPrompts.length > 0;
   const isStreaming = isTurnRunning(activeTurn);
   const composerHasContent =
     prompt.trim().length > 0 ||
@@ -2063,9 +2178,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isTauri()) return;
     let active = true;
-    void getVersion()
+    void getAppVersion()
       .then((version) => {
         if (active) setAppVersion(version);
       })
@@ -2231,6 +2345,67 @@ export default function App() {
       setDeviceCode(event.payload);
       setLoginOpen(true);
     });
+    const unlistenAuthRequired = listen(TRANSPORT_AUTH_REQUIRED, () => {
+      setWebAuthOpen(true);
+    });
+    const unlistenReplayReset = listen<ReplayResetEvent>(
+      TRANSPORT_REPLAY_RESET,
+      async (event) => {
+        const sessionIds = new Set(
+          event.payload.scopes.map((scope) => scope.sessionId),
+        );
+        if (sessionIds.size === 0) return;
+        if (agentChatEventFrame.current !== undefined) {
+          window.cancelAnimationFrame(agentChatEventFrame.current);
+          agentChatEventFrame.current = undefined;
+        }
+        queuedAgentChatEvents.current = queuedAgentChatEvents.current.filter(
+          (queued) => !sessionIds.has(queued.sessionId),
+        );
+        setInFlightTurns((current) => {
+          const next = omitSessionKeys(current, sessionIds);
+          inFlightTurnsRef.current = next;
+          return next;
+        });
+        setSubagentLiveTurns((current) => omitSessionKeys(current, sessionIds));
+        setSubagentRuns((current) => omitSessionKeys(current, sessionIds));
+        setInteractions((current) => omitSessionKeys(current, sessionIds));
+        setRemoteQueuedPrompts((current) =>
+          omitSessionKeys(current, sessionIds),
+        );
+
+        await Promise.all(
+          [...sessionIds].map(async (conversationId) => {
+            const request =
+              (historyRequests.current[conversationId] ?? 0) + 1;
+            historyRequests.current[conversationId] = request;
+            try {
+              const page = await fetchConversationHistory(conversationId);
+              if (request !== historyRequests.current[conversationId]) return;
+              setHistoryByConversation((current) => ({
+                ...current,
+                [conversationId]: {
+                  conversationId,
+                  items: [...page.items].reverse(),
+                  loading: false,
+                },
+              }));
+            } catch (error) {
+              if (request !== historyRequests.current[conversationId]) return;
+              setHistoryByConversation((current) => ({
+                ...current,
+                [conversationId]: {
+                  conversationId,
+                  items: current[conversationId]?.items ?? [],
+                  loading: false,
+                  error: conciseError(error),
+                },
+              }));
+            }
+          }),
+        );
+      },
+    );
     const unlistenBrowserError = listen<string>(
       "auth-browser-open-failed",
       (event) => {
@@ -2246,8 +2421,90 @@ export default function App() {
           payload.agentId === sideChatAgentId.current;
         const isSideChatAgent =
           sideChatAgentIds.current.has(payload.agentId);
+        const submitted = readPromptSubmittedEvent(payload.event);
+        if (submitted && isMainAgentEvent && !isSideChatAgent) {
+          const projected = inFlightTurnFromUserMessage(submitted);
+          const existing = inFlightTurnsRef.current[payload.sessionId];
+          if (
+            !existing ||
+            isSameLiveUserMessage(existing, submitted) ||
+            (existing.status === "queued" && !existing.promptId)
+          ) {
+            setInFlightTurns((current) => {
+              const active = current[payload.sessionId];
+              if (
+                active &&
+                !isSameLiveUserMessage(active, submitted) &&
+                !(active.status === "queued" && !active.promptId)
+              ) {
+                return current;
+              }
+              const merged = {
+                ...projected,
+                ...active,
+                promptId: submitted.promptId,
+                userMessageId: submitted.userMessageId,
+                prompt: projected.prompt,
+                attachments: projected.attachments,
+                skills: projected.skills,
+                createdAt: projected.createdAt,
+              };
+              const next = { ...current, [payload.sessionId]: merged };
+              inFlightTurnsRef.current = next;
+              return next;
+            });
+          } else {
+            setRemoteQueuedPrompts((current) => {
+              const queued = current[payload.sessionId] ?? [];
+              if (queued.some((item) => item.promptId === submitted.promptId)) {
+                return current;
+              }
+              return {
+                ...current,
+                [payload.sessionId]: [
+                  ...queued,
+                  {
+                    promptId: submitted.promptId,
+                    userMessageId: submitted.userMessageId,
+                    text: projected.prompt,
+                    attachments: projected.attachments,
+                    skills: projected.skills,
+                    createdAt: projected.createdAt,
+                  },
+                ],
+              };
+            });
+          }
+        }
+        if (
+          isMainAgentEvent &&
+          (payload.event.type === "prompt.completed" ||
+            payload.event.type === "prompt.aborted") &&
+          typeof payload.event.promptId === "string"
+        ) {
+          const promptId = payload.event.promptId;
+          setRemoteQueuedPrompts((current) => ({
+            ...current,
+            [payload.sessionId]: (current[payload.sessionId] ?? []).filter(
+              (item) => item.promptId !== promptId,
+            ),
+          }));
+        }
         if (isAgentChatEvent(payload.event)) {
           const chatEvent = payload.event;
+          if (
+            isMainAgentEvent &&
+            chatEvent.type === "turn.started" &&
+            chatEvent.userMessage
+          ) {
+            const promptId = chatEvent.userMessage.promptId;
+            setRemoteQueuedPrompts((current) => ({
+              ...current,
+              [payload.sessionId]: (current[payload.sessionId] ?? []).filter(
+                (item) => item.promptId !== promptId,
+              ),
+            }));
+          }
           if (isSideChatEvent) {
             setSideChat((current) => {
               if (
@@ -2431,6 +2688,57 @@ export default function App() {
             })
             .catch((error) => showNotice(conciseError(error)));
         }
+        if (payload.event.type === "agent.status.updated" && isMainAgentEvent) {
+          const model =
+            typeof payload.event.model === "string"
+              ? payload.event.model
+              : undefined;
+          const thinkingLevel =
+            typeof payload.event.thinkingEffort === "string"
+              ? payload.event.thinkingEffort
+              : undefined;
+          const permission = ["manual", "auto", "yolo"].includes(
+            String(payload.event.permission),
+          )
+            ? (payload.event.permission as PermissionMode)
+            : undefined;
+          if (model || thinkingLevel || permission) {
+            updateDesktop((current) => ({
+              ...current,
+              projects: current.projects.map((project) => ({
+                ...project,
+                conversations: project.conversations.map((conversation) =>
+                  conversation.id === payload.sessionId
+                    ? {
+                        ...conversation,
+                        ...(model ? { modelId: model } : {}),
+                        ...(thinkingLevel ? { thinkingLevel } : {}),
+                        ...(permission ? { permissionMode: permission } : {}),
+                      }
+                    : conversation,
+                ),
+              })),
+            }));
+          }
+        }
+        if (
+          payload.event.type === "session.meta.updated" &&
+          isMainAgentEvent &&
+          typeof payload.event.title === "string"
+        ) {
+          const title = payload.event.title;
+          updateDesktop((current) => ({
+            ...current,
+            projects: current.projects.map((project) => ({
+              ...project,
+              conversations: project.conversations.map((conversation) =>
+                conversation.id === payload.sessionId
+                  ? { ...conversation, title }
+                  : conversation,
+              ),
+            })),
+          }));
+        }
         if (
           payload.event.type === "agent.status.updated" &&
           isMainAgentEvent &&
@@ -2475,6 +2783,8 @@ export default function App() {
       }
       queuedAgentChatEvents.current = [];
       void unlistenDevice.then((unlisten) => unlisten());
+      void unlistenAuthRequired.then((unlisten) => unlisten());
+      void unlistenReplayReset.then((unlisten) => unlisten());
       void unlistenBrowserError.then((unlisten) => unlisten());
       void unlistenChatEvent.then((unlisten) => unlisten());
       void unlistenInteractions.then((unlisten) => unlisten());
@@ -2773,7 +3083,12 @@ export default function App() {
     setSubagentRuns((current) => omitSessionKeys(current, ids));
     setSubagentLiveTurns((current) => omitSessionKeys(current, ids));
     setQueuedPrompts((current) => omitSessionKeys(current, ids));
-    setInFlightTurns((current) => omitSessionKeys(current, ids));
+    setRemoteQueuedPrompts((current) => omitSessionKeys(current, ids));
+    setInFlightTurns((current) => {
+      const next = omitSessionKeys(current, ids);
+      inFlightTurnsRef.current = next;
+      return next;
+    });
     setHistoryByConversation((current) => omitSessionKeys(current, ids));
     if (activeConversation && ids.has(activeConversation.id)) {
       resetPrompt();
@@ -2852,14 +3167,8 @@ export default function App() {
     }
   };
 
-  const addProject = async (): Promise<void> => {
+  const addProjectPath = async (selection: string): Promise<void> => {
     try {
-      const selection = await open({
-        directory: true,
-        multiple: false,
-        title: t("dialog.pickProjectDirectory"),
-      });
-      if (!selection) return;
       const workspace = await createOrTouchWorkspace(selection);
       const existing = desktop.projects.find(
         (item) => item.id === workspace.id || item.path === selection,
@@ -2888,6 +3197,19 @@ export default function App() {
         activeConversationId: undefined,
       }));
       setSidebarCollapsed(false);
+    } catch (error) {
+      showNotice(conciseError(error));
+    }
+  };
+
+  const addProject = async (): Promise<void> => {
+    if (!isDesktop()) {
+      setDirectoryPickerOpen(true);
+      return;
+    }
+    try {
+      const selection = await pickNativeDirectory();
+      if (selection) await addProjectPath(selection);
     } catch (error) {
       showNotice(conciseError(error));
     }
@@ -3547,6 +3869,7 @@ export default function App() {
           ...current,
           [conversationId]: {
             ...turn,
+            promptId: submitted.promptId,
             turnId: submitted.turnId ?? turn.turnId,
             status,
             durationMs:
@@ -3650,6 +3973,7 @@ export default function App() {
           ...current,
           [conversationId]: {
             ...turn,
+            promptId: submitted.promptId,
             turnId: submitted.turnId,
             status: liveTurnStatusFromSubmit(submitted.status),
           },
@@ -4492,6 +4816,14 @@ export default function App() {
                       }
                     />
                   )}
+                  {activeRemoteQueuedPrompts.length > 0 && (
+                    <RemoteQueuedPromptList
+                      prompts={activeRemoteQueuedPrompts}
+                      onSkillOpen={(name) =>
+                        void openSkillDetail({ name })
+                      }
+                    />
+                  )}
                   {activeCompaction &&
                     (activeCompaction.phase !== "completed" ||
                       !compactionHistoryReady[activeConversation.id]) && (
@@ -5096,12 +5428,32 @@ export default function App() {
         />
       )}
 
+      {webAuthOpen && !isDesktop() && (
+        <WebCredentialDialog
+          onSubmit={(credential) => {
+            setWebCredential(credential);
+            setWebAuthOpen(false);
+            window.location.reload();
+          }}
+        />
+      )}
+
       {removalTarget && (
         <RemovalDialog
           target={removalTarget}
           busy={removalBusy}
           onClose={() => !removalBusy && setRemovalTarget(undefined)}
           onConfirm={() => void confirmRemoval()}
+        />
+      )}
+
+      {directoryPickerOpen && !isDesktop() && (
+        <DirectoryPickerDialog
+          onClose={() => setDirectoryPickerOpen(false)}
+          onSelect={(path) => {
+            setDirectoryPickerOpen(false);
+            void addProjectPath(path);
+          }}
         />
       )}
 
@@ -5452,7 +5804,7 @@ function ChatHeaderTitle({
 function WindowTitleBar() {
   const [maximized, setMaximized] = useState(false);
   const appWindow = useMemo(
-    () => (isTauri() ? getCurrentWindow() : undefined),
+    () => (isDesktop() ? getCurrentWindow() : undefined),
     [],
   );
 
@@ -5512,11 +5864,13 @@ function WindowTitleBar() {
         </div>
         <div className="titlebar-brand-copy" data-tauri-drag-region>
           <strong data-tauri-drag-region>Kimi Code</strong>
-          <span data-tauri-drag-region>Agent Desktop</span>
+          <span data-tauri-drag-region>
+            {isDesktop() ? "Agent Desktop" : "Agent Web"}
+          </span>
         </div>
       </div>
 
-      <div className="window-controls">
+      {appWindow && <div className="window-controls">
         <button
           className="window-control"
           type="button"
@@ -5548,7 +5902,7 @@ function WindowTitleBar() {
         >
           <X size={15} strokeWidth={1.7} />
         </button>
-      </div>
+      </div>}
     </header>
   );
 }
@@ -6730,6 +7084,52 @@ function QueuedPromptList({
                 {t("queue.withdraw")}
               </button>
             </div>
+          </footer>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function RemoteQueuedPromptList({
+  prompts,
+  onSkillOpen,
+}: {
+  prompts: readonly RemoteQueuedPrompt[];
+  onSkillOpen: (name: string) => void;
+}) {
+  return (
+    <section className="queued-prompt-stack" aria-label={t("queue.remoteAriaLabel")}>
+      <header>
+        <span>
+          <MessageSquareText size={13} />
+          {t("queue.remoteTitle", { count: prompts.length })}
+        </span>
+        <small>{t("queue.remoteHint")}</small>
+      </header>
+      {prompts.map((prompt, index) => (
+        <article className="queued-prompt" key={prompt.promptId}>
+          <div className="queued-prompt-content">
+            {prompt.text || prompt.skills.length > 0 ? (
+              <div>
+                <SkillPromptDisplayContent
+                  text={prompt.text}
+                  skills={prompt.skills}
+                  onSkillOpen={onSkillOpen}
+                />
+              </div>
+            ) : (
+              <span className="queued-prompt-placeholder">
+                {t("queue.attachmentsOnly", { count: prompt.attachments.length })}
+              </span>
+            )}
+            <PromptAttachmentContent attachments={prompt.attachments} />
+          </div>
+          <footer>
+            <span className={index === 0 ? "next" : ""}>
+              {index === 0 ? t("queue.next") : `#${index + 1}`}
+            </span>
+            <small>{formatTime(prompt.createdAt)}</small>
           </footer>
         </article>
       ))}
@@ -8379,9 +8779,8 @@ const MarkdownMessage = memo(function MarkdownMessage({
                   event.preventDefault();
                   return;
                 }
-                if (!isTauri()) return;
                 event.preventDefault();
-                void openUrl(externalUrl).catch((error) => {
+                void openExternalUrl(externalUrl).catch((error) => {
                   console.error("failed to open Markdown link", error);
                 });
               }}
@@ -8564,6 +8963,135 @@ function RemovalDialog({
   );
 }
 
+function DirectoryPickerDialog({
+  onClose,
+  onSelect,
+}: {
+  onClose: () => void;
+  onSelect: (path: string) => void;
+}) {
+  const [home, setHome] = useState<FolderHome>();
+  const [browse, setBrowse] = useState<FolderBrowse>();
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState<string>();
+
+  const navigate = useCallback(async (target?: string): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const result = await invoke<FolderBrowse>("fs_browse", {
+        ...(target ? { path: target } : {}),
+      });
+      setBrowse(result);
+      setPath(result.path);
+    } catch (cause) {
+      setError(conciseError(cause));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void invoke<FolderHome>("fs_home")
+      .then((result) => {
+        if (!active) return;
+        setHome(result);
+        return navigate(result.home);
+      })
+      .catch((cause) => {
+        if (active) {
+          setError(conciseError(cause));
+          setBusy(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [navigate]);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <section
+        className="directory-picker-dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button className="dialog-close" aria-label={t("login.close")} onClick={onClose}>
+          <X size={17} />
+        </button>
+        <p className="eyebrow">KIMI CODE WEB</p>
+        <h2>{t("folderPicker.title")}</h2>
+        <form
+          className="directory-path-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void navigate(path.trim());
+          }}
+        >
+          <input
+            value={path}
+            onChange={(event) => setPath(event.target.value)}
+            aria-label={t("folderPicker.path")}
+          />
+          <button type="submit" className="dialog-secondary" disabled={!path.trim() || busy}>
+            {t("folderPicker.go")}
+          </button>
+        </form>
+        {home && (
+          <div className="directory-roots">
+            {[home.home, ...home.recent_roots]
+              .filter((item, index, values) => values.indexOf(item) === index)
+              .map((root) => (
+                <button type="button" key={root} onClick={() => void navigate(root)}>
+                  <Folder size={13} />
+                  <span>{root}</span>
+                </button>
+              ))}
+          </div>
+        )}
+        <div className="directory-list">
+          {busy ? (
+            <div className="history-loading"><span className="spinner" />{t("folderPicker.loading")}</div>
+          ) : error ? (
+            <div className="history-loading error">{error}</div>
+          ) : (
+            <>
+              {browse?.parent && (
+                <button type="button" onClick={() => void navigate(browse.parent ?? undefined)}>
+                  <Folder size={16} />
+                  <span>..</span>
+                  <ChevronRight size={15} />
+                </button>
+              )}
+              {browse?.entries.map((entry) => (
+                <button type="button" key={entry.path} onClick={() => void navigate(entry.path)}>
+                  <Folder size={16} />
+                  <span>{entry.name}</span>
+                  <ChevronRight size={15} />
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+        <div className="operation-dialog-actions">
+          <button className="dialog-secondary" type="button" onClick={onClose}>
+            {t("common.cancel")}
+          </button>
+          <button
+            className="dialog-primary"
+            type="button"
+            disabled={!browse?.path || busy}
+            onClick={() => browse?.path && onSelect(browse.path)}
+          >
+            {t("folderPicker.select")}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function LoginDialog({
   busy,
   code,
@@ -8610,7 +9138,11 @@ function LoginDialog({
             </button>
             <button
               className="dialog-primary"
-              onClick={() => void openUrl(code.verificationUriComplete || code.verificationUri)}
+              onClick={() =>
+                void openExternalUrl(
+                  code.verificationUriComplete || code.verificationUri,
+                )
+              }
             >
               {t("login.authorize")}
               <ExternalLink size={16} />
@@ -8643,6 +9175,48 @@ function LoginDialog({
           </>
         )}
       </section>
+    </div>
+  );
+}
+
+function WebCredentialDialog({
+  onSubmit,
+}: {
+  onSubmit: (credential: string) => void;
+}) {
+  const [credential, setCredential] = useState("");
+  const submit = (event: FormEvent): void => {
+    event.preventDefault();
+    const value = credential.trim();
+    if (value) onSubmit(value);
+  };
+  return (
+    <div className="modal-backdrop">
+      <form
+        className="login-dialog"
+        onSubmit={submit}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="login-logo">
+          <ShieldCheck size={24} />
+        </div>
+        <p className="eyebrow">KIMI CODE WEB</p>
+        <h2>{t("webAuth.title")}</h2>
+        <p className="dialog-copy">{t("webAuth.description")}</p>
+        <input
+          className="web-credential-input"
+          type="password"
+          autoFocus
+          autoComplete="off"
+          value={credential}
+          placeholder={t("webAuth.placeholder")}
+          onChange={(event) => setCredential(event.target.value)}
+        />
+        <button className="dialog-primary" type="submit" disabled={!credential.trim()}>
+          {t("webAuth.connect")}
+          <ArrowUp size={16} />
+        </button>
+      </form>
     </div>
   );
 }

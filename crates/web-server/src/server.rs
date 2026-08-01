@@ -1,0 +1,756 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{
+        DefaultBodyLimit, Multipart, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use futures_util::{SinkExt, StreamExt};
+use kimi_code_agent_core_v2::{
+    _base::di::lifecycle::DisposableHandle, app::desktop_client::KimiCodeDesktopClient,
+};
+use serde_json::Value;
+use subtle::ConstantTimeEq;
+use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+use crate::{RpcError, RpcRequest, RpcResponse, rpc::dispatch_rpc, wire::ServerFrame};
+
+const WS_BEARER_PROTOCOL_PREFIX: &str = "kimi-code.bearer.";
+const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Clone, Debug)]
+pub struct WebAsset {
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
+    pub csp_header: Option<String>,
+}
+
+pub trait AssetProvider: Send + Sync + 'static {
+    fn get(&self, path: &str) -> Option<WebAsset>;
+}
+
+impl<F> AssetProvider for F
+where
+    F: Fn(&str) -> Option<WebAsset> + Send + Sync + 'static,
+{
+    fn get(&self, path: &str) -> Option<WebAsset> {
+        self(path)
+    }
+}
+
+pub(crate) struct RpcConnection {
+    sender: mpsc::UnboundedSender<String>,
+    subscriptions: Mutex<HashMap<String, DisposableHandle>>,
+}
+
+impl RpcConnection {
+    fn new(sender: mpsc::UnboundedSender<String>) -> Self {
+        Self {
+            sender,
+            subscriptions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(crate) fn emit(&self, event: &str, payload: Value) {
+        let frame = ServerFrame::Event {
+            event: event.to_owned(),
+            payload,
+        };
+        if let Ok(serialized) = serde_json::to_string(&frame) {
+            let _ = self.sender.send(serialized);
+        }
+    }
+
+    pub(crate) fn add_subscription(
+        &self,
+        subscription: DisposableHandle,
+    ) -> Result<String, RpcError> {
+        let id = Uuid::new_v4().to_string();
+        self.subscriptions
+            .lock()
+            .map_err(|_| RpcError::transport("agent subscription registry is unavailable"))?
+            .insert(id.clone(), subscription);
+        Ok(id)
+    }
+
+    pub(crate) fn remove_subscription(&self, id: &str) -> Result<(), RpcError> {
+        let subscription = self
+            .subscriptions
+            .lock()
+            .map_err(|_| RpcError::transport("agent subscription registry is unavailable"))?
+            .remove(id);
+        if let Some(subscription) = subscription {
+            subscription
+                .dispose()
+                .map_err(|error| RpcError::transport(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn dispose_all(&self) {
+        let subscriptions = self
+            .subscriptions
+            .lock()
+            .map(|mut subscriptions| subscriptions.drain().map(|(_, value)| value).collect())
+            .unwrap_or_else(|_| Vec::new());
+        for subscription in subscriptions {
+            let _ = subscription.dispose();
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ServerState {
+    client: Arc<KimiCodeDesktopClient>,
+    assets: Arc<dyn AssetProvider>,
+    connections: Arc<Mutex<HashMap<String, Arc<RpcConnection>>>>,
+    token: Arc<str>,
+    version: Arc<str>,
+    port: u16,
+}
+
+pub(crate) struct RunningServer {
+    pub port: u16,
+    cancellation: CancellationToken,
+    task: JoinHandle<()>,
+    connections: Arc<Mutex<HashMap<String, Arc<RpcConnection>>>>,
+}
+
+impl RunningServer {
+    pub async fn close(self) {
+        self.cancellation.cancel();
+        let connections = self
+            .connections
+            .lock()
+            .map(|mut connections| connections.drain().map(|(_, value)| value).collect())
+            .unwrap_or_else(|_| Vec::new());
+        for connection in connections {
+            connection.dispose_all();
+        }
+        let mut task = self.task;
+        if tokio::time::timeout(Duration::from_secs(2), &mut task)
+            .await
+            .is_err()
+        {
+            task.abort();
+        }
+    }
+}
+
+pub(crate) async fn start_server(
+    client: Arc<KimiCodeDesktopClient>,
+    assets: Arc<dyn AssetProvider>,
+    token: String,
+    version: String,
+    port: u16,
+) -> Result<RunningServer, String> {
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .await
+        .map_err(|error| format!("failed to listen on 127.0.0.1:{port}: {error}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| error.to_string())?
+        .port();
+    let connections = Arc::new(Mutex::new(HashMap::new()));
+    let state = ServerState {
+        client,
+        assets,
+        connections: Arc::clone(&connections),
+        token: token.into(),
+        version: version.into(),
+        port,
+    };
+    let router = Router::new()
+        .route("/_kimi/v1/meta", get(meta_handler))
+        .route("/_kimi/v1/rpc", post(rpc_handler))
+        .route("/_kimi/v1/files", post(upload_handler))
+        .route("/_kimi/v1/events", get(websocket_handler))
+        .fallback(static_handler)
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+        .with_state(state);
+    let cancellation = CancellationToken::new();
+    let shutdown = cancellation.clone();
+    let task = tokio::spawn(async move {
+        let _ = axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown.cancelled_owned())
+            .await;
+    });
+    Ok(RunningServer {
+        port,
+        cancellation,
+        task,
+        connections,
+    })
+}
+
+async fn meta_handler(State(state): State<ServerState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authenticate_bearer(&state, &headers) {
+        return response;
+    }
+    Json(serde_json::json!({
+        "serverVersion": state.version,
+        "websocket": true,
+        "fileUpload": true,
+        "fsBrowse": true,
+    }))
+    .into_response()
+}
+
+async fn rpc_handler(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Json(request): Json<RpcRequest>,
+) -> Response {
+    let connection = match authenticate_connection(&state, &headers) {
+        Ok(connection) => connection,
+        Err(response) => return response,
+    };
+    let id = request.id;
+    match dispatch_rpc(&state.client, &connection, &request.command, request.args).await {
+        Ok(result) => Json(RpcResponse::success(id, result)).into_response(),
+        Err(error) => Json(RpcResponse::error(
+            id,
+            error.code,
+            error.message,
+            error.details.map(Value::Object),
+        ))
+        .into_response(),
+    }
+}
+
+async fn upload_handler(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    if let Err(response) = authenticate_connection(&state, &headers) {
+        return response;
+    }
+    let request_id = Uuid::new_v4().to_string();
+    let mut filename = None;
+    let mut media_type = None;
+    let mut bytes = None;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(error) => {
+                return rpc_http_error(
+                    StatusCode::BAD_REQUEST,
+                    request_id,
+                    "request.invalid",
+                    error.to_string(),
+                );
+            }
+        };
+        if field.name() != Some("file") {
+            continue;
+        }
+        filename = field.file_name().map(str::to_owned);
+        media_type = field.content_type().map(str::to_owned);
+        match field.bytes().await {
+            Ok(value) => bytes = Some(value.to_vec()),
+            Err(error) => {
+                return rpc_http_error(
+                    StatusCode::BAD_REQUEST,
+                    request_id,
+                    "request.invalid",
+                    error.to_string(),
+                );
+            }
+        }
+    }
+    let Some(bytes) = bytes else {
+        return rpc_http_error(
+            StatusCode::BAD_REQUEST,
+            request_id,
+            "request.invalid",
+            "multipart request must include a file field",
+        );
+    };
+    let filename = filename.unwrap_or_else(|| "attachment".into());
+    let media_type = media_type.unwrap_or_else(|| "application/octet-stream".into());
+    match state
+        .client
+        .upload_file(&filename, &media_type, bytes)
+        .await
+    {
+        Ok(file) => Json(RpcResponse::success(
+            request_id,
+            serde_json::to_value(file).unwrap_or(Value::Null),
+        ))
+        .into_response(),
+        Err(error) => rpc_http_error(StatusCode::OK, request_id, "transport.error", error),
+    }
+}
+
+async fn websocket_handler(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    websocket: WebSocketUpgrade,
+) -> Response {
+    if let Err(response) = validate_host_and_origin(&state, &headers) {
+        return response;
+    }
+    let Some(protocol) = websocket_bearer_protocol(&headers) else {
+        return rpc_http_error(
+            StatusCode::UNAUTHORIZED,
+            "",
+            "auth.required",
+            "a WebSocket bearer credential is required",
+        );
+    };
+    let candidate = protocol.trim_start_matches(WS_BEARER_PROTOCOL_PREFIX);
+    if !token_matches(&state.token, candidate) {
+        return rpc_http_error(
+            StatusCode::UNAUTHORIZED,
+            "",
+            "auth.invalid",
+            "the WebSocket bearer credential is invalid",
+        );
+    }
+    websocket
+        .protocols([protocol.clone()])
+        .on_upgrade(move |socket| websocket_session(state, socket))
+        .into_response()
+}
+
+async fn websocket_session(state: ServerState, mut socket: WebSocket) {
+    let connection_id = Uuid::new_v4().to_string();
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let connection = Arc::new(RpcConnection::new(sender));
+    if let Ok(mut connections) = state.connections.lock() {
+        connections.insert(connection_id.clone(), Arc::clone(&connection));
+    } else {
+        let _ = socket.close().await;
+        return;
+    }
+
+    let ready = serde_json::to_string(&ServerFrame::Ready {
+        connection_id: connection_id.clone(),
+    })
+    .expect("ready frame is serializable");
+    if socket.send(Message::Text(ready.into())).await.is_ok() {
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
+        loop {
+            tokio::select! {
+                outgoing = receiver.recv() => {
+                    let Some(outgoing) = outgoing else { break };
+                    if socket.send(Message::Text(outgoing.into())).await.is_err() { break; }
+                }
+                incoming = socket.next() => {
+                    match incoming {
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                        _ => {}
+                    }
+                }
+                _ = heartbeat.tick() => {
+                    if socket.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
+                }
+            }
+        }
+    }
+
+    if let Ok(mut connections) = state.connections.lock() {
+        connections.remove(&connection_id);
+    }
+    connection.dispose_all();
+}
+
+async fn static_handler(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    if let Err(response) = validate_host(&state, &headers) {
+        return response;
+    }
+    if uri.path().starts_with("/_kimi/") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let requested = normalized_asset_path(uri.path());
+    let asset = requested
+        .as_deref()
+        .and_then(|path| state.assets.get(path))
+        .or_else(|| state.assets.get("index.html"));
+    let Some(asset) = asset else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mut response = Response::new(Body::from(asset.bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&asset.mime_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    if let Some(csp) = asset
+        .csp_header
+        .and_then(|value| HeaderValue::from_str(&value).ok())
+    {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_SECURITY_POLICY, csp);
+    }
+    let cache = if requested
+        .as_deref()
+        .is_some_and(|path| path.starts_with("assets/"))
+    {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    response
+}
+
+fn normalized_asset_path(path: &str) -> Option<String> {
+    let path = path.trim_start_matches('/');
+    if path.is_empty() {
+        return Some("index.html".into());
+    }
+    if path.split('/').any(|segment| matches!(segment, "." | "..")) {
+        return None;
+    }
+    Some(path.to_owned())
+}
+
+fn authenticate_connection(
+    state: &ServerState,
+    headers: &HeaderMap,
+) -> Result<Arc<RpcConnection>, Response> {
+    authenticate_bearer(state, headers)?;
+    let Some(connection_id) = headers
+        .get("x-kimi-connection-id")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Err(rpc_http_error(
+            StatusCode::CONFLICT,
+            "",
+            "connection.required",
+            "an active WebSocket connection is required",
+        ));
+    };
+    state
+        .connections
+        .lock()
+        .ok()
+        .and_then(|connections| connections.get(connection_id).cloned())
+        .ok_or_else(|| {
+            rpc_http_error(
+                StatusCode::CONFLICT,
+                "",
+                "connection.stale",
+                "the WebSocket connection is no longer active",
+            )
+        })
+}
+
+fn authenticate_bearer(state: &ServerState, headers: &HeaderMap) -> Result<(), Response> {
+    validate_host_and_origin(state, headers)?;
+    let credential = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if !credential.is_some_and(|value| token_matches(&state.token, value)) {
+        return Err(rpc_http_error(
+            StatusCode::UNAUTHORIZED,
+            "",
+            "auth.invalid",
+            "a valid bearer credential is required",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_host_and_origin(state: &ServerState, headers: &HeaderMap) -> Result<(), Response> {
+    validate_host(state, headers)?;
+    if let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    {
+        let expected = format!("http://127.0.0.1:{}", state.port);
+        let localhost = format!("http://localhost:{}", state.port);
+        if origin != expected && origin != localhost {
+            return Err(rpc_http_error(
+                StatusCode::FORBIDDEN,
+                "",
+                "origin.rejected",
+                "request origin is not allowed",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_host(state: &ServerState, headers: &HeaderMap) -> Result<(), Response> {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let expected = format!("127.0.0.1:{}", state.port);
+    let localhost = format!("localhost:{}", state.port);
+    if host != expected && host != localhost {
+        return Err(rpc_http_error(
+            StatusCode::BAD_REQUEST,
+            "",
+            "host.rejected",
+            "request host is not allowed",
+        ));
+    }
+    Ok(())
+}
+
+fn websocket_bearer_protocol(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::SEC_WEBSOCKET_PROTOCOL)?
+        .to_str()
+        .ok()?
+        .split(',')
+        .map(str::trim)
+        .find(|protocol| protocol.starts_with(WS_BEARER_PROTOCOL_PREFIX))
+        .map(str::to_owned)
+}
+
+fn token_matches(expected: &str, candidate: &str) -> bool {
+    expected.len() == candidate.len() && bool::from(expected.as_bytes().ct_eq(candidate.as_bytes()))
+}
+
+fn rpc_http_error(
+    status: StatusCode,
+    id: impl Into<String>,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> Response {
+    (status, Json(RpcResponse::error(id, code, message, None))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::StreamExt;
+    use kimi_code_agent_core_v2::_base::di::lifecycle::to_disposable;
+    use reqwest::{Client, multipart};
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
+
+    fn temp_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("kimi-web-server-{}", Uuid::new_v4()))
+    }
+
+    #[tokio::test]
+    async fn authenticates_bridge_routes_and_serves_spa_assets() {
+        let root = temp_dir();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let client = Arc::new(KimiCodeDesktopClient::new(&home, "test").unwrap());
+        let assets: Arc<dyn AssetProvider> = Arc::new(|path: &str| match path {
+            "index.html" => Some(WebAsset {
+                bytes: b"<main>Kimi Web</main>".to_vec(),
+                mime_type: "text/html; charset=utf-8".into(),
+                csp_header: Some("default-src 'self'".into()),
+            }),
+            "assets/app.js" => Some(WebAsset {
+                bytes: b"export {};".to_vec(),
+                mime_type: "text/javascript".into(),
+                csp_header: None,
+            }),
+            _ => None,
+        });
+        let token = "test-token-that-must-never-appear-in-errors";
+        let server = start_server(client, assets, token.into(), "1.2.3".into(), 0)
+            .await
+            .unwrap();
+        let origin = format!("http://127.0.0.1:{}", server.port);
+        let http = Client::new();
+
+        let page = http
+            .get(format!("{origin}/conversation/example"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(page.status(), StatusCode::OK);
+        assert_eq!(
+            page.headers()[header::CONTENT_TYPE],
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(page.text().await.unwrap(), "<main>Kimi Web</main>");
+
+        let asset = http
+            .get(format!("{origin}/assets/app.js"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(asset.status(), StatusCode::OK);
+        assert_eq!(asset.headers()[header::CONTENT_TYPE], "text/javascript");
+        assert_eq!(
+            asset.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+
+        assert_eq!(
+            http.get(format!("{origin}/_kimi/v1/missing"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            http.get(format!("{origin}/"))
+                .header(header::HOST, "malicious.example")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let unauthorized = http
+            .get(format!("{origin}/_kimi/v1/meta"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        assert!(!unauthorized.text().await.unwrap().contains(token));
+        assert_eq!(
+            http.get(format!("{origin}/_kimi/v1/meta"))
+                .bearer_auth("wrong-token")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            http.get(format!("{origin}/_kimi/v1/meta"))
+                .bearer_auth(token)
+                .header(header::ORIGIN, "http://malicious.example")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let meta: Value = http
+            .get(format!("{origin}/_kimi/v1/meta"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(meta["serverVersion"], "1.2.3");
+
+        let websocket_url = format!("ws://127.0.0.1:{}/_kimi/v1/events", server.port);
+        let mut request = websocket_url.into_client_request().unwrap();
+        request.headers_mut().insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_str(&format!("{WS_BEARER_PROTOCOL_PREFIX}{token}")).unwrap(),
+        );
+        request
+            .headers_mut()
+            .insert(header::ORIGIN, HeaderValue::from_str(&origin).unwrap());
+        let (mut websocket, response) = connect_async(request).await.unwrap();
+        assert_eq!(
+            response.headers()[header::SEC_WEBSOCKET_PROTOCOL],
+            format!("{WS_BEARER_PROTOCOL_PREFIX}{token}")
+        );
+        let ready: Value =
+            serde_json::from_str(websocket.next().await.unwrap().unwrap().to_text().unwrap())
+                .unwrap();
+        let connection_id = ready["connectionId"].as_str().unwrap().to_owned();
+
+        let unknown: Value = http
+            .post(format!("{origin}/_kimi/v1/rpc"))
+            .bearer_auth(token)
+            .header("x-kimi-connection-id", &connection_id)
+            .json(&json!({"id":"rpc-1", "command":"not_allowed", "args":{}}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(unknown["ok"], false);
+        assert_eq!(unknown["error"]["code"], "request.unknown_command");
+
+        let no_file = http
+            .post(format!("{origin}/_kimi/v1/files"))
+            .bearer_auth(token)
+            .header("x-kimi-connection-id", &connection_id)
+            .multipart(multipart::Form::new().text("ignored", "value"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(no_file.status(), StatusCode::BAD_REQUEST);
+
+        websocket.close(None).await.unwrap();
+        let mut stale_status = StatusCode::OK;
+        for _ in 0..50 {
+            stale_status = http
+                .post(format!("{origin}/_kimi/v1/rpc"))
+                .bearer_auth(token)
+                .header("x-kimi-connection-id", &connection_id)
+                .json(&json!({"id":"rpc-2", "command":"auth_status", "args":{}}))
+                .send()
+                .await
+                .unwrap()
+                .status();
+            if stale_status == StatusCode::CONFLICT {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(stale_status, StatusCode::CONFLICT);
+
+        server.close().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_traversal_and_compares_tokens_exactly() {
+        assert_eq!(normalized_asset_path("/"), Some("index.html".into()));
+        assert_eq!(
+            normalized_asset_path("/assets/app.js"),
+            Some("assets/app.js".into())
+        );
+        assert_eq!(normalized_asset_path("/../secret"), None);
+        assert!(token_matches("abc", "abc"));
+        assert!(!token_matches("abc", "abd"));
+        assert!(!token_matches("abc", "abc0"));
+    }
+
+    #[test]
+    fn connection_disposes_owned_subscriptions() {
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        let connection = RpcConnection::new(sender);
+        let disposed = Arc::new(AtomicUsize::new(0));
+        for _ in 0..2 {
+            let disposed = Arc::clone(&disposed);
+            connection
+                .add_subscription(to_disposable(move || {
+                    disposed.fetch_add(1, Ordering::SeqCst);
+                }))
+                .unwrap();
+        }
+        connection.dispose_all();
+        assert_eq!(disposed.load(Ordering::SeqCst), 2);
+        connection.dispose_all();
+        assert_eq!(disposed.load(Ordering::SeqCst), 2);
+    }
+}

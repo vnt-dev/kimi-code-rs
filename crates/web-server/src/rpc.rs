@@ -1,0 +1,298 @@
+use std::sync::Arc;
+
+use kimi_code_agent_core_v2::app::desktop_client::{
+    DesktopPrepareSessionRequest, KimiCodeDesktopClient,
+};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::Value;
+
+use crate::{AgentRpcRequest, RpcError, dispatch_agent_rpc, server::RpcConnection};
+
+fn decode<T: DeserializeOwned>(value: Value) -> Result<T, RpcError> {
+    serde_json::from_value(value).map_err(|error| RpcError::invalid_request(error.to_string()))
+}
+
+fn encode<T: Serialize>(value: T) -> Result<Value, RpcError> {
+    serde_json::to_value(value).map_err(|error| RpcError::transport(error.to_string()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionArgs {
+    session_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceArgs {
+    workspace_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateWorkspaceArgs {
+    root: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillArgs {
+    session_id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct ModelArgs {
+    model: String,
+}
+
+#[derive(Deserialize)]
+struct PrepareSessionArgs {
+    request: DesktopPrepareSessionRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadFileArgs {
+    filename: String,
+    media_type: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubscribeArgs {
+    session_id: String,
+    agent_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnsubscribeArgs {
+    subscription_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractionArgs {
+    session_id: String,
+    interaction_id: String,
+    response: Value,
+}
+
+#[derive(Deserialize)]
+struct BrowseFoldersArgs {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+pub(crate) async fn dispatch_rpc(
+    client: &Arc<KimiCodeDesktopClient>,
+    connection: &Arc<RpcConnection>,
+    command: &str,
+    args: Value,
+) -> Result<Value, RpcError> {
+    match command {
+        "auth_status" => encode(client.auth_status().await.map_err(RpcError::transport)?),
+        "account_usage" => encode(client.managed_usage().await.map_err(RpcError::transport)?),
+        "login" => {
+            let events = Arc::clone(connection);
+            encode(
+                client
+                    .login(Arc::new(move |code| {
+                        if let Ok(payload) = serde_json::to_value(code) {
+                            events.emit("auth-device-code", payload);
+                        }
+                    }))
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "logout" => encode(client.logout().await.map_err(RpcError::transport)?),
+        "list_models" => encode(client.list_models().await.map_err(RpcError::transport)?),
+        "refresh_models" => encode(client.refresh_models().await.map_err(RpcError::transport)?),
+        "list_skills" => {
+            let args: SessionArgs = decode(args)?;
+            encode(
+                client
+                    .list_session_skills(&args.session_id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "get_skill_content" => {
+            let args: SkillArgs = decode(args)?;
+            encode(
+                client
+                    .get_session_skill_content(&args.session_id, &args.name)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "upload_file" => {
+            let args: UploadFileArgs = decode(args)?;
+            encode(
+                client
+                    .upload_file(&args.filename, &args.media_type, args.bytes)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "set_default_model" => {
+            let args: ModelArgs = decode(args)?;
+            client
+                .set_default_model(&args.model)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
+        }
+        "list_workspaces" => encode(
+            client
+                .list_workspaces()
+                .await
+                .map_err(RpcError::transport)?,
+        ),
+        "create_or_touch_workspace" => {
+            let args: CreateWorkspaceArgs = decode(args)?;
+            encode(
+                client
+                    .create_or_touch_workspace(&args.root, args.name.as_deref())
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "remove_workspace" => {
+            let args: WorkspaceArgs = decode(args)?;
+            client
+                .remove_workspace(&args.workspace_id)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
+        }
+        "list_workspace_sessions" => {
+            let args: WorkspaceArgs = decode(args)?;
+            encode(
+                client
+                    .list_workspace_sessions(&args.workspace_id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "fork_session" => {
+            let args: SessionArgs = decode(args)?;
+            encode(
+                client
+                    .fork_session(&args.session_id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "archive_session" => {
+            let args: SessionArgs = decode(args)?;
+            client
+                .archive_session(&args.session_id)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
+        }
+        "prepare_session" => {
+            let args: PrepareSessionArgs = decode(args)?;
+            encode(
+                client
+                    .prepare_session(args.request)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "conversation_context_usage" => {
+            let args: SessionArgs = decode(args)?;
+            encode(
+                client
+                    .context_usage(&args.session_id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "list_conversation_messages" => {
+            let args: SessionArgs = decode(args)?;
+            encode(
+                client
+                    .list_messages(&args.session_id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "agent_rpc" => {
+            #[derive(Deserialize)]
+            struct Args {
+                request: AgentRpcRequest,
+            }
+            let args: Args = decode(args)?;
+            dispatch_agent_rpc(client, args.request).await
+        }
+        "subscribe_agent_events" => {
+            let args: SubscribeArgs = decode(args)?;
+            let session_id = args.session_id.clone();
+            let events = Arc::clone(connection);
+            let interactions = Arc::clone(connection);
+            let interaction_session_id = args.session_id.clone();
+            let subscription = client
+                .subscribe_agent_events_with_replay(
+                    &args.session_id,
+                    &args.agent_id,
+                    Arc::new(move |agent_id, event| {
+                        events.emit(
+                            "agent-event",
+                            serde_json::json!({
+                                "sessionId": session_id,
+                                "agentId": agent_id,
+                                "event": event,
+                            }),
+                        );
+                    }),
+                    Arc::new(move |pending| {
+                        interactions.emit(
+                            "agent-interactions",
+                            serde_json::json!({
+                                "sessionId": interaction_session_id,
+                                "interactions": pending,
+                            }),
+                        );
+                    }),
+                )
+                .await
+                .map_err(RpcError::transport)?;
+            encode(connection.add_subscription(subscription)?)
+        }
+        "unsubscribe_agent_events" => {
+            let args: UnsubscribeArgs = decode(args)?;
+            connection.remove_subscription(&args.subscription_id)?;
+            Ok(Value::Null)
+        }
+        "respond_interaction" => {
+            let args: InteractionArgs = decode(args)?;
+            client
+                .respond_interaction(&args.session_id, &args.interaction_id, args.response)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
+        }
+        "fs_home" => encode(client.folder_home().await.map_err(RpcError::transport)?),
+        "fs_browse" => {
+            let args: BrowseFoldersArgs = decode(args)?;
+            encode(
+                client
+                    .browse_folders(args.path.as_deref())
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        _ => Err(RpcError {
+            code: "request.unknown_command".into(),
+            message: format!("unknown RPC command `{command}`"),
+            details: None,
+        }),
+    }
+}

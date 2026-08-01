@@ -55,6 +55,7 @@ use crate::{
         config::{CONFIG_SERVICE_ID, ConfigTarget},
         event::event_bus::EVENT_BUS_SERVICE_ID,
         file::{FILE_SERVICE_ID, FileByteStream, FileMeta, FileServiceError, SaveOptions},
+        host_folder_browser::{FS_HOST_FOLDER_BROWSER_ID, FsBrowseResponse, FsHomeResponse},
         message_legacy::{
             MESSAGE_LEGACY_SERVICE_ID, MessageListQuery, PageResponse as MessagePageResponse,
         },
@@ -518,6 +519,27 @@ impl KimiCodeDesktopClient {
             .list()
             .await
             .map(|workspaces| workspaces.into_iter().map(map_desktop_workspace).collect())
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn folder_home(&self) -> Result<FsHomeResponse, String> {
+        self.app
+            .get(FS_HOST_FOLDER_BROWSER_ID)
+            .map_err(|error| error.to_string())?
+            .home()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn browse_folders(
+        &self,
+        absolute_path: Option<&str>,
+    ) -> Result<FsBrowseResponse, String> {
+        self.app
+            .get(FS_HOST_FOLDER_BROWSER_ID)
+            .map_err(|error| error.to_string())?
+            .browse(absolute_path)
+            .await
             .map_err(|error| error.to_string())
     }
 

@@ -1,5 +1,3 @@
-mod rpc_dispatch;
-
 use std::{
     collections::HashMap,
     sync::{
@@ -11,6 +9,7 @@ use std::{
 use kimi_code_agent_core_v2::{
     _base::di::lifecycle::DisposableHandle,
     app::{
+        bootstrap::resolve_kimi_home,
         desktop_client::{
             DesktopAuthStatus, DesktopContextUsage, DesktopDeviceCode, DesktopInteraction,
             DesktopManagedUsage, DesktopMessagePage, DesktopModel, DesktopPrepareSessionRequest,
@@ -21,7 +20,10 @@ use kimi_code_agent_core_v2::{
         session_index::SessionSummary,
     },
 };
-use rpc_dispatch::{AgentRpcRequest, RpcError};
+use kimi_code_web_server::{
+    AgentRpcRequest, AssetProvider, RpcError, WebAsset, WebServerController, WebServerSettings,
+    WebServerStatus, dispatch_agent_rpc,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -29,6 +31,7 @@ use tauri_plugin_opener::OpenerExt;
 
 struct AppState {
     client: Arc<KimiCodeDesktopClient>,
+    web_server: Arc<WebServerController>,
     subscriptions: Mutex<HashMap<String, DisposableHandle>>,
     next_subscription_id: AtomicU64,
 }
@@ -222,7 +225,20 @@ async fn agent_rpc(
     state: State<'_, AppState>,
     request: AgentRpcRequest,
 ) -> Result<Value, RpcError> {
-    rpc_dispatch::dispatch(&state.client, request).await
+    dispatch_agent_rpc(&state.client, request).await
+}
+
+#[tauri::command]
+async fn get_web_server_status(state: State<'_, AppState>) -> Result<WebServerStatus, String> {
+    Ok(state.web_server.status().await)
+}
+
+#[tauri::command]
+async fn set_web_server_settings(
+    state: State<'_, AppState>,
+    settings: WebServerSettings,
+) -> Result<WebServerStatus, String> {
+    state.web_server.set_settings(settings).await
 }
 
 #[tauri::command]
@@ -311,12 +327,43 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let client = KimiCodeDesktopClient::bootstrap(env!("CARGO_PKG_VERSION"))
-                .map_err(|error| format!("failed to initialize Kimi Code agent core: {error}"))?;
+            let client = Arc::new(
+                KimiCodeDesktopClient::bootstrap(env!("CARGO_PKG_VERSION")).map_err(|error| {
+                    format!("failed to initialize Kimi Code agent core: {error}")
+                })?,
+            );
+            let app_handle = app.handle().clone();
+            let assets: Arc<dyn AssetProvider> = Arc::new(move |path: &str| {
+                app_handle
+                    .asset_resolver()
+                    .get(path.to_owned())
+                    .map(|asset| WebAsset {
+                        bytes: asset.bytes,
+                        mime_type: asset.mime_type,
+                        csp_header: asset.csp_header,
+                    })
+            });
+            let app_config_dir = app
+                .path()
+                .app_config_dir()
+                .map_err(|error| format!("failed to resolve app config directory: {error}"))?;
+            let kimi_home = resolve_kimi_home(None)
+                .map_err(|error| format!("failed to resolve Kimi Code home: {error}"))?;
+            let web_server = Arc::new(WebServerController::new(
+                Arc::clone(&client),
+                assets,
+                env!("CARGO_PKG_VERSION"),
+                app_config_dir.join("web-server.json"),
+                kimi_home.join("server.token"),
+            ));
             app.manage(AppState {
-                client: Arc::new(client),
+                client,
+                web_server: Arc::clone(&web_server),
                 subscriptions: Mutex::new(HashMap::new()),
                 next_subscription_id: AtomicU64::new(1),
+            });
+            tauri::async_runtime::spawn(async move {
+                web_server.restore().await;
             });
             Ok(())
         })
@@ -341,10 +388,20 @@ pub fn run() {
             conversation_context_usage,
             list_conversation_messages,
             agent_rpc,
+            get_web_server_status,
+            set_web_server_settings,
             subscribe_agent_events,
             unsubscribe_agent_events,
             respond_interaction
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Kimi Code desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Kimi Code desktop")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                let web_server = Arc::clone(&app.state::<AppState>().web_server);
+                tauri::async_runtime::block_on(async move {
+                    web_server.shutdown().await;
+                });
+            }
+        });
 }

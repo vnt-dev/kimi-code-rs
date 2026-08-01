@@ -1340,6 +1340,15 @@ event_type!(TurnStartedEventType, "turn.started");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LiveUserMessage {
+    pub prompt_id: String,
+    pub user_message_id: String,
+    pub created_at: IsoDateTime,
+    pub content: Vec<MessageContent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TurnStartedEvent {
     #[serde(rename = "type")]
     pub event_type: TurnStartedEventType,
@@ -1351,6 +1360,12 @@ pub struct TurnStartedEvent {
         deserialize_with = "optional_non_null"
     )]
     pub prompt: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_non_null"
+    )]
+    pub user_message: Option<LiveUserMessage>,
 }
 
 event_type!(TurnEndedEventType, "turn.ended");
@@ -2247,6 +2262,17 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(prompt.created_at, "2026-06-11T00:00:00.000Z");
+        let started: TurnStartedEvent = serde_json::from_value(serde_json::json!({
+            "type": "turn.started", "turnId": 7, "origin": {"kind": "user"},
+            "prompt": "hello",
+            "userMessage": {
+                "promptId": "p", "userMessageId": "m",
+                "createdAt": "2026-06-11T00:00:00Z",
+                "content": [{"type": "text", "text": "hello"}]
+            }
+        }))
+        .unwrap();
+        assert_eq!(started.user_message.unwrap().user_message_id, "m");
         assert!(
             serde_json::from_value::<McpServerStatusPayload>(serde_json::json!({
                 "name": "server", "transport": "sse", "status": "connected", "toolCount": 2

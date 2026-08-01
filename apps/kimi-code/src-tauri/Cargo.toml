@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 kimi-code-agent-core-v2 = { path = "../../../crates/agent-core-v2" }
+kimi-code-web-server = { path = "../../../crates/web-server" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tauri = { version = "2", features = [] }

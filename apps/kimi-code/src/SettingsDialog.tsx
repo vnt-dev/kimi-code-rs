@@ -1,16 +1,38 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isTauri } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { Check, ChevronDown, RefreshCw, X } from "lucide-react";
+import { Check, ChevronDown, Copy, ExternalLink, RefreshCw, X } from "lucide-react";
 
 import type { ColorScheme } from "./appearance";
 import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
+import { invoke, isDesktop, openExternalUrl } from "./transport";
 
-type SettingsTab = "general" | "about";
+type SettingsTab = "general" | "web" | "about";
+
+interface WebServerStatus {
+  state: "stopped" | "starting" | "running" | "error";
+  enabled: boolean;
+  port: number;
+  origin?: string;
+  accessUrl?: string;
+  error?: string;
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function webServerStateLabel(state: WebServerStatus["state"] = "stopped"): string {
+  switch (state) {
+    case "starting":
+      return t("settings.webState.starting");
+    case "running":
+      return t("settings.webState.running");
+    case "error":
+      return t("settings.webState.error");
+    default:
+      return t("settings.webState.stopped");
+  }
 }
 
 function LanguageSelect({
@@ -110,6 +132,12 @@ export default function SettingsDialog({
   const [updateMessage, setUpdateMessage] = useState<string>();
   const [updateToast, setUpdateToast] = useState<string>();
   const [downloadProgress, setDownloadProgress] = useState<number>();
+  const [webStatus, setWebStatus] = useState<WebServerStatus>();
+  const [webEnabled, setWebEnabled] = useState(false);
+  const [webPort, setWebPort] = useState("58627");
+  const [webBusy, setWebBusy] = useState(false);
+  const [webError, setWebError] = useState<string>();
+  const [webCopied, setWebCopied] = useState(false);
   const updateToastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -147,6 +175,25 @@ export default function SettingsDialog({
     },
     [clearUpdateToastTimer],
   );
+
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let active = true;
+    void invoke<WebServerStatus>("get_web_server_status")
+      .then((status) => {
+        if (!active) return;
+        setWebStatus(status);
+        setWebEnabled(status.enabled);
+        setWebPort(String(status.port));
+        setWebError(status.error);
+      })
+      .catch((error) => {
+        if (active) setWebError(errorMessage(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const previousFocus = document.activeElement;
@@ -189,7 +236,7 @@ export default function SettingsDialog({
   }, [onClose]);
 
   const handleCheckForUpdates = async (): Promise<void> => {
-    if (!isTauri()) {
+    if (!isDesktop()) {
       showUpdateToast(t("settings.updateDesktopOnly"));
       return;
     }
@@ -217,6 +264,42 @@ export default function SettingsDialog({
     } finally {
       setUpdateBusy(false);
     }
+  };
+
+  const applyWebSettings = async (): Promise<void> => {
+    const port = Number(webPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      setWebError(t("settings.webPortInvalid"));
+      return;
+    }
+    setWebBusy(true);
+    setWebError(undefined);
+    try {
+      const status = await invoke<WebServerStatus>("set_web_server_settings", {
+        settings: { enabled: webEnabled, port },
+      });
+      setWebStatus(status);
+      setWebEnabled(status.enabled);
+      setWebPort(String(status.port));
+      setWebError(status.error);
+    } catch (error) {
+      setWebError(errorMessage(error));
+      try {
+        const status = await invoke<WebServerStatus>("get_web_server_status");
+        setWebStatus(status);
+      } catch {
+        // Preserve the actionable settings error.
+      }
+    } finally {
+      setWebBusy(false);
+    }
+  };
+
+  const copyProtectedWebUrl = async (): Promise<void> => {
+    if (!webStatus?.accessUrl) return;
+    await navigator.clipboard.writeText(webStatus.accessUrl);
+    setWebCopied(true);
+    window.setTimeout(() => setWebCopied(false), 1500);
   };
 
   const handleInstallUpdate = async (): Promise<void> => {
@@ -297,6 +380,16 @@ export default function SettingsDialog({
             >
               {t("settings.tabGeneral")}
             </button>
+            {isDesktop() && (
+              <button
+                className={`settings-tab ${activeTab === "web" ? "active" : ""}`}
+                type="button"
+                aria-current={activeTab === "web" ? "page" : undefined}
+                onClick={() => setActiveTab("web")}
+              >
+                {t("settings.tabWeb")}
+              </button>
+            )}
             <button
               className={`settings-tab ${activeTab === "about" ? "active" : ""}`}
               type="button"
@@ -351,6 +444,90 @@ export default function SettingsDialog({
                   />
                 </div>
               </section>
+            ) : activeTab === "web" ? (
+              <section
+                className="settings-section settings-web"
+                aria-labelledby="web-heading"
+              >
+                <h3 id="web-heading">{t("settings.webTitle")}</h3>
+                <p className="settings-section-copy">
+                  {t("settings.webDescription")}
+                </p>
+                <div className="settings-row">
+                  <div>
+                    <span className="settings-row-label">
+                      {t("settings.webEnabled")}
+                    </span>
+                    <small>{t("settings.webLoopback")}</small>
+                  </div>
+                  <button
+                    className={`settings-toggle ${webEnabled ? "active" : ""}`}
+                    type="button"
+                    role="switch"
+                    aria-checked={webEnabled}
+                    onClick={() => setWebEnabled((enabled) => !enabled)}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-row">
+                  <label className="settings-row-label" htmlFor="web-server-port">
+                    {t("settings.webPort")}
+                  </label>
+                  <input
+                    id="web-server-port"
+                    className="settings-port-input"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={webPort}
+                    onChange={(event) => setWebPort(event.target.value)}
+                  />
+                </div>
+                <div className="settings-web-status">
+                  <span className={`state ${webStatus?.state ?? "stopped"}`} />
+                  <div>
+                    <strong>
+                      {webServerStateLabel(webStatus?.state)}
+                    </strong>
+                    <small>{webStatus?.origin ?? t("settings.webUnavailable")}</small>
+                  </div>
+                </div>
+                {(webError || webStatus?.error) && (
+                  <div className="settings-web-error" role="alert">
+                    {webError ?? webStatus?.error}
+                  </div>
+                )}
+                <div className="settings-web-actions">
+                  <button
+                    className="settings-update-button"
+                    type="button"
+                    disabled={webBusy}
+                    onClick={() => void applyWebSettings()}
+                  >
+                    {webBusy && <RefreshCw size={14} className="spinning" />}
+                    {t("settings.webApply")}
+                  </button>
+                  <button
+                    className="settings-update-button"
+                    type="button"
+                    disabled={!webStatus?.accessUrl}
+                    onClick={() => webStatus?.accessUrl && void openExternalUrl(webStatus.accessUrl)}
+                  >
+                    <ExternalLink size={14} />
+                    {t("settings.webOpen")}
+                  </button>
+                  <button
+                    className="settings-update-button"
+                    type="button"
+                    disabled={!webStatus?.accessUrl}
+                    onClick={() => void copyProtectedWebUrl()}
+                  >
+                    <Copy size={14} />
+                    {webCopied ? t("common.copied") : t("settings.webCopy")}
+                  </button>
+                </div>
+              </section>
             ) : (
               <section
                 className="settings-section settings-about"
@@ -366,24 +543,30 @@ export default function SettingsDialog({
                       v{appVersion ?? "—"}
                     </span>
                   </div>
-                  <button
-                    className="settings-update-button"
-                    type="button"
-                    disabled={updateBusy}
-                    onClick={() =>
-                      void (pendingUpdate
-                        ? handleInstallUpdate()
-                        : handleCheckForUpdates())
-                    }
-                  >
-                    <RefreshCw
-                      size={14}
-                      className={updateBusy ? "spinning" : undefined}
-                    />
-                    {pendingUpdate
-                      ? t("settings.installUpdate")
-                      : t("settings.checkUpdate")}
-                  </button>
+                  {isDesktop() ? (
+                    <button
+                      className="settings-update-button"
+                      type="button"
+                      disabled={updateBusy}
+                      onClick={() =>
+                        void (pendingUpdate
+                          ? handleInstallUpdate()
+                          : handleCheckForUpdates())
+                      }
+                    >
+                      <RefreshCw
+                        size={14}
+                        className={updateBusy ? "spinning" : undefined}
+                      />
+                      {pendingUpdate
+                        ? t("settings.installUpdate")
+                        : t("settings.checkUpdate")}
+                    </button>
+                  ) : (
+                    <span className="settings-desktop-only">
+                      {t("settings.updateDesktopOnly")}
+                    </span>
+                  )}
                 </div>
 
                 {updateMessage && (
