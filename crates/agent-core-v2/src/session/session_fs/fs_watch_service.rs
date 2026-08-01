@@ -10,6 +10,8 @@ use std::{
 
 use indexmap::IndexSet;
 use serde_json::{Map, Value};
+#[cfg(test)]
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::{
@@ -51,6 +53,8 @@ struct WatchState {
     raw_count: usize,
     truncated: bool,
     gitignore_loaded: bool,
+    #[cfg(test)]
+    gitignore_ready: bool,
 }
 
 impl Default for WatchState {
@@ -64,6 +68,8 @@ impl Default for WatchState {
             raw_count: 0,
             truncated: false,
             gitignore_loaded: false,
+            #[cfg(test)]
+            gitignore_ready: false,
         }
     }
 }
@@ -75,6 +81,8 @@ struct WatchInner {
     emitter: Emitter<FsChangeEvent>,
     matcher: RwLock<GitignoreMatcher>,
     state: Mutex<WatchState>,
+    #[cfg(test)]
+    gitignore_ready: Notify,
     debounce_ms: u64,
     max_changes_per_window: usize,
 }
@@ -100,6 +108,8 @@ impl SessionFsWatchService {
                 emitter: Emitter::new(),
                 matcher: RwLock::new(matcher),
                 state: Mutex::new(WatchState::default()),
+                #[cfg(test)]
+                gitignore_ready: Notify::new(),
                 debounce_ms: read_positive_int_env(
                     "KIMI_CODE_FS_WATCH_DEBOUNCE_MS",
                     DEFAULT_DEBOUNCE_MS,
@@ -154,16 +164,30 @@ impl SessionFsWatchService {
         let host_fs = self.inner.host_fs.clone();
         let path = self.inner.workspace.work_dir().join(".gitignore");
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            self.finish_gitignore_load(None);
             return;
         };
         runtime.spawn(async move {
-            let Ok(contents) = host_fs.read_text(&path, None).await else {
-                return;
-            };
+            let contents = host_fs.read_text(&path, None).await.ok();
             if let Some(inner) = weak.upgrade() {
-                inner.matcher.write().unwrap().add(&contents);
+                finish_gitignore_load(&inner, contents.as_deref());
             }
         });
+    }
+
+    fn finish_gitignore_load(&self, contents: Option<&str>) {
+        finish_gitignore_load(&self.inner, contents);
+    }
+
+    #[cfg(test)]
+    async fn wait_for_gitignore(&self) {
+        loop {
+            let ready = self.inner.gitignore_ready.notified();
+            if self.inner.state.lock().unwrap().gitignore_ready {
+                return;
+            }
+            ready.await;
+        }
     }
 
     fn teardown_handle(&self) {
@@ -212,6 +236,17 @@ impl SessionFsWatchService {
             ));
         }
         Ok(absolute)
+    }
+}
+
+fn finish_gitignore_load(inner: &WatchInner, contents: Option<&str>) {
+    if let Some(contents) = contents {
+        inner.matcher.write().unwrap().add(contents);
+    }
+    #[cfg(test)]
+    {
+        inner.state.lock().unwrap().gitignore_ready = true;
+        inner.gitignore_ready.notify_one();
     }
 }
 
@@ -605,12 +640,7 @@ mod tests {
             .on_did_change_files()
             .subscribe(move |event| captured.lock().unwrap().push(event.clone()));
         service.set_watched_paths(&[".".into()]).unwrap();
-        for _ in 0..100 {
-            if service.inner.matcher.read().unwrap().ignores("dist/x.js") {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+        service.wait_for_gitignore().await;
         assert!(service.inner.matcher.read().unwrap().ignores("dist/x.js"));
         watcher.handle.emitter.fire(&HostFsChange {
             path: directory.0.join("dist/x.js").to_string_lossy().into_owned(),
