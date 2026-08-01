@@ -4635,7 +4635,6 @@ export default function App() {
         <div className="brand-row">
           <div className="sidebar-heading-copy" aria-hidden={sidebarCollapsed}>
             <strong>{t("sidebar.workspace")}</strong>
-            <span>Projects &amp; sessions</span>
           </div>
           <button
             className="icon-button quiet"

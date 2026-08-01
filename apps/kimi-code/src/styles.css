@@ -260,11 +260,11 @@ select:focus-visible {
   min-width: 0;
   display: flex;
   max-width: 190px;
-  flex: 1;
   flex-direction: column;
   overflow: hidden;
   opacity: 1;
   line-height: 1.1;
+  white-space: nowrap;
   transform: translateX(0);
   transition:
     max-width 160ms ease,
@@ -274,7 +274,6 @@ select:focus-visible {
 
 .collapsed .sidebar-heading-copy {
   max-width: 0;
-  flex: 0;
   opacity: 0;
   transform: translateX(-5px);
 }
@@ -284,14 +283,6 @@ select:focus-visible {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
-}
-
-.sidebar-heading-copy span {
-  margin-top: 4px;
-  color: #50505a;
-  font-size: 7.5px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
 }
 
 .brand-row > .icon-button {
@@ -338,6 +329,10 @@ select:focus-visible {
   padding: 4px 10px;
 }
 
+.sidebar.collapsed .sidebar-primary {
+  padding-right: 9px;
+}
+
 .new-project-button {
   display: flex;
   width: 100%;
@@ -375,7 +370,9 @@ select:focus-visible {
 .collapsed .new-project-button {
   width: 40px;
   margin: 0 auto;
+  padding: 0;
   gap: 0;
+  justify-content: center;
 }
 
 .collapsed .sidebar-control-label {
@@ -414,6 +411,14 @@ select:focus-visible {
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #45484f transparent;
+}
+
+.collapsed .project-list {
+  scrollbar-width: none;
+}
+
+.collapsed .project-list::-webkit-scrollbar {
+  width: 0;
 }
 
 .project-group {
@@ -487,7 +492,8 @@ select:focus-visible {
 }
 
 .collapsed .project-row {
-  padding: 0 4px;
+  padding: 0;
+  justify-content: center;
   gap: 0;
 }
 
@@ -801,14 +807,15 @@ select:focus-visible {
   display: flex;
   min-width: 0;
   max-width: 170px;
-  flex: 1;
+  margin-right: auto;
   flex-direction: column;
   overflow: hidden;
   opacity: 1;
+  white-space: nowrap;
   transform: translateX(0);
   transition:
     max-width 160ms ease,
-    opacity 110ms ease,
+    opacity 120ms ease,
     transform 160ms ease;
 }
 
@@ -859,9 +866,12 @@ select:focus-visible {
 .collapsed .account-copy,
 .collapsed .account-trailing-icon {
   max-width: 0;
-  flex: 0;
   opacity: 0;
   transform: translateX(-5px);
+}
+
+.collapsed .account-trailing-icon {
+  flex: 0;
 }
 
 .profile-popover {
@@ -6763,8 +6773,7 @@ input:focus-visible {
   font-weight: 600;
 }
 
-.titlebar-brand-copy span,
-.sidebar-heading-copy span {
+.titlebar-brand-copy span {
   color: var(--subtle);
   font-size: 10px;
   letter-spacing: 0.08em;
