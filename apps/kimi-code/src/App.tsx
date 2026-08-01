@@ -121,6 +121,12 @@ import {
   type ReplayResetEvent,
 } from "./transport";
 import {
+  MOBILE_LAYOUT_MAX_WIDTH,
+  MOBILE_LAYOUT_QUERY,
+  resolveSidebarCollapsed,
+  shouldUseWebMobileLayout,
+} from "./responsive";
+import {
   applyLanguage,
   loadLanguage,
   localeTag,
@@ -1554,6 +1560,16 @@ function omitSessionKeys<T>(
 }
 
 export default function App() {
+  const desktopRuntime = useMemo(isDesktop, []);
+  const [mobileQueryMatches, setMobileQueryMatches] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia(MOBILE_LAYOUT_QUERY).matches
+      : window.innerWidth <= MOBILE_LAYOUT_MAX_WIDTH,
+  );
+  const mobileLayout = shouldUseWebMobileLayout(
+    desktopRuntime,
+    mobileQueryMatches,
+  );
   const [desktop, setDesktop] = useState<DesktopState>({ projects: [] });
   const [auth, setAuth] = useState<AuthStatus>({
     loggedIn: false,
@@ -1587,7 +1603,10 @@ export default function App() {
   const [remoteQueuedPrompts, setRemoteQueuedPrompts] = useState<
     Record<string, RemoteQueuedPrompt[]>
   >({});
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] =
+    useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [mobileViewportHeight, setMobileViewportHeight] = useState<number>();
   const [loginOpen, setLoginOpen] = useState(false);
   const [webAuthOpen, setWebAuthOpen] = useState(webCredentialRequired);
   const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
@@ -1658,6 +1677,7 @@ export default function App() {
   const composerAddRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageStackRef = useRef<HTMLDivElement>(null);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const followLatestMessageRef = useRef(true);
   const lastChatScrollTopRef = useRef(0);
   const lastChatScrollHeightRef = useRef(0);
@@ -1681,6 +1701,80 @@ export default function App() {
   const sideChatInstance = useRef(0);
   const sideChatAgentId = useRef<string | undefined>(undefined);
   const sideChatAgentIds = useRef(new Set<string>());
+
+  const sidebarCollapsed = resolveSidebarCollapsed(
+    mobileLayout,
+    desktopSidebarCollapsed,
+    mobileSidebarOpen,
+  );
+
+  const closeMobileNavigation = useCallback((): void => {
+    if (!mobileLayout) return;
+    setMobileSidebarOpen(false);
+    setProfileOpen(false);
+    window.requestAnimationFrame(() => mobileMenuButtonRef.current?.focus());
+  }, [mobileLayout]);
+
+  const openSidebar = useCallback((): void => {
+    setProfileOpen(false);
+    if (mobileLayout) setMobileSidebarOpen(true);
+    else setDesktopSidebarCollapsed(false);
+  }, [mobileLayout]);
+
+  const toggleSidebar = useCallback((): void => {
+    setProfileOpen(false);
+    if (mobileLayout) {
+      if (mobileSidebarOpen) closeMobileNavigation();
+      else setMobileSidebarOpen(true);
+    } else {
+      setDesktopSidebarCollapsed((collapsed) => !collapsed);
+    }
+  }, [closeMobileNavigation, mobileLayout, mobileSidebarOpen]);
+
+  useEffect(() => {
+    if (desktopRuntime || typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia(MOBILE_LAYOUT_QUERY);
+    const sync = (): void => setMobileQueryMatches(query.matches);
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, [desktopRuntime]);
+
+  useEffect(() => {
+    setMobileSidebarOpen(false);
+    setProfileOpen(false);
+  }, [mobileLayout]);
+
+  useEffect(() => {
+    if (!mobileLayout) {
+      setMobileViewportHeight(undefined);
+      return;
+    }
+    const viewport = window.visualViewport;
+    const sync = (): void => {
+      setMobileViewportHeight(
+        Math.round(viewport?.height ?? window.innerHeight),
+      );
+    };
+    sync();
+    window.addEventListener("resize", sync);
+    viewport?.addEventListener("resize", sync);
+    return () => {
+      window.removeEventListener("resize", sync);
+      viewport?.removeEventListener("resize", sync);
+    };
+  }, [mobileLayout]);
+
+  useEffect(() => {
+    if (!mobileLayout || !mobileSidebarOpen) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      closeMobileNavigation();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [closeMobileNavigation, mobileLayout, mobileSidebarOpen]);
 
   const { project: activeProject, conversation: activeConversation } = useMemo(
     () => getActive(desktop),
@@ -3254,7 +3348,8 @@ export default function App() {
           activeConversationId: undefined,
         };
       });
-      setSidebarCollapsed(false);
+      if (mobileLayout) closeMobileNavigation();
+      else setDesktopSidebarCollapsed(false);
     } catch (error) {
       showNotice(conciseError(error));
     }
@@ -3317,6 +3412,7 @@ export default function App() {
       }));
       resetPrompt();
       setPromptAttachments([]);
+      closeMobileNavigation();
     } catch (error) {
       showNotice(conciseError(error));
     }
@@ -3331,6 +3427,7 @@ export default function App() {
       activeProjectId: projectId,
       activeConversationId: conversationId,
     }));
+    closeMobileNavigation();
   };
 
   const toggleProject = (projectId: string): void => {
@@ -4509,14 +4606,30 @@ export default function App() {
 
   return (
     <div
-      className={`app-shell ${
-        sidebarCollapsed ? "sidebar-is-collapsed" : ""
-      }`}
+      className={[
+        "app-shell",
+        desktopRuntime ? "desktop-runtime" : "web-runtime",
+        mobileLayout ? "mobile-layout" : undefined,
+        sidebarCollapsed ? "sidebar-is-collapsed" : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={
+        mobileLayout && mobileViewportHeight
+          ? ({
+              "--app-viewport-height": `${mobileViewportHeight}px`,
+            } as CSSProperties)
+          : undefined
+      }
     >
       <WindowTitleBar />
 
       <div className="app-body">
-        <aside className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
+        <aside
+          className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}
+          aria-hidden={mobileLayout && !mobileSidebarOpen}
+          inert={mobileLayout && !mobileSidebarOpen}
+        >
         <div className="brand-row">
           <div className="sidebar-heading-copy" aria-hidden={sidebarCollapsed}>
             <strong>{t("sidebar.workspace")}</strong>
@@ -4524,10 +4637,12 @@ export default function App() {
           </div>
           <button
             className="icon-button quiet"
-            onClick={() => {
-              setSidebarCollapsed((value) => !value);
-              setProfileOpen(false);
-            }}
+            type="button"
+            aria-label={
+              sidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")
+            }
+            aria-expanded={!sidebarCollapsed}
+            onClick={toggleSidebar}
             title={sidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
           >
             {sidebarCollapsed ? (
@@ -4562,7 +4677,7 @@ export default function App() {
                     className="project-row"
                     onClick={() =>
                       sidebarCollapsed
-                        ? setSidebarCollapsed(false)
+                        ? openSidebar()
                         : toggleProject(project.id)
                     }
                     title={project.path}
@@ -4766,7 +4881,19 @@ export default function App() {
         </div>
         </aside>
 
-        <main className="workspace">
+        {mobileLayout && mobileSidebarOpen && (
+          <button
+            className="mobile-sidebar-backdrop"
+            type="button"
+            aria-label={t("sidebar.collapse")}
+            onClick={closeMobileNavigation}
+          />
+        )}
+
+        <main
+          className="workspace"
+          inert={mobileLayout && mobileSidebarOpen}
+        >
         {activeProject && activeConversation ? (
           <>
             <header className="chat-header">
@@ -4774,7 +4901,11 @@ export default function App() {
                 {sidebarCollapsed && (
                   <button
                     className="icon-button"
-                    onClick={() => setSidebarCollapsed(false)}
+                    ref={mobileMenuButtonRef}
+                    type="button"
+                    aria-label={t("sidebar.expand")}
+                    aria-expanded={mobileSidebarOpen}
+                    onClick={openSidebar}
                   >
                     <Menu size={18} />
                   </button>
@@ -5452,7 +5583,8 @@ export default function App() {
         ) : (
           <ProjectLanding
             collapsed={sidebarCollapsed}
-            onExpand={() => setSidebarCollapsed(false)}
+            menuButtonRef={mobileMenuButtonRef}
+            onExpand={openSidebar}
             onAddProject={() => void addProject()}
           />
         )}
@@ -8887,17 +9019,25 @@ function StreamingMarkdownMessage({
 
 function ProjectLanding({
   collapsed,
+  menuButtonRef,
   onExpand,
   onAddProject,
 }: {
   collapsed: boolean;
+  menuButtonRef?: React.RefObject<HTMLButtonElement | null>;
   onExpand: () => void;
   onAddProject: () => void;
 }) {
   return (
     <div className="project-landing">
       {collapsed && (
-        <button className="landing-menu icon-button" onClick={onExpand}>
+        <button
+          className="landing-menu icon-button"
+          ref={menuButtonRef}
+          type="button"
+          aria-label={t("sidebar.expand")}
+          onClick={onExpand}
+        >
           <Menu size={18} />
         </button>
       )}
