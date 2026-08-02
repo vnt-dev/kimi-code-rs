@@ -679,23 +679,26 @@ interface HistoryConversationTurn {
   responses: RenderMessage[];
 }
 
-const PROMPT_SUGGESTIONS = [
-  {
-    icon: <FileCode2 size={17} />,
-    title: t("suggestion.explore.title"),
-    prompt: t("suggestion.explore.prompt"),
-  },
-  {
-    icon: <Wrench size={17} />,
-    title: t("suggestion.debug.title"),
-    prompt: t("suggestion.debug.prompt"),
-  },
-  {
-    icon: <TerminalSquare size={17} />,
-    title: t("suggestion.feature.title"),
-    prompt: t("suggestion.feature.prompt"),
-  },
-];
+// Evaluated at render time so the text follows language switches.
+function promptSuggestions() {
+  return [
+    {
+      icon: <FileCode2 size={17} />,
+      title: t("suggestion.explore.title"),
+      prompt: t("suggestion.explore.prompt"),
+    },
+    {
+      icon: <Wrench size={17} />,
+      title: t("suggestion.debug.title"),
+      prompt: t("suggestion.debug.prompt"),
+    },
+    {
+      icon: <TerminalSquare size={17} />,
+      title: t("suggestion.feature.title"),
+      prompt: t("suggestion.feature.prompt"),
+    },
+  ];
+}
 
 function formatTime(timestamp: string | number): string {
   return new Intl.DateTimeFormat(localeTag(), {
@@ -7552,7 +7555,7 @@ function Welcome({
         {t("welcome.copy")}
       </p>
       <div className="suggestion-grid">
-        {PROMPT_SUGGESTIONS.map((suggestion) => (
+        {promptSuggestions().map((suggestion) => (
           <button
             key={suggestion.title}
             onClick={() => onSuggestion(suggestion.prompt)}
