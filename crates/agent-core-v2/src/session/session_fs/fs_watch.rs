@@ -54,6 +54,12 @@ pub trait SessionFsWatchServiceContract: Disposable + Send + Sync {
     fn set_watched_paths(&self, paths: &[String]) -> Result<(), SessionFsWatchError>;
     fn watched_paths(&self) -> Vec<String>;
     fn on_did_change_files(&self) -> Event<FsChangeEvent>;
+    /// Delivers the current coalescing window immediately.
+    ///
+    /// Turn-scoped consumers use this as a boundary barrier so an edit that
+    /// happened just before `turn.ended` is not left behind in the debounce
+    /// window.
+    fn flush_pending(&self);
 }
 
 #[derive(Clone)]

@@ -3551,6 +3551,107 @@ button.message-skill-chip:hover {
   margin-top: 12px;
 }
 
+.turn-file-changes {
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+}
+
+.turn-file-changes-summary {
+  display: flex;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 14px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.turn-file-changes-summary:hover {
+  background: color-mix(in srgb, var(--surface-hover) 45%, transparent);
+}
+
+.turn-file-changes-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+.turn-file-changes-title {
+  min-width: 0;
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.turn-file-changes-totals,
+.turn-file-change-lines {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  font-family: "DM Mono", monospace;
+  font-size: 12px;
+}
+
+.turn-file-changes .additions {
+  color: var(--green);
+}
+
+.turn-file-changes .deletions {
+  color: var(--danger, #e0807a);
+}
+
+.turn-file-changes-list {
+  padding: 4px 14px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.turn-file-change-row {
+  display: grid;
+  min-height: 34px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.file-change-status {
+  font-family: "DM Mono", monospace;
+  font-weight: 600;
+  text-align: center;
+}
+
+.file-change-status.created {
+  color: var(--green);
+}
+
+.file-change-status.modified {
+  color: var(--accent-2);
+}
+
+.file-change-status.deleted {
+  color: var(--danger, #e0807a);
+}
+
+.turn-file-change-path {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .message-actions button {
   display: flex;
   padding: 5px 7px;

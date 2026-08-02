@@ -12,6 +12,7 @@ use crate::{
     },
     app::event::event_bus::DomainEventPayload,
     kosong::contract::{message::ContentPart, provider::FinishReason, usage::TokenUsage},
+    session::session_fs::FsChangeAction,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -51,6 +52,24 @@ pub struct TurnEndedEvent {
     pub error: Option<KimiErrorPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnFileChange {
+    pub path: String,
+    pub change: FsChangeAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnFilesChangedEvent {
+    pub turn_id: i64,
+    pub files: Vec<TurnFileChange>,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +159,7 @@ macro_rules! impl_domain_event_payload {
 
 impl_domain_event_payload!(
     TurnStartedEvent => "turn.started",
+    TurnFilesChangedEvent => "turn.files.changed",
     TurnEndedEvent => "turn.ended",
     TurnStepStartedEvent => "turn.step.started",
     TurnStepCompletedEvent => "turn.step.completed",
@@ -234,6 +254,31 @@ mod tests {
                     "createdAt": "2026-01-01T00:00:00.000Z",
                     "content": [{ "type": "text", "text": "hello" }]
                 }
+            })
+        );
+    }
+
+    #[test]
+    fn turn_file_changes_use_frontend_wire_names() {
+        let event = TurnFilesChangedEvent {
+            turn_id: 7,
+            files: vec![TurnFileChange {
+                path: "src/lib.rs".into(),
+                change: FsChangeAction::Modified,
+                additions: Some(3),
+                deletions: Some(1),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "turnId": 7,
+                "files": [{
+                    "path": "src/lib.rs",
+                    "change": "modified",
+                    "additions": 3,
+                    "deletions": 1
+                }]
             })
         );
     }

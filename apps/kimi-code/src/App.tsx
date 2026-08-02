@@ -31,6 +31,7 @@ import {
   Copy,
   ExternalLink,
   FileCode2,
+  FileDiff,
   Folder,
   FolderGit2,
   FolderMinus,
@@ -186,6 +187,7 @@ import type {
   TokenUsage,
   TodoItem,
   ToolUpdate,
+  TurnFileChange,
 } from "./types";
 
 const MAX_PROMPT_ATTACHMENTS = 8;
@@ -308,6 +310,7 @@ interface InFlightTurn {
   status: LiveTurnStatus;
   durationMs?: number;
   steps: LiveStep[];
+  fileChanges?: readonly TurnFileChange[];
   error?: string;
   historyBoundaryId?: string;
 }
@@ -1022,6 +1025,11 @@ function reduceAgentChatEvent(
               )
             : next.error,
       };
+    case "turn.files.changed":
+      return {
+        ...next,
+        fileChanges: event.files,
+      };
     case "turn.step.started": {
       const anchorStepKey = liveStepKey(event.step, event.stepId);
       const steeredPrompts = next.steeredPrompts.map((item) =>
@@ -1265,6 +1273,7 @@ function reduceQueuedSubagentChatEvents(
 const CHAT_EVENT_TYPES = new Set([
   "prompt.steered",
   "turn.started",
+  "turn.files.changed",
   "turn.ended",
   "turn.step.started",
   "turn.step.completed",
@@ -1657,6 +1666,9 @@ export default function App() {
   >({});
   const [messageDurations, setMessageDurations] = useState<
     Record<string, Record<string, number>>
+  >({});
+  const [messageFileChanges, setMessageFileChanges] = useState<
+    Record<string, Record<string, readonly TurnFileChange[]>>
   >({});
   const [plans, setPlans] = useState<Record<string, PlanData | null>>({});
   const [goals, setGoals] = useState<Record<string, GoalSnapshot | null>>({});
@@ -3823,16 +3835,31 @@ export default function App() {
       if (request !== historyRequests.current[conversationId]) return false;
       const items = [...page.items].reverse();
       const durationMs = completedTurn?.durationMs;
-      if (completedTurn && durationMs !== undefined) {
+      const fileChanges = completedTurn?.fileChanges;
+      if (
+        completedTurn &&
+        (durationMs !== undefined || (fileChanges?.length ?? 0) > 0)
+      ) {
         const messageId = completedTurnMessageId(items, completedTurn);
         if (messageId) {
-          setMessageDurations((current) => ({
-            ...current,
-            [conversationId]: {
-              ...current[conversationId],
-              [messageId]: durationMs,
-            },
-          }));
+          if (durationMs !== undefined) {
+            setMessageDurations((current) => ({
+              ...current,
+              [conversationId]: {
+                ...current[conversationId],
+                [messageId]: durationMs,
+              },
+            }));
+          }
+          if (fileChanges && fileChanges.length > 0) {
+            setMessageFileChanges((current) => ({
+              ...current,
+              [conversationId]: {
+                ...current[conversationId],
+                [messageId]: fileChanges,
+              },
+            }));
+          }
         }
       }
       setHistoryByConversation((current) => ({
@@ -5168,6 +5195,9 @@ export default function App() {
                       subagentLiveTurns={activeSubagentLiveTurns}
                       messageDurations={
                         messageDurations[activeConversation.id] ?? {}
+                      }
+                      messageFileChanges={
+                        messageFileChanges[activeConversation.id] ?? {}
                       }
                       copiedMessageId={copiedMessage}
                       onCopy={copyMessage}
@@ -7543,6 +7573,9 @@ function LiveTurnView({
               </div>
             )}
           {turn.error && <div className="live-turn-error">{turn.error}</div>}
+          {turn.fileChanges && turn.fileChanges.length > 0 && (
+            <TurnFileChangesCard files={turn.fileChanges} />
+          )}
           <AssistantResponseStatus
             running={isTurnRunning(turn)}
             durationMs={turn.durationMs}
@@ -8348,6 +8381,7 @@ const HistoryTurnView = memo(function HistoryTurnView({
   subagentRuns,
   subagentLiveTurns,
   messageDurations,
+  messageFileChanges,
   copiedMessageId,
   onCopy,
   onSkillOpen,
@@ -8359,6 +8393,7 @@ const HistoryTurnView = memo(function HistoryTurnView({
   subagentRuns?: SubagentRunsByTool;
   subagentLiveTurns?: Record<string, InFlightTurn>;
   messageDurations: Record<string, number>;
+  messageFileChanges: Record<string, readonly TurnFileChange[]>;
   copiedMessageId?: string;
   onCopy: (message: ProtocolMessage) => void;
   onSkillOpen: (name: string) => void;
@@ -8386,6 +8421,9 @@ const HistoryTurnView = memo(function HistoryTurnView({
     inferredDuration >= 0
       ? inferredDuration
       : undefined);
+  const fileChanges = finalResponse
+    ? messageFileChanges[finalResponse.id]
+    : undefined;
 
   return (
     <section
@@ -8464,6 +8502,9 @@ const HistoryTurnView = memo(function HistoryTurnView({
                 />
               ))
             )}
+            {fileChanges && fileChanges.length > 0 && (
+              <TurnFileChangesCard files={fileChanges} />
+            )}
             {finalResponse && (
               <div className="message-actions">
                 <button onClick={() => onCopy(finalResponse)}>
@@ -8490,6 +8531,73 @@ const HistoryTurnView = memo(function HistoryTurnView({
     </section>
   );
 });
+
+function TurnFileChangesCard({
+  files,
+}: {
+  files: readonly TurnFileChange[];
+}) {
+  const [open, setOpen] = useState(true);
+  const additions = files.reduce(
+    (total, file) => total + (file.additions ?? 0),
+    0,
+  );
+  const deletions = files.reduce(
+    (total, file) => total + (file.deletions ?? 0),
+    0,
+  );
+  const hasLineStats = files.some(
+    (file) => file.additions !== undefined || file.deletions !== undefined,
+  );
+
+  return (
+    <section className="turn-file-changes">
+      <button
+        type="button"
+        className="turn-file-changes-summary"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="turn-file-changes-icon">
+          <FileDiff size={17} />
+        </span>
+        <span className="turn-file-changes-title">
+          {t("filesChanged.title", { count: files.length })}
+        </span>
+        {hasLineStats && (
+          <span className="turn-file-changes-totals">
+            <span className="additions">+{additions}</span>
+            <span className="deletions">-{deletions}</span>
+          </span>
+        )}
+        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+      </button>
+      <Collapsible open={open}>
+        <div className="turn-file-changes-list">
+          {files.map((file) => (
+            <div className="turn-file-change-row" key={file.path}>
+              <span className={`file-change-status ${file.change}`}>
+                {file.change === "created"
+                  ? "+"
+                  : file.change === "deleted"
+                    ? "-"
+                    : "~"}
+              </span>
+              <span className="turn-file-change-path">{file.path}</span>
+              {(file.additions !== undefined ||
+                file.deletions !== undefined) && (
+                <span className="turn-file-change-lines">
+                  <span className="additions">+{file.additions ?? 0}</span>
+                  <span className="deletions">-{file.deletions ?? 0}</span>
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </Collapsible>
+    </section>
+  );
+}
 
 function UserMessageView({
   message,

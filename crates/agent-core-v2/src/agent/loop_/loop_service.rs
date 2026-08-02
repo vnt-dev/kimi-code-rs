@@ -59,6 +59,7 @@ use crate::{
         event::event_bus::{
             DomainEvent, EVENT_BUS_SERVICE_ID, EventBusContract, EventBusHandle, TypedEventBusExt,
         },
+        git::{FS_GIT_SERVICE_ID, GitServiceContract, GitServiceHandle},
         telemetry::{
             AGENT_TELEMETRY_CONTEXT_SERVICE_ID, AgentTelemetryContextPatch,
             AgentTelemetryContextServiceContract, AgentTelemetryContextServiceHandle,
@@ -80,6 +81,11 @@ use crate::{
         },
         protocol::errors::{PROVIDER_FILTERED, ensure_protocol_errors_registered},
     },
+    session::session_fs::{
+        FsChangeAction, FsChangeEvent, FsChangeKind, SESSION_FS_WATCH_SERVICE_ID,
+        SessionFsWatchServiceHandle,
+    },
+    session::workspace_context::{SESSION_WORKSPACE_CONTEXT_ID, SessionWorkspaceContextHandle},
     tool::ExecutableToolOutput,
     wire::contract::{WIRE_SERVICE_ID, WireServiceHandle},
 };
@@ -271,6 +277,12 @@ struct LoopState {
     disposing: bool,
 }
 
+#[derive(Default)]
+struct TurnFileTrackingState {
+    active_turn_id: Option<i64>,
+    files: HashMap<String, FsChangeAction>,
+}
+
 pub struct AgentLoopService {
     context: Arc<dyn AgentContextMemoryServiceContract>,
     llm_requester: Arc<dyn AgentLlmRequesterServiceContract>,
@@ -282,6 +294,11 @@ pub struct AgentLoopService {
     telemetry_context: Arc<dyn AgentTelemetryContextServiceContract>,
     hooks: AgentLoopHooks,
     state: Mutex<LoopState>,
+    fs_watch: SessionFsWatchServiceHandle,
+    git: Arc<dyn GitServiceContract>,
+    workspace: SessionWorkspaceContextHandle,
+    fs_watch_subscription: Mutex<Option<DisposableHandle>>,
+    turn_files: Mutex<TurnFileTrackingState>,
     self_weak: Weak<AgentLoopService>,
     tasks: TaskTracker,
 }
@@ -297,9 +314,12 @@ impl AgentLoopService {
         wire: WireServiceHandle,
         telemetry: Arc<dyn TelemetryServiceContract>,
         telemetry_context: Arc<dyn AgentTelemetryContextServiceContract>,
+        fs_watch: SessionFsWatchServiceHandle,
+        git: Arc<dyn GitServiceContract>,
+        workspace: SessionWorkspaceContextHandle,
     ) -> Arc<Self> {
         ensure_turn_wire_registered();
-        Arc::new_cyclic(|weak| Self {
+        let service = Arc::new_cyclic(|weak| Self {
             context,
             llm_requester,
             event_bus,
@@ -310,9 +330,98 @@ impl AgentLoopService {
             telemetry_context,
             hooks: AgentLoopHooks::default(),
             state: Mutex::new(LoopState::default()),
+            fs_watch,
+            git,
+            workspace,
+            fs_watch_subscription: Mutex::new(None),
+            turn_files: Mutex::new(TurnFileTrackingState::default()),
             self_weak: weak.clone(),
             tasks: TaskTracker::new(),
-        })
+        });
+        if service.fs_watch.set_watched_paths(&[".".into()]).is_ok() {
+            let weak = Arc::downgrade(&service);
+            let subscription = service
+                .fs_watch
+                .on_did_change_files()
+                .subscribe(move |event| {
+                    if let Some(service) = weak.upgrade() {
+                        service.record_file_changes(event);
+                    }
+                });
+            *service.fs_watch_subscription.lock().unwrap() = Some(subscription);
+        }
+        service
+    }
+
+    fn begin_turn_file_tracking(&self, turn_id: i64) {
+        // Drain an older debounce window before opening the turn boundary.
+        self.fs_watch.flush_pending();
+        let mut tracking = self.turn_files.lock().unwrap();
+        tracking.active_turn_id = Some(turn_id);
+        tracking.files.clear();
+    }
+
+    fn record_file_changes(&self, event: &FsChangeEvent) {
+        let mut tracking = self.turn_files.lock().unwrap();
+        if tracking.active_turn_id.is_none() || event.truncated == Some(true) {
+            return;
+        }
+        for entry in &event.changes {
+            if entry.kind != FsChangeKind::File {
+                continue;
+            }
+            merge_file_change(&mut tracking.files, &entry.path, entry.change);
+        }
+    }
+
+    fn finish_turn_file_tracking(&self, turn_id: i64) -> Vec<super::TurnFileChange> {
+        self.fs_watch.flush_pending();
+        let mut tracking = self.turn_files.lock().unwrap();
+        if tracking.active_turn_id != Some(turn_id) {
+            return Vec::new();
+        }
+        tracking.active_turn_id = None;
+        let mut files = std::mem::take(&mut tracking.files)
+            .into_iter()
+            .map(|(path, change)| super::TurnFileChange {
+                path,
+                change,
+                additions: None,
+                deletions: None,
+            })
+            .collect::<Vec<_>>();
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        files
+    }
+
+    fn publish_turn_file_changes(&self, turn_id: i64) {
+        let files = self.finish_turn_file_tracking(turn_id);
+        if !files.is_empty() {
+            self.event_bus
+                .publish_typed(super::TurnFilesChangedEvent { turn_id, files });
+        }
+    }
+
+    async fn publish_turn_file_changes_with_stats(&self, turn_id: i64) {
+        let mut files = self.finish_turn_file_tracking(turn_id);
+        if files.is_empty() {
+            return;
+        }
+        let cwd = self.workspace.work_dir().to_string_lossy().into_owned();
+        for file in &mut files {
+            let absolute = self.workspace.resolve(&file.path);
+            if let Ok(diff) = self
+                .git
+                .diff(&cwd, &file.path, &absolute.to_string_lossy())
+                .await
+            {
+                let (additions, deletions) = count_diff_lines(&diff.diff);
+                file.additions = Some(additions);
+                file.deletions = Some(deletions);
+            }
+        }
+        self.event_bus
+            .publish_typed(super::TurnFilesChangedEvent { turn_id, files });
     }
 
     fn create_and_queue_turn(&self, request: Arc<dyn StepRequest>) -> Result<(), LoopValue> {
@@ -503,6 +612,7 @@ impl AgentLoopService {
             .wire
             .dispatch([prompt_turn(job.seed.clone()).expect("turn seed is serializable")]);
         job.turn_impl.mutable.lock().unwrap().state = TurnState::Running;
+        self.begin_turn_file_tracking(job.turn.0.id());
         self.event_bus.publish_typed(super::TurnStartedEvent {
             turn_id: job.turn.0.id(),
             origin: job.seed.origin.clone(),
@@ -537,6 +647,7 @@ impl AgentLoopService {
         if is_active {
             self.settle_turn_ready(job, &result);
             self.release_active_turn(job, &result);
+            self.publish_turn_file_changes(job.turn.0.id());
             let payload = error_payload(&error);
             self.event_bus.publish_typed(super::TurnEndedEvent {
                 turn_id: job.turn.0.id(),
@@ -600,6 +711,7 @@ impl AgentLoopService {
             LoopRunResult::Failed { error, .. } => Some(error_payload(error)),
             _ => None,
         };
+        self.publish_turn_file_changes_with_stats(turn_id).await;
         self.event_bus.publish_typed(super::TurnEndedEvent {
             turn_id,
             reason: turn_end_reason(&result),
@@ -1635,6 +1747,9 @@ impl AgentLoopServiceContract for AgentLoopService {
 impl Disposable for AgentLoopService {
     fn dispose(&self) -> DisposeResult {
         self.tasks.close();
+        if let Some(subscription) = self.fs_watch_subscription.lock().unwrap().take() {
+            let _ = subscription.dispose();
+        }
         let (turn_ids, active, standalone) = {
             let mut state = self.state.lock().unwrap();
             if state.disposing {
@@ -1800,6 +1915,51 @@ fn result_steps(result: &LoopRunResult) -> u64 {
     }
 }
 
+fn merge_file_change(
+    files: &mut HashMap<String, FsChangeAction>,
+    path: &str,
+    incoming: FsChangeAction,
+) {
+    use FsChangeAction::{Created, Deleted, Modified};
+
+    let previous = files.get(path).copied();
+    match (previous, incoming) {
+        (None, action) => {
+            files.insert(path.to_owned(), action);
+        }
+        (Some(Created), Modified | Created) => {}
+        (Some(Created), Deleted) => {
+            // The file was created and removed inside the same turn, so there
+            // is no useful artifact to show in the result card.
+            files.remove(path);
+        }
+        (Some(Modified), Deleted) => {
+            files.insert(path.to_owned(), Deleted);
+        }
+        (Some(Deleted), Created | Modified) => {
+            // Atomic-save and replacement sequences surface as delete/create.
+            files.insert(path.to_owned(), Modified);
+        }
+        (Some(Modified), Created | Modified) | (Some(Deleted), Deleted) => {}
+    }
+}
+
+fn count_diff_lines(diff: &str) -> (u64, u64) {
+    let mut additions = 0_u64;
+    let mut deletions = 0_u64;
+    for line in diff.lines() {
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+        if line.starts_with('+') {
+            additions = additions.saturating_add(1);
+        } else if line.starts_with('-') {
+            deletions = deletions.saturating_add(1);
+        }
+    }
+    (additions, deletions)
+}
+
 fn turn_end_reason(result: &LoopRunResult) -> super::TurnEndReason {
     match result {
         LoopRunResult::Completed { .. } => super::TurnEndReason::Completed,
@@ -1867,6 +2027,11 @@ pub fn register_agent_loop_service() {
             let telemetry: TelemetryServiceHandle = (*accessor.get(TELEMETRY_SERVICE_ID)?).clone();
             let telemetry_context: AgentTelemetryContextServiceHandle =
                 (*accessor.get(AGENT_TELEMETRY_CONTEXT_SERVICE_ID)?).clone();
+            let fs_watch: SessionFsWatchServiceHandle =
+                (*accessor.get(SESSION_FS_WATCH_SERVICE_ID)?).clone();
+            let git: GitServiceHandle = (*accessor.get(FS_GIT_SERVICE_ID)?).clone();
+            let workspace: SessionWorkspaceContextHandle =
+                (*accessor.get(SESSION_WORKSPACE_CONTEXT_ID)?).clone();
             let service: Arc<dyn AgentLoopServiceContract> = AgentLoopService::new(
                 context.0,
                 llm_requester.0,
@@ -1876,6 +2041,9 @@ pub fn register_agent_loop_service() {
                 wire,
                 telemetry.0,
                 telemetry_context.0,
+                fs_watch,
+                git.0,
+                workspace,
             );
             Ok(AgentLoopServiceHandle(service))
         })
@@ -1920,6 +2088,30 @@ mod tests {
         assert_eq!(
             combined.throw_if_aborted().unwrap_err().to_string(),
             "turn cancelled"
+        );
+    }
+
+    #[test]
+    fn file_change_sequences_collapse_to_turn_artifacts() {
+        let mut files = HashMap::new();
+        merge_file_change(&mut files, "new.rs", FsChangeAction::Created);
+        merge_file_change(&mut files, "new.rs", FsChangeAction::Modified);
+        assert_eq!(files["new.rs"], FsChangeAction::Created);
+        merge_file_change(&mut files, "new.rs", FsChangeAction::Deleted);
+        assert!(!files.contains_key("new.rs"));
+
+        merge_file_change(&mut files, "saved.rs", FsChangeAction::Deleted);
+        merge_file_change(&mut files, "saved.rs", FsChangeAction::Created);
+        assert_eq!(files["saved.rs"], FsChangeAction::Modified);
+    }
+
+    #[test]
+    fn unified_diff_headers_do_not_count_as_changed_lines() {
+        assert_eq!(
+            count_diff_lines(
+                "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,2 +1,3 @@\n-old\n+new\n+extra\n keep\n"
+            ),
+            (2, 1)
         );
     }
 

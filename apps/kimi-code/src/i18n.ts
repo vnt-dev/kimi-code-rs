@@ -394,6 +394,7 @@ const zh = {
 
   "assistant.thinking": "正在思考",
   "assistant.elapsed": "用时 {duration}",
+  "filesChanged.title": "已编辑 {count} 个文件",
 
   "tool.preparing": "准备工具调用",
   "tool.fallback": "工具",
@@ -843,6 +844,7 @@ const en: Record<TranslationKey, string> = {
 
   "assistant.thinking": "Thinking",
   "assistant.elapsed": "Took {duration}",
+  "filesChanged.title": "Edited {count} files",
 
   "tool.preparing": "Preparing tool call",
   "tool.fallback": "tool",

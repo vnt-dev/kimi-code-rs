@@ -85,6 +85,7 @@ struct WatchInner {
     gitignore_ready: Notify,
     debounce_ms: u64,
     max_changes_per_window: usize,
+    runtime: Option<tokio::runtime::Handle>,
 }
 
 pub struct SessionFsWatchService {
@@ -118,6 +119,7 @@ impl SessionFsWatchService {
                     "KIMI_CODE_FS_WATCH_MAX_CHANGES_PER_WINDOW",
                     DEFAULT_MAX_CHANGES_PER_WINDOW as u64,
                 ) as usize,
+                runtime: tokio::runtime::Handle::try_current().ok(),
             }),
         }
     }
@@ -282,6 +284,14 @@ impl SessionFsWatchServiceContract for SessionFsWatchService {
     fn on_did_change_files(&self) -> Event<FsChangeEvent> {
         self.inner.emitter.event()
     }
+
+    fn flush_pending(&self) {
+        let task = self.inner.state.lock().unwrap().debounce_task.take();
+        if let Some(task) = task {
+            task.abort();
+        }
+        flush(&self.inner);
+    }
 }
 
 impl Disposable for SessionFsWatchService {
@@ -333,12 +343,17 @@ fn on_raw(inner: &Arc<WatchInner>, event: &HostFsChange) {
         let weak = Arc::downgrade(inner);
         let debounce_ms = inner.debounce_ms;
         let deadline = tokio::time::Instant::now() + Duration::from_millis(debounce_ms);
-        state.debounce_task = Some(tokio::spawn(async move {
-            tokio::time::sleep_until(deadline).await;
-            if let Some(inner) = weak.upgrade() {
-                flush(&inner);
-            }
-        }));
+        if let Some(runtime) = inner.runtime.as_ref() {
+            state.debounce_task = Some(runtime.spawn(async move {
+                tokio::time::sleep_until(deadline).await;
+                if let Some(inner) = weak.upgrade() {
+                    flush(&inner);
+                }
+            }));
+        } else {
+            drop(state);
+            flush(inner);
+        }
     }
 }
 

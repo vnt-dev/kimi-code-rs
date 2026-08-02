@@ -270,6 +270,13 @@ export type AgentPromptPart = Extract<
   size: number;
 };
 
+export interface TurnFileChange {
+  path: string;
+  change: "created" | "modified" | "deleted";
+  additions?: number;
+  deletions?: number;
+}
+
 export type AgentChatEvent =
   | {
       type: "prompt.steered";
@@ -289,6 +296,11 @@ export type AgentChatEvent =
       reason: "completed" | "cancelled" | "failed" | "blocked";
       error?: unknown;
       durationMs?: number;
+    }
+  | {
+      type: "turn.files.changed";
+      turnId: number;
+      files: TurnFileChange[];
     }
   | {
       type: "turn.step.started";
