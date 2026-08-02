@@ -9,6 +9,8 @@ import type {
   AgentPromptPart,
   AgentTaskInfo,
   AgentUsageStatus,
+  GoalSnapshot,
+  GoalToolResult,
   PermissionMode,
   PlanData,
   PreparedSession,
@@ -178,6 +180,29 @@ export function createAgentClient(scope: AgentScope) {
     getPlan() {
       return callAgentRpc<PlanData | null>(scope, "getPlan");
     },
+    createGoal(
+      objective: string,
+      replace = false,
+      completionCriterion?: string,
+    ) {
+      return callAgentRpc<GoalSnapshot>(scope, "createGoal", {
+        objective,
+        replace,
+        ...(completionCriterion ? { completionCriterion } : {}),
+      });
+    },
+    getGoal() {
+      return callAgentRpc<GoalToolResult>(scope, "getGoal");
+    },
+    pauseGoal() {
+      return callAgentRpc<GoalSnapshot>(scope, "pauseGoal");
+    },
+    resumeGoal() {
+      return callAgentRpc<GoalSnapshot>(scope, "resumeGoal");
+    },
+    cancelGoal() {
+      return callAgentRpc<GoalSnapshot>(scope, "cancelGoal");
+    },
     getTodos() {
       return callAgentRpc<TodoItem[]>(scope, "getTodos");
     },
@@ -207,6 +232,17 @@ export function listWorkspaces(): Promise<Workspace[]> {
 
 export function createOrTouchWorkspace(root: string): Promise<Workspace> {
   return invoke<Workspace>("create_or_touch_workspace", { root });
+}
+
+export function getSharedGoalMode(sessionId: string): Promise<boolean> {
+  return invoke<boolean>("get_goal_mode", { sessionId });
+}
+
+export function setSharedGoalMode(
+  sessionId: string,
+  enabled: boolean,
+): Promise<void> {
+  return invoke<void>("set_goal_mode", { sessionId, enabled });
 }
 
 export function removeWorkspace(workspaceId: string): Promise<void> {

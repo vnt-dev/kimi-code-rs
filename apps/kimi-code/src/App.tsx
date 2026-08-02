@@ -45,6 +45,8 @@ import {
   Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
   Settings as SettingsIcon,
@@ -53,6 +55,7 @@ import {
   Sparkles,
   Square,
   SquarePen,
+  Target,
   TerminalSquare,
   Wrench,
   X,
@@ -65,12 +68,14 @@ import {
   createAgentClient,
   createOrTouchWorkspace,
   forkSession,
+  getSharedGoalMode,
   getSkillContent,
   listSkills,
   listWorkspaceSessions,
   prepareSession,
   removeWorkspace,
   setDefaultModel,
+  setSharedGoalMode,
   subscribeAgentEvents,
   type AgentPromptSubmitStatus,
   unsubscribeAgentEvents,
@@ -161,6 +166,7 @@ import type {
   ContextUsage,
   DesktopState,
   DeviceCode,
+  GoalSnapshot,
   MessageContent,
   LiveUserMessage,
   PromptSubmittedEvent,
@@ -183,6 +189,7 @@ import type {
 } from "./types";
 
 const MAX_PROMPT_ATTACHMENTS = 8;
+const MAX_GOAL_OBJECTIVE_LENGTH = 4_000;
 const MAX_PROMPT_SKILLS = 8;
 const SLASH_COMMAND_COUNT = 3;
 const MAX_PROMPT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -331,6 +338,7 @@ interface QueuedPrompt {
   attachments: readonly PromptAttachment[];
   skills: readonly SkillDescriptor[];
   createdAt: string;
+  goalMode?: boolean;
   steering?: boolean;
 }
 
@@ -341,6 +349,11 @@ interface RemoteQueuedPrompt {
   attachments: readonly PromptAttachment[];
   skills: readonly string[];
   createdAt: string;
+}
+
+interface GoalModeChangedEvent {
+  sessionId: string;
+  enabled: boolean;
 }
 
 interface FolderHome {
@@ -1646,6 +1659,10 @@ export default function App() {
     Record<string, Record<string, number>>
   >({});
   const [plans, setPlans] = useState<Record<string, PlanData | null>>({});
+  const [goals, setGoals] = useState<Record<string, GoalSnapshot | null>>({});
+  const [goalModeBySession, setGoalModeBySession] = useState<
+    Record<string, boolean>
+  >({});
   const [sessionTodos, setSessionTodos] = useState<Record<string, TodoItem[]>>(
     {},
   );
@@ -1656,6 +1673,8 @@ export default function App() {
   const [subagentLiveTurns, setSubagentLiveTurns] =
     useState<SubagentLiveTurns>({});
   const [modeBusy, setModeBusy] = useState(false);
+  const [goalEditTarget, setGoalEditTarget] = useState<GoalSnapshot>();
+  const [goalEditBusy, setGoalEditBusy] = useState(false);
   const [removalTarget, setRemovalTarget] = useState<RemovalTarget>();
   const [removalBusy, setRemovalBusy] = useState(false);
   const [historyByConversation, setHistoryByConversation] = useState<
@@ -1956,6 +1975,12 @@ export default function App() {
   const activePlan = activeConversation
     ? plans[activeConversation.id]
     : undefined;
+  const activeGoal = activeConversation
+    ? goals[activeConversation.id]
+    : undefined;
+  const activeGoalMode = activeConversation
+    ? Boolean(goalModeBySession[activeConversation.id])
+    : false;
   const activeTodos = activeConversation
     ? (sessionTodos[activeConversation.id] ?? [])
     : [];
@@ -2089,13 +2114,24 @@ export default function App() {
     agentId: string;
   }): Promise<void> => {
     const agent = createAgentClient(scope);
-    const [plan, todos, usage, permission] = await Promise.all([
-      agent.getPlan(),
-      agent.getTodos(),
-      agent.getUsage(),
-      agent.getPermission(),
-    ]);
+    const [plan, goalResult, goalMode, todos, usage, permission] =
+      await Promise.all([
+        agent.getPlan(),
+        agent.getGoal(),
+        getSharedGoalMode(scope.sessionId),
+        agent.getTodos(),
+        agent.getUsage(),
+        agent.getPermission(),
+      ]);
     setPlans((current) => ({ ...current, [scope.sessionId]: plan }));
+    setGoals((current) => ({
+      ...current,
+      [scope.sessionId]: goalResult.goal,
+    }));
+    setGoalModeBySession((current) => ({
+      ...current,
+      [scope.sessionId]: goalMode,
+    }));
     setSessionTodos((current) => ({
       ...current,
       [scope.sessionId]: todos,
@@ -2365,6 +2401,8 @@ export default function App() {
     setSkillDetail(undefined);
     setSkillDetailBusy(false);
     setSkillDetailError(undefined);
+    setGoalEditTarget(undefined);
+    setGoalEditBusy(false);
   }, [activeConversation?.id, closeSideChat]);
 
   useEffect(() => {
@@ -2557,6 +2595,16 @@ export default function App() {
     const unlistenDesktopStateChanged = listen(
       "desktop-state-changed",
       refreshDesktopInventory,
+    );
+    const unlistenGoalModeChanged = listen<GoalModeChangedEvent>(
+      "goal-mode-changed",
+      (event) => {
+        const { sessionId, enabled } = event.payload;
+        setGoalModeBySession((current) => ({
+          ...current,
+          [sessionId]: enabled,
+        }));
+      },
     );
     const unlistenBrowserError = listen<string>(
       "auth-browser-open-failed",
@@ -2822,6 +2870,21 @@ export default function App() {
             }));
           }
         }
+        if (isMainAgentEvent && payload.event.type === "goal.updated") {
+          const snapshot = payload.event.snapshot;
+          if (
+            snapshot === null ||
+            (typeof snapshot === "object" &&
+              snapshot !== null &&
+              typeof (snapshot as { objective?: unknown }).objective ===
+                "string")
+          ) {
+            setGoals((current) => ({
+              ...current,
+              [payload.sessionId]: snapshot as GoalSnapshot | null,
+            }));
+          }
+        }
         if (
           payload.event.type === "agent.status.updated" &&
           isMainAgentEvent &&
@@ -2938,6 +3001,7 @@ export default function App() {
       void unlistenAuthRequired.then((unlisten) => unlisten());
       void unlistenReplayReset.then((unlisten) => unlisten());
       void unlistenDesktopStateChanged.then((unlisten) => unlisten());
+      void unlistenGoalModeChanged.then((unlisten) => unlisten());
       void unlistenBrowserError.then((unlisten) => unlisten());
       void unlistenChatEvent.then((unlisten) => unlisten());
       void unlistenInteractions.then((unlisten) => unlisten());
@@ -3231,6 +3295,8 @@ export default function App() {
     setAgentUsages((current) => omitSessionKeys(current, ids));
     setMessageDurations((current) => omitSessionKeys(current, ids));
     setPlans((current) => omitSessionKeys(current, ids));
+    setGoals((current) => omitSessionKeys(current, ids));
+    setGoalModeBySession((current) => omitSessionKeys(current, ids));
     setSessionTodos((current) => omitSessionKeys(current, ids));
     setBackgroundTasks((current) => omitSessionKeys(current, ids));
     setSubagentRuns((current) => omitSessionKeys(current, ids));
@@ -3617,6 +3683,100 @@ export default function App() {
     }
   };
 
+  const setSynchronizedGoalMode = async (
+    conversationId: string,
+    enabled: boolean,
+  ): Promise<void> => {
+    setGoalModeBySession((current) => ({
+      ...current,
+      [conversationId]: enabled,
+    }));
+    try {
+      await setSharedGoalMode(conversationId, enabled);
+    } catch (error) {
+      showNotice(conciseError(error));
+    }
+  };
+
+  const toggleGoalMode = async (): Promise<void> => {
+    if (!activeConversation || !activeAgentScope || activeGoal || modeBusy) {
+      return;
+    }
+    const conversationId = activeConversation.id;
+    setModeBusy(true);
+    try {
+      await setSynchronizedGoalMode(conversationId, !activeGoalMode);
+    } finally {
+      setModeBusy(false);
+    }
+  };
+
+  const controlActiveGoal = async (
+    action: "pause" | "resume" | "cancel",
+  ): Promise<void> => {
+    if (!activeConversation || !activeAgentScope || !activeGoal || modeBusy) {
+      return;
+    }
+    const conversationId = activeConversation.id;
+    setModeBusy(true);
+    try {
+      const agent = createAgentClient(activeAgentScope);
+      const goal =
+        action === "pause"
+          ? await agent.pauseGoal()
+          : action === "resume"
+            ? await agent.resumeGoal()
+            : await agent.cancelGoal();
+      setGoals((current) => ({
+        ...current,
+        [conversationId]: action === "cancel" ? null : goal,
+      }));
+    } catch (error) {
+      showNotice(conciseError(error));
+    } finally {
+      setModeBusy(false);
+    }
+  };
+
+  const editActiveGoal = async (
+    target: GoalSnapshot,
+    objective: string,
+  ): Promise<void> => {
+    const trimmed = objective.trim();
+    if (
+      !trimmed ||
+      !activeConversation ||
+      !activeAgentScope ||
+      activeGoal?.goalId !== target.goalId
+    ) {
+      setGoalEditTarget(undefined);
+      if (activeGoal?.goalId !== target.goalId) {
+        showNotice(t("goal.changedWhileEditing"));
+      }
+      return;
+    }
+
+    const conversationId = activeConversation.id;
+    setGoalEditBusy(true);
+    try {
+      const agent = createAgentClient(activeAgentScope);
+      let goal = await agent.createGoal(
+        trimmed,
+        true,
+        target.completionCriterion,
+      );
+      if (target.status === "paused") {
+        goal = await agent.pauseGoal();
+      }
+      setGoals((current) => ({ ...current, [conversationId]: goal }));
+      setGoalEditTarget(undefined);
+    } catch (error) {
+      showNotice(conciseError(error));
+    } finally {
+      setGoalEditBusy(false);
+    }
+  };
+
   const startLogin = async (): Promise<void> => {
     setProfileOpen(false);
     setLoginOpen(true);
@@ -3874,6 +4034,7 @@ export default function App() {
     override?: string,
     queuedAttachments?: readonly PromptAttachment[],
     queuedSkills?: readonly SkillDescriptor[],
+    queuedGoalMode?: boolean,
   ): Promise<void> => {
     const text = (override ?? prompt).trim();
     const attachments = [
@@ -3884,6 +4045,7 @@ export default function App() {
     const skills = [
       ...(queuedSkills === undefined ? promptSkills : queuedSkills),
     ];
+    const shouldCreateGoal = queuedGoalMode ?? activeGoalMode;
     const submittedText = buildSkillPromptText(text, skills);
     if (
       (!submittedText && attachments.length === 0) ||
@@ -3893,6 +4055,10 @@ export default function App() {
       isHistoryLoading ||
       hasBlockingInteraction
     ) {
+      return;
+    }
+    if (shouldCreateGoal && !text) {
+      showNotice(t("goal.objectiveRequired"));
       return;
     }
     if (!selectedModel) {
@@ -3928,6 +4094,7 @@ export default function App() {
         attachments,
         skills,
         createdAt: new Date().toISOString(),
+        goalMode: shouldCreateGoal,
       };
       setQueuedPrompts((current) => ({
         ...current,
@@ -3953,6 +4120,9 @@ export default function App() {
         setPromptAttachments([]);
         setPromptSkills([]);
       }
+      if (shouldCreateGoal) {
+        await setSynchronizedGoalMode(conversationId, false);
+      }
       followLatestMessageRef.current = true;
       return;
     }
@@ -3967,6 +4137,17 @@ export default function App() {
             .slice(0, 28)
         : activeConversation.title;
     const input = buildAgentPromptInput(text, attachments);
+
+    if (shouldCreateGoal) {
+      try {
+        const goal = await createAgentClient(activeAgentScope).createGoal(text);
+        setGoals((current) => ({ ...current, [conversationId]: goal }));
+        await setSynchronizedGoalMode(conversationId, false);
+      } catch (error) {
+        showNotice(conciseError(error));
+        return;
+      }
+    }
 
     followLatestMessageRef.current = true;
     setCompactions((current) => {
@@ -4079,7 +4260,14 @@ export default function App() {
     const queued = activeQueuedPrompts.find(
       (item) => item.id === queuedPromptId,
     );
-    if (!queued || queued.steering || queued.skills.length > 0) return;
+    if (
+      !queued ||
+      queued.steering ||
+      queued.skills.length > 0 ||
+      queued.goalMode
+    ) {
+      return;
+    }
 
     setQueuedPrompts((current) => ({
       ...current,
@@ -4218,11 +4406,14 @@ export default function App() {
         (item) => item.id !== queued.id,
       ),
     }));
-    void sendPrompt(queued.text, queued.attachments, queued.skills).finally(
-      () => {
-        drainingQueuedPrompts.current.delete(queued.id);
-      },
-    );
+    void sendPrompt(
+      queued.text,
+      queued.attachments,
+      queued.skills,
+      queued.goalMode,
+    ).finally(() => {
+      drainingQueuedPrompts.current.delete(queued.id);
+    });
   }, [
     activeAgentScope?.sessionId,
     activeConversation?.id,
@@ -5093,6 +5284,83 @@ export default function App() {
                   )}
                 </div>
               )}
+              {activeGoal && activeGoal.status !== "complete" && (
+                <div className="composer-goal-status">
+                  <section
+                    className={`composer-goal-card ${activeGoal.status}`}
+                    aria-label={t("goal.current")}
+                  >
+                    <span className="composer-goal-icon" aria-hidden="true">
+                      <Target size={15} />
+                    </span>
+                    <span className="composer-goal-copy">
+                      <span className="composer-goal-heading">
+                        <strong>{t("goal.current")}</strong>
+                        <small>
+                          {activeGoal.status === "active"
+                            ? t("goal.statusActive")
+                            : activeGoal.status === "paused"
+                              ? t("goal.statusPaused")
+                              : t("goal.statusBlocked")}
+                        </small>
+                      </span>
+                      <span
+                        className="composer-goal-objective"
+                        title={activeGoal.objective}
+                      >
+                        {activeGoal.objective}
+                      </span>
+                    </span>
+                    <span className="composer-goal-actions">
+                      <button
+                        className="icon-only"
+                        type="button"
+                        aria-label={t("goal.editAction")}
+                        title={t("goal.editAction")}
+                        disabled={modeBusy}
+                        onClick={() => setGoalEditTarget(activeGoal)}
+                      >
+                        <SquarePen size={12} />
+                      </button>
+                      {activeGoal.status === "active" && (
+                        <button
+                          className="icon-only"
+                          type="button"
+                          aria-label={t("goal.pauseAction")}
+                          title={t("goal.pauseAction")}
+                          disabled={modeBusy}
+                          onClick={() => void controlActiveGoal("pause")}
+                        >
+                          <Pause size={12} />
+                        </button>
+                      )}
+                      {(activeGoal.status === "paused" ||
+                        activeGoal.status === "blocked") && (
+                        <button
+                          className="primary icon-only"
+                          type="button"
+                          aria-label={t("goal.resumeAction")}
+                          title={t("goal.resumeAction")}
+                          disabled={modeBusy}
+                          onClick={() => void controlActiveGoal("resume")}
+                        >
+                          <Play size={12} />
+                        </button>
+                      )}
+                      <button
+                        className="cancel"
+                        type="button"
+                        aria-label={t("goal.cancel")}
+                        title={t("goal.cancel")}
+                        disabled={modeBusy}
+                        onClick={() => void controlActiveGoal("cancel")}
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  </section>
+                </div>
+              )}
               <form className="composer" onSubmit={handleSubmit}>
                 {slashMenuOpen && (
                   <div
@@ -5220,7 +5488,7 @@ export default function App() {
                     ))}
                   </div>
                 )}
-                {(activePlan || promptSkills.length > 0) && (
+                {(activePlan || activeGoalMode || promptSkills.length > 0) && (
                   <div
                     className="prompt-skill-list"
                     aria-label={t("composer.inputSettings")}
@@ -5238,6 +5506,28 @@ export default function App() {
                           title={t("plan.exit")}
                           disabled={modeBusy || isStreaming}
                           onClick={() => void togglePlanMode()}
+                        >
+                          {modeBusy ? (
+                            <span className="spinner" />
+                          ) : (
+                            <X size={11} />
+                          )}
+                        </button>
+                      </span>
+                    )}
+                    {activeGoalMode && (
+                      <span className="prompt-skill-chip prompt-goal-chip">
+                        <span className="prompt-skill-open prompt-plan-label">
+                          <Target size={13} />
+                          <span>{t("goal.label")}</span>
+                        </span>
+                        <button
+                          className="prompt-skill-remove"
+                          type="button"
+                          aria-label={t("goal.disable")}
+                          title={t("goal.disable")}
+                          disabled={modeBusy}
+                          onClick={() => void toggleGoalMode()}
                         >
                           {modeBusy ? (
                             <span className="spinner" />
@@ -5330,6 +5620,8 @@ export default function App() {
                   placeholder={
                     activePlan
                       ? t("composer.placeholderPlan")
+                      : activeGoalMode
+                        ? t("composer.placeholderGoal")
                       : isStreaming
                         ? t("composer.placeholderStreaming")
                         : t("composer.placeholder")
@@ -5405,6 +5697,50 @@ export default function App() {
                                 <small>{t("plan.desc")}</small>
                               </span>
                               {activePlan && <Check size={14} />}
+                            </button>
+                            <button
+                              className={`composer-add-item ${
+                                activeGoal || activeGoalMode ? "selected" : ""
+                              }`}
+                              type="button"
+                              role="menuitemcheckbox"
+                              aria-checked={Boolean(
+                                activeGoal || activeGoalMode,
+                              )}
+                              disabled={
+                                !activeAgentScope ||
+                                modeBusy ||
+                                activeGoal?.status === "complete"
+                              }
+                              onClick={() => {
+                                setComposerAddOpen(false);
+                                if (activeGoal?.status === "active") {
+                                  void controlActiveGoal("pause");
+                                } else if (
+                                  activeGoal?.status === "paused" ||
+                                  activeGoal?.status === "blocked"
+                                ) {
+                                  void controlActiveGoal("resume");
+                                } else {
+                                  void toggleGoalMode();
+                                }
+                              }}
+                            >
+                              <Target size={15} />
+                              <span>
+                                <strong>{t("goal.label")}</strong>
+                                <small>
+                                  {activeGoal?.status === "active"
+                                    ? t("goal.pauseDesc")
+                                    : activeGoal?.status === "paused" ||
+                                        activeGoal?.status === "blocked"
+                                      ? t("goal.resumeDesc")
+                                      : activeGoal?.objective ?? t("goal.desc")}
+                                </small>
+                              </span>
+                              {(activeGoal || activeGoalMode) && (
+                                <Check size={14} />
+                              )}
                             </button>
                           </div>
 
@@ -5648,6 +5984,17 @@ export default function App() {
           busy={removalBusy}
           onClose={() => !removalBusy && setRemovalTarget(undefined)}
           onConfirm={() => void confirmRemoval()}
+        />
+      )}
+
+      {goalEditTarget && (
+        <GoalEditDialog
+          goal={goalEditTarget}
+          busy={goalEditBusy}
+          onClose={() => !goalEditBusy && setGoalEditTarget(undefined)}
+          onConfirm={(objective) =>
+            void editActiveGoal(goalEditTarget, objective)
+          }
         />
       )}
 
@@ -7282,10 +7629,13 @@ function QueuedPromptList({
                 disabled={
                   !canSteer ||
                   prompt.steering ||
-                  prompt.skills.length > 0
+                  prompt.skills.length > 0 ||
+                  prompt.goalMode
                 }
                 title={
-                  prompt.skills.length > 0
+                  prompt.goalMode
+                    ? t("queue.goalPending")
+                    : prompt.skills.length > 0
                     ? t("queue.skillPending")
                     : canSteer
                       ? t("queue.steer")
@@ -9097,6 +9447,107 @@ function ProjectLanding({
         <span>{t("landing.tip")}</span>
         {t("landing.dragHint")}
       </div>
+    </div>
+  );
+}
+
+function GoalEditDialog({
+  goal,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  goal: GoalSnapshot;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (objective: string) => void;
+}) {
+  const [objective, setObjective] = useState(goal.objective);
+  const trimmed = objective.trim();
+  const changed = trimmed !== goal.objective.trim();
+
+  useEffect(() => {
+    const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [busy, onClose]);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <section
+        className="operation-dialog goal-edit-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="goal-edit-dialog-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button
+          className="dialog-close"
+          type="button"
+          aria-label={t("goal.editClose")}
+          onClick={onClose}
+          disabled={busy}
+        >
+          <X size={17} />
+        </button>
+        <div className="operation-dialog-icon goal">
+          <Target size={23} />
+        </div>
+        <p className="eyebrow">GOAL</p>
+        <h2 id="goal-edit-dialog-title">{t("goal.editTitle")}</h2>
+        <p className="dialog-copy">{t("goal.editCopy")}</p>
+        <form
+          className="goal-edit-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (trimmed && changed && !busy) onConfirm(trimmed);
+          }}
+        >
+          <label htmlFor="goal-edit-objective">{t("goal.objective")}</label>
+          <textarea
+            id="goal-edit-objective"
+            value={objective}
+            maxLength={MAX_GOAL_OBJECTIVE_LENGTH}
+            rows={5}
+            autoFocus
+            disabled={busy}
+            placeholder={t("goal.editPlaceholder")}
+            onChange={(event) => setObjective(event.target.value)}
+          />
+          <small className="goal-edit-count">
+            {objective.length}/{MAX_GOAL_OBJECTIVE_LENGTH}
+          </small>
+          <div className="operation-dialog-actions">
+            <button
+              className="dialog-secondary"
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              className="dialog-primary"
+              type="submit"
+              disabled={!trimmed || !changed || busy}
+            >
+              {busy ? (
+                <>
+                  <span className="spinner light" />
+                  {t("common.processing")}
+                </>
+              ) : (
+                <>
+                  <Check size={15} />
+                  {t("goal.save")}
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   );
 }

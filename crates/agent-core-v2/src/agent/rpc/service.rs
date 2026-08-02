@@ -608,7 +608,7 @@ impl AgentRpcServiceContract for AgentRpcService {
             .create_goal(
                 CreateGoalInput {
                     objective: payload.objective,
-                    completion_criterion: None,
+                    completion_criterion: payload.completion_criterion,
                     replace: payload.replace,
                 },
                 None,

@@ -123,6 +123,37 @@ export interface PlanData {
   path: string;
 }
 
+export type GoalStatus = "active" | "paused" | "blocked" | "complete";
+
+export interface GoalBudgetReport {
+  tokenBudget: number | null;
+  turnBudget: number | null;
+  wallClockBudgetMs: number | null;
+  remainingTokens: number | null;
+  remainingTurns: number | null;
+  remainingWallClockMs: number | null;
+  tokenBudgetReached: boolean;
+  turnBudgetReached: boolean;
+  wallClockBudgetReached: boolean;
+  overBudget: boolean;
+}
+
+export interface GoalSnapshot {
+  goalId: string;
+  objective: string;
+  completionCriterion?: string;
+  status: GoalStatus;
+  turnsUsed: number;
+  tokensUsed: number;
+  wallClockMs: number;
+  budget: GoalBudgetReport;
+  terminalReason?: string;
+}
+
+export interface GoalToolResult {
+  goal: GoalSnapshot | null;
+}
+
 export type TodoStatus = "pending" | "in_progress" | "done";
 
 export interface TodoItem {

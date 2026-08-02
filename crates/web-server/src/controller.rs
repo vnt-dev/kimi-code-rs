@@ -149,6 +149,14 @@ impl WebServerController {
         self.events.desktop_state_changed(change);
     }
 
+    pub fn goal_mode(&self, session_id: &str) -> bool {
+        self.events.goal_mode(session_id)
+    }
+
+    pub fn set_goal_mode(&self, session_id: String, enabled: bool) {
+        self.events.set_goal_mode(session_id, enabled);
+    }
+
     async fn apply(&self, settings: WebServerSettings, persist: bool) -> Result<(), String> {
         validate_settings(settings)?;
         let _operation = self.operation.lock().await;

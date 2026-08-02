@@ -3743,6 +3743,148 @@ button.message-skill-chip:hover {
   flex: 1 1 0;
 }
 
+.composer-goal-status {
+  display: flex;
+  width: min(850px, 100%);
+  margin: 0 auto 8px;
+  justify-content: flex-end;
+}
+
+.composer-goal-card {
+  display: grid;
+  width: min(620px, 100%);
+  min-height: 44px;
+  padding: 6px 7px;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: 10px;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--accent) 7%, transparent),
+      transparent 58%
+    ),
+    var(--surface-translucent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+.composer-goal-card.paused {
+  border-color: color-mix(in srgb, #d3a45b 28%, var(--line));
+}
+
+.composer-goal-card.blocked {
+  border-color: color-mix(in srgb, var(--danger, #cf7777) 32%, var(--line));
+}
+
+.composer-goal-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.composer-goal-copy,
+.composer-goal-heading {
+  display: flex;
+  min-width: 0;
+}
+
+.composer-goal-copy {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-goal-heading {
+  align-items: center;
+  gap: 6px;
+}
+
+.composer-goal-heading strong {
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.composer-goal-heading small {
+  color: var(--accent);
+  font-size: 9px;
+}
+
+.composer-goal-card.paused .composer-goal-heading small {
+  color: #d3a45b;
+}
+
+.composer-goal-card.blocked .composer-goal-heading small {
+  color: var(--danger, #cf7777);
+}
+
+.composer-goal-objective {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-goal-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.composer-goal-actions button {
+  display: flex;
+  height: 27px;
+  padding: 0 8px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--surface-2);
+  cursor: pointer;
+  font-size: 9.5px;
+}
+
+.composer-goal-actions button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.composer-goal-actions button.primary {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
+}
+
+.composer-goal-actions button.cancel {
+  width: 27px;
+  padding: 0;
+  justify-content: center;
+}
+
+.composer-goal-actions button.icon-only {
+  width: 27px;
+  padding: 0;
+  justify-content: center;
+}
+
+.composer-goal-actions button.cancel:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger, #cf7777) 28%, var(--line));
+  color: var(--danger, #cf7777);
+}
+
+.composer-goal-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .todo-progress-anchor,
 .background-task-anchor {
   position: relative;
@@ -6231,6 +6373,62 @@ button.message-skill-chip:hover {
   background: rgba(139, 124, 246, 0.09);
 }
 
+.operation-dialog-icon.goal {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.goal-edit-dialog {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.goal-edit-form {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  text-align: left;
+}
+
+.goal-edit-form > label {
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.goal-edit-form textarea {
+  width: 100%;
+  min-height: 116px;
+  max-height: min(300px, 35vh);
+  padding: 11px 12px;
+  resize: vertical;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  outline: none;
+  color: var(--text);
+  background: var(--control);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.goal-edit-form textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.goal-edit-form textarea:disabled {
+  opacity: 0.65;
+}
+
+.goal-edit-count {
+  margin: 5px 2px 14px;
+  color: var(--subtle);
+  font-size: 9.5px;
+  text-align: right;
+}
+
 .operation-dialog h2 {
   margin: 9px 0 8px;
   color: #e7e7eb;
@@ -8573,6 +8771,16 @@ input:focus-visible {
 
   .web-runtime.mobile-layout .composer-dock {
     padding: 0 10px calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .web-runtime.mobile-layout .composer-goal-card {
+    width: 100%;
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .web-runtime.mobile-layout .composer-goal-actions {
+    grid-column: 2;
+    justify-content: flex-end;
   }
 
   .web-runtime.mobile-layout .composer {

@@ -545,6 +545,12 @@ pub struct UpdateSessionMetadataPayload {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CreateGoalPayload {
     pub objective: String,
+    #[serde(
+        default,
+        rename = "completionCriterion",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub completion_criterion: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replace: Option<bool>,
 }

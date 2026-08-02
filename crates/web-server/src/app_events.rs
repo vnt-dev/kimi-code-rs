@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 pub const DESKTOP_STATE_CHANGED_EVENT: &str = "desktop-state-changed";
+pub const GOAL_MODE_CHANGED_EVENT: &str = "goal-mode-changed";
 
 pub type ApplicationEventHandler = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
@@ -45,6 +46,7 @@ pub enum DesktopStateChange {
 pub(crate) struct ApplicationEventBus {
     next_id: AtomicU64,
     handlers: Mutex<HashMap<u64, ApplicationEventHandler>>,
+    goal_modes: Mutex<HashMap<String, bool>>,
 }
 
 impl ApplicationEventBus {
@@ -79,8 +81,46 @@ impl ApplicationEventBus {
     }
 
     pub(crate) fn desktop_state_changed(&self, change: DesktopStateChange) {
+        if let DesktopStateChange::SessionArchived { session_id } = &change
+            && let Ok(mut goal_modes) = self.goal_modes.lock()
+        {
+            goal_modes.remove(session_id);
+        }
         if let Ok(payload) = serde_json::to_value(change) {
             self.emit(DESKTOP_STATE_CHANGED_EVENT, payload);
+        }
+    }
+
+    pub(crate) fn goal_mode(&self, session_id: &str) -> bool {
+        self.goal_modes
+            .lock()
+            .ok()
+            .and_then(|goal_modes| goal_modes.get(session_id).copied())
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn set_goal_mode(&self, session_id: String, enabled: bool) {
+        let changed = self
+            .goal_modes
+            .lock()
+            .map(|mut goal_modes| {
+                let previous = goal_modes.get(&session_id).copied().unwrap_or(false);
+                if enabled {
+                    goal_modes.insert(session_id.clone(), true);
+                } else {
+                    goal_modes.remove(&session_id);
+                }
+                previous != enabled
+            })
+            .unwrap_or(false);
+        if changed {
+            self.emit(
+                GOAL_MODE_CHANGED_EVENT,
+                serde_json::json!({
+                    "sessionId": session_id,
+                    "enabled": enabled,
+                }),
+            );
         }
     }
 }
@@ -115,5 +155,28 @@ mod tests {
         assert_eq!(received[0].0, DESKTOP_STATE_CHANGED_EVENT);
         assert_eq!(received[0].1["kind"], "session_created");
         assert_eq!(received[0].1["sessionId"], "session-1");
+    }
+
+    #[test]
+    fn goal_mode_is_shared_and_broadcast_only_when_it_changes() {
+        let events = Arc::new(ApplicationEventBus::default());
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let received_for_handler = Arc::clone(&received);
+        let _subscription = events.subscribe(Arc::new(move |event, payload| {
+            if event == GOAL_MODE_CHANGED_EVENT {
+                received_for_handler.lock().unwrap().push(payload);
+            }
+        }));
+
+        assert!(!events.goal_mode("session-1"));
+        events.set_goal_mode("session-1".into(), true);
+        events.set_goal_mode("session-1".into(), true);
+        assert!(events.goal_mode("session-1"));
+        events.set_goal_mode("session-1".into(), false);
+
+        let received = received.lock().unwrap();
+        assert_eq!(received.len(), 2);
+        assert_eq!(received[0]["enabled"], true);
+        assert_eq!(received[1]["enabled"], false);
     }
 }

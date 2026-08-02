@@ -27,6 +27,13 @@ struct SessionArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct GoalModeArgs {
+    session_id: String,
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WorkspaceArgs {
     workspace_id: String,
 }
@@ -99,6 +106,15 @@ pub(crate) async fn dispatch_rpc(
     args: Value,
 ) -> Result<Value, RpcError> {
     match command {
+        "get_goal_mode" => {
+            let args: SessionArgs = decode(args)?;
+            encode(events.goal_mode(&args.session_id))
+        }
+        "set_goal_mode" => {
+            let args: GoalModeArgs = decode(args)?;
+            events.set_goal_mode(args.session_id, args.enabled);
+            Ok(Value::Null)
+        }
         "auth_status" => encode(client.auth_status().await.map_err(RpcError::transport)?),
         "account_usage" => encode(client.managed_usage().await.map_err(RpcError::transport)?),
         "login" => {

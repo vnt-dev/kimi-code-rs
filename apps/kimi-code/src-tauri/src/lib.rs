@@ -264,6 +264,16 @@ async fn agent_rpc(
 }
 
 #[tauri::command]
+fn get_goal_mode(state: State<'_, AppState>, session_id: String) -> bool {
+    state.web_server.goal_mode(&session_id)
+}
+
+#[tauri::command]
+fn set_goal_mode(state: State<'_, AppState>, session_id: String, enabled: bool) {
+    state.web_server.set_goal_mode(session_id, enabled);
+}
+
+#[tauri::command]
 async fn get_web_server_status(state: State<'_, AppState>) -> Result<WebServerStatus, String> {
     Ok(state.web_server.status().await)
 }
@@ -429,6 +439,8 @@ pub fn run() {
             conversation_context_usage,
             list_conversation_messages,
             agent_rpc,
+            get_goal_mode,
+            set_goal_mode,
             get_web_server_status,
             set_web_server_settings,
             subscribe_agent_events,
