@@ -58,6 +58,7 @@ import {
   SquarePen,
   Target,
   TerminalSquare,
+  Undo2,
   Wrench,
   X,
 } from "lucide-react";
@@ -1371,6 +1372,11 @@ function messageOriginKind(message: ProtocolMessage): string | undefined {
     : undefined;
 }
 
+function isDirectUserMessage(message: ProtocolMessage): boolean {
+  const origin = messageOriginKind(message);
+  return origin === undefined || origin === "user";
+}
+
 function isVisibleHistoryMessage(message: ProtocolMessage): boolean {
   return !["injection", "system_trigger", "task", "cron"].includes(
     messageOriginKind(message) ?? "",
@@ -1687,6 +1693,8 @@ export default function App() {
   const [modeBusy, setModeBusy] = useState(false);
   const [goalEditTarget, setGoalEditTarget] = useState<GoalSnapshot>();
   const [goalEditBusy, setGoalEditBusy] = useState(false);
+  const [undoMessageTarget, setUndoMessageTarget] = useState<RenderMessage>();
+  const [undoMessageBusy, setUndoMessageBusy] = useState(false);
   const [removalTarget, setRemovalTarget] = useState<RemovalTarget>();
   const [removalBusy, setRemovalBusy] = useState(false);
   const [historyByConversation, setHistoryByConversation] = useState<
@@ -1875,6 +1883,19 @@ export default function App() {
     () => groupHistoryMessages(historyToolPresentation.messages),
     [historyToolPresentation.messages],
   );
+  const latestHistoryUserMessage = useMemo(
+    () =>
+      [...historyConversationTurns]
+        .reverse()
+        .find((turn) => turn.user !== undefined)?.user,
+    [historyConversationTurns],
+  );
+  const undoableUserMessageId =
+    activeTurn === undefined &&
+    latestHistoryUserMessage &&
+    isDirectUserMessage(latestHistoryUserMessage)
+      ? latestHistoryUserMessage.id
+      : undefined;
   const liveOutlineTurnId = activeTurn
     ? `live-${activeTurn.turnId ?? activeTurn.createdAt}`
     : undefined;
@@ -2415,6 +2436,8 @@ export default function App() {
     setSkillDetailError(undefined);
     setGoalEditTarget(undefined);
     setGoalEditBusy(false);
+    setUndoMessageTarget(undefined);
+    setUndoMessageBusy(false);
   }, [activeConversation?.id, closeSideChat]);
 
   useEffect(() => {
@@ -2513,6 +2536,46 @@ export default function App() {
         setDesktop((current) => mergeDesktopInventory(current, inventory));
       } catch {
         // A later state-change event or explicit action will retry the refresh.
+      }
+    };
+    const refreshConversationAfterUndo = async (
+      conversationId: string,
+    ): Promise<void> => {
+      const request = (historyRequests.current[conversationId] ?? 0) + 1;
+      historyRequests.current[conversationId] = request;
+      try {
+        const page = await fetchConversationHistory(conversationId);
+        if (request !== historyRequests.current[conversationId]) return;
+        setHistoryByConversation((current) => ({
+          ...current,
+          [conversationId]: {
+            conversationId,
+            items: [...page.items].reverse(),
+            loading: false,
+          },
+        }));
+        setInFlightTurns((current) => {
+          const turn = current[conversationId];
+          if (!turn || isTurnRunning(turn)) return current;
+          const next = { ...current };
+          delete next[conversationId];
+          inFlightTurnsRef.current = next;
+          return next;
+        });
+        setUndoMessageTarget((current) =>
+          current?.session_id === conversationId ? undefined : current,
+        );
+      } catch (error) {
+        if (request !== historyRequests.current[conversationId]) return;
+        setHistoryByConversation((current) => ({
+          ...current,
+          [conversationId]: {
+            conversationId,
+            items: current[conversationId]?.items ?? [],
+            loading: false,
+            error: conciseError(error),
+          },
+        }));
       }
     };
     const unlistenDevice = listen<DeviceCode>("auth-device-code", (event) => {
@@ -2633,6 +2696,12 @@ export default function App() {
           payload.agentId === sideChatAgentId.current;
         const isSideChatAgent =
           sideChatAgentIds.current.has(payload.agentId);
+        if (
+          isMainAgentEvent &&
+          payload.event.type === "conversation.undone"
+        ) {
+          void refreshConversationAfterUndo(payload.sessionId);
+        }
         const submitted = readPromptSubmittedEvent(payload.event);
         if (submitted && isMainAgentEvent && !isSideChatAgent) {
           const projected = inFlightTurnFromUserMessage(submitted);
@@ -3885,6 +3954,52 @@ export default function App() {
       }));
       showNotice(message);
       return false;
+    }
+  };
+
+  const confirmUndoMessage = async (): Promise<void> => {
+    const target = undoMessageTarget;
+    const conversation = activeConversation;
+    const scope = activeAgentScope;
+    if (!target || !conversation || !scope || undoMessageBusy) return;
+    if (
+      scope.sessionId !== conversation.id ||
+      target.id !== undoableUserMessageId ||
+      inFlightTurnsRef.current[conversation.id] !== undefined
+    ) {
+      setUndoMessageTarget(undefined);
+      showNotice(t("undo.unavailable"));
+      return;
+    }
+
+    setUndoMessageBusy(true);
+    try {
+      await createAgentClient(scope).undoHistory(1);
+      const projected = projectLiveUserMessage({
+        promptId: target.prompt_id ?? target.id,
+        userMessageId: target.id,
+        createdAt: target.created_at,
+        content: target.content,
+      });
+      const display = parseSkillPromptDisplay(projected.text);
+      await refreshHistory(conversation.id);
+      resetPrompt(display.text);
+      setPromptAttachments(projected.attachments);
+      setPromptSkills(
+        availableSkills.filter((skill) => display.skills.includes(skill.name)),
+      );
+      setUndoMessageTarget(undefined);
+      showNotice(t("undo.success"));
+      window.requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        textarea.focus();
+        textarea.setSelectionRange(display.text.length, display.text.length);
+      });
+    } catch (error) {
+      showNotice(conciseError(error));
+    } finally {
+      setUndoMessageBusy(false);
     }
   };
 
@@ -5199,6 +5314,8 @@ export default function App() {
                       messageFileChanges={
                         messageFileChanges[activeConversation.id] ?? {}
                       }
+                      undoableUserMessageId={undoableUserMessageId}
+                      onUndoUserMessage={setUndoMessageTarget}
                       copiedMessageId={copiedMessage}
                       onCopy={copyMessage}
                       onSkillOpen={(name) =>
@@ -6014,6 +6131,16 @@ export default function App() {
           busy={removalBusy}
           onClose={() => !removalBusy && setRemovalTarget(undefined)}
           onConfirm={() => void confirmRemoval()}
+        />
+      )}
+
+      {undoMessageTarget && (
+        <UndoMessageDialog
+          busy={undoMessageBusy}
+          onClose={() =>
+            !undoMessageBusy && setUndoMessageTarget(undefined)
+          }
+          onConfirm={() => void confirmUndoMessage()}
         />
       )}
 
@@ -8382,6 +8509,8 @@ const HistoryTurnView = memo(function HistoryTurnView({
   subagentLiveTurns,
   messageDurations,
   messageFileChanges,
+  undoableUserMessageId,
+  onUndoUserMessage,
   copiedMessageId,
   onCopy,
   onSkillOpen,
@@ -8394,6 +8523,8 @@ const HistoryTurnView = memo(function HistoryTurnView({
   subagentLiveTurns?: Record<string, InFlightTurn>;
   messageDurations: Record<string, number>;
   messageFileChanges: Record<string, readonly TurnFileChange[]>;
+  undoableUserMessageId?: string;
+  onUndoUserMessage: (message: RenderMessage) => void;
   copiedMessageId?: string;
   onCopy: (message: ProtocolMessage) => void;
   onSkillOpen: (name: string) => void;
@@ -8437,6 +8568,8 @@ const HistoryTurnView = memo(function HistoryTurnView({
           subagentRuns={subagentRuns}
           subagentLiveTurns={subagentLiveTurns}
           onSkillOpen={onSkillOpen}
+          canUndo={turn.user.id === undoableUserMessageId}
+          onUndo={onUndoUserMessage}
         />
       )}
       {turn.responses.length > 0 && (
@@ -8605,12 +8738,16 @@ function UserMessageView({
   subagentRuns,
   subagentLiveTurns,
   onSkillOpen,
+  canUndo = false,
+  onUndo,
 }: {
   message: RenderMessage;
   toolResults: Map<string, ToolResultContent>;
   subagentRuns?: SubagentRunsByTool;
   subagentLiveTurns?: Record<string, InFlightTurn>;
   onSkillOpen: (name: string) => void;
+  canUndo?: boolean;
+  onUndo?: (message: RenderMessage) => void;
 }) {
   const text = messageText(message);
   const structured = messageStructuredContent(message);
@@ -8631,6 +8768,19 @@ function UserMessageView({
           subagentLiveTurns={subagentLiveTurns}
         />
       </div>
+      {canUndo && onUndo && (
+        <div className="user-message-actions">
+          <button
+            type="button"
+            className="user-message-undo"
+            title={t("undo.tooltip")}
+            aria-label={t("undo.tooltip")}
+            onClick={() => onUndo(message)}
+          >
+            <Undo2 size={14} />
+          </button>
+        </div>
+      )}
     </article>
   );
 }
@@ -9655,6 +9805,81 @@ function GoalEditDialog({
             </button>
           </div>
         </form>
+      </section>
+    </div>
+  );
+}
+
+function UndoMessageDialog({
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [busy, onClose]);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <section
+        className="operation-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="undo-message-dialog-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button
+          className="dialog-close"
+          type="button"
+          aria-label={t("undo.close")}
+          onClick={onClose}
+          disabled={busy}
+        >
+          <X size={17} />
+        </button>
+        <div className="operation-dialog-icon conversation">
+          <Undo2 size={22} />
+        </div>
+        <p className="eyebrow">CONVERSATION UNDO</p>
+        <h2 id="undo-message-dialog-title">{t("undo.title")}</h2>
+        <p className="dialog-copy">{t("undo.confirm")}</p>
+        <div className="operation-dialog-actions">
+          <button
+            className="dialog-secondary"
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            autoFocus
+          >
+            {t("common.cancel")}
+          </button>
+          <button
+            className="dialog-danger"
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? (
+              <>
+                <span className="spinner light" />
+                {t("common.processing")}
+              </>
+            ) : (
+              <>
+                <Undo2 size={15} />
+                {t("undo.action")}
+              </>
+            )}
+          </button>
+        </div>
       </section>
     </div>
   );

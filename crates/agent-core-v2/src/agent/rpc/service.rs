@@ -107,6 +107,17 @@ impl DomainEventPayload for PluginCommandActivatedEvent {
     const TYPE: &'static str = "plugin_command.activated";
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationUndoneEvent {
+    pub count: f64,
+    pub undone: u64,
+}
+
+impl DomainEventPayload for ConversationUndoneEvent {
+    const TYPE: &'static str = "conversation.undone";
+}
+
 #[allow(clippy::too_many_arguments)]
 pub struct AgentRpcService {
     prompt_service: AgentPromptServiceHandle,
@@ -382,6 +393,10 @@ impl AgentRpcServiceContract for AgentRpcService {
 
     async fn undo_history(&self, payload: UndoHistoryPayload) -> AgentRpcResult<u64> {
         let undone = self.prompt_service.undo(payload.count)?;
+        self.event_bus.publish_typed(ConversationUndoneEvent {
+            count: payload.count,
+            undone: undone as u64,
+        });
         self.track(
             "conversation_undo",
             TelemetryProperties::from_iter([("count".into(), Some(Value::from(payload.count)))]),
@@ -811,6 +826,19 @@ mod tests {
             PluginCommandActivatedEvent::TYPE,
             "plugin_command.activated"
         );
+    }
+
+    #[test]
+    fn conversation_undone_event_is_broadcastable_to_all_clients() {
+        assert_eq!(
+            serde_json::to_value(ConversationUndoneEvent {
+                count: 1.0,
+                undone: 1,
+            })
+            .unwrap(),
+            serde_json::json!({ "count": 1.0, "undone": 1 })
+        );
+        assert_eq!(ConversationUndoneEvent::TYPE, "conversation.undone");
     }
 
     #[test]

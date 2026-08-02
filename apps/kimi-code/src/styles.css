@@ -2127,6 +2127,42 @@ select:focus-visible {
   white-space: pre-wrap;
 }
 
+.user-message-actions {
+  display: flex;
+  min-height: 24px;
+  margin-top: 3px;
+  padding-right: 3px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.user-message-undo {
+  display: inline-flex;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: color 120ms ease, background-color 120ms ease, opacity 120ms ease;
+}
+
+.user-message-undo:hover {
+  color: var(--accent);
+  background: var(--control-hover);
+  opacity: 1;
+}
+
+.user-message-undo:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
 .message-skill-list {
   display: flex;
   margin: 0 0 7px;

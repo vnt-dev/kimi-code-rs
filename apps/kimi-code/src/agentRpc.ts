@@ -143,6 +143,9 @@ export function createAgentClient(scope: AgentScope) {
     cancel(turnId?: number) {
       return callAgentRpc<void>(scope, "cancel", { turnId });
     },
+    undoHistory(count = 1) {
+      return callAgentRpc<number>(scope, "undoHistory", { count });
+    },
     setModel(model: string) {
       return callAgentRpc<{ model: string; providerName?: string }>(
         scope,
