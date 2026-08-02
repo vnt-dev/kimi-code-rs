@@ -4,14 +4,14 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
+use async_trait::async_trait;
 use indexmap::IndexSet;
 use serde_json::{Map, Value};
-#[cfg(test)]
-use tokio::sync::Notify;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::{
@@ -44,17 +44,24 @@ use super::{
 const DEFAULT_DEBOUNCE_MS: u64 = 200;
 const DEFAULT_MAX_CHANGES_PER_WINDOW: usize = 500;
 
+enum WatchCommand {
+    Raw(HostFsChange),
+    Clear,
+    Flush(oneshot::Sender<()>),
+}
+
+#[derive(Default)]
+struct WatchWindow {
+    pending: Vec<FsChangeEntry>,
+    raw_count: usize,
+    truncated: bool,
+    deadline: Option<tokio::time::Instant>,
+}
+
 struct WatchState {
     watched: IndexSet<String>,
     handle: Option<Arc<dyn HostFsWatchHandle>>,
     handle_subscription: Option<DisposableHandle>,
-    debounce_task: Option<JoinHandle<()>>,
-    pending: Vec<FsChangeEntry>,
-    raw_count: usize,
-    truncated: bool,
-    gitignore_loaded: bool,
-    #[cfg(test)]
-    gitignore_ready: bool,
 }
 
 impl Default for WatchState {
@@ -63,13 +70,6 @@ impl Default for WatchState {
             watched: IndexSet::new(),
             handle: None,
             handle_subscription: None,
-            debounce_task: None,
-            pending: Vec::new(),
-            raw_count: 0,
-            truncated: false,
-            gitignore_loaded: false,
-            #[cfg(test)]
-            gitignore_ready: false,
         }
     }
 }
@@ -79,13 +79,11 @@ struct WatchInner {
     host_watch: HostFsWatchServiceHandle,
     host_fs: HostFileSystemServiceHandle,
     emitter: Emitter<FsChangeEvent>,
-    matcher: RwLock<GitignoreMatcher>,
     state: Mutex<WatchState>,
-    #[cfg(test)]
-    gitignore_ready: Notify,
+    commands: mpsc::UnboundedSender<WatchCommand>,
+    worker_task: Mutex<Option<JoinHandle<()>>>,
     debounce_ms: u64,
     max_changes_per_window: usize,
-    runtime: Option<tokio::runtime::Handle>,
 }
 
 pub struct SessionFsWatchService {
@@ -99,36 +97,33 @@ impl SessionFsWatchService {
         host_fs: HostFileSystemServiceHandle,
     ) -> Self {
         ensure_fs_errors_registered();
-        let mut matcher = GitignoreMatcher::new();
-        matcher.add(".git/");
-        Self {
-            inner: Arc::new(WatchInner {
-                workspace,
-                host_watch,
-                host_fs,
-                emitter: Emitter::new(),
-                matcher: RwLock::new(matcher),
-                state: Mutex::new(WatchState::default()),
-                #[cfg(test)]
-                gitignore_ready: Notify::new(),
-                debounce_ms: read_positive_int_env(
-                    "KIMI_CODE_FS_WATCH_DEBOUNCE_MS",
-                    DEFAULT_DEBOUNCE_MS,
-                ),
-                max_changes_per_window: read_positive_int_env(
-                    "KIMI_CODE_FS_WATCH_MAX_CHANGES_PER_WINDOW",
-                    DEFAULT_MAX_CHANGES_PER_WINDOW as u64,
-                ) as usize,
-                runtime: tokio::runtime::Handle::try_current().ok(),
-            }),
-        }
+        let (commands, receiver) = mpsc::unbounded_channel();
+        let inner = Arc::new(WatchInner {
+            workspace,
+            host_watch,
+            host_fs,
+            emitter: Emitter::new(),
+            state: Mutex::new(WatchState::default()),
+            commands,
+            worker_task: Mutex::new(None),
+            debounce_ms: read_positive_int_env(
+                "KIMI_CODE_FS_WATCH_DEBOUNCE_MS",
+                DEFAULT_DEBOUNCE_MS,
+            ),
+            max_changes_per_window: read_positive_int_env(
+                "KIMI_CODE_FS_WATCH_MAX_CHANGES_PER_WINDOW",
+                DEFAULT_MAX_CHANGES_PER_WINDOW as u64,
+            ) as usize,
+        });
+        let worker = tokio::spawn(run_watch_worker(Arc::downgrade(&inner), receiver));
+        *inner.worker_task.lock().unwrap() = Some(worker);
+        Self { inner }
     }
 
     fn ensure_handle(&self) -> Result<(), SessionFsWatchError> {
         if self.inner.state.lock().unwrap().handle.is_some() {
             return Ok(());
         }
-        self.load_gitignore();
         let work_dir = self.inner.workspace.work_dir();
         let handle = self.inner.host_watch.watch(
             &work_dir,
@@ -137,11 +132,9 @@ impl SessionFsWatchService {
                 ignored: None,
             },
         )?;
-        let weak = Arc::downgrade(&self.inner);
+        let commands = self.inner.commands.clone();
         let subscription = handle.on_did_change().subscribe(move |change| {
-            if let Some(inner) = weak.upgrade() {
-                on_raw(&inner, change);
-            }
+            let _ = commands.send(WatchCommand::Raw(change.clone()));
         });
         let mut state = self.inner.state.lock().unwrap();
         if state.handle.is_none() {
@@ -152,44 +145,6 @@ impl SessionFsWatchService {
             let _ = handle.dispose();
         }
         Ok(())
-    }
-
-    fn load_gitignore(&self) {
-        {
-            let mut state = self.inner.state.lock().unwrap();
-            if state.gitignore_loaded {
-                return;
-            }
-            state.gitignore_loaded = true;
-        }
-        let weak = Arc::downgrade(&self.inner);
-        let host_fs = self.inner.host_fs.clone();
-        let path = self.inner.workspace.work_dir().join(".gitignore");
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            self.finish_gitignore_load(None);
-            return;
-        };
-        runtime.spawn(async move {
-            let contents = host_fs.read_text(&path, None).await.ok();
-            if let Some(inner) = weak.upgrade() {
-                finish_gitignore_load(&inner, contents.as_deref());
-            }
-        });
-    }
-
-    fn finish_gitignore_load(&self, contents: Option<&str>) {
-        finish_gitignore_load(&self.inner, contents);
-    }
-
-    #[cfg(test)]
-    async fn wait_for_gitignore(&self) {
-        loop {
-            let ready = self.inner.gitignore_ready.notified();
-            if self.inner.state.lock().unwrap().gitignore_ready {
-                return;
-            }
-            ready.await;
-        }
     }
 
     fn teardown_handle(&self) {
@@ -206,13 +161,7 @@ impl SessionFsWatchService {
     }
 
     fn clear_window(&self) {
-        let mut state = self.inner.state.lock().unwrap();
-        if let Some(task) = state.debounce_task.take() {
-            task.abort();
-        }
-        state.pending.clear();
-        state.raw_count = 0;
-        state.truncated = false;
+        let _ = self.inner.commands.send(WatchCommand::Clear);
     }
 
     fn resolve_within(&self, input: &str) -> Result<PathBuf, SessionFsWatchError> {
@@ -241,17 +190,7 @@ impl SessionFsWatchService {
     }
 }
 
-fn finish_gitignore_load(inner: &WatchInner, contents: Option<&str>) {
-    if let Some(contents) = contents {
-        inner.matcher.write().unwrap().add(contents);
-    }
-    #[cfg(test)]
-    {
-        inner.state.lock().unwrap().gitignore_ready = true;
-        inner.gitignore_ready.notify_one();
-    }
-}
-
+#[async_trait]
 impl SessionFsWatchServiceContract for SessionFsWatchService {
     fn set_watched_paths(&self, paths: &[String]) -> Result<(), SessionFsWatchError> {
         let mut watched = IndexSet::new();
@@ -285,12 +224,16 @@ impl SessionFsWatchServiceContract for SessionFsWatchService {
         self.inner.emitter.event()
     }
 
-    fn flush_pending(&self) {
-        let task = self.inner.state.lock().unwrap().debounce_task.take();
-        if let Some(task) = task {
-            task.abort();
+    async fn flush_pending(&self) {
+        let (sender, receiver) = oneshot::channel();
+        if self
+            .inner
+            .commands
+            .send(WatchCommand::Flush(sender))
+            .is_ok()
+        {
+            let _ = receiver.await;
         }
-        flush(&self.inner);
     }
 }
 
@@ -298,11 +241,67 @@ impl Disposable for SessionFsWatchService {
     fn dispose(&self) -> DisposeResult {
         self.clear_window();
         self.teardown_handle();
+        if let Some(worker) = self.inner.worker_task.lock().unwrap().take() {
+            worker.abort();
+        }
         self.inner.emitter.dispose()
     }
 }
 
-fn on_raw(inner: &Arc<WatchInner>, event: &HostFsChange) {
+async fn run_watch_worker(
+    inner: std::sync::Weak<WatchInner>,
+    mut commands: mpsc::UnboundedReceiver<WatchCommand>,
+) {
+    let Some(service) = inner.upgrade() else {
+        return;
+    };
+    let mut matcher = GitignoreMatcher::new();
+    matcher.add(".git/");
+    let gitignore_path = service.workspace.work_dir().join(".gitignore");
+    if let Ok(contents) = service.host_fs.read_text(&gitignore_path, None).await {
+        matcher.add(&contents);
+    }
+    drop(service);
+
+    let mut window = WatchWindow::default();
+    loop {
+        let command = if let Some(deadline) = window.deadline {
+            tokio::select! {
+                command = commands.recv() => command,
+                _ = tokio::time::sleep_until(deadline) => {
+                    if let Some(service) = inner.upgrade() {
+                        flush_window(&service, &mut window);
+                        continue;
+                    }
+                    return;
+                }
+            }
+        } else {
+            commands.recv().await
+        };
+        let Some(command) = command else {
+            return;
+        };
+        let Some(service) = inner.upgrade() else {
+            return;
+        };
+        match command {
+            WatchCommand::Raw(event) => process_raw(&service, &matcher, &mut window, &event),
+            WatchCommand::Clear => clear_window(&mut window),
+            WatchCommand::Flush(sender) => {
+                flush_window(&service, &mut window);
+                let _ = sender.send(());
+            }
+        }
+    }
+}
+
+fn process_raw(
+    inner: &WatchInner,
+    matcher: &GitignoreMatcher,
+    window: &mut WatchWindow,
+    event: &HostFsChange,
+) {
     let relative = to_relative(&inner.workspace.work_dir(), Path::new(&event.path));
     if relative == "." {
         return;
@@ -312,15 +311,14 @@ fn on_raw(inner: &Arc<WatchInner>, event: &HostFsChange) {
     } else {
         relative.clone()
     };
-    if inner.matcher.read().unwrap().ignores(&probe) {
+    if matcher.ignores(&probe) {
         return;
     }
 
-    let mut state = inner.state.lock().unwrap();
-    if !is_under_any(&relative, &state.watched) {
+    if !is_under_any(&relative, &inner.state.lock().unwrap().watched) {
         return;
     }
-    state.pending.push(FsChangeEntry {
+    window.pending.push(FsChangeEntry {
         path: relative,
         change: match event.action {
             HostFsChangeAction::Created => FsChangeAction::Created,
@@ -334,52 +332,44 @@ fn on_raw(inner: &Arc<WatchInner>, event: &HostFsChange) {
         size_delta: None,
         etag: None,
     });
-    state.raw_count += 1;
-    if state.pending.len() > inner.max_changes_per_window {
-        state.truncated = true;
-        state.pending.clear();
+    window.raw_count += 1;
+    if window.pending.len() > inner.max_changes_per_window {
+        window.truncated = true;
+        window.pending.clear();
     }
-    if state.debounce_task.is_none() {
-        let weak = Arc::downgrade(inner);
-        let debounce_ms = inner.debounce_ms;
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(debounce_ms);
-        if let Some(runtime) = inner.runtime.as_ref() {
-            state.debounce_task = Some(runtime.spawn(async move {
-                tokio::time::sleep_until(deadline).await;
-                if let Some(inner) = weak.upgrade() {
-                    flush(&inner);
-                }
-            }));
-        } else {
-            drop(state);
-            flush(inner);
-        }
+    if window.deadline.is_none() {
+        window.deadline =
+            Some(tokio::time::Instant::now() + Duration::from_millis(inner.debounce_ms));
     }
 }
 
-fn flush(inner: &Arc<WatchInner>) {
-    let event = {
-        let mut state = inner.state.lock().unwrap();
-        state.debounce_task = None;
-        if state.raw_count == 0 {
-            return;
-        }
-        let truncated = state.truncated;
-        let count = state.raw_count;
-        let changes = if truncated {
-            state.pending.clear();
-            Vec::new()
-        } else {
-            std::mem::take(&mut state.pending)
-        };
-        state.raw_count = 0;
-        state.truncated = false;
-        FsChangeEvent {
-            changes,
-            coalesced_window_ms: inner.debounce_ms,
-            truncated: truncated.then_some(true),
-            count: truncated.then_some(count),
-        }
+fn clear_window(window: &mut WatchWindow) {
+    window.pending.clear();
+    window.raw_count = 0;
+    window.truncated = false;
+    window.deadline = None;
+}
+
+fn flush_window(inner: &WatchInner, window: &mut WatchWindow) {
+    window.deadline = None;
+    if window.raw_count == 0 {
+        return;
+    }
+    let truncated = window.truncated;
+    let count = window.raw_count;
+    let changes = if truncated {
+        window.pending.clear();
+        Vec::new()
+    } else {
+        std::mem::take(&mut window.pending)
+    };
+    window.raw_count = 0;
+    window.truncated = false;
+    let event = FsChangeEvent {
+        changes,
+        coalesced_window_ms: inner.debounce_ms,
+        truncated: truncated.then_some(true),
+        count: truncated.then_some(count),
     };
     inner.emitter.fire(&event);
 }
@@ -625,18 +615,23 @@ mod tests {
             std::slice::from_ref(&directory.0)
         );
         assert_eq!(service.watched_paths(), ["src"]);
-        watcher.handle.emitter.fire(&HostFsChange {
-            path: directory.0.join("src/a.ts").to_string_lossy().into_owned(),
-            action: HostFsChangeAction::Created,
-            kind: HostFsChangeKind::File,
-        });
+        let callback_handle = Arc::clone(&watcher.handle);
+        let callback_path = directory.0.join("src/a.ts").to_string_lossy().into_owned();
+        std::thread::spawn(move || {
+            callback_handle.emitter.fire(&HostFsChange {
+                path: callback_path,
+                action: HostFsChangeAction::Created,
+                kind: HostFsChangeKind::File,
+            });
+        })
+        .join()
+        .unwrap();
         watcher.handle.emitter.fire(&HostFsChange {
             path: directory.0.join("lib/b.ts").to_string_lossy().into_owned(),
             action: HostFsChangeAction::Created,
             kind: HostFsChangeKind::File,
         });
-        tokio::time::advance(Duration::from_millis(200)).await;
-        tokio::task::yield_now().await;
+        service.flush_pending().await;
         assert_eq!(events.lock().unwrap()[0].changes.len(), 1);
         assert_eq!(events.lock().unwrap()[0].changes[0].path, "src/a.ts");
 
@@ -655,8 +650,8 @@ mod tests {
             .on_did_change_files()
             .subscribe(move |event| captured.lock().unwrap().push(event.clone()));
         service.set_watched_paths(&[".".into()]).unwrap();
-        service.wait_for_gitignore().await;
-        assert!(service.inner.matcher.read().unwrap().ignores("dist/x.js"));
+        // Raw changes may arrive while `.gitignore` is still loading. They stay
+        // queued behind that async initialization and are filtered afterward.
         watcher.handle.emitter.fire(&HostFsChange {
             path: directory.0.join("dist/x.js").to_string_lossy().into_owned(),
             action: HostFsChangeAction::Created,
@@ -673,8 +668,7 @@ mod tests {
                 kind: HostFsChangeKind::File,
             });
         }
-        tokio::time::advance(Duration::from_millis(200)).await;
-        tokio::task::yield_now().await;
+        service.flush_pending().await;
         let events = events.lock().unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].truncated, Some(true));
@@ -682,8 +676,8 @@ mod tests {
         assert!(events[0].changes.is_empty());
     }
 
-    #[test]
-    fn rejects_escaping_watch_paths() {
+    #[tokio::test]
+    async fn rejects_escaping_watch_paths() {
         let directory = TestDirectory::new();
         let (service, _) = service(&directory.0);
         assert!(service.set_watched_paths(&["../x".into()]).is_err());

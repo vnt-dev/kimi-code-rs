@@ -4,6 +4,7 @@
 
 use std::{error::Error, ops::Deref, sync::Arc};
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::_base::{
@@ -50,6 +51,7 @@ pub struct FsChangeEvent {
 
 pub type SessionFsWatchError = Box<dyn Error + Send + Sync>;
 
+#[async_trait]
 pub trait SessionFsWatchServiceContract: Disposable + Send + Sync {
     fn set_watched_paths(&self, paths: &[String]) -> Result<(), SessionFsWatchError>;
     fn watched_paths(&self) -> Vec<String>;
@@ -59,7 +61,7 @@ pub trait SessionFsWatchServiceContract: Disposable + Send + Sync {
     /// Turn-scoped consumers use this as a boundary barrier so an edit that
     /// happened just before `turn.ended` is not left behind in the debounce
     /// window.
-    fn flush_pending(&self);
+    async fn flush_pending(&self);
 }
 
 #[derive(Clone)]

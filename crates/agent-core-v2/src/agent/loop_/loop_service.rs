@@ -353,9 +353,9 @@ impl AgentLoopService {
         service
     }
 
-    fn begin_turn_file_tracking(&self, turn_id: i64) {
+    async fn begin_turn_file_tracking(&self, turn_id: i64) {
         // Drain an older debounce window before opening the turn boundary.
-        self.fs_watch.flush_pending();
+        self.fs_watch.flush_pending().await;
         let mut tracking = self.turn_files.lock().unwrap();
         tracking.active_turn_id = Some(turn_id);
         tracking.files.clear();
@@ -374,8 +374,8 @@ impl AgentLoopService {
         }
     }
 
-    fn finish_turn_file_tracking(&self, turn_id: i64) -> Vec<super::TurnFileChange> {
-        self.fs_watch.flush_pending();
+    async fn finish_turn_file_tracking(&self, turn_id: i64) -> Vec<super::TurnFileChange> {
+        self.fs_watch.flush_pending().await;
         let mut tracking = self.turn_files.lock().unwrap();
         if tracking.active_turn_id != Some(turn_id) {
             return Vec::new();
@@ -394,8 +394,8 @@ impl AgentLoopService {
         files
     }
 
-    fn publish_turn_file_changes(&self, turn_id: i64) {
-        let files = self.finish_turn_file_tracking(turn_id);
+    async fn publish_turn_file_changes(&self, turn_id: i64) {
+        let files = self.finish_turn_file_tracking(turn_id).await;
         if !files.is_empty() {
             self.event_bus
                 .publish_typed(super::TurnFilesChangedEvent { turn_id, files });
@@ -403,7 +403,7 @@ impl AgentLoopService {
     }
 
     async fn publish_turn_file_changes_with_stats(&self, turn_id: i64) {
-        let mut files = self.finish_turn_file_tracking(turn_id);
+        let mut files = self.finish_turn_file_tracking(turn_id).await;
         if files.is_empty() {
             return;
         }
@@ -596,13 +596,24 @@ impl AgentLoopService {
                 // The gate preserves prompt/event ordering while ensuring the
                 // worker is tracked before shutdown can acquire loop state.
                 let _ = worker_ready.await;
+                service
+                    .begin_turn_file_tracking(worker_job.turn.0.id())
+                    .await;
+                service.event_bus.publish_typed(super::TurnStartedEvent {
+                    turn_id: worker_job.turn.0.id(),
+                    origin: worker_job.seed.origin.clone(),
+                    prompt: is_displayable_prompt_origin(&worker_job.seed.origin)
+                        .then(|| turn_prompt_text(&worker_job.seed.input))
+                        .flatten(),
+                    user_message: worker_job.seed.user_message.clone(),
+                });
                 let result =
                     match AssertUnwindSafe(Arc::clone(&service).run_turn(Arc::clone(&worker_job)))
                         .catch_unwind()
                         .await
                     {
                         Ok(result) => result,
-                        Err(payload) => service.fail_panicked_turn(&worker_job, payload),
+                        Err(payload) => service.fail_panicked_turn(&worker_job, payload).await,
                     };
                 worker_job.result.settle(result);
             });
@@ -612,19 +623,10 @@ impl AgentLoopService {
             .wire
             .dispatch([prompt_turn(job.seed.clone()).expect("turn seed is serializable")]);
         job.turn_impl.mutable.lock().unwrap().state = TurnState::Running;
-        self.begin_turn_file_tracking(job.turn.0.id());
-        self.event_bus.publish_typed(super::TurnStartedEvent {
-            turn_id: job.turn.0.id(),
-            origin: job.seed.origin.clone(),
-            prompt: is_displayable_prompt_origin(&job.seed.origin)
-                .then(|| turn_prompt_text(&job.seed.input))
-                .flatten(),
-            user_message: job.seed.user_message.clone(),
-        });
         let _ = start_worker.send(());
     }
 
-    fn fail_panicked_turn(
+    async fn fail_panicked_turn(
         &self,
         job: &Arc<TurnJob>,
         payload: Box<dyn std::any::Any + Send>,
@@ -647,7 +649,7 @@ impl AgentLoopService {
         if is_active {
             self.settle_turn_ready(job, &result);
             self.release_active_turn(job, &result);
-            self.publish_turn_file_changes(job.turn.0.id());
+            self.publish_turn_file_changes(job.turn.0.id()).await;
             let payload = error_payload(&error);
             self.event_bus.publish_typed(super::TurnEndedEvent {
                 turn_id: job.turn.0.id(),
