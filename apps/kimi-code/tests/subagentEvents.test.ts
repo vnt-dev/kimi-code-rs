@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   isSubagentEvent,
   mergeSubagentEvent,
+  mergeSubagentRuns,
+  parseAgentSwarmResult,
   subagentRunsWithSwarmItems,
   type SubagentRunsByTool,
 } from "../src/subagentEvents.ts";
@@ -165,4 +167,112 @@ test("swarm item text is used as the user-facing task title", () => {
   });
   assert.equal(displayed[0].description, "查询上海天气");
   assert.equal(runs[0].description, "并行查询天气 #1 (agent)");
+});
+
+test("historical AgentSwarm results restore every subagent and preserve markdown", () => {
+  const completedBody = [
+    "## Result",
+    "",
+    "literal </subagent> marker",
+    "",
+    "```ts",
+    "const answer = 42;",
+    "```",
+  ].join("\n");
+  const output = [
+    "<agent_swarm_result>",
+    "<summary>completed: 1, failed: 1</summary>",
+    `<subagent agent_id="agent-1" item="A &amp; &lt;B&gt;&quot;" state="started" outcome="completed">${completedBody}</subagent>`,
+    '<subagent item="second" state="not_started" outcome="failed">provider failed</subagent>',
+    "</agent_swarm_result>",
+  ].join("\n");
+
+  assert.deepEqual(
+    parseAgentSwarmResult(output, "call-1", {
+      subagent_type: "explore",
+    }),
+    [
+      {
+        subagentId: "agent-1",
+        subagentName: "explore",
+        description: 'A & <B>"',
+        swarmIndex: 1,
+        runInBackground: false,
+        status: "completed",
+        resultSummary: completedBody,
+        error: undefined,
+      },
+      {
+        subagentId: "call-1:history:2",
+        subagentName: "explore",
+        description: "second",
+        swarmIndex: 2,
+        runInBackground: false,
+        status: "failed",
+        resultSummary: undefined,
+        error: "provider failed",
+      },
+    ],
+  );
+});
+
+test("historical resumed and aborted subagents use stable fallback data", () => {
+  const output = [
+    "<agent_swarm_result>",
+    "<summary>aborted: 1</summary>",
+    '<subagent mode="resume" agent_id="agent-old" state="started" outcome="aborted">cancelled</subagent>',
+    "</agent_swarm_result>",
+  ].join("\n");
+
+  assert.deepEqual(parseAgentSwarmResult(output, "call-2", {}), [
+    {
+      subagentId: "agent-old",
+      subagentName: "agent",
+      description: undefined,
+      swarmIndex: 1,
+      runInBackground: false,
+      status: "failed",
+      resultSummary: undefined,
+      error: "cancelled",
+    },
+  ]);
+  assert.deepEqual(parseAgentSwarmResult("not a swarm result", "call-2", {}), []);
+  assert.deepEqual(parseAgentSwarmResult({ output }, "call-2", {}), []);
+});
+
+test("live subagent state overrides matching historical state without hiding siblings", () => {
+  const historical = parseAgentSwarmResult(
+    [
+      "<agent_swarm_result>",
+      "<summary>completed: 2</summary>",
+      '<subagent agent_id="agent-1" item="first" outcome="completed">old first</subagent>',
+      '<subagent agent_id="agent-2" item="second" outcome="completed">old second</subagent>',
+      "</agent_swarm_result>",
+    ].join("\n"),
+    "call-3",
+    {},
+  );
+  const merged = mergeSubagentRuns(historical, [
+    {
+      subagentId: "agent-1",
+      subagentName: "researcher",
+      description: "generic live description",
+      swarmIndex: 1,
+      runInBackground: false,
+      status: "running",
+    },
+  ]);
+
+  assert.equal(merged.length, 2);
+  assert.deepEqual(merged[0], {
+    subagentId: "agent-1",
+    subagentName: "researcher",
+    description: "first",
+    swarmIndex: 1,
+    runInBackground: false,
+    status: "running",
+    resultSummary: "old first",
+    error: undefined,
+  });
+  assert.equal(merged[1].subagentId, "agent-2");
 });

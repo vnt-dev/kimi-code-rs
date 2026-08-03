@@ -3000,7 +3000,19 @@ button.message-skill-chip:hover {
   gap: 4px;
 }
 
-.subagent-result-summary > span {
+.subagent-result-summary > header {
+  display: flex;
+  min-height: 22px;
+  align-items: center;
+  gap: 6px;
+}
+
+.subagent-result-summary > header > span {
+  flex: 1;
+}
+
+.subagent-result-summary > span,
+.subagent-result-summary > header > span {
   color: #5f5b69;
   font-size: 8px;
 }
@@ -3027,6 +3039,31 @@ button.message-skill-chip:hover {
 .subagent-result-summary > pre {
   max-height: none;
   overflow: visible;
+}
+
+.subagent-result-markdown {
+  width: 100%;
+  padding: 7px 8px;
+  border-left: 1px solid var(--line);
+  border-radius: 0 5px 5px 0;
+  color: var(--text);
+  background: var(--surface-2);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.subagent-result-markdown .code-wrap {
+  margin: 8px 0;
+}
+
+.subagent-result-markdown .code-wrap pre {
+  max-height: none;
+  padding: 0;
+  overflow-x: auto;
+  border-left: 0;
+  border-radius: 0;
+  background: transparent;
+  white-space: pre;
 }
 
 .subagent-row-detail pre.error {
@@ -7812,6 +7849,7 @@ input:focus-visible {
 .subagent-live-timeline .markdown-body,
 .subagent-row-detail,
 .subagent-result-summary > span,
+.subagent-result-summary > header > span,
 .subagent-metrics span {
   color: var(--muted);
 }

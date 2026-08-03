@@ -51,6 +51,8 @@ import {
 import { t } from "../../i18n";
 import { SkillPromptDisplayContent } from "../../prompt/SkillPromptDisplay";
 import {
+  mergeSubagentRuns,
+  parseAgentSwarmResult,
   subagentRunsWithSwarmItems,
   type SubagentRun,
   type SubagentRunStatus,
@@ -831,8 +833,13 @@ function SubagentRow({
           )}
           {subagent.resultSummary && (
             <section className="subagent-result-summary">
-              <span>{t("subagent.finalSummary")}</span>
-              <pre>{subagent.resultSummary}</pre>
+              <header>
+                <span>{t("subagent.finalSummary")}</span>
+                <AgentToolCopyButton text={subagent.resultSummary} />
+              </header>
+              <div className="subagent-result-markdown markdown-body">
+                <MarkdownMessage content={subagent.resultSummary} />
+              </div>
             </section>
           )}
           {subagent.error && (
@@ -1798,10 +1805,15 @@ function HistoryToolCard({
       ? "error"
       : "completed"
     : "incomplete";
-  const displayedSubagents = subagentRunsWithSwarmItems(
-    subagents,
-    tool.input,
-  );
+  const historicalSubagents =
+    tool.tool_name === "AgentSwarm"
+      ? parseAgentSwarmResult(result?.output, tool.tool_call_id, tool.input)
+      : [];
+  const mergedSubagents = mergeSubagentRuns(historicalSubagents, subagents);
+  const displayedSubagents =
+    historicalSubagents.length > 0
+      ? mergedSubagents
+      : subagentRunsWithSwarmItems(mergedSubagents, tool.input);
 
   return (
     <div className={`history-tool-card ${status}`}>
