@@ -3,8 +3,11 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ClipboardEvent,
   type ChangeEvent,
+  type UIEvent as ReactUIEvent,
+  type WheelEvent,
   Fragment,
   type ReactNode,
   isValidElement,
@@ -100,6 +103,10 @@ import {
   isSameLiveUserMessage,
   projectLiveUserMessage,
 } from "./liveUserMessage";
+import {
+  isUpwardChatScrollKey,
+  resolveChatFollowState,
+} from "./chatScroll";
 import {
   canUndoPromptEdit,
   createPromptUndoHistory,
@@ -1591,6 +1598,59 @@ function omitSessionKeys<T>(
   return changed ? next : current;
 }
 
+function nestedVerticalScroller(
+  target: EventTarget | null,
+  root: HTMLElement,
+): HTMLElement | undefined {
+  let element = target instanceof HTMLElement ? target : undefined;
+  while (element && element !== root) {
+    const overflowY = window.getComputedStyle(element).overflowY;
+    if (
+      element.scrollHeight > element.clientHeight + 1 &&
+      (overflowY === "auto" ||
+        overflowY === "scroll" ||
+        overflowY === "overlay")
+    ) {
+      return element;
+    }
+    element = element.parentElement ?? undefined;
+  }
+  return undefined;
+}
+
+function nestedScrollerConsumesWheel(
+  target: EventTarget | null,
+  root: HTMLElement,
+  deltaY: number,
+): boolean {
+  let element = target instanceof HTMLElement ? target : undefined;
+  while (element && element !== root) {
+    const style = window.getComputedStyle(element);
+    const scrollable =
+      element.scrollHeight > element.clientHeight + 1 &&
+      (style.overflowY === "auto" ||
+        style.overflowY === "scroll" ||
+        style.overflowY === "overlay");
+    if (scrollable) {
+      if (
+        style.overscrollBehaviorY === "contain" ||
+        style.overscrollBehaviorY === "none"
+      ) {
+        return true;
+      }
+      if (deltaY < 0 && element.scrollTop > 1) return true;
+      if (
+        deltaY > 0 &&
+        element.scrollTop + element.clientHeight < element.scrollHeight - 1
+      ) {
+        return true;
+      }
+    }
+    element = element.parentElement ?? undefined;
+  }
+  return false;
+}
+
 export default function App() {
   const desktopRuntime = useMemo(isDesktop, []);
   const [mobileQueryMatches, setMobileQueryMatches] = useState(() =>
@@ -1725,6 +1785,14 @@ export default function App() {
   const lastChatScrollTopRef = useRef(0);
   const lastChatScrollHeightRef = useRef(0);
   const chatScrollFrameRef = useRef<number | undefined>(undefined);
+  const chatScrollUpIntentRef = useRef(false);
+  const chatScrollIntentFrameRef = useRef<number | undefined>(undefined);
+  const chatPointerScrollingRef = useRef(false);
+  const chatPointerStartRef = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+  } | undefined>(undefined);
   const outlineScrollFrameRef = useRef<number | undefined>(undefined);
   const profileRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -3272,31 +3340,124 @@ export default function App() {
       if (outlineScrollFrameRef.current !== undefined) {
         window.cancelAnimationFrame(outlineScrollFrameRef.current);
       }
+      if (chatScrollIntentFrameRef.current !== undefined) {
+        window.cancelAnimationFrame(chatScrollIntentFrameRef.current);
+      }
     },
     [],
   );
 
-  const handleChatScroll = (): void => {
-    const scroll = scrollRef.current;
-    if (!scroll) return;
-    scheduleActiveOutlineTurnUpdate();
-    const scrollingUp =
-      scroll.scrollTop < lastChatScrollTopRef.current - 1;
-    const contentHeightChanged =
-      Math.abs(scroll.scrollHeight - lastChatScrollHeightRef.current) > 1;
-    lastChatScrollTopRef.current = scroll.scrollTop;
-    lastChatScrollHeightRef.current = scroll.scrollHeight;
-    if (scrollingUp) {
-      followLatestMessageRef.current = false;
-      return;
+  const markChatScrollUpIntent = useCallback((): void => {
+    chatScrollUpIntentRef.current = true;
+    if (chatScrollIntentFrameRef.current !== undefined) {
+      window.cancelAnimationFrame(chatScrollIntentFrameRef.current);
     }
+    chatScrollIntentFrameRef.current = window.requestAnimationFrame(() => {
+      chatScrollIntentFrameRef.current = undefined;
+      chatScrollUpIntentRef.current = false;
+    });
+  }, []);
+
+  useEffect(() => {
+    const stopPointerScrolling = (): void => {
+      chatPointerScrollingRef.current = false;
+      chatPointerStartRef.current = undefined;
+    };
+    const detectPointerScrolling = (event: PointerEvent): void => {
+      const start = chatPointerStartRef.current;
+      if (!start || start.pointerId !== event.pointerId) return;
+      if (
+        Math.abs(event.clientX - start.clientX) > 2 ||
+        Math.abs(event.clientY - start.clientY) > 2
+      ) {
+        chatPointerScrollingRef.current = true;
+        if (event.pointerType === "touch" && event.clientY > start.clientY) {
+          markChatScrollUpIntent();
+        }
+        start.clientX = event.clientX;
+        start.clientY = event.clientY;
+      }
+    };
+    window.addEventListener("pointermove", detectPointerScrolling);
+    window.addEventListener("pointerup", stopPointerScrolling);
+    window.addEventListener("pointercancel", stopPointerScrolling);
+    window.addEventListener("blur", stopPointerScrolling);
+    return () => {
+      window.removeEventListener("pointermove", detectPointerScrolling);
+      window.removeEventListener("pointerup", stopPointerScrolling);
+      window.removeEventListener("pointercancel", stopPointerScrolling);
+      window.removeEventListener("blur", stopPointerScrolling);
+    };
+  }, [markChatScrollUpIntent]);
+
+  // lastChatScrollHeightRef is only refreshed when the view is pinned to the
+  // bottom (or on conversation switch), never here. This prevents a content
+  // reflow between an append and the next outer pin from looking like the user
+  // deliberately scrolled away.
+  const handleChatScroll = (event: ReactUIEvent<HTMLDivElement>): void => {
+    // Exclude any descendant scroll event delivered by the WebView or React.
+    if (event.target !== event.currentTarget) return;
+    const scroll = event.currentTarget;
+    scheduleActiveOutlineTurnUpdate();
     const distanceFromBottom =
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
-    if (distanceFromBottom <= 48) {
-      followLatestMessageRef.current = true;
-    } else if (!contentHeightChanged) {
-      followLatestMessageRef.current = false;
+    const contentHeightChanged =
+      Math.abs(scroll.scrollHeight - lastChatScrollHeightRef.current) > 1;
+    const scrollingUp = scroll.scrollTop < lastChatScrollTopRef.current - 1;
+    lastChatScrollTopRef.current = scroll.scrollTop;
+    followLatestMessageRef.current = resolveChatFollowState({
+      currentlyFollowing: followLatestMessageRef.current,
+      distanceFromBottom,
+      contentHeightChanged,
+      scrollingUp,
+      userScrollingUp:
+        chatScrollUpIntentRef.current || chatPointerScrollingRef.current,
+    });
+  };
+
+  const handleChatWheel = (event: WheelEvent<HTMLDivElement>): void => {
+    if (
+      event.deltaY < 0 &&
+      !nestedScrollerConsumesWheel(
+        event.target,
+        event.currentTarget,
+        event.deltaY,
+      )
+    ) {
+      markChatScrollUpIntent();
     }
+  };
+
+  const handleChatPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ): void => {
+    if (!event.isPrimary || event.button !== 0) return;
+    chatPointerScrollingRef.current = false;
+    chatPointerStartRef.current = nestedVerticalScroller(
+      event.target,
+      event.currentTarget,
+    )
+      ? undefined
+      : {
+          pointerId: event.pointerId,
+          clientX: event.clientX,
+          clientY: event.clientY,
+        };
+  };
+
+  const handleChatKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (!isUpwardChatScrollKey(event.key, event.shiftKey)) return;
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        target.matches("input, textarea, select") ||
+        (event.key === " " && target.matches("button")) ||
+        nestedVerticalScroller(target, event.currentTarget))
+    ) {
+      return;
+    }
+    markChatScrollUpIntent();
   };
 
   const scrollToConversationTurn = (turnId: string): void => {
@@ -5283,7 +5444,11 @@ export default function App() {
             <div
               className="chat-scroll"
               ref={scrollRef}
+              tabIndex={0}
               onScroll={handleChatScroll}
+              onWheel={handleChatWheel}
+              onPointerDownCapture={handleChatPointerDown}
+              onKeyDownCapture={handleChatKeyDown}
             >
               {isHistoryLoading ? (
                 <div className="history-loading">

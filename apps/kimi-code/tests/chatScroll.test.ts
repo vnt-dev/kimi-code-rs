@@ -1,0 +1,55 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  isUpwardChatScrollKey,
+  resolveChatFollowState,
+} from "../src/chatScroll.ts";
+
+test("explicit upward input leaves follow mode while content is changing", () => {
+  assert.equal(
+    resolveChatFollowState({
+      currentlyFollowing: true,
+      distanceFromBottom: 12,
+      contentHeightChanged: true,
+      scrollingUp: true,
+      userScrollingUp: true,
+    }),
+    false,
+  );
+});
+
+test("content reflow does not leave follow mode without upward input", () => {
+  assert.equal(
+    resolveChatFollowState({
+      currentlyFollowing: true,
+      distanceFromBottom: 120,
+      contentHeightChanged: true,
+      scrollingUp: true,
+      userScrollingUp: false,
+    }),
+    true,
+  );
+});
+
+test("scrolling back to the bottom resumes follow mode", () => {
+  assert.equal(
+    resolveChatFollowState({
+      currentlyFollowing: false,
+      distanceFromBottom: 24,
+      contentHeightChanged: false,
+      scrollingUp: false,
+      userScrollingUp: false,
+    }),
+    true,
+  );
+});
+
+test("upward keyboard scrolling is recognized", () => {
+  assert.equal(isUpwardChatScrollKey("ArrowUp", false), true);
+  assert.equal(isUpwardChatScrollKey("PageUp", false), true);
+  assert.equal(isUpwardChatScrollKey("Home", false), true);
+  assert.equal(isUpwardChatScrollKey(" ", true), true);
+  assert.equal(isUpwardChatScrollKey(" ", false), false);
+  assert.equal(isUpwardChatScrollKey("PageDown", false), false);
+});
