@@ -54,9 +54,9 @@ jobs:
           projectPath: apps/kimi-code
           tagName: ${{ github.ref_name }}
           releaseName: Kimi Code ${{ github.ref_name }}
-          releaseBody: Windows, Linux, and macOS builds for Kimi Code ${{ github.ref_name }}.
           releaseDraft: false
           prerelease: false
+          releaseAssetNamePattern: '[name]_[version]_windows_[arch][setup][ext]'
 
   release-linux:
     name: Build and publish Linux AppImage
@@ -110,9 +110,9 @@ jobs:
           projectPath: apps/kimi-code
           tagName: ${{ github.ref_name }}
           releaseName: Kimi Code ${{ github.ref_name }}
-          releaseBody: Windows, Linux, and macOS builds for Kimi Code ${{ github.ref_name }}.
           releaseDraft: false
           prerelease: false
+          releaseAssetNamePattern: '[name]_[version]_linux_[arch][ext]'
           args: --bundles appimage
 
   release-macos:
@@ -164,9 +164,9 @@ jobs:
           projectPath: apps/kimi-code
           tagName: ${{ github.ref_name }}
           releaseName: Kimi Code ${{ github.ref_name }}
-          releaseBody: Windows, Linux, and macOS builds for Kimi Code ${{ github.ref_name }}.
           releaseDraft: false
           prerelease: false
+          releaseAssetNamePattern: '[name]_[version]_macos_[arch][ext]'
           args: --target aarch64-apple-darwin
 
       - name: Build and publish Kimi Code for Intel Mac
@@ -178,7 +178,7 @@ jobs:
           projectPath: apps/kimi-code
           tagName: ${{ github.ref_name }}
           releaseName: Kimi Code ${{ github.ref_name }}
-          releaseBody: Windows, Linux, and macOS builds for Kimi Code ${{ github.ref_name }}.
           releaseDraft: false
           prerelease: false
+          releaseAssetNamePattern: '[name]_[version]_macos_[arch][ext]'
           args: --target x86_64-apple-darwin
