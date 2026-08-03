@@ -496,6 +496,8 @@ export default function App() {
   const chatScrollFrameRef = useRef<number | undefined>(undefined);
   const chatScrollUpIntentRef = useRef(false);
   const chatScrollIntentFrameRef = useRef<number | undefined>(undefined);
+  const chatDisclosureReflowRef = useRef(false);
+  const chatDisclosureTimerRef = useRef<number | undefined>(undefined);
   const chatPointerScrollingRef = useRef(false);
   const chatPointerStartRef = useRef<{
     pointerId: number;
@@ -2070,6 +2072,10 @@ export default function App() {
       if (chatScrollIntentFrameRef.current !== undefined) {
         window.cancelAnimationFrame(chatScrollIntentFrameRef.current);
       }
+      if (chatDisclosureTimerRef.current !== undefined) {
+        window.clearTimeout(chatDisclosureTimerRef.current);
+      }
+      scrollRef.current?.style.removeProperty("overflow-anchor");
     },
     [],
   );
@@ -2139,7 +2145,39 @@ export default function App() {
       scrollingUp,
       userScrollingUp:
         chatScrollUpIntentRef.current || chatPointerScrollingRef.current,
+      userTogglingDisclosure: chatDisclosureReflowRef.current,
     });
+  };
+
+  const handleChatDisclosureClick = (
+    event: MouseEvent<HTMLDivElement>,
+  ): void => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const disclosure = target.closest("button[aria-expanded]");
+    if (!disclosure || !event.currentTarget.contains(disclosure)) return;
+
+    const scroll = event.currentTarget;
+    const wasFollowing = followLatestMessageRef.current;
+    followLatestMessageRef.current = false;
+    chatDisclosureReflowRef.current = true;
+    scroll.style.overflowAnchor = "none";
+    lastChatScrollTopRef.current = scroll.scrollTop;
+    lastChatScrollHeightRef.current = scroll.scrollHeight;
+    if (chatDisclosureTimerRef.current !== undefined) {
+      window.clearTimeout(chatDisclosureTimerRef.current);
+    }
+    chatDisclosureTimerRef.current = window.setTimeout(() => {
+      chatDisclosureTimerRef.current = undefined;
+      chatDisclosureReflowRef.current = false;
+      scroll.style.removeProperty("overflow-anchor");
+      lastChatScrollTopRef.current = scroll.scrollTop;
+      lastChatScrollHeightRef.current = scroll.scrollHeight;
+      const distanceFromBottom =
+        scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
+      followLatestMessageRef.current =
+        wasFollowing && distanceFromBottom <= 48;
+    }, 240);
   };
 
   const handleChatWheel = (event: WheelEvent<HTMLDivElement>): void => {
@@ -4200,6 +4238,7 @@ export default function App() {
               ref={scrollRef}
               tabIndex={0}
               onScroll={handleChatScroll}
+              onClickCapture={handleChatDisclosureClick}
               onWheel={handleChatWheel}
               onPointerDownCapture={handleChatPointerDown}
               onKeyDownCapture={handleChatKeyDown}

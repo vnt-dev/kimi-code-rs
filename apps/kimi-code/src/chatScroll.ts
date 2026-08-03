@@ -4,6 +4,7 @@ export type ChatFollowDecision = {
   contentHeightChanged: boolean;
   scrollingUp: boolean;
   userScrollingUp: boolean;
+  userTogglingDisclosure: boolean;
 };
 
 export function resolveChatFollowState({
@@ -12,7 +13,9 @@ export function resolveChatFollowState({
   contentHeightChanged,
   scrollingUp,
   userScrollingUp,
+  userTogglingDisclosure,
 }: ChatFollowDecision): boolean {
+  if (userTogglingDisclosure) return false;
   if (scrollingUp && (userScrollingUp || !contentHeightChanged)) return false;
   if (distanceFromBottom <= 48) return true;
   return currentlyFollowing;

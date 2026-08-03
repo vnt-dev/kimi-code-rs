@@ -14,6 +14,7 @@ test("explicit upward input leaves follow mode while content is changing", () =>
       contentHeightChanged: true,
       scrollingUp: true,
       userScrollingUp: true,
+      userTogglingDisclosure: false,
     }),
     false,
   );
@@ -27,6 +28,7 @@ test("content reflow does not leave follow mode without upward input", () => {
       contentHeightChanged: true,
       scrollingUp: true,
       userScrollingUp: false,
+      userTogglingDisclosure: false,
     }),
     true,
   );
@@ -40,8 +42,23 @@ test("scrolling back to the bottom resumes follow mode", () => {
       contentHeightChanged: false,
       scrollingUp: false,
       userScrollingUp: false,
+      userTogglingDisclosure: false,
     }),
     true,
+  );
+});
+
+test("toggling conversation details pauses follow mode during reflow", () => {
+  assert.equal(
+    resolveChatFollowState({
+      currentlyFollowing: true,
+      distanceFromBottom: 0,
+      contentHeightChanged: true,
+      scrollingUp: false,
+      userScrollingUp: false,
+      userTogglingDisclosure: true,
+    }),
+    false,
   );
 });
 
