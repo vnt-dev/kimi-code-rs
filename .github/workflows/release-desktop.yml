@@ -59,7 +59,7 @@ jobs:
           releaseAssetNamePattern: '[name]_[version]_windows_[arch][setup][ext]'
 
   release-linux:
-    name: Build and publish Linux AppImage
+    name: Build and publish Linux AppImage and Debian package
     needs: release-windows
     runs-on: ubuntu-22.04
 
@@ -113,7 +113,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           releaseAssetNamePattern: '[name]_[version]_linux_[arch][ext]'
-          args: --bundles appimage
+          args: --bundles appimage,deb
 
   release-macos:
     name: Build and publish macOS
