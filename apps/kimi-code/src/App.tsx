@@ -149,6 +149,7 @@ import {
 } from "./appearance";
 import SettingsDialog from "./SettingsDialog";
 import { AccountUsagePopover } from "./components/AccountUsagePopover";
+import { RemixSparklingLineIcon } from "./components/RemixSparklingLineIcon";
 import { ProjectLanding } from "./components/ProjectLanding";
 import {
   BackgroundTaskProgress,
@@ -447,6 +448,9 @@ export default function App() {
   const [plans, setPlans] = useState<Record<string, PlanData | null>>({});
   const [goals, setGoals] = useState<Record<string, GoalSnapshot | null>>({});
   const [goalModeBySession, setGoalModeBySession] = useState<
+    Record<string, boolean>
+  >({});
+  const [swarmModeBySession, setSwarmModeBySession] = useState<
     Record<string, boolean>
   >({});
   const [sessionTodos, setSessionTodos] = useState<Record<string, TodoItem[]>>(
@@ -790,6 +794,9 @@ export default function App() {
   const activeGoalMode = activeConversation
     ? Boolean(goalModeBySession[activeConversation.id])
     : false;
+  const activeSwarmMode = activeConversation
+    ? Boolean(swarmModeBySession[activeConversation.id])
+    : false;
   const activeTodos = activeConversation
     ? (sessionTodos[activeConversation.id] ?? [])
     : [];
@@ -923,11 +930,12 @@ export default function App() {
     agentId: string;
   }): Promise<void> => {
     const agent = createAgentClient(scope);
-    const [plan, goalResult, goalMode, todos, usage, permission] =
+    const [plan, goalResult, goalMode, swarmMode, todos, usage, permission] =
       await Promise.all([
         agent.getPlan(),
         agent.getGoal(),
         getSharedGoalMode(scope.sessionId),
+        agent.getSwarmMode(),
         agent.getTodos(),
         agent.getUsage(),
         agent.getPermission(),
@@ -940,6 +948,10 @@ export default function App() {
     setGoalModeBySession((current) => ({
       ...current,
       [scope.sessionId]: goalMode,
+    }));
+    setSwarmModeBySession((current) => ({
+      ...current,
+      [scope.sessionId]: swarmMode,
     }));
     setSessionTodos((current) => ({
       ...current,
@@ -1760,6 +1772,16 @@ export default function App() {
             })
             .catch((error) => showNotice(conciseError(error)));
         }
+        if (
+          payload.event.type === "agent.status.updated" &&
+          isMainAgentEvent &&
+          typeof payload.event.swarmMode === "boolean"
+        ) {
+          setSwarmModeBySession((current) => ({
+            ...current,
+            [payload.sessionId]: payload.event.swarmMode as boolean,
+          }));
+        }
         if (payload.event.type === "agent.status.updated" && isMainAgentEvent) {
           const model =
             typeof payload.event.model === "string"
@@ -2247,6 +2269,7 @@ export default function App() {
     setPlans((current) => omitSessionKeys(current, ids));
     setGoals((current) => omitSessionKeys(current, ids));
     setGoalModeBySession((current) => omitSessionKeys(current, ids));
+    setSwarmModeBySession((current) => omitSessionKeys(current, ids));
     setSessionTodos((current) => omitSessionKeys(current, ids));
     setBackgroundTasks((current) => omitSessionKeys(current, ids));
     setSubagentRuns((current) => omitSessionKeys(current, ids));
@@ -2656,6 +2679,32 @@ export default function App() {
     setModeBusy(true);
     try {
       await setSynchronizedGoalMode(conversationId, !activeGoalMode);
+    } finally {
+      setModeBusy(false);
+    }
+  };
+
+  const toggleSwarmMode = async (): Promise<void> => {
+    if (!activeConversation || !activeAgentScope || modeBusy || isStreaming) {
+      return;
+    }
+    const conversationId = activeConversation.id;
+    const nextMode = !activeSwarmMode;
+    setModeBusy(true);
+    try {
+      const agent = createAgentClient(activeAgentScope);
+      if (nextMode) {
+        await agent.enterSwarm("manual");
+      } else {
+        await agent.exitSwarm();
+      }
+      const enabled = await agent.getSwarmMode();
+      setSwarmModeBySession((current) => ({
+        ...current,
+        [conversationId]: enabled,
+      }));
+    } catch (error) {
+      showNotice(conciseError(error));
     } finally {
       setModeBusy(false);
     }
@@ -4508,7 +4557,12 @@ export default function App() {
                     ))}
                   </div>
                 )}
-                {(activePlan || activeGoalMode || promptSkills.length > 0) && (
+                {(
+                  activePlan ||
+                  activeGoalMode ||
+                  activeSwarmMode ||
+                  promptSkills.length > 0
+                ) && (
                   <div
                     className="prompt-skill-list"
                     aria-label={t("composer.inputSettings")}
@@ -4548,6 +4602,28 @@ export default function App() {
                           title={t("goal.disable")}
                           disabled={modeBusy}
                           onClick={() => void toggleGoalMode()}
+                        >
+                          {modeBusy ? (
+                            <span className="spinner" />
+                          ) : (
+                            <X size={11} />
+                          )}
+                        </button>
+                      </span>
+                    )}
+                    {activeSwarmMode && (
+                      <span className="prompt-skill-chip prompt-plan-chip">
+                        <span className="prompt-skill-open prompt-plan-label">
+                          <RemixSparklingLineIcon size={13} />
+                          <span>{t("swarm.label")}</span>
+                        </span>
+                        <button
+                          className="prompt-skill-remove"
+                          type="button"
+                          aria-label={t("swarm.disable")}
+                          title={t("swarm.disable")}
+                          disabled={modeBusy || isStreaming}
+                          onClick={() => void toggleSwarmMode()}
                         >
                           {modeBusy ? (
                             <span className="spinner" />
@@ -4761,6 +4837,32 @@ export default function App() {
                               {(activeGoal || activeGoalMode) && (
                                 <Check size={14} />
                               )}
+                            </button>
+                            <button
+                              className={`composer-add-item ${
+                                activeSwarmMode ? "selected" : ""
+                              }`}
+                              type="button"
+                              role="menuitemcheckbox"
+                              aria-checked={activeSwarmMode}
+                              disabled={
+                                !activeAgentScope || modeBusy || isStreaming
+                              }
+                              onClick={() => {
+                                setComposerAddOpen(false);
+                                void toggleSwarmMode();
+                              }}
+                            >
+                              <RemixSparklingLineIcon size={15} />
+                              <span>
+                                <strong>{t("swarm.label")}</strong>
+                                <small>
+                                  {activeSwarmMode
+                                    ? t("swarm.disableDesc")
+                                    : t("swarm.desc")}
+                                </small>
+                              </span>
+                              {activeSwarmMode && <Check size={14} />}
                             </button>
                           </div>
 

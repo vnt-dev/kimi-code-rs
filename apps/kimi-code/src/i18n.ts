@@ -219,7 +219,7 @@ const zh = {
   "composer.placeholderPlan": "计划模式：描述需要分析和规划的任务…",
   "composer.placeholderGoal": "目标模式：描述需要持续推进的目标…",
   "composer.placeholderStreaming": "继续输入；发送后将加入队列…",
-  "composer.add": "添加附件、计划、目标或技能",
+  "composer.add": "添加附件、计划、目标、集群或技能",
   "composer.addMenu": "添加到输入框",
   "composer.attachments": "附件",
   "composer.attachmentsDesc": "添加图片、音频、视频或文件",
@@ -265,6 +265,11 @@ const zh = {
   "goal.disable": "关闭目标模式",
   "goal.cancel": "取消当前目标",
   "goal.objectiveRequired": "目标模式需要输入目标描述",
+
+  "swarm.label": "集群",
+  "swarm.desc": "让 Agent 使用多个子 Agent 并行处理任务",
+  "swarm.disableDesc": "集群模式已开启，点击关闭",
+  "swarm.disable": "关闭集群模式",
 
   "model.select": "选择模型",
   "model.syncing": "同步模型中…",
@@ -676,7 +681,7 @@ const en: Record<TranslationKey, string> = {
   "composer.placeholderPlan": "Plan mode: describe the task to analyze and plan…",
   "composer.placeholderGoal": "Goal mode: describe the objective to keep pursuing…",
   "composer.placeholderStreaming": "Keep typing; sending will queue the message…",
-  "composer.add": "Add attachments, plan, goal, or skills",
+  "composer.add": "Add attachments, plan, goal, swarm, or skills",
   "composer.addMenu": "Add to input",
   "composer.attachments": "Attachment",
   "composer.attachmentsDesc": "Add images, audio, video, or files",
@@ -722,6 +727,11 @@ const en: Record<TranslationKey, string> = {
   "goal.disable": "Turn off goal mode",
   "goal.cancel": "Cancel current goal",
   "goal.objectiveRequired": "Goal mode requires an objective",
+
+  "swarm.label": "Swarm",
+  "swarm.desc": "Let the agent use multiple subagents in parallel",
+  "swarm.disableDesc": "Swarm mode is on; click to turn it off",
+  "swarm.disable": "Turn off swarm mode",
 
   "model.select": "Select model",
   "model.syncing": "Syncing models…",

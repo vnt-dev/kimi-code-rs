@@ -183,6 +183,15 @@ export function createAgentClient(scope: AgentScope) {
     getPlan() {
       return callAgentRpc<PlanData | null>(scope, "getPlan");
     },
+    enterSwarm(trigger: "manual" | "task" = "manual") {
+      return callAgentRpc<void>(scope, "enterSwarm", { trigger });
+    },
+    exitSwarm() {
+      return callAgentRpc<void>(scope, "exitSwarm");
+    },
+    getSwarmMode() {
+      return callAgentRpc<boolean>(scope, "getSwarmMode");
+    },
     createGoal(
       objective: string,
       replace = false,
