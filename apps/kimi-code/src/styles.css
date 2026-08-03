@@ -2763,6 +2763,15 @@ button.message-skill-chip:hover {
   scrollbar-gutter: stable;
 }
 
+.subagent-list,
+.subagent-row-detail pre,
+.live-tool-detail pre,
+.history-tool-card pre,
+.edit-diff-body,
+.agent-tool-body {
+  overflow-anchor: none;
+}
+
 .subagent-row {
   flex: 0 0 auto;
   overflow: hidden;

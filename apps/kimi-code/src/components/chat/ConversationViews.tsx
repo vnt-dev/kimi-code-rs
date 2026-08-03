@@ -2,9 +2,6 @@ import {
   Fragment,
   type ReactNode,
   memo,
-  useEffect,
-  useLayoutEffect,
-  useRef,
   useState,
 } from "react";
 import {
@@ -555,11 +552,7 @@ export function LiveToolBlock({
   subagentLiveTurns?: Record<string, InFlightTurn>;
 }) {
   const active = tool.status === "streaming" || tool.status === "running";
-  const [open, setOpen] = useState(active);
-  const userToggled = useRef(false);
-  useEffect(() => {
-    if (!userToggled.current) setOpen(active);
-  }, [active]);
+  const [open, setOpen] = useState(false);
   const progress = tool.updates.at(-1);
   const updateLog = tool.updates
     .filter((update) => update.text)
@@ -578,10 +571,7 @@ export function LiveToolBlock({
         type="button"
         className="tool-card-summary"
         aria-expanded={open}
-        onClick={() => {
-          userToggled.current = true;
-          setOpen((value) => !value);
-        }}
+        onClick={() => setOpen((value) => !value)}
       >
         <ToolStatusIcon status={tool.status} />
         <Wrench size={13} />
@@ -721,18 +711,7 @@ function SubagentPanel({
       status === "failed" ||
       status === "stopped",
   ).length;
-  const [open, setOpen] = useState(active);
-  const userToggled = useRef(false);
-  const listScroll = useRef<HTMLDivElement>(null);
-  const followLatestList = useRef(true);
-
-  useEffect(() => {
-    if (!userToggled.current) setOpen(active);
-  }, [active]);
-  useLayoutEffect(() => {
-    if (!open || !followLatestList.current || !listScroll.current) return;
-    listScroll.current.scrollTop = listScroll.current.scrollHeight;
-  }, [liveTurns, subagents]);
+  const [open, setOpen] = useState(false);
 
   return (
     <section
@@ -743,10 +722,7 @@ function SubagentPanel({
         type="button"
         className="subagent-panel-summary"
         aria-expanded={open}
-        onClick={() => {
-          userToggled.current = true;
-          setOpen((value) => !value);
-        }}
+        onClick={() => setOpen((value) => !value)}
       >
         <Bot size={13} />
         <span>{t("subagent.title")}</span>
@@ -765,13 +741,6 @@ function SubagentPanel({
         <div
           className="subagent-list"
           aria-live="polite"
-          ref={listScroll}
-          onScroll={(event) => {
-            const target = event.currentTarget;
-            followLatestList.current =
-              target.scrollHeight - target.scrollTop - target.clientHeight <=
-              24;
-          }}
         >
           {subagents.map((subagent, index) => (
             <SubagentRow
@@ -808,15 +777,7 @@ function SubagentRow({
     Boolean(subagent.error) ||
     subagent.usage !== undefined ||
     subagent.contextTokens !== undefined;
-  const active =
-    status === "queued" ||
-    status === "running" ||
-    status === "suspended";
-  const [open, setOpen] = useState(active);
-  const userToggled = useRef(false);
-  useEffect(() => {
-    if (!userToggled.current) setOpen(active);
-  }, [active]);
+  const [open, setOpen] = useState(false);
   const tokenTotal = subagent.usage
     ? inputTokenUsage(subagent.usage) + subagent.usage.output
     : undefined;
@@ -835,7 +796,6 @@ function SubagentRow({
         disabled={!hasDetail}
         onClick={() => {
           if (!hasDetail) return;
-          userToggled.current = true;
           setOpen((value) => !value);
         }}
       >
