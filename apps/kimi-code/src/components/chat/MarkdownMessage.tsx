@@ -1,0 +1,112 @@
+import {
+  type ReactNode,
+  isValidElement,
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+import { resolveMarkdownExternalUrl } from "../../markdownLinks";
+import { openExternalUrl } from "../../transport";
+
+function MarkdownCodeBlock({ children }: { children: ReactNode }) {
+  const className = isValidElement<{ className?: string }>(children)
+    ? children.props.className
+    : undefined;
+  const language = className?.match(/language-([^\s]+)/)?.[1] ?? "code";
+
+  return (
+    <div className="code-wrap">
+      <div className="code-label">
+        <span>{language}</span>
+      </div>
+      <pre>{children}</pre>
+    </div>
+  );
+}
+
+export const MarkdownMessage = memo(function MarkdownMessage({
+  content,
+}: {
+  content: string;
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        pre({ children }) {
+          return <MarkdownCodeBlock>{children}</MarkdownCodeBlock>;
+        },
+        code({ className, children, ...props }) {
+          return (
+            <code className={className} {...props}>
+              {children}
+            </code>
+          );
+        },
+        table({ children }) {
+          return (
+            <div className="markdown-table-wrap">
+              <table>{children}</table>
+            </div>
+          );
+        },
+        a({ children, href, ...props }) {
+          const externalUrl = resolveMarkdownExternalUrl(href);
+          return (
+            <a
+              {...props}
+              href={externalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(event) => {
+                if (!externalUrl) {
+                  event.preventDefault();
+                  return;
+                }
+                event.preventDefault();
+                void openExternalUrl(externalUrl).catch((error) => {
+                  console.error("failed to open Markdown link", error);
+                });
+              }}
+            >
+              {children}
+            </a>
+          );
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});
+
+export function StreamingMarkdownMessage({
+  content,
+  active,
+}: {
+  content: string;
+  active: boolean;
+}) {
+  const latestContent = useRef(content);
+  latestContent.current = content;
+  const [displayedContent, setDisplayedContent] = useState(content);
+
+  useLayoutEffect(() => {
+    if (!active) setDisplayedContent(content);
+  }, [active, content]);
+
+  useEffect(() => {
+    if (!active) return;
+    const interval = window.setInterval(() => {
+      setDisplayedContent(latestContent.current);
+    }, 80);
+    return () => window.clearInterval(interval);
+  }, [active]);
+
+  return <MarkdownMessage content={displayedContent} />;
+}
