@@ -2542,7 +2542,7 @@ dependencies = [
 
 [[package]]
 name = "kimi-code-desktop"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "kimi-code-agent-core-v2",
  "kimi-code-web-server",
