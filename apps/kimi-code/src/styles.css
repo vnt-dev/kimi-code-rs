@@ -3181,6 +3181,58 @@ button.message-skill-chip:hover {
   color: var(--text);
 }
 
+.agent-tool {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-deep);
+}
+
+.agent-tool-header {
+  display: flex;
+  padding: 6px 10px;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.agent-tool-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.agent-tool-copy {
+  display: flex;
+  padding: 3px 6px;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.agent-tool-copy:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.agent-tool-body {
+  max-height: 320px;
+  padding: 8px 12px;
+  overflow: auto;
+  font-size: 12px;
+}
+
 .live-tool-progress {
   display: flex;
   min-height: 24px;

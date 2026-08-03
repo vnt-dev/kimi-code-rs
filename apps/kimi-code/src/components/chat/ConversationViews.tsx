@@ -1568,6 +1568,49 @@ function WriteToolContent({ input }: { input: unknown }) {
   );
 }
 
+function agentToolInput(
+  input: unknown,
+): { description: string; prompt: string } | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const record = input as Record<string, unknown>;
+  if (typeof record.prompt !== "string") return undefined;
+  return {
+    description:
+      typeof record.description === "string" ? record.description : "",
+    prompt: record.prompt,
+  };
+}
+
+function AgentToolContent({ input }: { input: unknown }) {
+  const [copied, setCopied] = useState(false);
+  const agent = agentToolInput(input);
+  if (!agent) return null;
+  return (
+    <div className="agent-tool">
+      <div className="agent-tool-header">
+        <Bot size={12} />
+        <span className="agent-tool-title">{agent.description || "Agent"}</span>
+        <button
+          type="button"
+          className="agent-tool-copy"
+          onClick={() => {
+            void navigator.clipboard.writeText(agent.prompt).then(() => {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1400);
+            });
+          }}
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+          {copied ? t("common.copied") : t("common.copy")}
+        </button>
+      </div>
+      <div className="agent-tool-body markdown-body">
+        <MarkdownMessage content={agent.prompt} />
+      </div>
+    </div>
+  );
+}
+
 export function ToolInputView({
   name,
   input,
@@ -1580,6 +1623,9 @@ export function ToolInputView({
   }
   if (name === "Write" && writeToolInput(input)) {
     return <WriteToolContent input={input} />;
+  }
+  if (name === "Agent" && agentToolInput(input)) {
+    return <AgentToolContent input={input} />;
   }
   return <pre>{structuredValue(input)}</pre>;
 }
