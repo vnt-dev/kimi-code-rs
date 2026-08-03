@@ -3246,6 +3246,159 @@ button.message-skill-chip:hover {
   color: #c78383;
 }
 
+.agent-swarm-tool {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-deep);
+}
+
+.agent-swarm-header {
+  display: flex;
+  padding: 9px 10px;
+  align-items: flex-start;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-swarm-header > svg {
+  margin-top: 2px;
+  flex: none;
+  color: var(--accent);
+}
+
+.agent-swarm-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.agent-swarm-heading > strong {
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-swarm-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.agent-swarm-meta span {
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  font-size: 8.5px;
+  line-height: 1.4;
+}
+
+.agent-swarm-section + .agent-swarm-section {
+  border-top: 1px solid var(--line);
+}
+
+.agent-swarm-section > header {
+  display: flex;
+  min-height: 30px;
+  padding: 6px 10px;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  background: var(--surface-2);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.agent-swarm-section > header > span {
+  flex: 1;
+}
+
+.agent-swarm-section > header > small {
+  color: var(--subtle);
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.agent-swarm-template-body {
+  max-height: 340px;
+  padding: 10px 12px;
+  overflow: auto;
+  overflow-anchor: none;
+  font-size: 12px;
+}
+
+.agent-swarm-items {
+  display: flex;
+  max-height: 260px;
+  margin: 0;
+  padding: 8px 10px 9px 34px;
+  overflow: auto;
+  overflow-anchor: none;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--muted);
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+}
+
+.agent-swarm-items li {
+  padding-left: 2px;
+}
+
+.agent-swarm-items li::marker {
+  color: var(--subtle);
+}
+
+.agent-swarm-items span {
+  color: var(--text);
+  font-family: inherit;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.agent-swarm-resume-list {
+  display: flex;
+  max-height: 280px;
+  padding: 8px 10px 10px;
+  overflow: auto;
+  overflow-anchor: none;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-swarm-resume-list article {
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.agent-swarm-resume-list strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--accent);
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+.agent-swarm-resume-list p {
+  margin: 0;
+  color: var(--text);
+  font-size: 10.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .live-tool-progress {
   display: flex;
   min-height: 24px;

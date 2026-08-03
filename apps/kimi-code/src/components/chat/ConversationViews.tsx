@@ -1576,6 +1576,128 @@ function AgentToolContent({ input }: { input: unknown }) {
   );
 }
 
+type AgentSwarmToolInputView = {
+  description: string;
+  subagentType?: string;
+  promptTemplate?: string;
+  items: string[];
+  resumeAgents: Array<{ agentId: string; prompt: string }>;
+};
+
+function agentSwarmToolInput(
+  input: unknown,
+): AgentSwarmToolInputView | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const record = input as Record<string, unknown>;
+  if (typeof record.description !== "string") return undefined;
+
+  const items = Array.isArray(record.items)
+    ? record.items.filter((item): item is string => typeof item === "string")
+    : [];
+  const resumeAgents =
+    record.resume_agent_ids &&
+    typeof record.resume_agent_ids === "object" &&
+    !Array.isArray(record.resume_agent_ids)
+      ? Object.entries(record.resume_agent_ids)
+          .filter((entry): entry is [string, string] =>
+            typeof entry[1] === "string"
+          )
+          .map(([agentId, prompt]) => ({ agentId, prompt }))
+      : [];
+
+  return {
+    description: record.description,
+    subagentType:
+      typeof record.subagent_type === "string"
+        ? record.subagent_type
+        : undefined,
+    promptTemplate:
+      typeof record.prompt_template === "string"
+        ? record.prompt_template
+        : undefined,
+    items,
+    resumeAgents,
+  };
+}
+
+function AgentSwarmToolContent({ input }: { input: unknown }) {
+  const swarm = agentSwarmToolInput(input);
+  if (!swarm) return null;
+
+  return (
+    <div className="agent-swarm-tool">
+      <header className="agent-swarm-header">
+        <Bot size={13} />
+        <div className="agent-swarm-heading">
+          <strong>{swarm.description || "AgentSwarm"}</strong>
+          <div className="agent-swarm-meta">
+            {swarm.subagentType && (
+              <span>
+                {t("agentSwarm.subagentType", { type: swarm.subagentType })}
+              </span>
+            )}
+            {swarm.items.length > 0 && (
+              <span>{t("agentSwarm.itemCount", { count: swarm.items.length })}</span>
+            )}
+            {swarm.resumeAgents.length > 0 && (
+              <span>
+                {t("agentSwarm.resumeCount", {
+                  count: swarm.resumeAgents.length,
+                })}
+              </span>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {swarm.promptTemplate && (
+        <section className="agent-swarm-section agent-swarm-template">
+          <header>
+            <span>{t("agentSwarm.promptTemplate")}</span>
+            <AgentToolCopyButton text={swarm.promptTemplate} />
+          </header>
+          <div className="agent-swarm-template-body markdown-body">
+            <MarkdownMessage content={swarm.promptTemplate} />
+          </div>
+        </section>
+      )}
+
+      {swarm.items.length > 0 && (
+        <section className="agent-swarm-section">
+          <header>
+            <span>{t("agentSwarm.items")}</span>
+            <small>{swarm.items.length}</small>
+          </header>
+          <ol className="agent-swarm-items">
+            {swarm.items.map((item, index) => (
+              <li key={`${index}-${item}`}>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+
+      {swarm.resumeAgents.length > 0 && (
+        <section className="agent-swarm-section">
+          <header>
+            <span>{t("agentSwarm.resumeAgents")}</span>
+            <small>{swarm.resumeAgents.length}</small>
+          </header>
+          <div className="agent-swarm-resume-list">
+            {swarm.resumeAgents.map((agent) => (
+              <article key={agent.agentId}>
+                <strong>{agent.agentId}</strong>
+                <p>{agent.prompt}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 const AGENT_RESULT_SUMMARY_MARKER = "[summary]";
 
 function agentToolResultText(output: unknown): string | undefined {
@@ -1624,6 +1746,9 @@ export function ToolInputView({
   }
   if (name === "Agent" && agentToolInput(input)) {
     return <AgentToolContent input={input} />;
+  }
+  if (name === "AgentSwarm" && agentSwarmToolInput(input)) {
+    return <AgentSwarmToolContent input={input} />;
   }
   return <pre>{structuredValue(input)}</pre>;
 }

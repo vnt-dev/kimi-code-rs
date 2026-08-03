@@ -413,6 +413,13 @@ const zh = {
   "tool.params": "参数",
   "tool.result": "结果",
 
+  "agentSwarm.subagentType": "子代理类型：{type}",
+  "agentSwarm.itemCount": "{count} 个任务",
+  "agentSwarm.resumeCount": "续接 {count} 个代理",
+  "agentSwarm.promptTemplate": "提示词模板",
+  "agentSwarm.items": "任务项",
+  "agentSwarm.resumeAgents": "续接代理",
+
   "subagent.title": "子代理",
   "subagent.progressAria": "子代理执行进度",
   "subagent.runningCount": "{count} 个执行中",
@@ -874,6 +881,13 @@ const en: Record<TranslationKey, string> = {
   "tool.fallback": "tool",
   "tool.params": "Parameters",
   "tool.result": "Result",
+
+  "agentSwarm.subagentType": "Subagent type: {type}",
+  "agentSwarm.itemCount": "{count} items",
+  "agentSwarm.resumeCount": "{count} agents to resume",
+  "agentSwarm.promptTemplate": "Prompt template",
+  "agentSwarm.items": "Items",
+  "agentSwarm.resumeAgents": "Agents to resume",
 
   "subagent.title": "Subagents",
   "subagent.progressAria": "Subagent execution progress",
