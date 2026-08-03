@@ -1762,6 +1762,7 @@ export function ToolResultView({
   output: unknown;
   isError?: boolean;
 }) {
+  if (name === "AgentSwarm" && !isError) return null;
   const agentText = name === "Agent" ? agentToolResultText(output) : undefined;
   if (agentText !== undefined) {
     return (
