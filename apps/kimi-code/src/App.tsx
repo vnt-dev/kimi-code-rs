@@ -140,7 +140,15 @@ import {
   createPromptUndoHistory,
   recordPromptInput,
   undoPromptEdit,
+  type PromptUndoHistory,
 } from "./promptUndo";
+import {
+  promptDraftFor,
+  removePromptDrafts,
+  updatePromptDraft,
+  type PromptDrafts,
+  type PromptDraftUpdater,
+} from "./promptDrafts";
 import {
   applyColorScheme,
   loadColorScheme,
@@ -374,11 +382,9 @@ export default function App() {
     provider: "kimi-code",
   });
   const [models, setModels] = useState<Model[]>([]);
-  const [prompt, setPrompt] = useState("");
-  const [promptAttachments, setPromptAttachments] = useState<
-    PromptAttachment[]
-  >([]);
-  const [promptSkills, setPromptSkills] = useState<SkillDescriptor[]>([]);
+  const [promptDrafts, setPromptDrafts] = useState<
+    PromptDrafts<PromptAttachment, SkillDescriptor>
+  >({});
   const [availableSkills, setAvailableSkills] = useState<SkillDescriptor[]>([]);
   const [skillsBusy, setSkillsBusy] = useState(false);
   const [skillsError, setSkillsError] = useState<string>();
@@ -482,8 +488,8 @@ export default function App() {
     agentId: string;
   }>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const promptUndoHistoryRef = useRef(createPromptUndoHistory());
-  const promptUndoConversationRef = useRef<string | undefined>(undefined);
+  const promptUndoHistoriesRef = useRef<Record<string, PromptUndoHistory>>({});
+  const activeConversationIdRef = useRef<string | undefined>(undefined);
   const promptCompositionRef = useRef(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const composerAddRef = useRef<HTMLDivElement>(null);
@@ -602,6 +608,41 @@ export default function App() {
     () => getActive(desktop),
     [desktop],
   );
+  activeConversationIdRef.current = activeConversation?.id;
+  const activePromptDraft = promptDraftFor(
+    promptDrafts,
+    activeConversation?.id,
+  );
+  const prompt = activePromptDraft.text;
+  const promptAttachments = activePromptDraft.attachments;
+  const promptSkills = activePromptDraft.skills;
+  const setPromptText = (
+    update: PromptDraftUpdater<string>,
+    conversationId = activeConversation?.id,
+  ): void => {
+    if (!conversationId) return;
+    setPromptDrafts((current) =>
+      updatePromptDraft(current, conversationId, "text", update),
+    );
+  };
+  const setPromptAttachments = (
+    update: PromptDraftUpdater<PromptAttachment[]>,
+    conversationId = activeConversation?.id,
+  ): void => {
+    if (!conversationId) return;
+    setPromptDrafts((current) =>
+      updatePromptDraft(current, conversationId, "attachments", update),
+    );
+  };
+  const setPromptSkills = (
+    update: PromptDraftUpdater<SkillDescriptor[]>,
+    conversationId = activeConversation?.id,
+  ): void => {
+    if (!conversationId) return;
+    setPromptDrafts((current) =>
+      updatePromptDraft(current, conversationId, "skills", update),
+    );
+  };
   const defaultModel = models.find((model) => model.isDefault) ?? models[0];
   const selectedModel =
     models.find(
@@ -1210,13 +1251,13 @@ export default function App() {
   }, [slashMenuOpen]);
 
   useEffect(() => {
+    promptCompositionRef.current = false;
     skillsRequest.current += 1;
     skillDetailRequest.current += 1;
     setComposerAddOpen(false);
     setAvailableSkills([]);
     setSkillsBusy(false);
     setSkillsError(undefined);
-    setPromptSkills([]);
     setSlashMenuOpen(false);
     closeSideChat();
     setCompactionSummaryDetail(undefined);
@@ -2244,27 +2285,32 @@ export default function App() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
   }, [prompt]);
 
-  useEffect(() => {
-    const conversationId = activeConversation?.id;
-    if (conversationId === promptUndoConversationRef.current) return;
-    promptUndoConversationRef.current = conversationId;
-    promptCompositionRef.current = false;
-    promptUndoHistoryRef.current = createPromptUndoHistory(prompt);
-  }, [activeConversation?.id]);
-
-  const resetPrompt = (value = ""): void => {
-    promptCompositionRef.current = false;
-    promptUndoHistoryRef.current = createPromptUndoHistory(value);
-    setPrompt(value);
-    setSlashMenuOpen(false);
+  const resetPrompt = (
+    value = "",
+    conversationId = activeConversation?.id,
+  ): void => {
+    if (!conversationId) return;
+    promptUndoHistoriesRef.current[conversationId] =
+      createPromptUndoHistory(value);
+    setPromptText(value, conversationId);
+    if (activeConversationIdRef.current === conversationId) {
+      promptCompositionRef.current = false;
+      setSlashMenuOpen(false);
+    }
   };
 
   const updatePrompt = (value: string, isComposing = false): void => {
-    const history = recordPromptInput(promptUndoHistoryRef.current, value, {
-      isComposing,
-    });
-    promptUndoHistoryRef.current = history;
-    setPrompt(value);
+    const conversationId = activeConversation?.id;
+    if (!conversationId) return;
+    const current =
+      promptUndoHistoriesRef.current[conversationId] ??
+      createPromptUndoHistory(prompt);
+    promptUndoHistoriesRef.current[conversationId] = recordPromptInput(
+      current,
+      value,
+      { isComposing },
+    );
+    setPromptText(value, conversationId);
   };
 
   const syncSlashMenu = (textarea: HTMLTextAreaElement): void => {
@@ -2278,10 +2324,15 @@ export default function App() {
   };
 
   const undoPrompt = (): void => {
-    const history = undoPromptEdit(promptUndoHistoryRef.current);
-    if (history === promptUndoHistoryRef.current) return;
-    promptUndoHistoryRef.current = history;
-    setPrompt(history.current);
+    const conversationId = activeConversation?.id;
+    if (!conversationId) return;
+    const current =
+      promptUndoHistoriesRef.current[conversationId] ??
+      createPromptUndoHistory(prompt);
+    const history = undoPromptEdit(current);
+    if (history === current) return;
+    promptUndoHistoriesRef.current[conversationId] = history;
+    setPromptText(history.current, conversationId);
     window.requestAnimationFrame(() => {
       const textarea = textareaRef.current;
       if (!textarea) return;
@@ -2296,8 +2347,10 @@ export default function App() {
     for (const sessionId of ids) {
       delete historyRequests.current[sessionId];
       delete backgroundTaskRequests.current[sessionId];
+      delete promptUndoHistoriesRef.current[sessionId];
       releaseAgentSubscription(sessionId);
     }
+    setPromptDrafts((current) => removePromptDrafts(current, ids));
     setInteractions((current) => omitSessionKeys(current, ids));
     setCompactions((current) => omitSessionKeys(current, ids));
     setCompactionHistoryReady((current) => omitSessionKeys(current, ids));
@@ -2321,8 +2374,6 @@ export default function App() {
     });
     setHistoryByConversation((current) => omitSessionKeys(current, ids));
     if (activeConversation && ids.has(activeConversation.id)) {
-      resetPrompt();
-      setPromptAttachments([]);
       setResolvingInteraction(undefined);
     }
   };
@@ -2484,12 +2535,10 @@ export default function App() {
                     (candidate) => candidate.id !== conversation.id,
                   ),
                 ],
-              }
+            }
             : item,
         ),
       }));
-      resetPrompt();
-      setPromptAttachments([]);
       closeMobileNavigation();
     } catch (error) {
       showNotice(conciseError(error));
@@ -2939,14 +2988,16 @@ export default function App() {
       });
       const display = parseSkillPromptDisplay(projected.text);
       await refreshHistory(conversation.id);
-      resetPrompt(display.text);
-      setPromptAttachments(projected.attachments);
+      resetPrompt(display.text, conversation.id);
+      setPromptAttachments(projected.attachments, conversation.id);
       setPromptSkills(
         availableSkills.filter((skill) => display.skills.includes(skill.name)),
+        conversation.id,
       );
       setUndoMessageTarget(undefined);
       showNotice(t("undo.success"));
       window.requestAnimationFrame(() => {
+        if (activeConversationIdRef.current !== conversation.id) return;
         const textarea = textareaRef.current;
         if (!textarea) return;
         textarea.focus();
@@ -3080,6 +3131,8 @@ export default function App() {
     files: readonly File[],
   ): Promise<void> => {
     if (files.length === 0) return;
+    const conversationId = activeConversation?.id;
+    if (!conversationId) return;
     const remaining = MAX_PROMPT_ATTACHMENTS - promptAttachments.length;
     if (remaining <= 0) {
       showNotice(t("notice.maxAttachments", { count: MAX_PROMPT_ATTACHMENTS }));
@@ -3103,7 +3156,10 @@ export default function App() {
       }
     }
     if (prepared.length > 0) {
-      setPromptAttachments((current) => [...current, ...prepared]);
+      setPromptAttachments(
+        (current) => [...current, ...prepared],
+        conversationId,
+      );
     }
     if (files.length > remaining) {
       showNotice(t("notice.maxAttachments", { count: MAX_PROMPT_ATTACHMENTS }));
@@ -3214,9 +3270,9 @@ export default function App() {
         ),
       }));
       if (queuedAttachments === undefined) {
-        resetPrompt();
-        setPromptAttachments([]);
-        setPromptSkills([]);
+        resetPrompt("", conversationId);
+        setPromptAttachments([], conversationId);
+        setPromptSkills([], conversationId);
       }
       if (shouldCreateGoal) {
         await setSynchronizedGoalMode(conversationId, false);
@@ -3284,9 +3340,9 @@ export default function App() {
       ),
     }));
     if (queuedAttachments === undefined) {
-      resetPrompt();
-      setPromptAttachments([]);
-      setPromptSkills([]);
+      resetPrompt("", conversationId);
+      setPromptAttachments([], conversationId);
+      setPromptSkills([], conversationId);
     }
 
     try {
@@ -3552,7 +3608,7 @@ export default function App() {
     }
 
     const nextPrompt = prompt.startsWith("/") ? prompt.slice(1) : prompt;
-    resetPrompt(nextPrompt);
+    resetPrompt(nextPrompt, scope.sessionId);
     setCompactionCommandBusy(true);
     try {
       await createAgentClient(scope).beginCompaction();
@@ -3594,7 +3650,7 @@ export default function App() {
     }
 
     const nextPrompt = prompt.startsWith("/") ? prompt.slice(1) : prompt;
-    resetPrompt(nextPrompt);
+    resetPrompt(nextPrompt, source.id);
     setForkCommandBusy(true);
     try {
       const forkedId = await forkSession(source.id);
@@ -3662,7 +3718,7 @@ export default function App() {
     sideChatInstance.current = instanceId;
 
     const nextPrompt = prompt.startsWith("/") ? prompt.slice(1) : prompt;
-    resetPrompt(nextPrompt);
+    resetPrompt(nextPrompt, conversation.id);
     setSlashMenuOpen(false);
     skillDetailRequest.current += 1;
     setSkillDetailTarget(undefined);
@@ -3828,7 +3884,11 @@ export default function App() {
       !event.shiftKey
     ) {
       event.preventDefault();
-      if (canUndoPromptEdit(promptUndoHistoryRef.current)) {
+      const conversationId = activeConversation?.id;
+      const history = conversationId
+        ? promptUndoHistoriesRef.current[conversationId]
+        : undefined;
+      if (history && canUndoPromptEdit(history)) {
         undoPrompt();
       }
       return;
