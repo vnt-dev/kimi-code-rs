@@ -615,12 +615,11 @@ export function LiveToolBlock({
             </div>
           )}
           {tool.output !== undefined && (
-            <section className="tool-detail-section">
-              <span>{t("tool.result")}</span>
-              <pre className={tool.isError ? "error" : ""}>
-                {structuredValue(tool.output)}
-              </pre>
-            </section>
+            <ToolResultView
+              name={tool.name}
+              output={tool.output}
+              isError={tool.isError}
+            />
           )}
         </div>
       </Collapsible>
@@ -1581,8 +1580,26 @@ function agentToolInput(
   };
 }
 
-function AgentToolContent({ input }: { input: unknown }) {
+function AgentToolCopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="agent-tool-copy"
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1400);
+        });
+      }}
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+      {copied ? t("common.copied") : t("common.copy")}
+    </button>
+  );
+}
+
+function AgentToolContent({ input }: { input: unknown }) {
   const agent = agentToolInput(input);
   if (!agent) return null;
   return (
@@ -1590,22 +1607,43 @@ function AgentToolContent({ input }: { input: unknown }) {
       <div className="agent-tool-header">
         <Bot size={12} />
         <span className="agent-tool-title">{agent.description || "Agent"}</span>
-        <button
-          type="button"
-          className="agent-tool-copy"
-          onClick={() => {
-            void navigator.clipboard.writeText(agent.prompt).then(() => {
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1400);
-            });
-          }}
-        >
-          {copied ? <Check size={12} /> : <Copy size={12} />}
-          {copied ? t("common.copied") : t("common.copy")}
-        </button>
+        <AgentToolCopyButton text={agent.prompt} />
       </div>
       <div className="agent-tool-body markdown-body">
         <MarkdownMessage content={agent.prompt} />
+      </div>
+    </div>
+  );
+}
+
+const AGENT_RESULT_SUMMARY_MARKER = "[summary]";
+
+function agentToolResultText(output: unknown): string | undefined {
+  if (typeof output !== "string") return undefined;
+  const markerIndex = output.indexOf(AGENT_RESULT_SUMMARY_MARKER);
+  const text =
+    markerIndex >= 0
+      ? output.slice(markerIndex + AGENT_RESULT_SUMMARY_MARKER.length)
+      : output;
+  return text.replace(/^\r?\n/, "");
+}
+
+function AgentToolResult({
+  text,
+  isError,
+}: {
+  text: string;
+  isError?: boolean;
+}) {
+  return (
+    <div className="agent-tool">
+      <div className="agent-tool-header">
+        <Bot size={12} />
+        <span className="agent-tool-title">{t("tool.result")}</span>
+        <AgentToolCopyButton text={text} />
+      </div>
+      <div className={`agent-tool-body markdown-body${isError ? " error" : ""}`}>
+        <MarkdownMessage content={text} />
       </div>
     </div>
   );
@@ -1628,6 +1666,31 @@ export function ToolInputView({
     return <AgentToolContent input={input} />;
   }
   return <pre>{structuredValue(input)}</pre>;
+}
+
+export function ToolResultView({
+  name,
+  output,
+  isError,
+}: {
+  name: string | undefined;
+  output: unknown;
+  isError?: boolean;
+}) {
+  const agentText = name === "Agent" ? agentToolResultText(output) : undefined;
+  if (agentText !== undefined) {
+    return (
+      <section className="tool-detail-section">
+        <AgentToolResult text={agentText} isError={isError} />
+      </section>
+    );
+  }
+  return (
+    <section className="tool-detail-section">
+      <span>{t("tool.result")}</span>
+      <pre className={isError ? "error" : ""}>{structuredValue(output)}</pre>
+    </section>
+  );
 }
 
 function HistoryToolCard({
@@ -1684,12 +1747,11 @@ function HistoryToolCard({
             <ToolInputView name={tool.tool_name} input={tool.input} />
           </section>
           {result && (
-            <section className="tool-detail-section">
-              <span>{t("tool.result")}</span>
-              <pre className={result.is_error ? "error" : ""}>
-                {structuredValue(result.output)}
-              </pre>
-            </section>
+            <ToolResultView
+              name={tool.tool_name}
+              output={result.output}
+              isError={result.is_error}
+            />
           )}
         </div>
       </Collapsible>

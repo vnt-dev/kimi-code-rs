@@ -3233,6 +3233,10 @@ button.message-skill-chip:hover {
   font-size: 12px;
 }
 
+.agent-tool-body.error {
+  color: #c78383;
+}
+
 .live-tool-progress {
   display: flex;
   min-height: 24px;
