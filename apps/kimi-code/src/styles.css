@@ -6,6 +6,7 @@
 @import "./styles/conversation.css";
 @import "./styles/agent-activity.css";
 @import "./styles/markdown.css";
+@import "./styles/image-preview.css";
 @import "./styles/composer-status.css";
 @import "./styles/interaction-cards.css";
 @import "./styles/composer.css";

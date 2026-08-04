@@ -12,6 +12,7 @@ import remarkGfm from "remark-gfm";
 
 import { resolveMarkdownExternalUrl } from "../../markdownLinks";
 import { openExternalUrl } from "../../transport";
+import { PreviewableImage } from "./PreviewableImage";
 
 function MarkdownCodeBlock({ children }: { children: ReactNode }) {
   const className = isValidElement<{ className?: string }>(children)
@@ -53,6 +54,17 @@ export const MarkdownMessage = memo(function MarkdownMessage({
             <div className="markdown-table-wrap">
               <table>{children}</table>
             </div>
+          );
+        },
+        img({ src, alt, ...props }) {
+          if (!src) return <img {...props} alt={alt ?? ""} />;
+          return (
+            <PreviewableImage
+              {...props}
+              src={src}
+              alt={alt ?? ""}
+              path={src}
+            />
           );
         },
         a({ children, href, ...props }) {

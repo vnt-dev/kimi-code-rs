@@ -75,6 +75,7 @@ import {
 import { Collapsible } from "../Collapsible";
 import { compactionTokenTransition } from "../ChatHeader";
 import { MarkdownMessage, StreamingMarkdownMessage } from "./MarkdownMessage";
+import { PreviewableImage } from "./PreviewableImage";
 
 // Evaluated at render time so the text follows language switches.
 function promptSuggestions() {
@@ -529,10 +530,10 @@ export function LiveAssistantContent({
       return <LiveThinkingBlock content={content.think} />;
     case "image_url":
       return (
-        <img
-          className="history-media"
+        <MessageImage
           src={content.imageUrl.url}
           alt={t("message.imageAlt")}
+          path={content.imageUrl.id}
         />
       );
     case "audio_url":
@@ -1368,11 +1369,20 @@ function AssistantMessagePart({
 function MessageImage({
   src,
   alt,
+  path,
 }: {
   src: string;
   alt: string;
+  path?: string;
 }) {
-  return <img className="history-media" src={src} alt={alt} />;
+  return (
+    <PreviewableImage
+      className="history-media"
+      src={src}
+      alt={alt}
+      path={path}
+    />
+  );
 }
 
 function MessageAudio({ src }: { src: string }) {
@@ -1402,6 +1412,7 @@ export function PromptAttachmentContent({
               <MessageImage
                 src={attachment.dataUrl!}
                 alt={attachment.name}
+                path={attachment.name}
                 key={attachment.id}
               />
             );

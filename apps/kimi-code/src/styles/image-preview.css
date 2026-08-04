@@ -1,0 +1,140 @@
+.previewable-image {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.previewable-image > img {
+  cursor: zoom-in;
+}
+
+.previewable-image[data-image-path]::after {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  left: 7px;
+  padding: 5px 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 6px;
+  color: #f1f1f5;
+  background: rgba(20, 21, 24, 0.82);
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.26);
+  content: attr(data-image-path);
+  font-family: "DM Mono", monospace;
+  font-size: 9.5px;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  transform: translateY(3px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.previewable-image[data-image-path]:hover::after,
+.previewable-image[data-image-path]:focus-within::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.image-preview-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  padding: 36px;
+  place-items: center;
+  background: rgba(10, 11, 14, 0.88);
+  backdrop-filter: blur(12px);
+  z-index: 80;
+  animation: fade-in 140ms ease;
+}
+
+.image-preview-dialog {
+  position: relative;
+  display: flex;
+  width: min-content;
+  max-width: 100%;
+  max-height: 100%;
+  align-items: center;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.image-preview-dialog > img {
+  display: block;
+  width: auto;
+  max-width: min(92vw, 1600px);
+  max-height: calc(100vh - 112px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: var(--surface-deep);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.58);
+  object-fit: contain;
+}
+
+.image-preview-close {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  color: #f1f1f5;
+  background: rgba(38, 40, 46, 0.88);
+  cursor: pointer;
+}
+
+.image-preview-close:hover {
+  background: rgba(58, 60, 68, 0.96);
+}
+
+.image-preview-path {
+  width: 100%;
+  max-width: min(92vw, 960px);
+  padding: 6px 9px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  color: #c9c9d1;
+  background: rgba(38, 40, 46, 0.9);
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .image-preview-backdrop {
+    padding: 18px;
+  }
+
+  .image-preview-dialog > img {
+    max-width: calc(100vw - 36px);
+    max-height: calc(100vh - 96px);
+  }
+
+  .image-preview-close {
+    top: 10px;
+    right: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-preview-backdrop {
+    animation: none;
+  }
+
+  .previewable-image[data-image-path]::after {
+    transition: none;
+  }
+}
