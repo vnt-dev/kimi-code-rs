@@ -1,125 +1,51 @@
 import {
-  type CSSProperties,
-  type FormEvent,
-  type KeyboardEvent,
-  type MouseEvent,
-  type PointerEvent as ReactPointerEvent,
-  type ClipboardEvent,
-  type ChangeEvent,
-  type UIEvent as ReactUIEvent,
-  type WheelEvent,
+  Folder,
+  Menu,
+  SquarePen
+} from "lucide-react";
+import {
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type FormEvent,
+  type KeyboardEvent
 } from "react";
 import {
-  Archive,
-  ArrowUp,
-  Bot,
-  BrainCircuit,
-  Check,
-  ChevronRight,
-  CircleUserRound,
-  ClipboardList,
-  Copy,
-  FileCode2,
-  Folder,
-  FolderGit2,
-  FolderMinus,
-  LogIn,
-  Menu,
-  MessageSquareText,
-  Minimize2,
-  MoreHorizontal,
-  Package,
-  Paperclip,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Pause,
-  Play,
-  Plus,
-  ShieldCheck,
-  Sparkles,
-  SquarePen,
-  Target,
-  X,
-} from "lucide-react";
-import {
-  archiveSession,
   createAgentClient,
-  createOrTouchWorkspace,
   forkSession,
   getSharedGoalMode,
-  getSkillContent,
-  listSkills,
   listWorkspaceSessions,
   prepareSession,
-  removeWorkspace,
-  setDefaultModel,
-  setSharedGoalMode,
   subscribeAgentEvents,
-  unsubscribeAgentEvents,
+  unsubscribeAgentEvents
 } from "./agentRpc";
+import { subscribeToAppEvents } from "./app/appEventSubscriptions";
 import {
-  conversationFromSession,
-  conversationFromSummary,
-  getActive,
-  loadDesktopState,
-  projectFromWorkspace,
-} from "./store";
-import { mergeDesktopInventory } from "./desktopInventory";
+  BACKGROUND_TASK_LIST_LIMIT,
+  BACKGROUND_TASK_OUTPUT_TAIL,
+  LIVE_TURN_HANDOFF_MS,
+  SLASH_COMMAND_COUNT,
+  fetchConversationHistory,
+  newQueuedPromptId,
+  type AgentSubscription,
+  type ConversationHistory,
+  type PendingAgentSubscription
+} from "./app/appUtils";
+import { createWorkspaceActions } from "./app/createWorkspaceActions";
+import { useChatScroll } from "./app/useChatScroll";
+import { useConversationResources } from "./app/useConversationResources";
+import { useResponsiveSidebar } from "./app/useResponsiveSidebar";
 import {
-  normalizeThinkingLevel,
-  thinkingLevelDescription,
-  thinkingLevelsForModel,
-} from "./modelControls";
+  applyColorScheme,
+  loadColorScheme,
+  saveColorScheme,
+  type ColorScheme,
+} from "./appearance";
 import {
-  isSameLiveUserMessage,
-  projectLiveUserMessage,
-} from "./liveUserMessage";
-import {
-  isUpwardChatScrollKey,
-  resolveChatFollowState,
-} from "./chatScroll";
-import { buildSkillPromptText, parseSkillPromptDisplay } from "./prompt/skills";
-import {
-  MAX_PROMPT_ATTACHMENTS,
-  buildAgentPromptInput,
-  preparePromptAttachment,
-  promptAttachmentKind,
-} from "./prompt/attachments";
-import { conciseError } from "./utils/errors";
-import {
-  formatBytes,
-  formatContext,
-} from "./utils/format";
-import {
-  MAIN_AGENT_ID,
-  inFlightTurnFromUserMessage,
-  isTurnRunning,
-  liveTurnStatusFromSubmit,
-  newInFlightTurn,
-  readPromptSubmittedEvent,
-  reduceAgentChatEvent,
-  reduceQueuedAgentChatEvents,
-  reduceQueuedSubagentChatEvents,
-  type GoalModeChangedEvent,
-  type InFlightTurn,
-  type PromptAttachment,
-  type QueuedAgentChatEvent,
-  type QueuedPrompt,
-  type RemoteQueuedPrompt,
-  type SubagentLiveTurns,
-} from "./chat/liveTurns";
-import {
-  displayMessageText,
-  messageText,
-} from "./chat/messages";
-import {
-  completedTurnMessageId,
   finalResponseMessage,
   groupHistoryMessages,
   historyBeforeInFlightTurn,
@@ -127,56 +53,28 @@ import {
   isVisibleHistoryMessage,
   mergeHistoryToolResults,
   messageOriginKind,
-  type RenderMessage,
+  type RenderMessage
 } from "./chat/history";
 import {
-  isAgentChatEvent,
-  isTaskLifecycleEventType,
-  readAgentTaskInfo,
-  readTodoItems,
-} from "./chat/eventParsing";
+  isTurnRunning,
+  liveTurnStatusFromSubmit,
+  newInFlightTurn,
+  type InFlightTurn,
+  type PromptAttachment,
+  type QueuedAgentChatEvent,
+  type QueuedPrompt,
+  type RemoteQueuedPrompt,
+  type SubagentLiveTurns
+} from "./chat/liveTurns";
 import {
-  canUndoPromptEdit,
-  createPromptUndoHistory,
-  recordPromptInput,
-  undoPromptEdit,
-  type PromptUndoHistory,
-} from "./promptUndo";
+  displayMessageText,
+  messageText,
+} from "./chat/messages";
 import {
-  promptDraftFor,
-  removePromptDrafts,
-  updatePromptDraft,
-  type PromptDrafts,
-  type PromptDraftUpdater,
-} from "./promptDrafts";
-import {
-  applyColorScheme,
-  loadColorScheme,
-  saveColorScheme,
-  type ColorScheme,
-} from "./appearance";
-import SettingsDialog from "./SettingsDialog";
-import { AccountUsagePopover } from "./components/AccountUsagePopover";
-import { RemixSparklingLineIcon } from "./components/RemixSparklingLineIcon";
-import { ProjectLanding } from "./components/ProjectLanding";
-import {
-  BackgroundTaskProgress,
-  ChatHeaderTitle,
-  CompactionNotice,
-  ContextUsageIndicator,
-  TodoProgress,
-  ToolbarSelect,
-  WindowTitleBar,
-} from "./components/ChatHeader";
-import {
-  DirectoryPickerDialog,
-  GoalEditDialog,
-  LoginDialog,
-  RemovalDialog,
-  UndoMessageDialog,
-  WebCredentialDialog,
-  type RemovalTarget,
+  type RemovalTarget
 } from "./components/AppDialogs";
+import { AppOverlays } from "./components/AppOverlays";
+import { AppSidebar } from "./components/AppSidebar";
 import {
   ConversationOutline,
   compactOutlineText,
@@ -185,18 +83,19 @@ import {
   type ConversationOutlineItem,
 } from "./components/chat/ConversationOutline";
 import {
-  ApprovalCard,
-  PlanReviewCard,
-  QuestionCard,
-  isPlanReviewInteraction,
-} from "./components/InteractionCards";
-import {
   HistoryTurnView,
   LiveTurnView,
   QueuedPromptList,
   RemoteQueuedPromptList,
   Welcome,
 } from "./components/chat/ConversationViews";
+import {
+  ChatHeaderTitle,
+  CompactionNotice,
+  WindowTitleBar
+} from "./components/ChatHeader";
+import { ComposerDock } from "./components/ComposerDock";
+import { ProjectLanding } from "./components/ProjectLanding";
 import {
   CompactionSummarySidebar,
   SideChatSidebar,
@@ -205,24 +104,7 @@ import {
   type SideChatState,
   type SkillDetailTarget,
 } from "./components/sidebars/ChatSidebars";
-import {
-  TRANSPORT_AUTH_REQUIRED,
-  TRANSPORT_REPLAY_RESET,
-  getAppVersion,
-  invoke,
-  isDesktop,
-  listen,
-  pickNativeDirectory,
-  setWebCredential,
-  webCredentialRequired,
-  type ReplayResetEvent,
-} from "./transport";
-import {
-  MOBILE_LAYOUT_MAX_WIDTH,
-  MOBILE_LAYOUT_QUERY,
-  resolveSidebarCollapsed,
-  shouldUseWebMobileLayout,
-} from "./responsive";
+import { mergeDesktopInventory } from "./desktopInventory";
 import {
   applyLanguage,
   loadLanguage,
@@ -232,15 +114,44 @@ import {
   type Language,
 } from "./i18n";
 import {
-  isSubagentEvent,
-  mergeSessionSubagentEvent,
-  type SessionSubagentRuns,
+  normalizeThinkingLevel,
+  thinkingLevelsForModel
+} from "./modelControls";
+import {
+  buildAgentPromptInput
+} from "./prompt/attachments";
+import { buildSkillPromptText } from "./prompt/skills";
+import {
+  promptDraftFor,
+  updatePromptDraft,
+  type PromptDraftUpdater,
+  type PromptDrafts
+} from "./promptDrafts";
+import {
+  canUndoPromptEdit,
+  createPromptUndoHistory,
+  recordPromptInput,
+  undoPromptEdit,
+  type PromptUndoHistory,
+} from "./promptUndo";
+import {
+  conversationFromSession,
+  conversationFromSummary,
+  getActive,
+  loadDesktopState
+} from "./store";
+import {
+  type SessionSubagentRuns
 } from "./subagentEvents";
+import {
+  getAppVersion,
+  invoke,
+  setWebCredential,
+  webCredentialRequired
+} from "./transport";
 import type {
   AccountUsage,
-  AgentChatEventEnvelope,
   AgentInteraction,
-  AgentInteractionsEvent,
   AgentUsageStatus,
   AuthStatus,
   BackgroundTaskView,
@@ -249,133 +160,17 @@ import type {
   DesktopState,
   DeviceCode,
   GoalSnapshot,
-  MessagePage,
   Model,
-  PermissionMode,
   PlanData,
-  Project,
   ProtocolMessage,
   SkillContent,
   SkillDescriptor,
   TodoItem,
-  TurnFileChange,
+  TurnFileChange
 } from "./types";
-
-const MAX_PROMPT_SKILLS = 8;
-const SLASH_COMMAND_COUNT = 3;
-const LIVE_TURN_HANDOFF_MS = 200;
-const BACKGROUND_TASK_LIST_LIMIT = 50;
-const BACKGROUND_TASK_OUTPUT_TAIL = 16_384;
-const BACKGROUND_TASK_DETAIL_TAIL = 65_536;
-interface ConversationHistory {
-  conversationId: string;
-  items: ProtocolMessage[];
-  loading: boolean;
-  error?: string;
-}
-
-function newQueuedPromptId(): string {
-  return typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-interface AgentSubscription {
-  agentId: string;
-  subscriptionId: string;
-}
-
-interface PendingAgentSubscription {
-  agentId: string;
-  promise: Promise<string>;
-}
-
-function fetchConversationHistory(
-  conversationId: string,
-): Promise<MessagePage> {
-  return invoke<MessagePage>("list_conversation_messages", {
-    sessionId: conversationId,
-  });
-}
-
-function omitSessionKeys<T>(
-  current: Record<string, T>,
-  sessionIds: ReadonlySet<string>,
-): Record<string, T> {
-  let changed = false;
-  const next = { ...current };
-  for (const sessionId of sessionIds) {
-    if (!(sessionId in next)) continue;
-    delete next[sessionId];
-    changed = true;
-  }
-  return changed ? next : current;
-}
-
-function nestedVerticalScroller(
-  target: EventTarget | null,
-  root: HTMLElement,
-): HTMLElement | undefined {
-  let element = target instanceof HTMLElement ? target : undefined;
-  while (element && element !== root) {
-    const overflowY = window.getComputedStyle(element).overflowY;
-    if (
-      element.scrollHeight > element.clientHeight + 1 &&
-      (overflowY === "auto" ||
-        overflowY === "scroll" ||
-        overflowY === "overlay")
-    ) {
-      return element;
-    }
-    element = element.parentElement ?? undefined;
-  }
-  return undefined;
-}
-
-function nestedScrollerConsumesWheel(
-  target: EventTarget | null,
-  root: HTMLElement,
-  deltaY: number,
-): boolean {
-  let element = target instanceof HTMLElement ? target : undefined;
-  while (element && element !== root) {
-    const style = window.getComputedStyle(element);
-    const scrollable =
-      element.scrollHeight > element.clientHeight + 1 &&
-      (style.overflowY === "auto" ||
-        style.overflowY === "scroll" ||
-        style.overflowY === "overlay");
-    if (scrollable) {
-      if (
-        style.overscrollBehaviorY === "contain" ||
-        style.overscrollBehaviorY === "none"
-      ) {
-        return true;
-      }
-      if (deltaY < 0 && element.scrollTop > 1) return true;
-      if (
-        deltaY > 0 &&
-        element.scrollTop + element.clientHeight < element.scrollHeight - 1
-      ) {
-        return true;
-      }
-    }
-    element = element.parentElement ?? undefined;
-  }
-  return false;
-}
+import { conciseError } from "./utils/errors";
 
 export default function App() {
-  const desktopRuntime = useMemo(isDesktop, []);
-  const [mobileQueryMatches, setMobileQueryMatches] = useState(() =>
-    typeof window.matchMedia === "function"
-      ? window.matchMedia(MOBILE_LAYOUT_QUERY).matches
-      : window.innerWidth <= MOBILE_LAYOUT_MAX_WIDTH,
-  );
-  const mobileLayout = shouldUseWebMobileLayout(
-    desktopRuntime,
-    mobileQueryMatches,
-  );
   const [desktop, setDesktop] = useState<DesktopState>({ projects: [] });
   const [auth, setAuth] = useState<AuthStatus>({
     loggedIn: false,
@@ -407,10 +202,6 @@ export default function App() {
   const [remoteQueuedPrompts, setRemoteQueuedPrompts] = useState<
     Record<string, RemoteQueuedPrompt[]>
   >({});
-  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] =
-    useState(false);
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [mobileViewportHeight, setMobileViewportHeight] = useState<number>();
   const [loginOpen, setLoginOpen] = useState(false);
   const [webAuthOpen, setWebAuthOpen] = useState(webCredentialRequired);
   const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
@@ -478,7 +269,6 @@ export default function App() {
   const [historyByConversation, setHistoryByConversation] = useState<
     Record<string, ConversationHistory>
   >({});
-  const [activeOutlineTurnId, setActiveOutlineTurnId] = useState<string>();
   const [inFlightTurns, setInFlightTurns] = useState<
     Record<string, InFlightTurn>
   >({});
@@ -493,24 +283,6 @@ export default function App() {
   const promptCompositionRef = useRef(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const composerAddRef = useRef<HTMLDivElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const messageStackRef = useRef<HTMLDivElement>(null);
-  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
-  const followLatestMessageRef = useRef(true);
-  const lastChatScrollTopRef = useRef(0);
-  const lastChatScrollHeightRef = useRef(0);
-  const chatScrollFrameRef = useRef<number | undefined>(undefined);
-  const chatScrollUpIntentRef = useRef(false);
-  const chatScrollIntentFrameRef = useRef<number | undefined>(undefined);
-  const chatDisclosureReflowRef = useRef(false);
-  const chatDisclosureTimerRef = useRef<number | undefined>(undefined);
-  const chatPointerScrollingRef = useRef(false);
-  const chatPointerStartRef = useRef<{
-    pointerId: number;
-    clientX: number;
-    clientY: number;
-  } | undefined>(undefined);
-  const outlineScrollFrameRef = useRef<number | undefined>(undefined);
   const profileRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
   const accountUsageRequest = useRef(0);
@@ -530,79 +302,19 @@ export default function App() {
   const sideChatAgentId = useRef<string | undefined>(undefined);
   const sideChatAgentIds = useRef(new Set<string>());
 
-  const sidebarCollapsed = resolveSidebarCollapsed(
+  const {
+    desktopRuntime,
     mobileLayout,
-    desktopSidebarCollapsed,
     mobileSidebarOpen,
-  );
+    mobileViewportHeight,
+    sidebarCollapsed,
+    mobileMenuButtonRef,
+    closeMobileNavigation,
+    openSidebar,
+    toggleSidebar,
+    expandDesktopSidebar,
+  } = useResponsiveSidebar(setProfileOpen);
 
-  const closeMobileNavigation = useCallback((): void => {
-    if (!mobileLayout) return;
-    setMobileSidebarOpen(false);
-    setProfileOpen(false);
-    window.requestAnimationFrame(() => mobileMenuButtonRef.current?.focus());
-  }, [mobileLayout]);
-
-  const openSidebar = useCallback((): void => {
-    setProfileOpen(false);
-    if (mobileLayout) setMobileSidebarOpen(true);
-    else setDesktopSidebarCollapsed(false);
-  }, [mobileLayout]);
-
-  const toggleSidebar = useCallback((): void => {
-    setProfileOpen(false);
-    if (mobileLayout) {
-      if (mobileSidebarOpen) closeMobileNavigation();
-      else setMobileSidebarOpen(true);
-    } else {
-      setDesktopSidebarCollapsed((collapsed) => !collapsed);
-    }
-  }, [closeMobileNavigation, mobileLayout, mobileSidebarOpen]);
-
-  useEffect(() => {
-    if (desktopRuntime || typeof window.matchMedia !== "function") return;
-    const query = window.matchMedia(MOBILE_LAYOUT_QUERY);
-    const sync = (): void => setMobileQueryMatches(query.matches);
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
-  }, [desktopRuntime]);
-
-  useEffect(() => {
-    setMobileSidebarOpen(false);
-    setProfileOpen(false);
-  }, [mobileLayout]);
-
-  useEffect(() => {
-    if (!mobileLayout) {
-      setMobileViewportHeight(undefined);
-      return;
-    }
-    const viewport = window.visualViewport;
-    const sync = (): void => {
-      setMobileViewportHeight(
-        Math.round(viewport?.height ?? window.innerHeight),
-      );
-    };
-    sync();
-    window.addEventListener("resize", sync);
-    viewport?.addEventListener("resize", sync);
-    return () => {
-      window.removeEventListener("resize", sync);
-      viewport?.removeEventListener("resize", sync);
-    };
-  }, [mobileLayout]);
-
-  useEffect(() => {
-    if (!mobileLayout || !mobileSidebarOpen) return;
-    const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      closeMobileNavigation();
-    };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [closeMobileNavigation, mobileLayout, mobileSidebarOpen]);
 
   const { project: activeProject, conversation: activeConversation } = useMemo(
     () => getActive(desktop),
@@ -1357,578 +1069,45 @@ export default function App() {
     [],
   );
 
-  useEffect(() => {
-    const refreshDesktopInventory = async (): Promise<void> => {
-      const request = desktopInventoryRequest.current + 1;
-      desktopInventoryRequest.current = request;
-      try {
-        const inventory = await loadDesktopState();
-        if (request !== desktopInventoryRequest.current) return;
-        setDesktop((current) => mergeDesktopInventory(current, inventory));
-      } catch {
-        // A later state-change event or explicit action will retry the refresh.
-      }
-    };
-    const refreshConversationAfterUndo = async (
-      conversationId: string,
-    ): Promise<void> => {
-      const request = (historyRequests.current[conversationId] ?? 0) + 1;
-      historyRequests.current[conversationId] = request;
-      try {
-        const page = await fetchConversationHistory(conversationId);
-        if (request !== historyRequests.current[conversationId]) return;
-        setHistoryByConversation((current) => ({
-          ...current,
-          [conversationId]: {
-            conversationId,
-            items: [...page.items].reverse(),
-            loading: false,
-          },
-        }));
-        setInFlightTurns((current) => {
-          const turn = current[conversationId];
-          if (!turn || isTurnRunning(turn)) return current;
-          const next = { ...current };
-          delete next[conversationId];
-          inFlightTurnsRef.current = next;
-          return next;
-        });
-        setUndoMessageTarget((current) =>
-          current?.session_id === conversationId ? undefined : current,
-        );
-      } catch (error) {
-        if (request !== historyRequests.current[conversationId]) return;
-        setHistoryByConversation((current) => ({
-          ...current,
-          [conversationId]: {
-            conversationId,
-            items: current[conversationId]?.items ?? [],
-            loading: false,
-            error: conciseError(error),
-          },
-        }));
-      }
-    };
-    const unlistenDevice = listen<DeviceCode>("auth-device-code", (event) => {
-      setDeviceCode(event.payload);
-      setLoginOpen(true);
-    });
-    const unlistenAuthRequired = listen(TRANSPORT_AUTH_REQUIRED, () => {
-      setWebAuthOpen(true);
-    });
-    const unlistenReplayReset = listen<ReplayResetEvent>(
-      TRANSPORT_REPLAY_RESET,
-      async (event) => {
-        await refreshDesktopInventory();
-        const scopes = new Map(
-          event.payload.scopes.map((scope) => [scope.sessionId, scope]),
-        );
-        await Promise.all(
-          [...scopes.values()].map(async (scope) => {
-            try {
-              const permission = await createAgentClient(scope).getPermission();
-              updateDesktop((current) => ({
-                ...current,
-                projects: current.projects.map((project) => ({
-                  ...project,
-                  conversations: project.conversations.map((conversation) =>
-                    conversation.id === scope.sessionId
-                      ? { ...conversation, permissionMode: permission.mode }
-                      : conversation,
-                  ),
-                })),
-              }));
-            } catch {
-              // Session preparation or a later status event will retry it.
-            }
-          }),
-        );
-        const sessionIds = new Set(
-          event.payload.scopes.map((scope) => scope.sessionId),
-        );
-        if (sessionIds.size === 0) return;
-        if (agentChatEventFrame.current !== undefined) {
-          window.cancelAnimationFrame(agentChatEventFrame.current);
-          agentChatEventFrame.current = undefined;
-        }
-        queuedAgentChatEvents.current = queuedAgentChatEvents.current.filter(
-          (queued) => !sessionIds.has(queued.sessionId),
-        );
-        setInFlightTurns((current) => {
-          const next = omitSessionKeys(current, sessionIds);
-          inFlightTurnsRef.current = next;
-          return next;
-        });
-        setSubagentLiveTurns((current) => omitSessionKeys(current, sessionIds));
-        setSubagentRuns((current) => omitSessionKeys(current, sessionIds));
-        setInteractions((current) => omitSessionKeys(current, sessionIds));
-        setRemoteQueuedPrompts((current) =>
-          omitSessionKeys(current, sessionIds),
-        );
-
-        await Promise.all(
-          [...sessionIds].map(async (conversationId) => {
-            const request =
-              (historyRequests.current[conversationId] ?? 0) + 1;
-            historyRequests.current[conversationId] = request;
-            try {
-              const page = await fetchConversationHistory(conversationId);
-              if (request !== historyRequests.current[conversationId]) return;
-              setHistoryByConversation((current) => ({
-                ...current,
-                [conversationId]: {
-                  conversationId,
-                  items: [...page.items].reverse(),
-                  loading: false,
-                },
-              }));
-            } catch (error) {
-              if (request !== historyRequests.current[conversationId]) return;
-              setHistoryByConversation((current) => ({
-                ...current,
-                [conversationId]: {
-                  conversationId,
-                  items: current[conversationId]?.items ?? [],
-                  loading: false,
-                  error: conciseError(error),
-                },
-              }));
-            }
-          }),
-        );
-      },
-    );
-    const unlistenDesktopStateChanged = listen(
-      "desktop-state-changed",
-      refreshDesktopInventory,
-    );
-    const unlistenGoalModeChanged = listen<GoalModeChangedEvent>(
-      "goal-mode-changed",
-      (event) => {
-        const { sessionId, enabled } = event.payload;
-        setGoalModeBySession((current) => ({
-          ...current,
-          [sessionId]: enabled,
-        }));
-      },
-    );
-    const unlistenBrowserError = listen<string>(
-      "auth-browser-open-failed",
-      (event) => {
-        showNotice(t("notice.browserOpenFailed", { error: event.payload }));
-      },
-    );
-    const unlistenChatEvent = listen<AgentChatEventEnvelope>(
-      "agent-event",
-      (event) => {
-        const payload = event.payload;
-        const isMainAgentEvent = payload.agentId === MAIN_AGENT_ID;
-        const isSideChatEvent =
-          payload.agentId === sideChatAgentId.current;
-        const isSideChatAgent =
-          sideChatAgentIds.current.has(payload.agentId);
-        if (
-          isMainAgentEvent &&
-          payload.event.type === "conversation.undone"
-        ) {
-          void refreshConversationAfterUndo(payload.sessionId);
-        }
-        const submitted = readPromptSubmittedEvent(payload.event);
-        if (submitted && isMainAgentEvent && !isSideChatAgent) {
-          const projected = inFlightTurnFromUserMessage(submitted);
-          const existing = inFlightTurnsRef.current[payload.sessionId];
-          if (
-            !existing ||
-            isSameLiveUserMessage(existing, submitted) ||
-            (existing.status === "queued" && !existing.promptId)
-          ) {
-            setInFlightTurns((current) => {
-              const active = current[payload.sessionId];
-              if (
-                active &&
-                !isSameLiveUserMessage(active, submitted) &&
-                !(active.status === "queued" && !active.promptId)
-              ) {
-                return current;
-              }
-              const merged = {
-                ...projected,
-                ...active,
-                promptId: submitted.promptId,
-                userMessageId: submitted.userMessageId,
-                prompt: projected.prompt,
-                attachments: projected.attachments,
-                skills: projected.skills,
-                createdAt: projected.createdAt,
-              };
-              const next = { ...current, [payload.sessionId]: merged };
-              inFlightTurnsRef.current = next;
-              return next;
-            });
-          } else {
-            setRemoteQueuedPrompts((current) => {
-              const queued = current[payload.sessionId] ?? [];
-              if (queued.some((item) => item.promptId === submitted.promptId)) {
-                return current;
-              }
-              return {
-                ...current,
-                [payload.sessionId]: [
-                  ...queued,
-                  {
-                    promptId: submitted.promptId,
-                    userMessageId: submitted.userMessageId,
-                    text: projected.prompt,
-                    attachments: projected.attachments,
-                    skills: projected.skills,
-                    createdAt: projected.createdAt,
-                  },
-                ],
-              };
-            });
-          }
-        }
-        if (
-          isMainAgentEvent &&
-          (payload.event.type === "prompt.completed" ||
-            payload.event.type === "prompt.aborted") &&
-          typeof payload.event.promptId === "string"
-        ) {
-          const promptId = payload.event.promptId;
-          setRemoteQueuedPrompts((current) => ({
-            ...current,
-            [payload.sessionId]: (current[payload.sessionId] ?? []).filter(
-              (item) => item.promptId !== promptId,
-            ),
-          }));
-        }
-        if (isAgentChatEvent(payload.event)) {
-          const chatEvent = payload.event;
-          if (
-            isMainAgentEvent &&
-            chatEvent.type === "turn.started" &&
-            chatEvent.userMessage
-          ) {
-            const promptId = chatEvent.userMessage.promptId;
-            setRemoteQueuedPrompts((current) => ({
-              ...current,
-              [payload.sessionId]: (current[payload.sessionId] ?? []).filter(
-                (item) => item.promptId !== promptId,
-              ),
-            }));
-          }
-          if (isSideChatEvent) {
-            setSideChat((current) => {
-              if (
-                !current ||
-                current.parentSessionId !== payload.sessionId
-              ) {
-                return current;
-              }
-              const turns = [...current.turns];
-              const last = turns.at(-1);
-              if (!last) return current;
-              turns[turns.length - 1] = reduceAgentChatEvent(
-                last,
-                chatEvent,
-              );
-              return { ...current, turns, starting: false };
-            });
-          } else if (!isSideChatAgent) {
-            queuedAgentChatEvents.current.push({
-              sessionId: payload.sessionId,
-              agentId: payload.agentId,
-              event: chatEvent,
-            });
-            if (agentChatEventFrame.current === undefined) {
-              agentChatEventFrame.current = window.requestAnimationFrame(() => {
-                agentChatEventFrame.current = undefined;
-                const queue = queuedAgentChatEvents.current;
-                queuedAgentChatEvents.current = [];
-                if (queue.length > 0) {
-                  const mainEvents = queue.filter(
-                    (queued) => queued.agentId === MAIN_AGENT_ID,
-                  );
-                  const subagentEvents = queue.filter(
-                    (queued) => queued.agentId !== MAIN_AGENT_ID,
-                  );
-                  if (mainEvents.length > 0) {
-                    setInFlightTurns((current) =>
-                      reduceQueuedAgentChatEvents(current, mainEvents),
-                    );
-                  }
-                  if (subagentEvents.length > 0) {
-                    setSubagentLiveTurns((current) =>
-                      reduceQueuedSubagentChatEvents(current, subagentEvents),
-                    );
-                  }
-                }
-              });
-            }
-          }
-        }
-        if (!isSideChatAgent && isSubagentEvent(payload.event)) {
-          const subagentEvent = payload.event;
-          setSubagentRuns((current) =>
-            mergeSessionSubagentEvent(
-              current,
-              payload.sessionId,
-              subagentEvent,
-            ),
-          );
-        }
-        if (
-          isMainAgentEvent &&
-          isTaskLifecycleEventType(payload.event.type)
-        ) {
-          const started =
-            payload.event.type === "task.started" ||
-            payload.event.type === "background.task.started";
-          const info = readAgentTaskInfo(
-            payload.event.info,
-            started ? "running" : undefined,
-          );
-          if (info) {
-            setBackgroundTasks((current) => {
-              const tasks = current[payload.sessionId] ?? [];
-              const previous = tasks.find(
-                (task) => task.taskId === info.taskId,
-              );
-              const nextTask: BackgroundTaskView = {
-                ...previous,
-                ...info,
-              };
-              const nextTasks = [
-                nextTask,
-                ...tasks.filter((task) => task.taskId !== info.taskId),
-              ].sort((left, right) => right.startedAt - left.startedAt);
-              return {
-                ...current,
-                [payload.sessionId]: nextTasks,
-              };
-            });
-          }
-          const taskScope = {
-            sessionId: payload.sessionId,
-            agentId: payload.agentId,
-          };
-          void refreshBackgroundTasks(taskScope).catch(() => {
-            // The event payload already supplied the lifecycle update.
-          });
-          if (
-            info?.kind === "process" &&
-            info.detached !== false &&
-            !started
-          ) {
-            void loadBackgroundTaskOutput(
-              taskScope,
-              info.taskId,
-              BACKGROUND_TASK_DETAIL_TAIL,
-            );
-          }
-        }
-        if (
-          isMainAgentEvent &&
-          payload.event.type.startsWith("compaction.")
-        ) {
-          const phase = payload.event.type.slice("compaction.".length);
-          if (
-            phase === "started" ||
-            phase === "completed" ||
-            phase === "cancelled"
-          ) {
-            if (phase === "started") {
-              setCompactionHistoryReady((current) => ({
-                ...current,
-                [payload.sessionId]: false,
-              }));
-            }
-            const result =
-              payload.event.result &&
-              typeof payload.event.result === "object"
-                ? (payload.event.result as Record<string, unknown>)
-                : undefined;
-            setCompactions((current) => ({
-              ...current,
-              [payload.sessionId]: {
-                phase,
-                trigger:
-                  payload.event.trigger === "manual" ||
-                  payload.event.trigger === "auto"
-                    ? payload.event.trigger
-                    : undefined,
-                compactedCount:
-                  typeof result?.compactedCount === "number"
-                    ? result.compactedCount
-                    : undefined,
-                tokensBefore:
-                  typeof result?.tokensBefore === "number"
-                    ? result.tokensBefore
-                    : undefined,
-                tokensAfter:
-                  typeof result?.tokensAfter === "number"
-                    ? result.tokensAfter
-                    : undefined,
-              },
-            }));
-          }
-        }
-        if (isMainAgentEvent && payload.event.type === "todo.updated") {
-          const todos = readTodoItems(payload.event.todos);
-          if (todos) {
-            setSessionTodos((current) => ({
-              ...current,
-              [payload.sessionId]: todos,
-            }));
-          }
-        }
-        if (isMainAgentEvent && payload.event.type === "goal.updated") {
-          const snapshot = payload.event.snapshot;
-          if (
-            snapshot === null ||
-            (typeof snapshot === "object" &&
-              snapshot !== null &&
-              typeof (snapshot as { objective?: unknown }).objective ===
-                "string")
-          ) {
-            setGoals((current) => ({
-              ...current,
-              [payload.sessionId]: snapshot as GoalSnapshot | null,
-            }));
-          }
-        }
-        if (
-          payload.event.type === "agent.status.updated" &&
-          isMainAgentEvent &&
-          typeof payload.event.planMode === "boolean"
-        ) {
-          void createAgentClient({
-            sessionId: payload.sessionId,
-            agentId: payload.agentId,
-          })
-            .getPlan()
-            .then((plan) => {
-              setPlans((current) => ({
-                ...current,
-                [payload.sessionId]: plan,
-              }));
-            })
-            .catch((error) => showNotice(conciseError(error)));
-        }
-        if (
-          payload.event.type === "agent.status.updated" &&
-          isMainAgentEvent &&
-          typeof payload.event.swarmMode === "boolean"
-        ) {
-          setSwarmModeBySession((current) => ({
-            ...current,
-            [payload.sessionId]: payload.event.swarmMode as boolean,
-          }));
-        }
-        if (payload.event.type === "agent.status.updated" && isMainAgentEvent) {
-          const model =
-            typeof payload.event.model === "string"
-              ? payload.event.model
-              : undefined;
-          const thinkingLevel =
-            typeof payload.event.thinkingEffort === "string"
-              ? payload.event.thinkingEffort
-              : undefined;
-          const permission = ["manual", "auto", "yolo"].includes(
-            String(payload.event.permission),
-          )
-            ? (payload.event.permission as PermissionMode)
-            : undefined;
-          if (model || thinkingLevel || permission) {
-            updateDesktop((current) => ({
-              ...current,
-              projects: current.projects.map((project) => ({
-                ...project,
-                conversations: project.conversations.map((conversation) =>
-                  conversation.id === payload.sessionId
-                    ? {
-                        ...conversation,
-                        ...(model ? { modelId: model } : {}),
-                        ...(thinkingLevel ? { thinkingLevel } : {}),
-                        ...(permission ? { permissionMode: permission } : {}),
-                      }
-                    : conversation,
-                ),
-              })),
-            }));
-          }
-        }
-        if (
-          payload.event.type === "session.meta.updated" &&
-          isMainAgentEvent &&
-          typeof payload.event.title === "string"
-        ) {
-          const title = payload.event.title;
-          updateDesktop((current) => ({
-            ...current,
-            projects: current.projects.map((project) => ({
-              ...project,
-              conversations: project.conversations.map((conversation) =>
-                conversation.id === payload.sessionId
-                  ? { ...conversation, title }
-                  : conversation,
-              ),
-            })),
-          }));
-        }
-        if (
-          payload.event.type === "agent.status.updated" &&
-          isMainAgentEvent &&
-          payload.event.usage &&
-          typeof payload.event.usage === "object"
-        ) {
-          setAgentUsages((current) => ({
-            ...current,
-            [payload.sessionId]: payload.event.usage as AgentUsageStatus,
-          }));
-        }
-        if (
-          isMainAgentEvent &&
-          (payload.event.type === "agent.status.updated" ||
-            payload.event.type === "context.spliced")
-        ) {
-          void invoke<ContextUsage | null>("conversation_context_usage", {
-            sessionId: payload.sessionId,
-          }).then((usage) => {
-            if (!usage) return;
-            setContextUsages((current) => ({
-              ...current,
-              [payload.sessionId]: usage,
-            }));
-          });
-        }
-      },
-    );
-    const unlistenInteractions = listen<AgentInteractionsEvent>(
-      "agent-interactions",
-      (event) => {
-        setInteractions((current) => ({
-          ...current,
-          [event.payload.sessionId]: event.payload.interactions,
-        }));
-      },
-    );
-    return () => {
-      if (agentChatEventFrame.current !== undefined) {
-        window.cancelAnimationFrame(agentChatEventFrame.current);
-        agentChatEventFrame.current = undefined;
-      }
-      queuedAgentChatEvents.current = [];
-      void unlistenDevice.then((unlisten) => unlisten());
-      void unlistenAuthRequired.then((unlisten) => unlisten());
-      void unlistenReplayReset.then((unlisten) => unlisten());
-      void unlistenDesktopStateChanged.then((unlisten) => unlisten());
-      void unlistenGoalModeChanged.then((unlisten) => unlisten());
-      void unlistenBrowserError.then((unlisten) => unlisten());
-      void unlistenChatEvent.then((unlisten) => unlisten());
-      void unlistenInteractions.then((unlisten) => unlisten());
-    };
-  }, []);
+  useEffect(
+    () =>
+      subscribeToAppEvents({
+        agentChatEventFrame,
+        desktopInventoryRequest,
+        historyRequests,
+        inFlightTurnsRef,
+        queuedAgentChatEvents,
+        sideChatAgentId,
+        sideChatAgentIds,
+        loadBackgroundTaskOutput,
+        refreshBackgroundTasks,
+        setAgentUsages,
+        setBackgroundTasks,
+        setCompactionHistoryReady,
+        setCompactions,
+        setContextUsages,
+        setDesktop,
+        setDeviceCode,
+        setGoalModeBySession,
+        setGoals,
+        setHistoryByConversation,
+        setInFlightTurns,
+        setInteractions,
+        setLoginOpen,
+        setPlans,
+        setRemoteQueuedPrompts,
+        setSessionTodos,
+        setSideChat,
+        setSubagentLiveTurns,
+        setSubagentRuns,
+        setSwarmModeBySession,
+        setUndoMessageTarget,
+        setWebAuthOpen,
+        showNotice,
+        updateDesktop,
+      }),
+    [],
+  );
 
   useEffect(() => {
     const conversationId = activeConversation?.id;
@@ -2013,270 +1192,23 @@ export default function App() {
     };
   }, [activeConversation?.id]);
 
-  const updateActiveOutlineTurn = useCallback((): void => {
-    const scroll = scrollRef.current;
-    if (!scroll) return;
-    const anchors = Array.from(
-      scroll.querySelectorAll<HTMLElement>("[data-conversation-turn-id]"),
-    );
-    if (anchors.length === 0) {
-      setActiveOutlineTurnId(undefined);
-      return;
-    }
-
-    const distanceFromBottom =
-      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
-    let nextId = anchors.at(-1)?.dataset.conversationTurnId;
-    if (distanceFromBottom > 48) {
-      const scrollRect = scroll.getBoundingClientRect();
-      const viewportMiddle = scrollRect.top + scrollRect.height / 2;
-      nextId = anchors[0]?.dataset.conversationTurnId;
-      for (const anchor of anchors) {
-        if (anchor.getBoundingClientRect().top > viewportMiddle) break;
-        nextId = anchor.dataset.conversationTurnId;
-      }
-    }
-
-    setActiveOutlineTurnId((current) =>
-      current === nextId ? current : nextId,
-    );
-  }, []);
-
-  const scheduleActiveOutlineTurnUpdate = useCallback((): void => {
-    if (outlineScrollFrameRef.current !== undefined) return;
-    outlineScrollFrameRef.current = window.requestAnimationFrame(() => {
-      outlineScrollFrameRef.current = undefined;
-      updateActiveOutlineTurn();
-    });
-  }, [updateActiveOutlineTurn]);
-
-  useLayoutEffect(() => {
-    followLatestMessageRef.current = true;
-    const scroll = scrollRef.current;
-    if (scroll) {
-      scroll.scrollTop = scroll.scrollHeight;
-      lastChatScrollTopRef.current = scroll.scrollTop;
-      lastChatScrollHeightRef.current = scroll.scrollHeight;
-    }
-  }, [activeConversation?.id, activeHistory?.loading]);
-
-  useLayoutEffect(() => {
-    const scroll = scrollRef.current;
-    const content = messageStackRef.current;
-    if (!scroll || !content || activeHistory?.loading) return;
-
-    const scheduleScrollToLatest = (): void => {
-      if (
-        !followLatestMessageRef.current ||
-        chatScrollFrameRef.current !== undefined
-      ) {
-        return;
-      }
-      chatScrollFrameRef.current = window.requestAnimationFrame(() => {
-        chatScrollFrameRef.current = undefined;
-        if (!followLatestMessageRef.current) return;
-        scroll.scrollTop = scroll.scrollHeight;
-        lastChatScrollTopRef.current = scroll.scrollTop;
-        lastChatScrollHeightRef.current = scroll.scrollHeight;
-      });
-    };
-
-    const observer = new ResizeObserver(scheduleScrollToLatest);
-    observer.observe(content);
-    scheduleScrollToLatest();
-    return () => {
-      observer.disconnect();
-      if (chatScrollFrameRef.current !== undefined) {
-        window.cancelAnimationFrame(chatScrollFrameRef.current);
-        chatScrollFrameRef.current = undefined;
-      }
-    };
-  }, [
-    activeConversation?.id,
-    activeHistory?.loading,
+  const {
+    activeOutlineTurnId,
+    followLatestMessageRef,
+    scrollRef,
+    messageStackRef,
+    handleChatScroll,
+    handleChatDisclosureClick,
+    handleChatWheel,
+    handleChatPointerDown,
+    handleChatKeyDown,
+    scrollToConversationTurn,
+  } = useChatScroll({
+    conversationId: activeConversation?.id,
+    historyLoading: activeHistory?.loading,
     hasVisibleMessages,
-  ]);
-
-  useLayoutEffect(() => {
-    updateActiveOutlineTurn();
-  }, [
-    activeConversation?.id,
-    conversationOutlineItems,
-    updateActiveOutlineTurn,
-  ]);
-
-  useEffect(
-    () => () => {
-      if (outlineScrollFrameRef.current !== undefined) {
-        window.cancelAnimationFrame(outlineScrollFrameRef.current);
-      }
-      if (chatScrollIntentFrameRef.current !== undefined) {
-        window.cancelAnimationFrame(chatScrollIntentFrameRef.current);
-      }
-      if (chatDisclosureTimerRef.current !== undefined) {
-        window.clearTimeout(chatDisclosureTimerRef.current);
-      }
-      scrollRef.current?.style.removeProperty("overflow-anchor");
-    },
-    [],
-  );
-
-  const markChatScrollUpIntent = useCallback((): void => {
-    chatScrollUpIntentRef.current = true;
-    if (chatScrollIntentFrameRef.current !== undefined) {
-      window.cancelAnimationFrame(chatScrollIntentFrameRef.current);
-    }
-    chatScrollIntentFrameRef.current = window.requestAnimationFrame(() => {
-      chatScrollIntentFrameRef.current = undefined;
-      chatScrollUpIntentRef.current = false;
-    });
-  }, []);
-
-  useEffect(() => {
-    const stopPointerScrolling = (): void => {
-      chatPointerScrollingRef.current = false;
-      chatPointerStartRef.current = undefined;
-    };
-    const detectPointerScrolling = (event: PointerEvent): void => {
-      const start = chatPointerStartRef.current;
-      if (!start || start.pointerId !== event.pointerId) return;
-      if (
-        Math.abs(event.clientX - start.clientX) > 2 ||
-        Math.abs(event.clientY - start.clientY) > 2
-      ) {
-        chatPointerScrollingRef.current = true;
-        if (event.pointerType === "touch" && event.clientY > start.clientY) {
-          markChatScrollUpIntent();
-        }
-        start.clientX = event.clientX;
-        start.clientY = event.clientY;
-      }
-    };
-    window.addEventListener("pointermove", detectPointerScrolling);
-    window.addEventListener("pointerup", stopPointerScrolling);
-    window.addEventListener("pointercancel", stopPointerScrolling);
-    window.addEventListener("blur", stopPointerScrolling);
-    return () => {
-      window.removeEventListener("pointermove", detectPointerScrolling);
-      window.removeEventListener("pointerup", stopPointerScrolling);
-      window.removeEventListener("pointercancel", stopPointerScrolling);
-      window.removeEventListener("blur", stopPointerScrolling);
-    };
-  }, [markChatScrollUpIntent]);
-
-  // lastChatScrollHeightRef is only refreshed when the view is pinned to the
-  // bottom (or on conversation switch), never here. This prevents a content
-  // reflow between an append and the next outer pin from looking like the user
-  // deliberately scrolled away.
-  const handleChatScroll = (event: ReactUIEvent<HTMLDivElement>): void => {
-    // Exclude any descendant scroll event delivered by the WebView or React.
-    if (event.target !== event.currentTarget) return;
-    const scroll = event.currentTarget;
-    scheduleActiveOutlineTurnUpdate();
-    const distanceFromBottom =
-      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
-    const contentHeightChanged =
-      Math.abs(scroll.scrollHeight - lastChatScrollHeightRef.current) > 1;
-    const scrollingUp = scroll.scrollTop < lastChatScrollTopRef.current - 1;
-    lastChatScrollTopRef.current = scroll.scrollTop;
-    followLatestMessageRef.current = resolveChatFollowState({
-      currentlyFollowing: followLatestMessageRef.current,
-      distanceFromBottom,
-      contentHeightChanged,
-      scrollingUp,
-      userScrollingUp:
-        chatScrollUpIntentRef.current || chatPointerScrollingRef.current,
-      userTogglingDisclosure: chatDisclosureReflowRef.current,
-    });
-  };
-
-  const handleChatDisclosureClick = (
-    event: MouseEvent<HTMLDivElement>,
-  ): void => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const disclosure = target.closest("button[aria-expanded]");
-    if (!disclosure || !event.currentTarget.contains(disclosure)) return;
-
-    const scroll = event.currentTarget;
-    const wasFollowing = followLatestMessageRef.current;
-    followLatestMessageRef.current = false;
-    chatDisclosureReflowRef.current = true;
-    scroll.style.overflowAnchor = "none";
-    lastChatScrollTopRef.current = scroll.scrollTop;
-    lastChatScrollHeightRef.current = scroll.scrollHeight;
-    if (chatDisclosureTimerRef.current !== undefined) {
-      window.clearTimeout(chatDisclosureTimerRef.current);
-    }
-    chatDisclosureTimerRef.current = window.setTimeout(() => {
-      chatDisclosureTimerRef.current = undefined;
-      chatDisclosureReflowRef.current = false;
-      scroll.style.removeProperty("overflow-anchor");
-      lastChatScrollTopRef.current = scroll.scrollTop;
-      lastChatScrollHeightRef.current = scroll.scrollHeight;
-      const distanceFromBottom =
-        scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
-      followLatestMessageRef.current =
-        wasFollowing && distanceFromBottom <= 48;
-    }, 240);
-  };
-
-  const handleChatWheel = (event: WheelEvent<HTMLDivElement>): void => {
-    if (
-      event.deltaY < 0 &&
-      !nestedScrollerConsumesWheel(
-        event.target,
-        event.currentTarget,
-        event.deltaY,
-      )
-    ) {
-      markChatScrollUpIntent();
-    }
-  };
-
-  const handleChatPointerDown = (
-    event: ReactPointerEvent<HTMLDivElement>,
-  ): void => {
-    if (!event.isPrimary || event.button !== 0) return;
-    chatPointerScrollingRef.current = false;
-    chatPointerStartRef.current = nestedVerticalScroller(
-      event.target,
-      event.currentTarget,
-    )
-      ? undefined
-      : {
-          pointerId: event.pointerId,
-          clientX: event.clientX,
-          clientY: event.clientY,
-        };
-  };
-
-  const handleChatKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (!isUpwardChatScrollKey(event.key, event.shiftKey)) return;
-    const target = event.target;
-    if (
-      target instanceof HTMLElement &&
-      (target.isContentEditable ||
-        target.matches("input, textarea, select") ||
-        (event.key === " " && target.matches("button")) ||
-        nestedVerticalScroller(target, event.currentTarget))
-    ) {
-      return;
-    }
-    markChatScrollUpIntent();
-  };
-
-  const scrollToConversationTurn = (turnId: string): void => {
-    const scroll = scrollRef.current;
-    if (!scroll) return;
-    const target = Array.from(
-      scroll.querySelectorAll<HTMLElement>("[data-conversation-turn-id]"),
-    ).find((anchor) => anchor.dataset.conversationTurnId === turnId);
-    if (!target) return;
-    followLatestMessageRef.current = false;
-    setActiveOutlineTurnId(turnId);
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
-  };
+    outlineItems: conversationOutlineItems,
+  });
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -2284,6 +1216,7 @@ export default function App() {
     textarea.style.height = "0px";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
   }, [prompt]);
+
 
   const resetPrompt = (
     value = "",
@@ -2341,848 +1274,144 @@ export default function App() {
     });
   };
 
-  const forgetSessionState = (sessionIds: string[]): void => {
-    const ids = new Set(sessionIds);
-    if (ids.size === 0) return;
-    for (const sessionId of ids) {
-      delete historyRequests.current[sessionId];
-      delete backgroundTaskRequests.current[sessionId];
-      delete promptUndoHistoriesRef.current[sessionId];
-      releaseAgentSubscription(sessionId);
-    }
-    setPromptDrafts((current) => removePromptDrafts(current, ids));
-    setInteractions((current) => omitSessionKeys(current, ids));
-    setCompactions((current) => omitSessionKeys(current, ids));
-    setCompactionHistoryReady((current) => omitSessionKeys(current, ids));
-    setContextUsages((current) => omitSessionKeys(current, ids));
-    setAgentUsages((current) => omitSessionKeys(current, ids));
-    setMessageDurations((current) => omitSessionKeys(current, ids));
-    setPlans((current) => omitSessionKeys(current, ids));
-    setGoals((current) => omitSessionKeys(current, ids));
-    setGoalModeBySession((current) => omitSessionKeys(current, ids));
-    setSwarmModeBySession((current) => omitSessionKeys(current, ids));
-    setSessionTodos((current) => omitSessionKeys(current, ids));
-    setBackgroundTasks((current) => omitSessionKeys(current, ids));
-    setSubagentRuns((current) => omitSessionKeys(current, ids));
-    setSubagentLiveTurns((current) => omitSessionKeys(current, ids));
-    setQueuedPrompts((current) => omitSessionKeys(current, ids));
-    setRemoteQueuedPrompts((current) => omitSessionKeys(current, ids));
-    setInFlightTurns((current) => {
-      const next = omitSessionKeys(current, ids);
-      inFlightTurnsRef.current = next;
-      return next;
-    });
-    setHistoryByConversation((current) => omitSessionKeys(current, ids));
-    if (activeConversation && ids.has(activeConversation.id)) {
-      setResolvingInteraction(undefined);
-    }
-  };
+  const {
+    confirmRemoval,
+    addProjectPath,
+    addProject,
+    createConversation,
+    selectConversation,
+    toggleProject,
+    chooseModel,
+    choosePermissionMode,
+    renameConversation,
+    chooseEffort,
+    togglePlanMode,
+    setSynchronizedGoalMode,
+    toggleGoalMode,
+    toggleSwarmMode,
+    controlActiveGoal,
+    editActiveGoal,
+  } = createWorkspaceActions({
+    activeAgentScope,
+    activeConversation,
+    activeGoal,
+    activeGoalMode,
+    activePlan,
+    activeProject,
+    activeSwarmMode,
+    backgroundTaskRequests,
+    closeMobileNavigation,
+    desktop,
+    effort,
+    expandDesktopSidebar,
+    historyRequests,
+    inFlightTurnsRef,
+    isStreaming,
+    mobileLayout,
+    modeBusy,
+    modelBusy,
+    models,
+    permissionMode,
+    promptUndoHistoriesRef,
+    refreshAgentState,
+    releaseAgentSubscription,
+    removalBusy,
+    removalTarget,
+    selectedModel,
+    setAgentUsages,
+    setBackgroundTasks,
+    setCompactionHistoryReady,
+    setCompactions,
+    setContextUsages,
+    setDirectoryPickerOpen,
+    setGoalEditBusy,
+    setGoalEditTarget,
+    setGoalModeBySession,
+    setGoals,
+    setHistoryByConversation,
+    setInFlightTurns,
+    setInteractions,
+    setMessageDurations,
+    setModeBusy,
+    setModelBusy,
+    setModels,
+    setPlans,
+    setPromptDrafts,
+    setQueuedPrompts,
+    setRemoteQueuedPrompts,
+    setRemovalBusy,
+    setRemovalTarget,
+    setResolvingInteraction,
+    setSessionTodos,
+    setSubagentLiveTurns,
+    setSubagentRuns,
+    setSwarmModeBySession,
+    showNotice,
+    updateDesktop,
+  });
 
-  const confirmRemoval = async (): Promise<void> => {
-    const target = removalTarget;
-    if (!target || removalBusy) return;
-    setRemovalBusy(true);
-    try {
-      if (target.kind === "project") {
-        await removeWorkspace(target.projectId);
-        forgetSessionState(target.conversationIds);
-        updateDesktop((current) => {
-          const removedIndex = current.projects.findIndex(
-            (project) => project.id === target.projectId,
-          );
-          if (removedIndex < 0) return current;
-          const projects = current.projects.filter(
-            (project) => project.id !== target.projectId,
-          );
-          if (current.activeProjectId !== target.projectId) {
-            return { ...current, projects };
-          }
-          const fallback =
-            projects[Math.min(removedIndex, projects.length - 1)];
-          return {
-            projects,
-            activeProjectId: fallback?.id,
-            activeConversationId: fallback?.conversations[0]?.id,
-          };
-        });
-        showNotice(t("notice.projectRemoved", { name: target.name }));
-      } else {
-        await archiveSession(target.conversationId);
-        forgetSessionState([target.conversationId]);
-        updateDesktop((current) => {
-          const project = current.projects.find(
-            (item) => item.id === target.projectId,
-          );
-          if (!project) return current;
-          const removedIndex = project.conversations.findIndex(
-            (conversation) => conversation.id === target.conversationId,
-          );
-          if (removedIndex < 0) return current;
-          const conversations = project.conversations.filter(
-            (conversation) => conversation.id !== target.conversationId,
-          );
-          const projects = current.projects.map((item) =>
-            item.id === target.projectId
-              ? { ...item, conversations }
-              : item,
-          );
-          if (current.activeConversationId !== target.conversationId) {
-            return { ...current, projects };
-          }
-          const fallback =
-            conversations[Math.min(removedIndex, conversations.length - 1)];
-          return {
-            ...current,
-            projects,
-            activeProjectId: target.projectId,
-            activeConversationId: fallback?.id,
-          };
-        });
-        showNotice(t("notice.conversationArchived", { title: target.title }));
-      }
-      setRemovalTarget(undefined);
-    } catch (error) {
-      showNotice(conciseError(error));
-    } finally {
-      setRemovalBusy(false);
-    }
-  };
-
-  const addProjectPath = async (selection: string): Promise<void> => {
-    try {
-      const workspace = await createOrTouchWorkspace(selection);
-      const sessions = await listWorkspaceSessions(workspace.id);
-      const project = projectFromWorkspace(
-        workspace,
-        desktop.projects.length,
-        sessions,
-      );
-      updateDesktop((current) => {
-        const existing = current.projects.find(
-          (item) => item.id === workspace.id || item.path === selection,
-        );
-        if (existing) {
-          return {
-            ...current,
-            activeProjectId: existing.id,
-            activeConversationId: existing.conversations[0]?.id,
-            projects: current.projects.map((item) =>
-              item.id === existing.id ? { ...item, expanded: true } : item,
-            ),
-          };
-        }
-        return {
-          projects: [...current.projects, project],
-          activeProjectId: project.id,
-          activeConversationId: undefined,
-        };
-      });
-      if (mobileLayout) closeMobileNavigation();
-      else setDesktopSidebarCollapsed(false);
-    } catch (error) {
-      showNotice(conciseError(error));
-    }
-  };
-
-  const addProject = async (): Promise<void> => {
-    if (!isDesktop()) {
-      setDirectoryPickerOpen(true);
-      return;
-    }
-    try {
-      const selection = await pickNativeDirectory();
-      if (selection) await addProjectPath(selection);
-    } catch (error) {
-      showNotice(conciseError(error));
-    }
-  };
-
-  const createConversation = async (
-    project: Project,
-    event?: MouseEvent<HTMLButtonElement>,
-  ): Promise<void> => {
-    event?.stopPropagation();
-    const model = selectedModel ?? models[0];
-    if (!model) {
-      showNotice(t("notice.modelRequired"));
-      return;
-    }
-    try {
-      const scope = await prepareSession({
-        workDir: project.path,
-        model: model.id,
-        thinking: effort,
-        permission: permissionMode,
-      });
-      const conversation = {
-        ...conversationFromSession(scope.sessionId),
-        modelId: scope.model,
-        thinkingLevel: scope.thinkingLevel,
-        permissionMode: scope.permissionMode,
-      };
-      updateDesktop((current) => ({
-        ...current,
-        activeProjectId: project.id,
-        activeConversationId: conversation.id,
-        projects: current.projects.map((item) =>
-          item.id === project.id
-            ? {
-                ...item,
-                expanded: true,
-                conversations: [
-                  conversation,
-                  ...item.conversations.filter(
-                    (candidate) => candidate.id !== conversation.id,
-                  ),
-                ],
-            }
-            : item,
-        ),
-      }));
-      closeMobileNavigation();
-    } catch (error) {
-      showNotice(conciseError(error));
-    }
-  };
-
-  const selectConversation = (
-    projectId: string,
-    conversationId: string,
-  ): void => {
-    updateDesktop((current) => ({
-      ...current,
-      activeProjectId: projectId,
-      activeConversationId: conversationId,
-    }));
-    closeMobileNavigation();
-  };
-
-  const toggleProject = (projectId: string): void => {
-    updateDesktop((current) => ({
-      ...current,
-      projects: current.projects.map((project) =>
-        project.id === projectId
-          ? { ...project, expanded: !project.expanded }
-          : project,
-      ),
-    }));
-  };
-
-  const chooseModel = (modelId: string): void => {
-    if (!activeConversation || !activeProject || modelBusy) return;
-    if (activeAgentScope?.sessionId !== activeConversation.id) {
-      showNotice("The conversation is still preparing. Try again in a moment.");
-      return;
-    }
-    const model = models.find((item) => item.id === modelId);
-    const projectId = activeProject.id;
-    const conversationId = activeConversation.id;
-    const scope = activeAgentScope;
-    void (async () => {
-      setModelBusy(true);
-      try {
-        const agent = createAgentClient(scope);
-        await agent.setModel(modelId);
-        const effectiveModel = await agent.getModel();
-        const config = await agent.getConfig();
-        const thinkingLevel = normalizeThinkingLevel(
-          config.thinkingLevel,
-          model,
-        );
-        if (model?.supportsReasoning && thinkingLevel !== config.thinkingLevel) {
-          await agent.setThinking(thinkingLevel);
-        }
-        if (effectiveModel !== modelId) {
-          throw new Error(
-            `Model switch returned "${effectiveModel}" instead of "${modelId}".`,
-          );
-        }
-        updateDesktop((current) => ({
-          ...current,
-          projects: current.projects.map((project) =>
-            project.id !== projectId
-              ? project
-              : {
-                  ...project,
-                  conversations: project.conversations.map((conversation) =>
-                    conversation.id === conversationId
-                      ? {
-                          ...conversation,
-                          modelId: effectiveModel,
-                          thinkingLevel,
-                        }
-                      : conversation,
-                  ),
-                },
-          ),
-        }));
-        await setDefaultModel(effectiveModel);
-        setModels((current) =>
-          current.map((item) => ({
-            ...item,
-            isDefault: item.id === effectiveModel,
-          })),
-        );
-      } catch (error) {
-        showNotice(conciseError(error));
-      } finally {
-        setModelBusy(false);
-      }
-    })();
-  };
-
-  const choosePermissionMode = (mode: PermissionMode): void => {
-    if (!activeConversation || !activeProject) return;
-    if (activeAgentScope?.sessionId !== activeConversation.id) {
-      showNotice("The conversation is still preparing. Try again in a moment.");
-      return;
-    }
-    const projectId = activeProject.id;
-    const conversationId = activeConversation.id;
-    const scope = activeAgentScope;
-    void createAgentClient(scope)
-      .setPermission(mode)
-      .then(() => {
-        updateDesktop((current) => ({
-          ...current,
-          projects: current.projects.map((project) =>
-            project.id !== projectId
-              ? project
-              : {
-                  ...project,
-                  conversations: project.conversations.map((conversation) =>
-                    conversation.id === conversationId
-                      ? { ...conversation, permissionMode: mode }
-                      : conversation,
-                  ),
-                },
-          ),
-        }));
-      })
-      .catch((error) => showNotice(conciseError(error)));
-  };
-
-  const renameConversation = (nextTitle: string): void => {
-    if (!activeConversation || !activeProject) return;
-    if (activeAgentScope?.sessionId !== activeConversation.id) {
-      showNotice(t("notice.sessionPreparing"));
-      return;
-    }
-    const projectId = activeProject.id;
-    const conversationId = activeConversation.id;
-    const scope = activeAgentScope;
-    void createAgentClient(scope)
-      .renameSession(nextTitle)
-      .then(() => {
-        updateDesktop((current) => ({
-          ...current,
-          projects: current.projects.map((project) =>
-            project.id !== projectId
-              ? project
-              : {
-                  ...project,
-                  conversations: project.conversations.map((conversation) =>
-                    conversation.id === conversationId
-                      ? { ...conversation, title: nextTitle }
-                      : conversation,
-                  ),
-                },
-          ),
-        }));
-      })
-      .catch((error) => showNotice(conciseError(error)));
-  };
-
-  const chooseEffort = (level: string): void => {
-    if (!activeConversation || !activeProject || modelBusy) return;
-    if (!thinkingLevelsForModel(selectedModel).includes(level)) return;
-    if (activeAgentScope?.sessionId !== activeConversation.id) {
-      showNotice("The conversation is still preparing. Try again in a moment.");
-      return;
-    }
-    const projectId = activeProject.id;
-    const conversationId = activeConversation.id;
-    const scope = activeAgentScope;
-    void createAgentClient(scope)
-      .setThinking(level)
-      .then(() => {
-        updateDesktop((current) => ({
-          ...current,
-          projects: current.projects.map((project) =>
-            project.id !== projectId
-              ? project
-              : {
-                  ...project,
-                  conversations: project.conversations.map((conversation) =>
-                    conversation.id === conversationId
-                      ? { ...conversation, thinkingLevel: level }
-                      : conversation,
-                  ),
-                },
-          ),
-        }));
-      })
-      .catch((error) => showNotice(conciseError(error)));
-  };
-
-  const togglePlanMode = async (): Promise<void> => {
-    if (!activeAgentScope || modeBusy || isStreaming) return;
-    setModeBusy(true);
-    try {
-      const agent = createAgentClient(activeAgentScope);
-      if (activePlan) {
-        await agent.cancelPlan(activePlan.id);
-      } else {
-        await agent.enterPlan();
-      }
-      await refreshAgentState(activeAgentScope);
-    } catch (error) {
-      showNotice(conciseError(error));
-    } finally {
-      setModeBusy(false);
-    }
-  };
-
-  const setSynchronizedGoalMode = async (
-    conversationId: string,
-    enabled: boolean,
-  ): Promise<void> => {
-    setGoalModeBySession((current) => ({
-      ...current,
-      [conversationId]: enabled,
-    }));
-    try {
-      await setSharedGoalMode(conversationId, enabled);
-    } catch (error) {
-      showNotice(conciseError(error));
-    }
-  };
-
-  const toggleGoalMode = async (): Promise<void> => {
-    if (!activeConversation || !activeAgentScope || activeGoal || modeBusy) {
-      return;
-    }
-    const conversationId = activeConversation.id;
-    setModeBusy(true);
-    try {
-      await setSynchronizedGoalMode(conversationId, !activeGoalMode);
-    } finally {
-      setModeBusy(false);
-    }
-  };
-
-  const toggleSwarmMode = async (): Promise<void> => {
-    if (!activeConversation || !activeAgentScope || modeBusy || isStreaming) {
-      return;
-    }
-    const conversationId = activeConversation.id;
-    const nextMode = !activeSwarmMode;
-    setModeBusy(true);
-    try {
-      const agent = createAgentClient(activeAgentScope);
-      if (nextMode) {
-        await agent.enterSwarm("manual");
-      } else {
-        await agent.exitSwarm();
-      }
-      const enabled = await agent.getSwarmMode();
-      setSwarmModeBySession((current) => ({
-        ...current,
-        [conversationId]: enabled,
-      }));
-    } catch (error) {
-      showNotice(conciseError(error));
-    } finally {
-      setModeBusy(false);
-    }
-  };
-
-  const controlActiveGoal = async (
-    action: "pause" | "resume" | "cancel",
-  ): Promise<void> => {
-    if (!activeConversation || !activeAgentScope || !activeGoal || modeBusy) {
-      return;
-    }
-    const conversationId = activeConversation.id;
-    setModeBusy(true);
-    try {
-      const agent = createAgentClient(activeAgentScope);
-      const goal =
-        action === "pause"
-          ? await agent.pauseGoal()
-          : action === "resume"
-            ? await agent.resumeGoal()
-            : await agent.cancelGoal();
-      setGoals((current) => ({
-        ...current,
-        [conversationId]: action === "cancel" ? null : goal,
-      }));
-    } catch (error) {
-      showNotice(conciseError(error));
-    } finally {
-      setModeBusy(false);
-    }
-  };
-
-  const editActiveGoal = async (
-    target: GoalSnapshot,
-    objective: string,
-  ): Promise<void> => {
-    const trimmed = objective.trim();
-    if (
-      !trimmed ||
-      !activeConversation ||
-      !activeAgentScope ||
-      activeGoal?.goalId !== target.goalId
-    ) {
-      setGoalEditTarget(undefined);
-      if (activeGoal?.goalId !== target.goalId) {
-        showNotice(t("goal.changedWhileEditing"));
-      }
-      return;
-    }
-
-    const conversationId = activeConversation.id;
-    setGoalEditBusy(true);
-    try {
-      const agent = createAgentClient(activeAgentScope);
-      let goal = await agent.createGoal(
-        trimmed,
-        true,
-        target.completionCriterion,
-      );
-      if (target.status === "paused") {
-        goal = await agent.pauseGoal();
-      }
-      setGoals((current) => ({ ...current, [conversationId]: goal }));
-      setGoalEditTarget(undefined);
-    } catch (error) {
-      showNotice(conciseError(error));
-    } finally {
-      setGoalEditBusy(false);
-    }
-  };
-
-  const startLogin = async (): Promise<void> => {
-    setProfileOpen(false);
-    setLoginOpen(true);
-    setLoginBusy(true);
-    setDeviceCode(undefined);
-    try {
-      const status = await invoke<AuthStatus>("login");
-      setAuth(status);
-      if (status.loggedIn) {
-        setLoginOpen(false);
-        showNotice(t("notice.loginSuccess"));
-        void refreshModels();
-      }
-    } catch (error) {
-      showNotice(conciseError(error));
-    } finally {
-      setLoginBusy(false);
-    }
-  };
-
-  const signOut = async (): Promise<void> => {
-    try {
-      const status = await invoke<AuthStatus>("logout");
-      setAuth(status);
-      accountUsageRequest.current += 1;
-      setAccountUsage(undefined);
-      setAccountUsageBusy(false);
-      setAccountUsageError(undefined);
-      setProfileOpen(false);
-      showNotice(t("notice.logoutSuccess"));
-    } catch (error) {
-      showNotice(conciseError(error));
-    }
-  };
-
-  const refreshHistory = async (
-    conversationId: string,
-    completedTurn?: InFlightTurn,
-  ): Promise<boolean> => {
-    const request = (historyRequests.current[conversationId] ?? 0) + 1;
-    historyRequests.current[conversationId] = request;
-    try {
-      const page = await fetchConversationHistory(conversationId);
-      if (request !== historyRequests.current[conversationId]) return false;
-      const items = [...page.items].reverse();
-      const durationMs = completedTurn?.durationMs;
-      const fileChanges = completedTurn?.fileChanges;
-      if (
-        completedTurn &&
-        (durationMs !== undefined || (fileChanges?.length ?? 0) > 0)
-      ) {
-        const messageId = completedTurnMessageId(items, completedTurn);
-        if (messageId) {
-          if (durationMs !== undefined) {
-            setMessageDurations((current) => ({
-              ...current,
-              [conversationId]: {
-                ...current[conversationId],
-                [messageId]: durationMs,
-              },
-            }));
-          }
-          if (fileChanges && fileChanges.length > 0) {
-            setMessageFileChanges((current) => ({
-              ...current,
-              [conversationId]: {
-                ...current[conversationId],
-                [messageId]: fileChanges,
-              },
-            }));
-          }
-        }
-      }
-      setHistoryByConversation((current) => ({
-        ...current,
-        [conversationId]: {
-          conversationId,
-          items,
-          loading: false,
-        },
-      }));
-      return true;
-    } catch (error) {
-      if (request !== historyRequests.current[conversationId]) return false;
-      const message = conciseError(error);
-      setHistoryByConversation((current) => ({
-        ...current,
-        [conversationId]: {
-          conversationId,
-          items: current[conversationId]?.items ?? [],
-          loading: false,
-          error: message,
-        },
-      }));
-      showNotice(message);
-      return false;
-    }
-  };
-
-  const confirmUndoMessage = async (): Promise<void> => {
-    const target = undoMessageTarget;
-    const conversation = activeConversation;
-    const scope = activeAgentScope;
-    if (!target || !conversation || !scope || undoMessageBusy) return;
-    if (
-      scope.sessionId !== conversation.id ||
-      target.id !== undoableUserMessageId ||
-      inFlightTurnsRef.current[conversation.id] !== undefined
-    ) {
-      setUndoMessageTarget(undefined);
-      showNotice(t("undo.unavailable"));
-      return;
-    }
-
-    setUndoMessageBusy(true);
-    try {
-      await createAgentClient(scope).undoHistory(1);
-      const projected = projectLiveUserMessage({
-        promptId: target.prompt_id ?? target.id,
-        userMessageId: target.id,
-        createdAt: target.created_at,
-        content: target.content,
-      });
-      const display = parseSkillPromptDisplay(projected.text);
-      await refreshHistory(conversation.id);
-      resetPrompt(display.text, conversation.id);
-      setPromptAttachments(projected.attachments, conversation.id);
-      setPromptSkills(
-        availableSkills.filter((skill) => display.skills.includes(skill.name)),
-        conversation.id,
-      );
-      setUndoMessageTarget(undefined);
-      showNotice(t("undo.success"));
-      window.requestAnimationFrame(() => {
-        if (activeConversationIdRef.current !== conversation.id) return;
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-        textarea.focus();
-        textarea.setSelectionRange(display.text.length, display.text.length);
-      });
-    } catch (error) {
-      showNotice(conciseError(error));
-    } finally {
-      setUndoMessageBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    const conversationId = activeConversation?.id;
-    if (!conversationId || activeCompaction?.phase !== "completed") return;
-    void refreshHistory(conversationId).then((refreshed) => {
-      if (!refreshed) return;
-      setCompactionHistoryReady((current) => ({
-        ...current,
-        [conversationId]: true,
-      }));
-    });
-  }, [activeConversation?.id, activeCompaction?.phase]);
-
-  const loadAvailableSkills = async (): Promise<void> => {
-    const request = skillsRequest.current + 1;
-    skillsRequest.current = request;
-    const scope = activeAgentScope;
-    if (!scope) {
-      setAvailableSkills([]);
-      setSkillsBusy(false);
-      setSkillsError(t("notice.sessionPreparing"));
-      return;
-    }
-
-    setSkillsBusy(true);
-    setSkillsError(undefined);
-    try {
-      const skills = await listSkills(scope.sessionId);
-      if (request !== skillsRequest.current) return;
-      setAvailableSkills(skills);
-    } catch (error) {
-      if (request !== skillsRequest.current) return;
-      setAvailableSkills([]);
-      setSkillsError(conciseError(error));
-    } finally {
-      if (request === skillsRequest.current) setSkillsBusy(false);
-    }
-  };
-
-  const toggleComposerAdd = (): void => {
-    if (composerAddOpen) {
-      setComposerAddOpen(false);
-      return;
-    }
-    setComposerAddOpen(true);
-    void loadAvailableSkills();
-  };
-
-  const selectPromptSkill = (skill: SkillDescriptor): void => {
-    const selected = promptSkills.some(
-      (item) => item.name === skill.name,
-    );
-    if (!selected && promptSkills.length >= MAX_PROMPT_SKILLS) {
-      showNotice(t("notice.maxSkills", { count: MAX_PROMPT_SKILLS }));
-      setComposerAddOpen(false);
-      return;
-    }
-    setPromptSkills((current) =>
-      selected
-        ? current.filter((item) => item.name !== skill.name)
-        : [...current, skill],
-    );
-    setComposerAddOpen(false);
-    window.requestAnimationFrame(() => textareaRef.current?.focus());
-  };
-
-  const openSkillDetail = async (skill: SkillDetailTarget): Promise<void> => {
-    const request = skillDetailRequest.current + 1;
-    skillDetailRequest.current = request;
-    const scope = activeAgentScope;
-
-    setComposerAddOpen(false);
-    closeSideChat();
-    setCompactionSummaryDetail(undefined);
-    setSkillDetailTarget(skill);
-    setSkillDetail(undefined);
-    setSkillDetailError(undefined);
-    if (!scope) {
-      setSkillDetailBusy(false);
-      setSkillDetailError(t("notice.sessionPreparing"));
-      return;
-    }
-
-    setSkillDetailBusy(true);
-    try {
-      const content = await getSkillContent(scope.sessionId, skill.name);
-      if (request !== skillDetailRequest.current) return;
-      setSkillDetail(content);
-    } catch (error) {
-      if (request !== skillDetailRequest.current) return;
-      setSkillDetailError(conciseError(error));
-    } finally {
-      if (request === skillDetailRequest.current) setSkillDetailBusy(false);
-    }
-  };
-
-  const closeSkillDetail = (): void => {
-    skillDetailRequest.current += 1;
-    setSkillDetailTarget(undefined);
-    setSkillDetail(undefined);
-    setSkillDetailBusy(false);
-    setSkillDetailError(undefined);
-  };
-
-  const openCompactionSummary = (message: RenderMessage): void => {
-    closeSideChat();
-    skillDetailRequest.current += 1;
-    setSkillDetailTarget(undefined);
-    setSkillDetail(undefined);
-    setSkillDetailBusy(false);
-    setSkillDetailError(undefined);
-    setCompactionSummaryDetail({
-      id: message.id,
-      content: messageText(message),
-      createdAt: message.created_at,
-    });
-  };
-
-  const addPromptAttachments = async (
-    files: readonly File[],
-  ): Promise<void> => {
-    if (files.length === 0) return;
-    const conversationId = activeConversation?.id;
-    if (!conversationId) return;
-    const remaining = MAX_PROMPT_ATTACHMENTS - promptAttachments.length;
-    if (remaining <= 0) {
-      showNotice(t("notice.maxAttachments", { count: MAX_PROMPT_ATTACHMENTS }));
-      return;
-    }
-
-    const selected = files.slice(0, remaining);
-    const prepared: PromptAttachment[] = [];
-    for (const file of selected) {
-      try {
-        const kind = promptAttachmentKind(file.type);
-        if (kind === "image" && !selectedModel?.supportsImage) {
-          throw new Error(t("error.imageNotSupported"));
-        }
-        if (kind === "video" && !selectedModel?.supportsVideo) {
-          throw new Error(t("error.videoNotSupported"));
-        }
-        prepared.push(await preparePromptAttachment(file));
-      } catch (error) {
-        showNotice(conciseError(error));
-      }
-    }
-    if (prepared.length > 0) {
-      setPromptAttachments(
-        (current) => [...current, ...prepared],
-        conversationId,
-      );
-    }
-    if (files.length > remaining) {
-      showNotice(t("notice.maxAttachments", { count: MAX_PROMPT_ATTACHMENTS }));
-    }
-  };
-
-  const handleAttachmentInput = (
-    event: ChangeEvent<HTMLInputElement>,
-  ): void => {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
-    void addPromptAttachments(files);
-  };
-
-  const handlePromptPaste = (
-    event: ClipboardEvent<HTMLTextAreaElement>,
-  ): void => {
-    const media = Array.from(event.clipboardData.items)
-      .filter((item) => item.kind === "file")
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
-    if (media.length > 0) void addPromptAttachments(media);
-  };
+  const {
+    startLogin,
+    signOut,
+    refreshHistory,
+    confirmUndoMessage,
+    loadAvailableSkills,
+    toggleComposerAdd,
+    selectPromptSkill,
+    openSkillDetail,
+    closeSkillDetail,
+    openCompactionSummary,
+    handleAttachmentInput,
+    handlePromptPaste,
+  } = useConversationResources({
+    accountUsageRequest,
+    activeAgentScope,
+    activeCompaction,
+    activeConversation,
+    activeConversationIdRef,
+    availableSkills,
+    closeSideChat,
+    composerAddOpen,
+    historyRequests,
+    inFlightTurnsRef,
+    promptAttachments,
+    promptSkills,
+    refreshModels,
+    resetPrompt,
+    selectedModel,
+    setAccountUsage,
+    setAccountUsageBusy,
+    setAccountUsageError,
+    setAuth,
+    setAvailableSkills,
+    setCompactionHistoryReady,
+    setCompactionSummaryDetail,
+    setComposerAddOpen,
+    setDeviceCode,
+    setHistoryByConversation,
+    setLoginBusy,
+    setLoginOpen,
+    setMessageDurations,
+    setMessageFileChanges,
+    setProfileOpen,
+    setPromptAttachments,
+    setPromptSkills,
+    setSkillDetail,
+    setSkillDetailBusy,
+    setSkillDetailError,
+    setSkillDetailTarget,
+    setSkillsBusy,
+    setSkillsError,
+    setUndoMessageBusy,
+    setUndoMessageTarget,
+    showNotice,
+    skillDetailRequest,
+    skillsRequest,
+    textareaRef,
+    undoableUserMessageId,
+    undoMessageBusy,
+    undoMessageTarget,
+  });
 
   const sendPrompt = async (
     override?: string,
@@ -3976,277 +2205,38 @@ export default function App() {
       <WindowTitleBar />
 
       <div className="app-body">
-        <aside
-          className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}
-          aria-hidden={mobileLayout && !mobileSidebarOpen}
-          inert={mobileLayout && !mobileSidebarOpen}
-        >
-        <div className="brand-row">
-          <div className="sidebar-heading-copy" aria-hidden={sidebarCollapsed}>
-            <strong>{t("sidebar.workspace")}</strong>
-          </div>
-          <button
-            className="icon-button quiet"
-            type="button"
-            aria-label={
-              sidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")
-            }
-            aria-expanded={!sidebarCollapsed}
-            onClick={toggleSidebar}
-            title={sidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
-          >
-            {sidebarCollapsed ? (
-              <PanelLeftOpen size={17} />
-            ) : (
-              <PanelLeftClose size={17} />
-            )}
-          </button>
-        </div>
+        <AppSidebar
+          desktop={desktop}
+          activeProject={activeProject}
+          activeConversation={activeConversation}
+          inFlightTurns={inFlightTurns}
+          auth={auth}
+          appVersion={appVersion}
+          accountUsage={accountUsage}
+          accountUsageBusy={accountUsageBusy}
+          accountUsageError={accountUsageError}
+          profileOpen={profileOpen}
+          sidebarCollapsed={sidebarCollapsed}
+          mobileLayout={mobileLayout}
+          mobileSidebarOpen={mobileSidebarOpen}
+          profileRef={profileRef}
+          onToggleSidebar={toggleSidebar}
+          onAddProject={() => void addProject()}
+          onOpenSidebar={openSidebar}
+          onToggleProject={toggleProject}
+          onCreateConversation={(project, event) =>
+            void createConversation(project, event)
+          }
+          onSelectConversation={selectConversation}
+          onSetRemovalTarget={setRemovalTarget}
+          onToggleProfile={toggleProfile}
+          onRefreshAccountUsage={() => void loadAccountUsage()}
+          onLogin={() => void startLogin()}
+          onOpenSettings={openSettings}
+          onSignOut={() => void signOut()}
+          onCloseMobileNavigation={closeMobileNavigation}
+        />
 
-        <div className="sidebar-primary">
-          <button className="new-project-button" onClick={() => void addProject()}>
-            <Plus size={17} />
-            <span className="sidebar-control-label" aria-hidden={sidebarCollapsed}>
-              {t("sidebar.openProject")}
-            </span>
-          </button>
-
-          <div className="sidebar-section-heading" aria-hidden={sidebarCollapsed}>
-            <span>{t("sidebar.projects")}</span>
-          </div>
-
-          <nav className="project-list" aria-label={t("sidebar.projectsAndConversations")}>
-            {desktop.projects.map((project) => {
-              const isProjectActive = project.id === activeProject?.id;
-              return (
-                <div
-                  className={`project-group ${isProjectActive ? "active" : ""}`}
-                  key={project.id}
-                >
-                  <div
-                    className="project-row"
-                    onClick={() =>
-                      sidebarCollapsed
-                        ? openSidebar()
-                        : toggleProject(project.id)
-                    }
-                    title={project.path}
-                  >
-                    <span
-                      className="project-glyph"
-                      style={{ "--project-accent": project.accent } as React.CSSProperties}
-                    >
-                      <FolderGit2 size={16} />
-                    </span>
-                    <span className="project-name" aria-hidden={sidebarCollapsed}>
-                      {project.name}
-                    </span>
-                    <span className="project-actions" aria-hidden={sidebarCollapsed}>
-                      <button
-                        className="icon-button tiny"
-                        type="button"
-                        tabIndex={sidebarCollapsed ? -1 : 0}
-                        onClick={(event) =>
-                          void createConversation(project, event)
-                        }
-                        title={t("conversation.create")}
-                        aria-label={t("conversation.newIn", { name: project.name })}
-                      >
-                        <Plus size={14} />
-                      </button>
-                      <button
-                        className="icon-button tiny project-remove-button"
-                        type="button"
-                        tabIndex={sidebarCollapsed ? -1 : 0}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setRemovalTarget({
-                            kind: "project",
-                            projectId: project.id,
-                            name: project.name,
-                            path: project.path,
-                            conversationIds: project.conversations.map(
-                              (conversation) => conversation.id,
-                            ),
-                          });
-                        }}
-                        title={t("sidebar.removeProject")}
-                        aria-label={t("sidebar.removeProjectNamed", { name: project.name })}
-                      >
-                        <FolderMinus size={13} />
-                      </button>
-                      <ChevronRight
-                        className={`project-chevron ${
-                          project.expanded ? "expanded" : ""
-                        }`}
-                        size={14}
-                      />
-                    </span>
-                  </div>
-                  <div
-                    className={`conversation-list-collapse ${
-                      !sidebarCollapsed && project.expanded ? "expanded" : ""
-                    }`}
-                    aria-hidden={sidebarCollapsed || !project.expanded}
-                    inert={sidebarCollapsed || !project.expanded}
-                  >
-                    <div className="conversation-list-clip">
-                      <div className="conversation-list">
-                      {project.conversations.map((conversation) => (
-                        <div
-                          className={`conversation-row ${
-                            conversation.id === activeConversation?.id
-                              ? "selected"
-                              : ""
-                          }`}
-                          key={conversation.id}
-                        >
-                          <button
-                            className="conversation-select"
-                            type="button"
-                            onClick={() =>
-                              selectConversation(project.id, conversation.id)
-                            }
-                            title={conversation.title}
-                          >
-                            <MessageSquareText size={14} />
-                            <span className="conversation-title">
-                              {conversation.title}
-                            </span>
-                            {isTurnRunning(inFlightTurns[conversation.id]) && (
-                              <span className="conversation-meta">
-                                <span
-                                  className="conversation-running-indicator"
-                                  role="status"
-                                  aria-label={t("conversation.running")}
-                                  title={t("conversation.running")}
-                                />
-                              </span>
-                            )}
-                          </button>
-                          <button
-                            className="conversation-archive-button"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setRemovalTarget({
-                                kind: "conversation",
-                                projectId: project.id,
-                                conversationId: conversation.id,
-                                title: conversation.title,
-                              });
-                            }}
-                            title={t("conversation.archive")}
-                            aria-label={t("conversation.archiveNamed", { title: conversation.title })}
-                          >
-                            <Archive size={12} />
-                          </button>
-                        </div>
-                      ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </nav>
-
-          {desktop.projects.length === 0 && (
-            <div className="sidebar-empty" aria-hidden={sidebarCollapsed}>
-              <Folder size={22} />
-              <p>{t("sidebar.empty")}</p>
-            </div>
-          )}
-        </div>
-
-        <div className="account-area">
-          <div className="profile-wrap" ref={profileRef}>
-            <button
-              className={auth.loggedIn ? "account-button" : "account-button login"}
-              tabIndex={sidebarCollapsed ? -1 : 0}
-              aria-label={t("account.openMenu")}
-              aria-expanded={profileOpen}
-              aria-controls="account-popover"
-              onClick={toggleProfile}
-            >
-              <span className={auth.loggedIn ? "avatar" : "avatar signed-out"}>
-                {auth.loggedIn ? (
-                  <Sparkles size={15} />
-                ) : (
-                  <CircleUserRound size={18} />
-                )}
-                {auth.loggedIn && <i />}
-              </span>
-              <span className="account-copy" aria-hidden={sidebarCollapsed}>
-                <strong>
-                  {auth.loggedIn ? "Kimi Code" : t("account.login")}
-                </strong>
-                <small>
-                  {auth.loggedIn
-                    ? t("account.connected")
-                    : t("account.loginHint")}
-                </small>
-              </span>
-              {auth.loggedIn ? (
-                <MoreHorizontal
-                  className="account-trailing-icon"
-                  size={16}
-                  aria-hidden={sidebarCollapsed}
-                />
-              ) : (
-                <LogIn
-                  className="account-trailing-icon"
-                  size={16}
-                  aria-hidden={sidebarCollapsed}
-                />
-              )}
-            </button>
-            <div
-              className="account-compact-actions"
-              aria-hidden={!sidebarCollapsed}
-              inert={!sidebarCollapsed}
-            >
-              <button
-                className="account-compact-kimi"
-                type="button"
-                title={t("account.kimiAccount")}
-                aria-label={t("account.openMenu")}
-                aria-expanded={profileOpen}
-                aria-controls="account-popover"
-                onClick={toggleProfile}
-              >
-                {auth.loggedIn ? (
-                  <Sparkles size={14} />
-                ) : (
-                  <CircleUserRound size={15} />
-                )}
-              </button>
-            </div>
-            {profileOpen && (
-              <AccountUsagePopover
-                appVersion={appVersion}
-                loggedIn={auth.loggedIn}
-                usage={accountUsage}
-                busy={accountUsageBusy}
-                error={accountUsageError}
-                onRefresh={() => void loadAccountUsage()}
-                onLogin={() => void startLogin()}
-                onOpenSettings={openSettings}
-                onSignOut={() => void signOut()}
-              />
-            )}
-          </div>
-        </div>
-        </aside>
-
-        {mobileLayout && mobileSidebarOpen && (
-          <button
-            className="mobile-sidebar-backdrop"
-            type="button"
-            aria-label={t("sidebar.collapse")}
-            onClick={closeMobileNavigation}
-          />
-        )}
 
         <main
           className="workspace"
@@ -4395,756 +2385,82 @@ export default function App() {
               )}
             </div>
 
-            <div className="composer-dock">
-              {activeQuestion && (
-                <QuestionCard
-                  key={activeQuestion.id}
-                  interaction={activeQuestion}
-                  busy={resolvingInteraction === activeQuestion.id}
-                  onRespond={(response) =>
-                    void respondToInteraction(activeQuestion, response)
-                  }
-                />
-              )}
-              {activeApproval && isPlanReviewInteraction(activeApproval) ? (
-                <PlanReviewCard
-                  key={activeApproval.id}
-                  interaction={activeApproval}
-                  busy={resolvingInteraction === activeApproval.id}
-                  onRespond={(response) =>
-                    void respondToInteraction(activeApproval, response)
-                  }
-                />
-              ) : activeApproval ? (
-                <ApprovalCard
-                  interaction={activeApproval}
-                  busy={resolvingInteraction === activeApproval.id}
-                  onReject={() =>
-                    void resolveApproval(activeApproval, "rejected")
-                  }
-                  onApprove={() =>
-                    void resolveApproval(activeApproval, "approved")
-                  }
-                  onApproveSession={() =>
-                    void resolveApproval(activeApproval, "approved", true)
-                  }
-                />
-              ) : null}
-              {(activeBackgroundTasks.length > 0 ||
-                activeTodos.some((todo) => todo.status !== "done")) && (
-                <div className="composer-progress-row">
-                  {activeBackgroundTasks.length > 0 && (
-                    <BackgroundTaskProgress
-                      tasks={activeBackgroundTasks}
-                      onLoadOutput={(taskId) =>
-                        activeAgentScope
-                          ? loadBackgroundTaskOutput(
-                              activeAgentScope,
-                              taskId,
-                              BACKGROUND_TASK_DETAIL_TAIL,
-                            )
-                          : Promise.resolve()
-                      }
-                    />
-                  )}
-                  {activeTodos.some((todo) => todo.status !== "done") && (
-                    <TodoProgress todos={activeTodos} />
-                  )}
-                </div>
-              )}
-              {activeGoal && activeGoal.status !== "complete" && (
-                <div className="composer-goal-status">
-                  <section
-                    className={`composer-goal-card ${activeGoal.status}`}
-                    aria-label={t("goal.current")}
-                  >
-                    <span className="composer-goal-icon" aria-hidden="true">
-                      <Target size={15} />
-                    </span>
-                    <span className="composer-goal-copy">
-                      <span className="composer-goal-heading">
-                        <strong>{t("goal.current")}</strong>
-                        <small>
-                          {activeGoal.status === "active"
-                            ? t("goal.statusActive")
-                            : activeGoal.status === "paused"
-                              ? t("goal.statusPaused")
-                              : t("goal.statusBlocked")}
-                        </small>
-                      </span>
-                      <span
-                        className="composer-goal-objective"
-                        title={activeGoal.objective}
-                      >
-                        {activeGoal.objective}
-                      </span>
-                    </span>
-                    <span className="composer-goal-actions">
-                      <button
-                        className="icon-only"
-                        type="button"
-                        aria-label={t("goal.editAction")}
-                        title={t("goal.editAction")}
-                        disabled={modeBusy}
-                        onClick={() => setGoalEditTarget(activeGoal)}
-                      >
-                        <SquarePen size={12} />
-                      </button>
-                      {activeGoal.status === "active" && (
-                        <button
-                          className="icon-only"
-                          type="button"
-                          aria-label={t("goal.pauseAction")}
-                          title={t("goal.pauseAction")}
-                          disabled={modeBusy}
-                          onClick={() => void controlActiveGoal("pause")}
-                        >
-                          <Pause size={12} />
-                        </button>
-                      )}
-                      {(activeGoal.status === "paused" ||
-                        activeGoal.status === "blocked") && (
-                        <button
-                          className="primary icon-only"
-                          type="button"
-                          aria-label={t("goal.resumeAction")}
-                          title={t("goal.resumeAction")}
-                          disabled={modeBusy}
-                          onClick={() => void controlActiveGoal("resume")}
-                        >
-                          <Play size={12} />
-                        </button>
-                      )}
-                      <button
-                        className="cancel"
-                        type="button"
-                        aria-label={t("goal.cancel")}
-                        title={t("goal.cancel")}
-                        disabled={modeBusy}
-                        onClick={() => void controlActiveGoal("cancel")}
-                      >
-                        <X size={12} />
-                      </button>
-                    </span>
-                  </section>
-                </div>
-              )}
-              <form className="composer" onSubmit={handleSubmit}>
-                {slashMenuOpen && (
-                  <div
-                    className="slash-command-menu"
-                    id="slash-command-menu"
-                    role="menu"
-                    aria-label={t("slash.commands")}
-                    onMouseDown={(event) => event.preventDefault()}
-                  >
-                    <button
-                      className={
-                        slashMenuActiveIndex === 0 ? "selected" : undefined
-                      }
-                      id="slash-command-compact"
-                      type="button"
-                      role="menuitem"
-                      disabled={!canRunCompaction}
-                      onMouseEnter={() => setSlashMenuActiveIndex(0)}
-                      onClick={() => void runCompactionCommand()}
-                    >
-                      <span className="slash-command-icon" aria-hidden="true">
-                        {activeCompaction?.phase === "started" ? (
-                          <span className="spinner" />
-                        ) : (
-                          <Minimize2 size={14} />
-                        )}
-                      </span>
-                      <strong>{t("slash.compact")}</strong>
-                      <small>
-                        {activeCompaction?.phase === "started"
-                          ? t("slash.compacting")
-                          : activeContextPercent === undefined
-                            ? t("slash.compactDesc")
-                            : t("slash.compactDescPercent", { percent: activeContextPercent })}
-                      </small>
-                    </button>
-                    <button
-                      className={
-                        slashMenuActiveIndex === 1 ? "selected" : undefined
-                      }
-                      id="slash-command-fork"
-                      type="button"
-                      role="menuitem"
-                      disabled={!canRunFork}
-                      onMouseEnter={() => setSlashMenuActiveIndex(1)}
-                      onClick={() => void runForkCommand()}
-                    >
-                      <span className="slash-command-icon" aria-hidden="true">
-                        {forkCommandBusy ? (
-                          <span className="spinner" />
-                        ) : (
-                          <Copy size={14} />
-                        )}
-                      </span>
-                      <strong>{t("slash.fork")}</strong>
-                      <small>{t("slash.forkDesc")}</small>
-                    </button>
-                    <button
-                      className={
-                        slashMenuActiveIndex === 2 ? "selected" : undefined
-                      }
-                      id="slash-command-btw"
-                      type="button"
-                      role="menuitem"
-                      disabled={!canOpenSideChat}
-                      onMouseEnter={() => setSlashMenuActiveIndex(2)}
-                      onClick={openSideChatCommand}
-                    >
-                      <span className="slash-command-icon" aria-hidden="true">
-                        <MessageSquareText size={14} />
-                      </span>
-                      <strong>{t("sideChat.title")}</strong>
-                      <small>{t("slash.sideChatDesc")}</small>
-                    </button>
-                  </div>
-                )}
-                {promptAttachments.length > 0 && (
-                  <div className="prompt-attachment-list">
-                    {promptAttachments.map((attachment) => (
-                      <figure
-                        className={`prompt-attachment ${attachment.kind}`}
-                        key={attachment.id}
-                      >
-                        {attachment.kind === "image" ? (
-                          <img
-                            src={attachment.dataUrl}
-                            alt={attachment.name}
-                          />
-                        ) : attachment.kind === "audio" ? (
-                          <audio
-                            src={attachment.dataUrl}
-                            controls
-                            preload="metadata"
-                          />
-                        ) : attachment.kind === "video" ? (
-                          <video
-                            src={attachment.dataUrl}
-                            controls
-                            preload="metadata"
-                          />
-                        ) : (
-                          <div className="prompt-file-preview">
-                            <FileCode2 size={24} />
-                            <small>{formatBytes(attachment.size)}</small>
-                          </div>
-                        )}
-                        <figcaption title={attachment.name}>
-                          {attachment.name}
-                        </figcaption>
-                        <button
-                          type="button"
-                          aria-label={t("composer.removeAttachmentNamed", { name: attachment.name })}
-                          title={t("composer.removeAttachment")}
-                          onClick={() =>
-                            setPromptAttachments((current) =>
-                              current.filter(
-                                (item) => item.id !== attachment.id,
-                              ),
-                            )
-                          }
-                        >
-                          <X size={12} />
-                        </button>
-                      </figure>
-                    ))}
-                  </div>
-                )}
-                {(
-                  activePlan ||
-                  activeGoalMode ||
-                  activeSwarmMode ||
-                  promptSkills.length > 0
-                ) && (
-                  <div
-                    className="prompt-skill-list"
-                    aria-label={t("composer.inputSettings")}
-                  >
-                    {activePlan && (
-                      <span className="prompt-skill-chip prompt-plan-chip">
-                        <span className="prompt-skill-open prompt-plan-label">
-                          <ClipboardList size={13} />
-                          <span>{t("plan.label")}</span>
-                        </span>
-                        <button
-                          className="prompt-skill-remove"
-                          type="button"
-                          aria-label={t("plan.exit")}
-                          title={t("plan.exit")}
-                          disabled={modeBusy || isStreaming}
-                          onClick={() => void togglePlanMode()}
-                        >
-                          {modeBusy ? (
-                            <span className="spinner" />
-                          ) : (
-                            <X size={11} />
-                          )}
-                        </button>
-                      </span>
-                    )}
-                    {activeGoalMode && (
-                      <span className="prompt-skill-chip prompt-goal-chip">
-                        <span className="prompt-skill-open prompt-plan-label">
-                          <Target size={13} />
-                          <span>{t("goal.label")}</span>
-                        </span>
-                        <button
-                          className="prompt-skill-remove"
-                          type="button"
-                          aria-label={t("goal.disable")}
-                          title={t("goal.disable")}
-                          disabled={modeBusy}
-                          onClick={() => void toggleGoalMode()}
-                        >
-                          {modeBusy ? (
-                            <span className="spinner" />
-                          ) : (
-                            <X size={11} />
-                          )}
-                        </button>
-                      </span>
-                    )}
-                    {activeSwarmMode && (
-                      <span className="prompt-skill-chip prompt-plan-chip">
-                        <span className="prompt-skill-open prompt-plan-label">
-                          <RemixSparklingLineIcon size={13} />
-                          <span>{t("swarm.label")}</span>
-                        </span>
-                        <button
-                          className="prompt-skill-remove"
-                          type="button"
-                          aria-label={t("swarm.disable")}
-                          title={t("swarm.disable")}
-                          disabled={modeBusy || isStreaming}
-                          onClick={() => void toggleSwarmMode()}
-                        >
-                          {modeBusy ? (
-                            <span className="spinner" />
-                          ) : (
-                            <X size={11} />
-                          )}
-                        </button>
-                      </span>
-                    )}
-                    {promptSkills.map((skill) => (
-                      <span className="prompt-skill-chip" key={skill.name}>
-                        <button
-                          className="prompt-skill-open"
-                          type="button"
-                          aria-label={t("skills.viewSkill", { name: skill.name })}
-                          title={t("skills.viewDetail")}
-                          onClick={() => void openSkillDetail(skill)}
-                        >
-                          <Package size={13} />
-                          <span>{skill.name}</span>
-                        </button>
-                        <button
-                          className="prompt-skill-remove"
-                          type="button"
-                          aria-label={t("skills.removeSkill", { name: skill.name })}
-                          title={t("skills.remove")}
-                          onClick={() =>
-                            setPromptSkills((current) =>
-                              current.filter(
-                                (item) => item.name !== skill.name,
-                              ),
-                            )
-                          }
-                        >
-                          <X size={11} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <input
-                  ref={attachmentInputRef}
-                  className="prompt-attachment-input"
-                  type="file"
-                  multiple
-                  onChange={handleAttachmentInput}
-                />
-                <textarea
-                  ref={textareaRef}
-                  value={prompt}
-                  onChange={(event) => {
-                    updatePrompt(
-                      event.target.value,
-                      promptCompositionRef.current ||
-                        (event.nativeEvent as InputEvent).isComposing,
-                    );
-                    syncSlashMenu(event.currentTarget);
-                  }}
-                  onCompositionStart={() => {
-                    promptCompositionRef.current = true;
-                  }}
-                  onCompositionEnd={() => {
-                    promptCompositionRef.current = false;
-                    window.requestAnimationFrame(() => {
-                      const textarea = textareaRef.current;
-                      if (textarea) {
-                        updatePrompt(textarea.value);
-                        syncSlashMenu(textarea);
-                      }
-                    });
-                  }}
-                  onFocus={(event) => syncSlashMenu(event.currentTarget)}
-                  onSelect={(event) => syncSlashMenu(event.currentTarget)}
-                  onBlur={() => setSlashMenuOpen(false)}
-                  onKeyDown={handlePromptKeyDown}
-                  onPaste={handlePromptPaste}
-                  aria-expanded={slashMenuOpen}
-                  aria-controls={
-                    slashMenuOpen ? "slash-command-menu" : undefined
-                  }
-                  aria-activedescendant={
-                    slashMenuOpen
-                      ? slashMenuActiveIndex === 0
-                        ? "slash-command-compact"
-                        : slashMenuActiveIndex === 1
-                          ? "slash-command-fork"
-                          : "slash-command-btw"
-                      : undefined
-                  }
-                  placeholder={
-                    activePlan
-                      ? t("composer.placeholderPlan")
-                      : activeGoalMode
-                        ? t("composer.placeholderGoal")
-                      : isStreaming
-                        ? t("composer.placeholderStreaming")
-                        : t("composer.placeholder")
-                  }
-                  rows={1}
-                  disabled={modelBusy || hasBlockingInteraction}
-                />
-                <div className="composer-toolbar">
-                  <div className="composer-options">
-                    <div
-                      className={`composer-add-menu-wrap ${
-                        composerAddOpen ? "open" : ""
-                      }`}
-                      ref={composerAddRef}
-                    >
-                      <button
-                        className="toolbar-icon composer-add-trigger"
-                        type="button"
-                        title={t("composer.add")}
-                        aria-label={t("composer.add")}
-                        aria-expanded={composerAddOpen}
-                        aria-controls="composer-add-menu"
-                        onClick={toggleComposerAdd}
-                        disabled={!selectedModel || modelBusy}
-                      >
-                        <Plus size={15} />
-                      </button>
-                      {composerAddOpen && (
-                        <div
-                          className="composer-add-menu"
-                          id="composer-add-menu"
-                          role="menu"
-                          aria-label={t("composer.addMenu")}
-                        >
-                          <div className="composer-add-group">
-                            <button
-                              className="composer-add-item"
-                              type="button"
-                              role="menuitem"
-                              disabled={
-                                promptAttachments.length >=
-                                MAX_PROMPT_ATTACHMENTS
-                              }
-                              onClick={() => {
-                                setComposerAddOpen(false);
-                                attachmentInputRef.current?.click();
-                              }}
-                            >
-                              <Paperclip size={15} />
-                              <span>
-                                <strong>{t("composer.attachments")}</strong>
-                                <small>{t("composer.attachmentsDesc")}</small>
-                              </span>
-                            </button>
-                            <button
-                              className={`composer-add-item ${
-                                activePlan ? "selected" : ""
-                              }`}
-                              type="button"
-                              role="menuitemcheckbox"
-                              aria-checked={Boolean(activePlan)}
-                              disabled={
-                                !activeAgentScope || modeBusy || isStreaming
-                              }
-                              onClick={() => {
-                                setComposerAddOpen(false);
-                                void togglePlanMode();
-                              }}
-                            >
-                              <ClipboardList size={15} />
-                              <span>
-                                <strong>{t("plan.label")}</strong>
-                                <small>{t("plan.desc")}</small>
-                              </span>
-                              {activePlan && <Check size={14} />}
-                            </button>
-                            <button
-                              className={`composer-add-item ${
-                                activeGoal || activeGoalMode ? "selected" : ""
-                              }`}
-                              type="button"
-                              role="menuitemcheckbox"
-                              aria-checked={Boolean(
-                                activeGoal || activeGoalMode,
-                              )}
-                              disabled={
-                                !activeAgentScope ||
-                                modeBusy ||
-                                activeGoal?.status === "complete"
-                              }
-                              onClick={() => {
-                                setComposerAddOpen(false);
-                                if (activeGoal?.status === "active") {
-                                  void controlActiveGoal("pause");
-                                } else if (
-                                  activeGoal?.status === "paused" ||
-                                  activeGoal?.status === "blocked"
-                                ) {
-                                  void controlActiveGoal("resume");
-                                } else {
-                                  void toggleGoalMode();
-                                }
-                              }}
-                            >
-                              <Target size={15} />
-                              <span>
-                                <strong>{t("goal.label")}</strong>
-                                <small>
-                                  {activeGoal?.status === "active"
-                                    ? t("goal.pauseDesc")
-                                    : activeGoal?.status === "paused" ||
-                                        activeGoal?.status === "blocked"
-                                      ? t("goal.resumeDesc")
-                                      : activeGoal?.objective ?? t("goal.desc")}
-                                </small>
-                              </span>
-                              {(activeGoal || activeGoalMode) && (
-                                <Check size={14} />
-                              )}
-                            </button>
-                            <button
-                              className={`composer-add-item ${
-                                activeSwarmMode ? "selected" : ""
-                              }`}
-                              type="button"
-                              role="menuitemcheckbox"
-                              aria-checked={activeSwarmMode}
-                              disabled={
-                                !activeAgentScope || modeBusy || isStreaming
-                              }
-                              onClick={() => {
-                                setComposerAddOpen(false);
-                                void toggleSwarmMode();
-                              }}
-                            >
-                              <RemixSparklingLineIcon size={15} />
-                              <span>
-                                <strong>{t("swarm.label")}</strong>
-                                <small>
-                                  {activeSwarmMode
-                                    ? t("swarm.disableDesc")
-                                    : t("swarm.desc")}
-                                </small>
-                              </span>
-                              {activeSwarmMode && <Check size={14} />}
-                            </button>
-                          </div>
-
-                          <div className="composer-add-divider" />
-                          <div className="composer-add-heading">{t("skills.heading")}</div>
-                          <div className="composer-skill-list">
-                            {skillsBusy ? (
-                              <div className="composer-add-empty">
-                                <span className="spinner" />
-                                {t("skills.loading")}
-                              </div>
-                            ) : skillsError ? (
-                              <div className="composer-add-empty error">
-                                {skillsError}
-                                <button
-                                  type="button"
-                                  onClick={() => void loadAvailableSkills()}
-                                >
-                                  {t("common.retry")}
-                                </button>
-                              </div>
-                            ) : availableSkills.length === 0 ? (
-                              <div className="composer-add-empty">
-                                {t("skills.empty")}
-                              </div>
-                            ) : (
-                              availableSkills.map((skill) => {
-                                const selected = promptSkills.some(
-                                  (item) => item.name === skill.name,
-                                );
-                                return (
-                                  <button
-                                    className={`composer-add-item skill ${
-                                      selected ? "selected" : ""
-                                    }`}
-                                    type="button"
-                                    role="menuitemcheckbox"
-                                    aria-checked={selected}
-                                    key={skill.name}
-                                    onClick={() => selectPromptSkill(skill)}
-                                  >
-                                    <Package size={15} />
-                                    <span>
-                                      <strong>{skill.name}</strong>
-                                      <small>{skill.description}</small>
-                                    </span>
-                                    {selected && <Check size={14} />}
-                                  </button>
-                                );
-                              })
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    <ToolbarSelect
-                      className="model-select"
-                      ariaLabel={t("model.select")}
-                      icon={<Bot size={15} />}
-                      value={selectedModel?.id ?? ""}
-                      label={
-                        modelsBusy
-                          ? t("model.syncing")
-                          : (selectedModel?.displayName ?? t("model.none"))
-                      }
-                      disabled={
-                        modelsBusy ||
-                        modelBusy ||
-                        !activeAgentScope ||
-                        !models.length
-                      }
-                      options={models.map((model) => ({
-                        value: model.id,
-                        label: model.displayName,
-                        description: t("model.contextDesc", { size: formatContext(model.contextLength) }),
-                      }))}
-                      onChange={chooseModel}
-                    />
-                    {selectedModel?.supportsReasoning &&
-                      supportedThinkingLevels.length > 0 && (
-                        <ToolbarSelect
-                          className="effort-select"
-                          ariaLabel={t("thinking.select")}
-                          icon={<BrainCircuit size={15} />}
-                          value={effort}
-                          label={t("thinking.label", { level: effort })}
-                          disabled={modelBusy || !activeAgentScope}
-                          options={supportedThinkingLevels.map((value) => ({
-                            value,
-                            label: t("thinking.label", { level: value }),
-                            description: thinkingLevelDescription(value),
-                          }))}
-                          onChange={chooseEffort}
-                        />
-                      )}
-                    <ToolbarSelect
-                      className={`permission-select ${
-                        permissionMode === "yolo"
-                          ? "full-access"
-                          : permissionMode === "auto"
-                            ? "auto-access"
-                            : ""
-                      }`}
-                      ariaLabel={t("permission.select")}
-                      icon={<ShieldCheck size={15} />}
-                      value={permissionMode}
-                      label={
-                        permissionMode === "yolo"
-                          ? t("permission.yolo")
-                          : permissionMode === "auto"
-                            ? t("permission.auto")
-                            : t("permission.manual")
-                      }
-                      disabled={modelBusy}
-                      options={[
-                        {
-                          value: "manual",
-                          label: t("permission.manual"),
-                          description: t("permission.manualDesc"),
-                        },
-                        {
-                          value: "auto",
-                          label: t("permission.auto"),
-                          description: t("permission.autoDesc"),
-                        },
-                        {
-                          value: "yolo",
-                          label: t("permission.yolo"),
-                          description: t("permission.yoloDesc"),
-                          danger: true,
-                        },
-                      ]}
-                      onChange={(value) =>
-                        choosePermissionMode(value as PermissionMode)
-                      }
-                    />
-                    {selectedModel && (
-                      <ContextUsageIndicator
-                        usage={activeContextUsage}
-                        agentUsage={activeAgentUsage}
-                        models={models}
-                        maxContextTokens={selectedModel.contextLength}
-                      />
-                    )}
-                  </div>
-                  <div className="send-zone">
-                    <span>{isStreaming ? t("composer.enterQueue") : t("composer.enterSend")}</span>
-                    <button
-                      className="send-button"
-                      type={showStopButton ? "button" : "submit"}
-                      onClick={
-                        showStopButton
-                          ? () => void cancelActiveTurn()
-                          : undefined
-                      }
-                      disabled={
-                        showStopButton
-                          ? !activeAgentScope
-                          : hasBlockingInteraction ||
-                            !composerHasContent ||
-                            isHistoryLoading ||
-                            modelBusy ||
-                            !activeAgentScope ||
-                            (promptAttachments.some(
-                              (attachment) => attachment.kind === "image",
-                            ) &&
-                              !selectedModel?.supportsImage) ||
-                            (promptAttachments.some(
-                              (attachment) => attachment.kind === "video",
-                            ) &&
-                              !selectedModel?.supportsVideo)
-                      }
-                      title={showStopButton ? t("composer.stop") : isStreaming ? t("composer.queue") : t("composer.send")}
-                    >
-                      {showStopButton ? <X size={17} /> : <ArrowUp size={18} />}
-                    </button>
-                  </div>
-                </div>
-              </form>
-              <p className="composer-caption">
-                {t("composer.caption")}
-              </p>
-            </div>
+            <ComposerDock
+              activeAgentScope={activeAgentScope}
+              activeAgentUsage={activeAgentUsage}
+              activeApproval={activeApproval}
+              activeBackgroundTasks={activeBackgroundTasks}
+              activeCompaction={activeCompaction}
+              activeContextPercent={activeContextPercent}
+              activeContextUsage={activeContextUsage}
+              activeGoal={activeGoal}
+              activeGoalMode={activeGoalMode}
+              activePlan={activePlan}
+              activeQuestion={activeQuestion}
+              activeSwarmMode={activeSwarmMode}
+              activeTodos={activeTodos}
+              attachmentInputRef={attachmentInputRef}
+              availableSkills={availableSkills}
+              canOpenSideChat={canOpenSideChat}
+              canRunCompaction={canRunCompaction}
+              canRunFork={canRunFork}
+              composerAddOpen={composerAddOpen}
+              composerAddRef={composerAddRef}
+              composerHasContent={composerHasContent}
+              effort={effort}
+              forkCommandBusy={forkCommandBusy}
+              hasBlockingInteraction={hasBlockingInteraction}
+              isHistoryLoading={isHistoryLoading}
+              isStreaming={isStreaming}
+              modeBusy={modeBusy}
+              modelBusy={modelBusy}
+              models={models}
+              modelsBusy={modelsBusy}
+              permissionMode={permissionMode}
+              prompt={prompt}
+              promptAttachments={promptAttachments}
+              promptCompositionRef={promptCompositionRef}
+              promptSkills={promptSkills}
+              resolvingInteraction={resolvingInteraction}
+              selectedModel={selectedModel}
+              showStopButton={showStopButton}
+              skillsBusy={skillsBusy}
+              skillsError={skillsError}
+              slashMenuActiveIndex={slashMenuActiveIndex}
+              slashMenuOpen={slashMenuOpen}
+              supportedThinkingLevels={supportedThinkingLevels}
+              textareaRef={textareaRef}
+              cancelActiveTurn={cancelActiveTurn}
+              chooseEffort={chooseEffort}
+              chooseModel={chooseModel}
+              choosePermissionMode={choosePermissionMode}
+              controlActiveGoal={controlActiveGoal}
+              handleAttachmentInput={handleAttachmentInput}
+              handlePromptKeyDown={handlePromptKeyDown}
+              handlePromptPaste={handlePromptPaste}
+              handleSubmit={handleSubmit}
+              loadAvailableSkills={loadAvailableSkills}
+              loadBackgroundTaskOutput={loadBackgroundTaskOutput}
+              openSideChatCommand={openSideChatCommand}
+              openSkillDetail={openSkillDetail}
+              resolveApproval={resolveApproval}
+              respondToInteraction={respondToInteraction}
+              runCompactionCommand={runCompactionCommand}
+              runForkCommand={runForkCommand}
+              selectPromptSkill={selectPromptSkill}
+              setComposerAddOpen={setComposerAddOpen}
+              setGoalEditTarget={setGoalEditTarget}
+              setPromptAttachments={setPromptAttachments}
+              setPromptSkills={setPromptSkills}
+              setSlashMenuActiveIndex={setSlashMenuActiveIndex}
+              setSlashMenuOpen={setSlashMenuOpen}
+              syncSlashMenu={syncSlashMenu}
+              toggleComposerAdd={toggleComposerAdd}
+              toggleGoalMode={toggleGoalMode}
+              togglePlanMode={togglePlanMode}
+              toggleSwarmMode={toggleSwarmMode}
+              updatePrompt={updatePrompt}
+            />
           </>
         ) : (
           <ProjectLanding
@@ -5180,84 +2496,58 @@ export default function App() {
         ) : null}
       </div>
 
-      {loginOpen && (
-        <LoginDialog
-          busy={loginBusy}
-          code={deviceCode}
-          onClose={() => !loginBusy && setLoginOpen(false)}
-          onStart={() => void startLogin()}
-        />
-      )}
+      <AppOverlays
+        loginOpen={loginOpen}
+        loginBusy={loginBusy}
+        deviceCode={deviceCode}
+        webAuthOpen={webAuthOpen}
+        removalTarget={removalTarget}
+        removalBusy={removalBusy}
+        undoMessageTarget={undoMessageTarget}
+        undoMessageBusy={undoMessageBusy}
+        goalEditTarget={goalEditTarget}
+        goalEditBusy={goalEditBusy}
+        directoryPickerOpen={directoryPickerOpen}
+        settingsOpen={settingsOpen}
+        appVersion={appVersion}
+        colorScheme={colorScheme}
+        language={language}
+        notice={notice}
+        onCloseLogin={() => {
+          if (!loginBusy) setLoginOpen(false);
+        }}
+        onStartLogin={() => void startLogin()}
+        onSubmitCredential={(credential) => {
+          setWebCredential(credential);
+          setWebAuthOpen(false);
+          window.location.reload();
+        }}
+        onCloseRemoval={() => {
+          if (!removalBusy) setRemovalTarget(undefined);
+        }}
+        onConfirmRemoval={() => void confirmRemoval()}
+        onCloseUndoMessage={() => {
+          if (!undoMessageBusy) setUndoMessageTarget(undefined);
+        }}
+        onConfirmUndoMessage={() => void confirmUndoMessage()}
+        onCloseGoalEdit={() => {
+          if (!goalEditBusy) setGoalEditTarget(undefined);
+        }}
+        onConfirmGoalEdit={(goal, objective) =>
+          void editActiveGoal(goal, objective)
+        }
+        onCloseDirectoryPicker={() => setDirectoryPickerOpen(false)}
+        onSelectDirectory={(path) => {
+          setDirectoryPickerOpen(false);
+          void addProjectPath(path);
+        }}
+        onColorSchemeChange={updateColorScheme}
+        onLanguageChange={updateLanguage}
+        onCloseSettings={closeSettings}
+        onDismissNotice={() => setNotice(undefined)}
+      />
 
-      {webAuthOpen && !isDesktop() && (
-        <WebCredentialDialog
-          onSubmit={(credential) => {
-            setWebCredential(credential);
-            setWebAuthOpen(false);
-            window.location.reload();
-          }}
-        />
-      )}
 
-      {removalTarget && (
-        <RemovalDialog
-          target={removalTarget}
-          busy={removalBusy}
-          onClose={() => !removalBusy && setRemovalTarget(undefined)}
-          onConfirm={() => void confirmRemoval()}
-        />
-      )}
-
-      {undoMessageTarget && (
-        <UndoMessageDialog
-          busy={undoMessageBusy}
-          onClose={() =>
-            !undoMessageBusy && setUndoMessageTarget(undefined)
-          }
-          onConfirm={() => void confirmUndoMessage()}
-        />
-      )}
-
-      {goalEditTarget && (
-        <GoalEditDialog
-          goal={goalEditTarget}
-          busy={goalEditBusy}
-          onClose={() => !goalEditBusy && setGoalEditTarget(undefined)}
-          onConfirm={(objective) =>
-            void editActiveGoal(goalEditTarget, objective)
-          }
-        />
-      )}
-
-      {directoryPickerOpen && !isDesktop() && (
-        <DirectoryPickerDialog
-          onClose={() => setDirectoryPickerOpen(false)}
-          onSelect={(path) => {
-            setDirectoryPickerOpen(false);
-            void addProjectPath(path);
-          }}
-        />
-      )}
-
-      {settingsOpen && (
-        <SettingsDialog
-          appVersion={appVersion}
-          colorScheme={colorScheme}
-          language={language}
-          onColorSchemeChange={updateColorScheme}
-          onLanguageChange={updateLanguage}
-          onClose={closeSettings}
-        />
-      )}
-
-      {notice && (
-        <div className="toast" role="status">
-          <span>{notice}</span>
-          <button aria-label={t("notice.dismiss")} onClick={() => setNotice(undefined)}>
-            <X size={14} />
-          </button>
-        </div>
-      )}
     </div>
   );
 }
