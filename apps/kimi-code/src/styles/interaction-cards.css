@@ -1,0 +1,718 @@
+.interaction-card {
+  width: min(850px, 100%);
+  margin: 0 auto 10px;
+  padding: 14px;
+  border: 1px solid rgba(139, 124, 246, 0.24);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 0 0, rgba(139, 124, 246, 0.09), transparent 34%),
+    #26282e;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.34);
+  animation: approval-in 180ms ease-out;
+}
+
+.interaction-card-heading {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+}
+
+.interaction-card-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(139, 124, 246, 0.24);
+  border-radius: 10px;
+  color: #b6aaf5;
+  background: rgba(139, 124, 246, 0.09);
+}
+
+.interaction-card-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.interaction-card-heading small,
+.interaction-card-heading strong {
+  display: block;
+}
+
+.interaction-card-heading small {
+  color: #a9a5b1;
+  font-size: 10.5px;
+}
+
+.interaction-card-heading strong {
+  color: #dad6e2;
+  font-size: 13px;
+  font-weight: 570;
+}
+
+.question-list {
+  display: grid;
+  max-height: min(390px, 48vh);
+  margin-top: 13px;
+  padding-right: 3px;
+  overflow: auto;
+  gap: 13px;
+}
+
+.question-item {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.question-item legend {
+  display: flex;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.question-item legend > span {
+  color: #8f83cf;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.question-item legend > strong {
+  color: #dedce2;
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.question-item legend > small {
+  color: #aaabb1;
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.question-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 6px;
+}
+
+.question-options > button {
+  display: grid;
+  min-width: 0;
+  min-height: 50px;
+  padding: 9px 10px;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  color: #aaa6b0;
+  background: rgba(255, 255, 255, 0.022);
+  text-align: left;
+  cursor: pointer;
+}
+
+.question-options > button:hover:not(:disabled),
+.question-options > button.selected {
+  border-color: rgba(139, 124, 246, 0.3);
+  background: rgba(139, 124, 246, 0.075);
+}
+
+.question-options > button.selected {
+  color: #d1c9f7;
+}
+
+.option-radio,
+.option-check {
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border: 1px solid #5f5a6b;
+  color: #cfc5ff;
+}
+
+.option-radio {
+  border-radius: 50%;
+}
+
+.option-check {
+  border-radius: 4px;
+}
+
+.question-options button.selected .option-radio,
+.question-options button.selected .option-check {
+  border-color: #9d8eea;
+  background: rgba(139, 124, 246, 0.18);
+}
+
+.question-options button > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.question-options button strong {
+  color: #d4d5d9;
+  font-size: 11.5px;
+  font-weight: 560;
+}
+
+.question-options button small {
+  overflow: hidden;
+  color: #a5a7ad;
+  font-size: 10.5px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+}
+
+.question-other,
+.plan-review-feedback {
+  display: flex;
+  margin-top: 7px;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.question-other > span,
+.plan-review-feedback > span,
+.plan-review-options > span {
+  color: #a7a9af;
+  font-size: 10.5px;
+}
+
+.question-other input,
+.plan-review-feedback textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  outline: none;
+  color: #c9c5cf;
+  background: #2b2d30;
+  font: inherit;
+  font-size: 11px;
+}
+
+.question-other input {
+  height: 36px;
+  padding: 0 10px;
+}
+
+.question-other input::placeholder {
+  color: #85878e;
+}
+
+.plan-review-feedback textarea {
+  padding: 8px 9px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.question-other input:focus,
+.plan-review-feedback textarea:focus {
+  border-color: rgba(139, 124, 246, 0.34);
+}
+
+.interaction-card-actions {
+  display: flex;
+  margin-top: 12px;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.interaction-card-actions button,
+.plan-review-option {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.interaction-card-actions button {
+  display: flex;
+  min-height: 34px;
+  padding: 0 13px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #9b979f;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 11px;
+}
+
+.interaction-card-actions button:hover:not(:disabled) {
+  color: #d5d1db;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.interaction-card-actions .interaction-primary {
+  border-color: rgba(139, 124, 246, 0.34);
+  color: #f1eefc;
+  background: linear-gradient(145deg, #8e7ce5, #6f60bd);
+  font-weight: 600;
+}
+
+.interaction-card-actions .interaction-danger:hover:not(:disabled) {
+  border-color: rgba(206, 105, 105, 0.25);
+  color: #dd9999;
+  background: rgba(206, 105, 105, 0.07);
+}
+
+.interaction-card-actions button:disabled,
+.plan-review-option.disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.plan-review-content {
+  max-height: min(340px, 42vh);
+  margin-top: 12px;
+  padding: 11px 12px;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 9px;
+  color: #bcb8c2;
+  background: #2b2d30;
+  font-size: 9.5px;
+  line-height: 1.62;
+}
+
+.plan-review-content > :first-child {
+  margin-top: 0;
+}
+
+.plan-review-content > :last-child {
+  margin-bottom: 0;
+}
+
+.plan-review-content h1,
+.plan-review-content h2,
+.plan-review-content h3 {
+  color: #d6d1df;
+}
+
+.plan-review-content code {
+  color: #c7bdf5;
+  font-family: "DM Mono", monospace;
+}
+
+.plan-review-path {
+  display: block;
+  margin-top: 7px;
+  overflow: hidden;
+  color: #66616f;
+  font-family: "DM Mono", monospace;
+  font-size: 7.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-review-options {
+  display: flex;
+  margin-top: 10px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-review-option-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.plan-review-option {
+  display: grid;
+  min-width: 0;
+  min-height: 52px;
+  padding: 9px 11px;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  color: #aaa4b6;
+  background: rgba(139, 124, 246, 0.045);
+  text-align: left;
+}
+
+.plan-review-option:hover:not(.disabled),
+.plan-review-option.selected {
+  border-color: rgba(139, 124, 246, 0.32);
+  color: #d4cafc;
+  background: rgba(139, 124, 246, 0.09);
+}
+
+.plan-review-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  appearance: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  outline: none;
+  background: var(--surface-deep);
+  cursor: pointer;
+}
+
+.plan-review-option input:checked {
+  border-color: var(--accent);
+  background:
+    radial-gradient(circle, var(--accent) 0 3px, transparent 3.5px),
+    var(--surface-deep);
+}
+
+.plan-review-option input:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: 2px;
+}
+
+.plan-review-option input:disabled {
+  cursor: default;
+}
+
+.plan-review-option-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.plan-review-option strong {
+  font-size: 9.5px;
+}
+
+.plan-review-option small {
+  color: #77717f;
+  font-size: 8px;
+}
+
+.interaction-card.plan-review-card {
+  border-color: #41444b;
+  background: #26282e;
+}
+
+.plan-review-card .interaction-card-heading {
+  grid-template-columns: 40px minmax(0, 1fr);
+}
+
+.plan-review-card .interaction-card-icon {
+  width: 40px;
+  height: 40px;
+  border-color: #484b53;
+  color: #c0b6f4;
+  background: #2b2d30;
+}
+
+.plan-review-card .interaction-card-heading > div {
+  gap: 4px;
+}
+
+.plan-review-card .interaction-card-heading small {
+  color: #a7a9af;
+  font-size: 10.5px;
+}
+
+.plan-review-card .interaction-card-heading strong {
+  color: #edeef1;
+  font-size: 13px;
+}
+
+.plan-review-card .plan-review-content {
+  padding: 14px 15px;
+  border-color: #41444a;
+  color: #d3d4d8;
+  background: #2b2d30;
+  font-size: 12px;
+  line-height: 1.72;
+}
+
+.plan-review-card .plan-review-content h1,
+.plan-review-card .plan-review-content h2,
+.plan-review-card .plan-review-content h3 {
+  color: #f0f1f3;
+}
+
+.plan-review-card .plan-review-content code {
+  color: #d2c9fa;
+  background: #25272b;
+}
+
+.plan-review-card .plan-review-path {
+  color: #a4a6ad;
+  font-size: 10px;
+}
+
+.plan-review-card .plan-review-options {
+  margin-top: 13px;
+  gap: 8px;
+}
+
+.plan-review-card .plan-review-options > span,
+.plan-review-card .plan-review-feedback > span {
+  color: #b0b2b8;
+  font-size: 10.5px;
+}
+
+.plan-review-card .plan-review-option {
+  min-height: 52px;
+  padding: 9px 11px;
+  border-color: #42454c;
+  color: #d6d2e5;
+  background: #2b2d30;
+}
+
+.plan-review-card .plan-review-option:hover:not(.disabled),
+.plan-review-card .plan-review-option.selected {
+  border-color: #625b8c;
+  color: #f0ecff;
+  background: #34363b;
+}
+
+.plan-review-card .plan-review-option strong {
+  font-size: 11.5px;
+}
+
+.plan-review-card .plan-review-option small {
+  color: #adafb6;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.plan-review-card .plan-review-feedback {
+  margin-top: 12px;
+  gap: 7px;
+}
+
+.plan-review-card .plan-review-feedback textarea {
+  min-height: 64px;
+  padding: 10px 11px;
+  border-color: #42454c;
+  color: #e0e1e4;
+  background: #2b2d30;
+  font-size: 11.5px;
+}
+
+.plan-review-card .plan-review-feedback textarea::placeholder {
+  color: #85878e;
+}
+
+.plan-review-card .interaction-card-actions {
+  margin-top: 14px;
+  gap: 8px;
+}
+
+.plan-review-card .interaction-card-actions button {
+  min-height: 34px;
+  padding: 0 13px;
+  border-color: #42454c;
+  color: #c1c3c8;
+  background: #2b2d30;
+  font-size: 11px;
+}
+
+.plan-review-card .interaction-card-actions button:hover:not(:disabled) {
+  border-color: #555860;
+  color: #f0f1f3;
+  background: #34363b;
+}
+
+.approval-card {
+  display: grid;
+  width: min(850px, 100%);
+  margin: 0 auto 10px;
+  padding: 14px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid rgba(231, 173, 82, 0.24);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 0 0, rgba(231, 173, 82, 0.08), transparent 34%),
+    #26282e;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.34);
+  animation: approval-in 180ms ease-out;
+}
+
+@keyframes approval-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+}
+
+.approval-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(231, 173, 82, 0.22);
+  border-radius: 10px;
+  color: #e6b76b;
+  background: rgba(231, 173, 82, 0.08);
+}
+
+.approval-content {
+  min-width: 0;
+}
+
+.approval-heading {
+  display: flex;
+  min-height: 36px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.approval-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.approval-heading span {
+  color: #9a7b4d;
+  font-size: 8.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.approval-heading strong {
+  overflow: hidden;
+  color: #d9d6d0;
+  font-size: 11.5px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-tool {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  color: #77747a !important;
+  background: rgba(255, 255, 255, 0.025);
+  font-family: "DM Mono", monospace;
+  font-weight: 450 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+
+.approval-command {
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 9px;
+  background: #1e1f22;
+}
+
+.approval-command > div {
+  display: flex;
+  padding: 7px 10px;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: #65636a;
+  font-size: 8.5px;
+}
+
+.approval-command code {
+  display: block;
+  max-height: 122px;
+  padding: 10px;
+  overflow: auto;
+  color: #d8d4c9;
+  font-family: "DM Mono", monospace;
+  font-size: 10.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.approval-detail {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  color: #aaa6a0;
+  background: #2b2d30;
+  font-size: 10px;
+}
+
+.approval-footer {
+  display: flex;
+  margin-top: 11px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.approval-footer p {
+  margin: 0;
+  color: #68656a;
+  font-size: 8.5px;
+}
+
+.approval-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.approval-actions button {
+  display: flex;
+  min-height: 29px;
+  padding: 0 10px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: #9b989e;
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.approval-actions button:hover:not(:disabled) {
+  color: #d4d1d5;
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.approval-actions .approval-reject:hover:not(:disabled) {
+  color: #dd9999;
+  border-color: rgba(206, 105, 105, 0.25);
+  background: rgba(206, 105, 105, 0.07);
+}
+
+.approval-actions .approval-once {
+  border-color: rgba(231, 173, 82, 0.25);
+  color: #17140e;
+  background: linear-gradient(145deg, #ecc27f, #c7964d);
+  font-weight: 600;
+}
+
+.approval-actions .approval-once:hover:not(:disabled) {
+  color: #110f0b;
+  border-color: rgba(255, 216, 151, 0.4);
+  background: linear-gradient(145deg, #f2cd91, #d3a45b);
+}
+
+.approval-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.approval-actions .spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 1px;
+}

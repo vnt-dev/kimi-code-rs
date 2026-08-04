@@ -1,0 +1,116 @@
+@media (max-width: 980px) {
+  .sidebar:not(.collapsed) {
+    flex-basis: 248px;
+    width: 248px;
+  }
+
+  .skill-detail-sidebar {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(420px, calc(100% - 68px));
+    min-width: 0;
+    box-shadow: -20px 0 60px rgba(0, 0, 0, 0.38);
+  }
+
+  .send-zone > span {
+    display: none;
+  }
+
+  .welcome {
+    width: calc(100% - 40px);
+  }
+
+  .suggestion-grid {
+    grid-template-columns: 1fr;
+    max-width: 520px;
+  }
+
+  .suggestion-grid button {
+    min-height: 82px;
+  }
+}
+
+@media (max-width: 760px) {
+  .sidebar:not(.collapsed) {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 270px;
+    box-shadow: 20px 0 60px rgba(0, 0, 0, 0.45);
+  }
+
+  .message-stack {
+    width: calc(100% - 32px);
+  }
+
+  .composer-dock {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .background-task-popover {
+    left: 0;
+    width: min(calc(200% + 8px), calc(100vw - 28px));
+    transform: translate(0, 8px) scale(0.985);
+    transform-origin: bottom left;
+  }
+
+  .background-task-anchor:hover .background-task-popover,
+  .background-task-anchor:focus-within .background-task-popover {
+    transform: translate(0, 0) scale(1);
+  }
+
+  .mode-status-stack {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-toolbar-button span {
+    display: none;
+  }
+
+  .mode-toolbar-button {
+    width: 29px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .approval-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .approval-actions {
+    width: 100%;
+  }
+
+  .approval-actions button {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message,
+  .live-step,
+  .live-tool-card,
+  .live-text,
+  .subagent-row,
+  .subagent-progress-dots i.running,
+  .todo-progress-anchor,
+  .background-task-anchor,
+  .background-task-running-dot {
+    animation: none;
+  }
+
+  .collapsible,
+  .collapsible.open,
+  .subagent-progress-dots i,
+  .subagent-row,
+  .todo-popover,
+  .todo-progress-pill,
+  .todo-list-item,
+  .background-task-popover,
+  .background-task-pill,
+  .background-task-item,
+  .background-task-chevron {
+    transition: none;
+  }
+}

@@ -1,0 +1,600 @@
+.mobile-sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .app-shell.web-runtime.mobile-layout {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+    height: var(--app-viewport-height, 100dvh);
+    max-height: var(--app-viewport-height, 100dvh);
+    overflow: hidden;
+  }
+
+  .web-runtime.mobile-layout .window-titlebar {
+    display: none;
+  }
+
+  .web-runtime.mobile-layout .app-body,
+  .web-runtime.mobile-layout .workspace {
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .web-runtime.mobile-layout .sidebar,
+  .web-runtime.mobile-layout .sidebar.collapsed {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: min(320px, 86vw);
+    height: 100%;
+    flex-basis: min(320px, 86vw);
+    padding-top: env(safe-area-inset-top);
+    box-shadow: var(--mobile-sidebar-shadow);
+    transform: translateX(0);
+    transition: transform 180ms ease;
+    z-index: 51;
+  }
+
+  .web-runtime.mobile-layout .sidebar.collapsed {
+    transform: translateX(-102%);
+    pointer-events: none;
+  }
+
+  .web-runtime.mobile-layout .mobile-sidebar-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: block;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--dialog-overlay);
+    backdrop-filter: blur(3px);
+  }
+
+  .web-runtime.mobile-layout .brand-row {
+    height: 58px;
+    padding: 0 10px 0 16px;
+  }
+
+  .web-runtime.mobile-layout .brand-row > .icon-button,
+  .web-runtime.mobile-layout .chat-header .icon-button,
+  .web-runtime.mobile-layout .landing-menu {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 auto;
+  }
+
+  .web-runtime.mobile-layout .sidebar-primary {
+    padding: 4px 10px;
+  }
+
+  .web-runtime.mobile-layout .new-project-button {
+    min-height: 44px;
+  }
+
+  .web-runtime.mobile-layout .project-row {
+    min-height: 44px;
+    height: auto;
+  }
+
+  .web-runtime.mobile-layout .project-actions {
+    max-width: 92px;
+  }
+
+  .web-runtime.mobile-layout .project-actions .icon-button {
+    width: 32px;
+    height: 32px;
+    opacity: 1;
+  }
+
+  .web-runtime.mobile-layout .conversation-row {
+    min-height: 42px;
+    height: auto;
+    grid-template-columns: minmax(0, 1fr) 34px;
+  }
+
+  .web-runtime.mobile-layout .conversation-archive-button {
+    width: 34px;
+    height: 34px;
+    opacity: 1;
+  }
+
+  .web-runtime.mobile-layout .account-area {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .web-runtime.mobile-layout .account-button {
+    min-height: 48px;
+    height: auto;
+  }
+
+  .web-runtime.mobile-layout .profile-popover {
+    right: 0;
+    bottom: calc(58px + env(safe-area-inset-bottom));
+    left: 0;
+    width: auto;
+    max-height: min(520px, calc(100dvh - 96px));
+  }
+
+  .web-runtime.mobile-layout .chat-header {
+    min-height: calc(58px + env(safe-area-inset-top));
+    height: auto;
+    padding: env(safe-area-inset-top) 10px 0;
+    gap: 8px;
+  }
+
+  .web-runtime.mobile-layout .chat-heading {
+    min-width: 0;
+    flex: 1;
+    gap: 8px;
+  }
+
+  .web-runtime.mobile-layout .chat-heading > div,
+  .web-runtime.mobile-layout .chat-title {
+    min-width: 0;
+  }
+
+  .web-runtime.mobile-layout .chat-heading h1 {
+    max-width: calc(100vw - 150px);
+    font-size: 14px;
+  }
+
+  .web-runtime.mobile-layout .path-line {
+    max-width: calc(100vw - 150px);
+    margin-top: 3px;
+    font-size: 10px;
+  }
+
+  .web-runtime.mobile-layout .chat-title-menu {
+    right: auto;
+    left: 0;
+    max-width: calc(100vw - 24px);
+  }
+
+  .web-runtime.mobile-layout .message-stack {
+    width: 100%;
+    padding: 24px 12px 52px;
+  }
+
+  .web-runtime.mobile-layout .message,
+  .web-runtime.mobile-layout .conversation-turn {
+    margin-bottom: 26px;
+  }
+
+  .web-runtime.mobile-layout .conversation-turn > .user-message {
+    margin-bottom: 18px;
+  }
+
+  .web-runtime.mobile-layout .user-message,
+  .web-runtime.mobile-layout .queued-prompt {
+    max-width: 94%;
+    width: auto;
+  }
+
+  .web-runtime.mobile-layout .markdown-body,
+  .web-runtime.mobile-layout .markdown-table-wrap,
+  .web-runtime.mobile-layout .code-wrap,
+  .web-runtime.mobile-layout .live-tool-card,
+  .web-runtime.mobile-layout .history-tool-card,
+  .web-runtime.mobile-layout .subagent-panel {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .web-runtime.mobile-layout .markdown-table-wrap,
+  .web-runtime.mobile-layout .code-wrap pre,
+  .web-runtime.mobile-layout .live-tool-detail,
+  .web-runtime.mobile-layout .history-tool-detail,
+  .web-runtime.mobile-layout .subagent-row-detail,
+  .web-runtime.mobile-layout .approval-command {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .web-runtime.mobile-layout .history-media,
+  .web-runtime.mobile-layout .markdown-body img,
+  .web-runtime.mobile-layout .markdown-body video {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .web-runtime.mobile-layout .welcome {
+    width: 100%;
+    padding: 32px 16px 40px;
+  }
+
+  .web-runtime.mobile-layout .welcome-orbit {
+    width: 64px;
+    height: 64px;
+    margin-bottom: 14px;
+  }
+
+  .web-runtime.mobile-layout .welcome-copy {
+    margin: 13px 0 20px;
+  }
+
+  .web-runtime.mobile-layout .suggestion-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .web-runtime.mobile-layout .suggestion-grid button {
+    min-height: 76px;
+  }
+
+  .web-runtime.mobile-layout .project-landing {
+    width: 100%;
+    min-width: 0;
+    padding: calc(28px + env(safe-area-inset-top)) 20px
+      calc(28px + env(safe-area-inset-bottom));
+  }
+
+  .web-runtime.mobile-layout .project-landing h1 {
+    font-size: 23px;
+  }
+
+  .web-runtime.mobile-layout .project-landing > p:not(.eyebrow) {
+    max-width: 320px;
+  }
+
+  .web-runtime.mobile-layout .composer-dock {
+    padding: 0 10px calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .web-runtime.mobile-layout .composer-goal-card {
+    width: 100%;
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .web-runtime.mobile-layout .composer-goal-actions {
+    grid-column: 2;
+    justify-content: flex-end;
+  }
+
+  .web-runtime.mobile-layout .composer {
+    width: 100%;
+    padding: 10px 10px 8px;
+    border-radius: 13px;
+    container-name: none;
+    container-type: normal;
+  }
+
+  .web-runtime.mobile-layout .composer textarea,
+  .web-runtime.mobile-layout .side-chat-composer textarea,
+  .web-runtime.mobile-layout .question-other input,
+  .web-runtime.mobile-layout .plan-review-feedback textarea {
+    max-height: min(140px, 25dvh);
+    font-size: 16px;
+  }
+
+  .web-runtime.mobile-layout .composer textarea {
+    min-height: 46px;
+  }
+
+  .web-runtime.mobile-layout .composer-toolbar {
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .web-runtime.mobile-layout .composer-options {
+    min-width: 0;
+    padding: 2px 1px;
+    flex: 1;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .web-runtime.mobile-layout .composer-options::-webkit-scrollbar {
+    display: none;
+  }
+
+  .web-runtime.mobile-layout .composer-options > * {
+    flex: 0 0 auto;
+  }
+
+  .web-runtime.mobile-layout .send-zone {
+    flex: 0 0 auto;
+  }
+
+  .web-runtime.mobile-layout .send-zone > span,
+  .web-runtime.mobile-layout .composer-caption {
+    display: none;
+  }
+
+  .web-runtime.mobile-layout .send-button {
+    width: 38px;
+    height: 38px;
+  }
+
+  .web-runtime.mobile-layout .toolbar-select-trigger,
+  .web-runtime.mobile-layout .model-select .toolbar-select-trigger {
+    width: auto;
+    max-width: 185px;
+    height: 34px;
+    padding: 0 8px;
+  }
+
+  .web-runtime.mobile-layout .effort-select .toolbar-select-trigger,
+  .web-runtime.mobile-layout .permission-select .toolbar-select-trigger {
+    width: 34px;
+    max-width: 34px;
+    height: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .web-runtime.mobile-layout .effort-select .toolbar-select-trigger > span,
+  .web-runtime.mobile-layout .permission-select .toolbar-select-trigger > span,
+  .web-runtime.mobile-layout .effort-select .toolbar-select-trigger > svg:last-child,
+  .web-runtime.mobile-layout .permission-select .toolbar-select-trigger > svg:last-child {
+    display: none;
+  }
+
+  .web-runtime.mobile-layout .toolbar-select-trigger > span,
+  .web-runtime.mobile-layout .mode-toolbar-button span {
+    font-size: 12px;
+  }
+
+  .web-runtime.mobile-layout .toolbar-icon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .web-runtime.mobile-layout .composer-add-menu,
+  .web-runtime.mobile-layout .toolbar-select-menu {
+    position: fixed;
+    right: 12px;
+    bottom: calc(82px + env(safe-area-inset-bottom));
+    left: 12px;
+    z-index: 90;
+    width: auto;
+    max-width: none;
+    max-height: min(360px, calc(100dvh - 130px));
+  }
+
+  .web-runtime.mobile-layout .slash-command-menu {
+    max-height: min(300px, 44dvh);
+    overflow-y: auto;
+  }
+
+  .web-runtime.mobile-layout .mode-status-stack {
+    grid-template-columns: 1fr;
+  }
+
+  .web-runtime.mobile-layout .composer-progress-row {
+    flex-wrap: wrap;
+  }
+
+  .web-runtime.mobile-layout .interaction-card,
+  .web-runtime.mobile-layout .approval-card {
+    padding: 12px;
+    border-radius: 12px;
+  }
+
+  .web-runtime.mobile-layout .interaction-card-heading {
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    gap: 9px;
+  }
+
+  .web-runtime.mobile-layout .interaction-card-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .web-runtime.mobile-layout .question-list,
+  .web-runtime.mobile-layout .plan-review-content {
+    max-height: min(300px, 36dvh);
+  }
+
+  .web-runtime.mobile-layout .question-options {
+    grid-template-columns: 1fr;
+  }
+
+  .web-runtime.mobile-layout .interaction-card-actions,
+  .web-runtime.mobile-layout .approval-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .web-runtime.mobile-layout .interaction-card-actions button,
+  .web-runtime.mobile-layout .approval-actions button {
+    min-height: 42px;
+    flex: 1 1 auto;
+  }
+
+  .web-runtime.mobile-layout .approval-card {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .web-runtime.mobile-layout .approval-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .web-runtime.mobile-layout .approval-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .web-runtime.mobile-layout .todo-popover,
+  .web-runtime.mobile-layout .background-task-popover,
+  .web-runtime.mobile-layout .context-usage-tooltip {
+    position: fixed;
+    right: 12px;
+    bottom: calc(82px + env(safe-area-inset-bottom));
+    left: 12px;
+    z-index: 89;
+    width: auto;
+    max-height: min(420px, calc(100dvh - 130px));
+    transform: translateY(8px) scale(0.985);
+  }
+
+  .web-runtime.mobile-layout .todo-progress-anchor:hover .todo-popover,
+  .web-runtime.mobile-layout .todo-progress-anchor:focus-within .todo-popover,
+  .web-runtime.mobile-layout .background-task-anchor:hover .background-task-popover,
+  .web-runtime.mobile-layout .background-task-anchor:focus-within .background-task-popover,
+  .web-runtime.mobile-layout .context-usage:hover .context-usage-tooltip,
+  .web-runtime.mobile-layout .context-usage:focus-visible .context-usage-tooltip {
+    transform: translateY(0) scale(1);
+  }
+
+  .web-runtime.mobile-layout .context-usage-tooltip::after {
+    display: none;
+  }
+
+  .web-runtime.mobile-layout .skill-detail-sidebar,
+  .web-runtime.mobile-layout .side-chat-sidebar {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    border-left: 0;
+    box-shadow: none;
+    z-index: 60;
+  }
+
+  .web-runtime.mobile-layout .skill-detail-header {
+    min-height: calc(58px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 10px 0 16px;
+  }
+
+  .web-runtime.mobile-layout .skill-detail-content,
+  .web-runtime.mobile-layout .side-chat-messages {
+    padding: 14px 12px 20px;
+  }
+
+  .web-runtime.mobile-layout .side-chat-composer {
+    margin: 0 10px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .web-runtime.mobile-layout .modal-backdrop,
+  .web-runtime.mobile-layout .settings-backdrop {
+    position: absolute;
+    inset: 0;
+    padding: 0;
+    z-index: 100;
+  }
+
+  .web-runtime.mobile-layout .login-dialog,
+  .web-runtime.mobile-layout .operation-dialog {
+    width: calc(100% - 24px);
+    max-height: calc(100% - 24px);
+    padding: 28px 20px 24px;
+    overflow-y: auto;
+  }
+
+  .web-runtime.mobile-layout .login-dialog {
+    max-width: 390px;
+  }
+
+  .web-runtime.mobile-layout .operation-dialog {
+    max-width: 410px;
+  }
+
+  .web-runtime.mobile-layout .operation-dialog-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .web-runtime.mobile-layout .operation-dialog-actions button,
+  .web-runtime.mobile-layout .dialog-primary,
+  .web-runtime.mobile-layout .dialog-secondary,
+  .web-runtime.mobile-layout .dialog-danger {
+    min-height: 44px;
+  }
+
+  .web-runtime.mobile-layout .web-credential-input,
+  .web-runtime.mobile-layout .directory-path-form input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .web-runtime.mobile-layout .directory-picker-dialog {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    padding: calc(22px + env(safe-area-inset-top)) 14px
+      calc(14px + env(safe-area-inset-bottom));
+    border: 0;
+    border-radius: 0;
+  }
+
+  .web-runtime.mobile-layout .directory-path-form {
+    grid-template-columns: 1fr;
+  }
+
+  .web-runtime.mobile-layout .directory-list {
+    min-height: 0;
+    flex: 1;
+  }
+
+  .web-runtime.mobile-layout .settings-backdrop {
+    align-items: stretch;
+  }
+
+  .web-runtime.mobile-layout .settings-dialog {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .web-runtime.mobile-layout .settings-dialog-header {
+    min-height: calc(58px + env(safe-area-inset-top));
+    padding: calc(16px + env(safe-area-inset-top)) 16px 10px;
+  }
+
+  .web-runtime.mobile-layout .settings-tabs {
+    padding: 6px 12px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .web-runtime.mobile-layout .settings-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .web-runtime.mobile-layout .settings-dialog-content {
+    padding: 6px 16px calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .web-runtime.mobile-layout .settings-segmented {
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .web-runtime.mobile-layout .settings-select-trigger,
+  .web-runtime.mobile-layout .settings-port-input {
+    min-height: 40px;
+    font-size: 16px;
+  }
+
+  .web-runtime.mobile-layout .settings-toast,
+  .web-runtime.mobile-layout .toast {
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 12px;
+    width: auto;
+    max-width: none;
+  }
+
+  .web-runtime.mobile-layout > .toast {
+    z-index: 120;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .web-runtime .project-actions .icon-button,
+  .web-runtime .conversation-archive-button {
+    opacity: 1;
+  }
+}
