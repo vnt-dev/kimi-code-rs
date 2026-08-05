@@ -460,6 +460,8 @@ async fn respond_interaction(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_rustls_crypto_provider();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -560,4 +562,24 @@ pub fn run() {
                 });
             }
         });
+}
+
+fn install_rustls_crypto_provider() {
+    // reqwest 0.13 is pulled in by the updater and MCP transport with its
+    // provider-neutral rustls feature. Choose a provider before either one can
+    // construct an HTTP client. Ignore the result so this remains safe when a
+    // dependency has already installed a process-wide provider.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::install_rustls_crypto_provider;
+
+    #[test]
+    fn installs_rustls_crypto_provider() {
+        install_rustls_crypto_provider();
+
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
 }

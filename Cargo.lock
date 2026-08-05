@@ -2547,6 +2547,7 @@ dependencies = [
  "kimi-code-agent-core-v2",
  "kimi-code-web-server",
  "reqwest 0.12.28",
+ "rustls",
  "serde",
  "serde_json",
  "tauri",
