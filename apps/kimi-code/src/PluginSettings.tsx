@@ -15,17 +15,17 @@ import {
   isThirdPartyEntry,
   marketplaceUpdateAvailable,
   pluginInstallPercent,
+  pluginTabNeedsNetwork,
   type PluginInfo,
   type PluginInstallProgressEvent,
   type PluginMarketplace,
   type PluginMarketplaceEntry,
   type PluginSummary,
+  type PluginTab,
   type PluginUpdateStatus,
 } from "./plugins";
 import { invoke, listen, openExternalUrl, pickNativeDirectory } from "./transport";
 import { formatBytes } from "./utils/format";
-
-type PluginTab = "installed" | "official" | "third-party" | "custom";
 
 interface ConfirmState {
   kind: "install" | "remove";
@@ -74,7 +74,8 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [marketplace, setMarketplace] = useState<PluginMarketplace>();
   const [updates, setUpdates] = useState<PluginUpdateStatus[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [installedLoading, setInstalledLoading] = useState(true);
+  const [marketLoading, setMarketLoading] = useState(false);
   const [marketError, setMarketError] = useState<string>();
   const [installedError, setInstalledError] = useState<string>();
   const [busy, setBusy] = useState<string>();
@@ -86,9 +87,10 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   const [installProgress, setInstallProgress] = useState<PluginInstallProgressEvent>();
   const installOperationRef = useRef<string | undefined>(undefined);
   const progressClearTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const marketAttemptedRef = useRef(false);
 
-  const loadData = useCallback(async (reload = false): Promise<void> => {
-    setLoading(true);
+  const loadInstalled = useCallback(async (reload = false): Promise<void> => {
+    setInstalledLoading(true);
     setInstalledError(undefined);
     if (reload) {
       try {
@@ -97,26 +99,40 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
         setInstalledError(messageOf(error));
       }
     }
-    const [installedResult, marketResult, updateResult] = await Promise.allSettled([
-      invoke<PluginSummary[]>("list_plugins"),
+    try {
+      setPlugins(await invoke<PluginSummary[]>("list_plugins"));
+    } catch (error) {
+      setInstalledError(messageOf(error));
+    } finally {
+      setInstalledLoading(false);
+    }
+  }, []);
+
+  const loadMarketData = useCallback(async (): Promise<void> => {
+    marketAttemptedRef.current = true;
+    setMarketLoading(true);
+    setMarketError(undefined);
+    const [marketResult, updateResult] = await Promise.allSettled([
       invoke<PluginMarketplace>("get_plugin_marketplace"),
       invoke<PluginUpdateStatus[]>("check_plugin_updates"),
     ]);
-    if (installedResult.status === "fulfilled") setPlugins(installedResult.value);
-    else setInstalledError(messageOf(installedResult.reason));
     if (marketResult.status === "fulfilled") {
       setMarketplace(marketResult.value);
-      setMarketError(undefined);
     } else {
       setMarketError(messageOf(marketResult.reason));
     }
     if (updateResult.status === "fulfilled") setUpdates(updateResult.value);
-    setLoading(false);
+    setMarketLoading(false);
   }, []);
 
   useEffect(() => {
-    void loadData();
-  }, [loadData]);
+    void loadInstalled();
+  }, [loadInstalled]);
+
+  useEffect(() => {
+    if (!pluginTabNeedsNetwork(tab) || marketAttemptedRef.current) return;
+    void loadMarketData();
+  }, [loadMarketData, tab]);
 
   useEffect(() => {
     let disposed = false;
@@ -158,14 +174,16 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
 
   const refreshAfterMutation = async (message: string): Promise<void> => {
     await invoke("reload_plugins");
-    const [nextPlugins, nextUpdates] = await Promise.all([
-      invoke<PluginSummary[]>("list_plugins"),
-      invoke<PluginUpdateStatus[]>("check_plugin_updates"),
-    ]);
+    const nextPlugins = await invoke<PluginSummary[]>("list_plugins");
     setPlugins(nextPlugins);
-    setUpdates(nextUpdates);
+    setUpdates([]);
     setNotice(message);
     onChanged();
+  };
+
+  const refresh = async (): Promise<void> => {
+    await loadInstalled(true);
+    if (pluginTabNeedsNetwork(tab)) await loadMarketData();
   };
 
   const install = async (source: string, label: string): Promise<void> => {
@@ -307,6 +325,14 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     const tierMatches = tab === "official" ? entry.tier === "official" : entry.tier !== "official";
     return tierMatches && matches(entry.displayName, entry.description, entry.keywords);
   });
+  const loading = tab === "installed"
+    ? installedLoading
+    : pluginTabNeedsNetwork(tab)
+      ? marketLoading
+      : false;
+  const showSkeleton = tab === "installed"
+    ? installedLoading && plugins.length === 0
+    : pluginTabNeedsNetwork(tab) && marketLoading;
 
   if (detail) {
     const homepage = detail.manifest?.interface?.websiteURL ?? detail.manifest?.homepage;
@@ -383,7 +409,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     <section className="plugin-settings" aria-labelledby="plugins-heading">
       <div className="plugin-settings-heading">
         <div><h3 id="plugins-heading">{t("plugins.title")}</h3><p>{t("plugins.description")}</p></div>
-        <button className="plugin-icon-button" type="button" aria-label={t("plugins.refresh")} disabled={loading} onClick={() => void loadData(true)}>
+        <button className="plugin-icon-button" type="button" aria-label={t("plugins.refresh")} disabled={loading} onClick={() => void refresh()}>
           <RefreshCw size={15} className={loading ? "spinning" : undefined} />
         </button>
       </div>
@@ -419,7 +445,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
           </div>
         </div>
       )}
-      {loading && plugins.length === 0 ? (
+      {showSkeleton ? (
         <div className="plugin-skeletons"><span /><span /><span /></div>
       ) : tab === "custom" ? (
         <div className="plugin-custom">

@@ -3,6 +3,7 @@ import type { PluginCommandDef } from "./agentRpc";
 export type PluginSource = "local-path" | "zip-url" | "github";
 export type PluginState = "ok" | "error";
 export type PluginMarketplaceTier = "official" | "curated";
+export type PluginTab = "installed" | "official" | "third-party" | "custom";
 export type PluginInstallPhase =
   | "resolving"
   | "downloading"
@@ -194,6 +195,10 @@ export function marketplaceUpdateAvailable(
 
 export function isThirdPartyEntry(entry: PluginMarketplaceEntry): boolean {
   return entry.tier !== "official";
+}
+
+export function pluginTabNeedsNetwork(tab: PluginTab): boolean {
+  return tab === "official" || tab === "third-party";
 }
 
 export function pluginInstallPercent(

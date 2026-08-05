@@ -9,6 +9,7 @@ import {
   marketplaceUpdateAvailable,
   parseKnownPluginCommand,
   pluginInstallPercent,
+  pluginTabNeedsNetwork,
   type PluginMarketplaceEntry,
   type PluginSummary,
 } from "../src/plugins.ts";
@@ -68,6 +69,13 @@ test("only official marketplace entries bypass third-party confirmation", () => 
   assert.equal(isThirdPartyEntry(entry), false);
   assert.equal(isThirdPartyEntry({ ...entry, tier: "curated" }), true);
   assert.equal(isThirdPartyEntry({ ...entry, tier: undefined }), true);
+});
+
+test("installed and custom plugin tabs do not require network data", () => {
+  assert.equal(pluginTabNeedsNetwork("installed"), false);
+  assert.equal(pluginTabNeedsNetwork("custom"), false);
+  assert.equal(pluginTabNeedsNetwork("official"), true);
+  assert.equal(pluginTabNeedsNetwork("third-party"), true);
 });
 
 test("plugin install progress uses real download bytes when total size is known", () => {
