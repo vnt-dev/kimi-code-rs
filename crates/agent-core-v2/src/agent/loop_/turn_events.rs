@@ -22,6 +22,7 @@ pub struct LiveUserMessage {
     pub user_message_id: String,
     pub created_at: String,
     pub content: Vec<MessageContent>,
+    pub origin: PromptOrigin,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -239,6 +240,7 @@ mod tests {
                 content: vec![MessageContent::Text {
                     text: "hello".into(),
                 }],
+                origin: PromptOrigin::User,
             }),
         };
 
@@ -252,7 +254,8 @@ mod tests {
                     "promptId": "prompt-1",
                     "userMessageId": "message-1",
                     "createdAt": "2026-01-01T00:00:00.000Z",
-                    "content": [{ "type": "text", "text": "hello" }]
+                    "content": [{ "type": "text", "text": "hello" }],
+                    "origin": { "kind": "user" }
                 }
             })
         );

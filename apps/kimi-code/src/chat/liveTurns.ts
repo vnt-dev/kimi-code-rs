@@ -1,6 +1,7 @@
 import type { AgentPromptSubmitStatus } from "../agentRpc";
 import { projectLiveUserMessage } from "../liveUserMessage";
 import { parseSkillPromptDisplay } from "../prompt/skills";
+import type { PluginCommandDisplay } from "./messages";
 import { conciseError } from "../utils/errors";
 import type {
   AgentChatEvent,
@@ -67,6 +68,7 @@ export interface InFlightTurn {
   fileChanges?: readonly TurnFileChange[];
   error?: string;
   historyBoundaryId?: string;
+  pluginCommand?: PluginCommandDisplay;
 }
 
 export interface QueuedAgentChatEvent {
@@ -152,6 +154,7 @@ export function inFlightTurnFromUserMessage(message: LiveUserMessage): InFlightT
     promptId: message.promptId,
     userMessageId: message.userMessageId,
     createdAt: message.createdAt,
+    pluginCommand: projected.pluginCommand,
   };
 }
 
@@ -322,6 +325,7 @@ export function reduceAgentChatEvent(
               attachments: projected.attachments,
               skills: projected.skills,
               createdAt: projected.createdAt,
+              pluginCommand: projected.pluginCommand,
             }
           : {}),
         status: "running",

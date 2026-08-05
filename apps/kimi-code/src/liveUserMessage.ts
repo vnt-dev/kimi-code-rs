@@ -1,4 +1,9 @@
 import type { LiveUserMessage, MessageContent } from "./types";
+import {
+  pluginCommandFromOrigin,
+  pluginCommandText,
+  type PluginCommandDisplay,
+} from "./pluginCommandMessage.ts";
 
 export type LiveMessageAttachmentKind = "image" | "audio" | "video" | "file";
 
@@ -15,6 +20,7 @@ export interface LiveMessageAttachment {
 export interface ProjectedLiveUserMessage {
   text: string;
   attachments: LiveMessageAttachment[];
+  pluginCommand?: PluginCommandDisplay;
 }
 
 function mediaSourceDataUrl(
@@ -74,18 +80,22 @@ function projectAttachment(
 export function projectLiveUserMessage(
   message: LiveUserMessage,
 ): ProjectedLiveUserMessage {
+  const pluginCommand = pluginCommandFromOrigin(message.origin);
   return {
-    text: message.content
-      .filter(
-        (part): part is Extract<MessageContent, { type: "text" }> =>
-          part.type === "text",
-      )
-      .map((part) => part.text)
-      .join(""),
+    text: pluginCommand
+      ? pluginCommandText(pluginCommand)
+      : message.content
+          .filter(
+            (part): part is Extract<MessageContent, { type: "text" }> =>
+              part.type === "text",
+          )
+          .map((part) => part.text)
+          .join(""),
     attachments: message.content.flatMap((part, index) => {
       const attachment = projectAttachment(part, index, message.userMessageId);
       return attachment ? [attachment] : [];
     }),
+    pluginCommand,
   };
 }
 

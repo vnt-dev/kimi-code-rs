@@ -172,7 +172,9 @@ pub const AGENT_PROMPT_SERVICE_ID: ServiceIdentifier<AgentPromptServiceHandle> =
 #[cfg(test)]
 mod tests {
     use crate::{
-        agent::context_memory::{ImageSource, MessageContent, PromptOrigin, USER_PROMPT_ORIGIN},
+        agent::context_memory::{
+            ImageSource, MessageContent, PluginCommandTrigger, PromptOrigin, USER_PROMPT_ORIGIN,
+        },
         kosong::contract::message::{ContentPart, Message, Role},
     };
 
@@ -264,6 +266,7 @@ mod tests {
                         size: 12,
                     },
                 ],
+                origin: PromptOrigin::User,
             },
             status: PromptSubmittedStatus::Queued,
         };
@@ -286,7 +289,43 @@ mod tests {
                         "size": 12
                     }
                 ],
+                "origin": { "kind": "user" },
                 "status": "queued"
+            })
+        );
+    }
+
+    #[test]
+    fn submitted_event_preserves_plugin_command_origin() {
+        let event = PromptSubmittedEvent {
+            user_message: LiveUserMessage {
+                prompt_id: "prompt-1".into(),
+                user_message_id: "message-1".into(),
+                created_at: "2026-01-01T00:00:00.000Z".into(),
+                content: vec![MessageContent::Text {
+                    text: "# Expanded plugin instructions".into(),
+                }],
+                origin: PromptOrigin::PluginCommand {
+                    activation_id: "activation-1".into(),
+                    plugin_id: "vercel-plugin".into(),
+                    command_name: "status".into(),
+                    command_args: Some("--json".into()),
+                    trigger: PluginCommandTrigger::UserSlash,
+                },
+            },
+            status: PromptSubmittedStatus::Queued,
+        };
+
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(
+            value["origin"],
+            serde_json::json!({
+                "kind": "plugin_command",
+                "activationId": "activation-1",
+                "pluginId": "vercel-plugin",
+                "commandName": "status",
+                "commandArgs": "--json",
+                "trigger": "user-slash"
             })
         );
     }

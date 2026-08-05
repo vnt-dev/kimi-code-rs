@@ -342,6 +342,7 @@ export function subscribeToAppEvents({
                 attachments: projected.attachments,
                 skills: projected.skills,
                 createdAt: projected.createdAt,
+                pluginCommand: projected.pluginCommand,
               };
               const next = { ...current, [payload.sessionId]: merged };
               inFlightTurnsRef.current = next;

@@ -1920,8 +1920,7 @@ export default function App() {
     }
   };
 
-  const handleSubmit = (event: FormEvent): void => {
-    event.preventDefault();
+  const submitComposer = (): void => {
     const command = parseKnownPluginCommand(prompt, pluginCommands);
     if (command) {
       if (promptAttachments.length > 0 || promptSkills.length > 0) {
@@ -1932,6 +1931,11 @@ export default function App() {
       return;
     }
     void sendPrompt();
+  };
+
+  const handleSubmit = (event: FormEvent): void => {
+    event.preventDefault();
+    submitComposer();
   };
 
   const cancelActiveTurn = async (): Promise<void> => {
@@ -2281,7 +2285,7 @@ export default function App() {
       !event.nativeEvent.isComposing
     ) {
       event.preventDefault();
-      void sendPrompt();
+      submitComposer();
     }
   };
 

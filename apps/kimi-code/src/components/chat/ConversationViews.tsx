@@ -43,10 +43,12 @@ import {
 } from "../../chat/liveTurns";
 import {
   mediaSourceUrl,
+  messagePluginCommand,
   messageStructuredContent,
   messageText,
   messageThinking,
   structuredValue,
+  type PluginCommandDisplay,
 } from "../../chat/messages";
 import { t } from "../../i18n";
 import { SkillPromptDisplayContent } from "../../prompt/SkillPromptDisplay";
@@ -167,11 +169,15 @@ export function LiveTurnView({
           <time>{formatTime(turn.createdAt)}</time>
         </div>
         <div className="user-bubble">
-          <SkillPromptDisplayContent
-            text={turn.prompt}
-            skills={turn.skills}
-            onSkillOpen={onSkillOpen}
-          />
+          {turn.pluginCommand ? (
+            <PluginCommandDisplayContent command={turn.pluginCommand} />
+          ) : (
+            <SkillPromptDisplayContent
+              text={turn.prompt}
+              skills={turn.skills}
+              onSkillOpen={onSkillOpen}
+            />
+          )}
           <PromptAttachmentContent attachments={turn.attachments} />
         </div>
       </article>
@@ -283,6 +289,24 @@ export function LiveTurnView({
         </div>
       </article>
     </section>
+  );
+}
+
+function PluginCommandDisplayContent({
+  command,
+}: {
+  command: PluginCommandDisplay;
+}) {
+  return (
+    <div className="plugin-command-message">
+      <div className="plugin-command-message-heading">
+        <TerminalSquare size={14} aria-hidden="true" />
+        <span>/{command.pluginId}:{command.commandName}</span>
+      </div>
+      {command.args && (
+        <div className="plugin-command-message-args">{command.args}</div>
+      )}
+    </div>
   );
 }
 
@@ -1271,6 +1295,7 @@ function UserMessageView({
   onUndo?: (message: RenderMessage) => void;
 }) {
   const text = messageText(message);
+  const pluginCommand = messagePluginCommand(message);
   const structured = messageStructuredContent(message);
   return (
     <article className="message user-message">
@@ -1278,10 +1303,14 @@ function UserMessageView({
         <time>{formatTime(message.created_at)}</time>
       </div>
       <div className="user-bubble">
-        <SkillPromptDisplayContent
-          text={text}
-          onSkillOpen={onSkillOpen}
-        />
+        {pluginCommand ? (
+          <PluginCommandDisplayContent command={pluginCommand} />
+        ) : (
+          <SkillPromptDisplayContent
+            text={text}
+            onSkillOpen={onSkillOpen}
+          />
+        )}
         <StructuredMessageContent
           parts={structured}
           toolResults={toolResults}

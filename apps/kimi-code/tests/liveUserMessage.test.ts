@@ -73,3 +73,36 @@ test("prompt and user message identifiers both deduplicate replay", () => {
   );
   assert.equal(isSameLiveUserMessage({ promptId: "other" }, message), false);
 });
+
+test("user-slash plugin commands display the command instead of expanded markdown", () => {
+  const origin = {
+    kind: "plugin_command",
+    activationId: "activation-1",
+    pluginId: "vercel-plugin",
+    commandName: "status",
+    commandArgs: "--json",
+    trigger: "user-slash",
+  };
+  const projected = projectLiveUserMessage({
+    ...message,
+    content: [{ type: "text", text: "# Expanded plugin instructions" }],
+    origin,
+  });
+  assert.equal(projected.text, "/vercel-plugin:status --json");
+  assert.deepEqual(projected.pluginCommand, {
+    pluginId: "vercel-plugin",
+    commandName: "status",
+    args: "--json",
+  });
+
+});
+
+test("non-command messages continue to display their original content", () => {
+  const projected = projectLiveUserMessage({
+    ...message,
+    content: [{ type: "text", text: "ordinary prompt" }],
+    origin: { kind: "user" },
+  });
+  assert.equal(projected.text, "ordinary prompt");
+  assert.equal(projected.pluginCommand, undefined);
+});

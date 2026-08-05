@@ -369,6 +369,7 @@ export interface LiveUserMessage {
   userMessageId: string;
   createdAt: string;
   content: MessageContent[];
+  origin?: unknown;
 }
 
 export interface PromptSubmittedEvent extends LiveUserMessage {

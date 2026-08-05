@@ -254,6 +254,7 @@ impl AgentPromptServiceContract for AgentPromptService {
             user_message_id: id.clone(),
             created_at: created_at.clone(),
             content: to_protocol_message_content(&message)?,
+            origin: message.origin.clone().unwrap_or(PromptOrigin::User),
         };
         let record = Arc::new(PromptRecord {
             snapshot: Mutex::new(PromptSnapshot {

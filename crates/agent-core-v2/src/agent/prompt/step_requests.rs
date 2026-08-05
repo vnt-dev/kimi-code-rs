@@ -256,6 +256,7 @@ mod tests {
                 user_message_id: "message-1".into(),
                 created_at: "2026-01-01T00:00:00.000Z".into(),
                 content: Vec::new(),
+                origin: PromptOrigin::User,
             },
         );
         assert_eq!(prompt.admission(), StepRequestAdmission::NewTurn);

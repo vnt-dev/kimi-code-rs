@@ -1,5 +1,18 @@
 import { parseSkillPromptDisplay } from "../prompt/skills";
 import type { MessageContent, ProtocolMessage } from "../types";
+import {
+  pluginCommandFromOrigin,
+  pluginCommandText,
+  type PluginCommandDisplay,
+} from "../pluginCommandMessage";
+
+export type { PluginCommandDisplay } from "../pluginCommandMessage";
+
+export function messagePluginCommand(
+  message: ProtocolMessage,
+): PluginCommandDisplay | undefined {
+  return pluginCommandFromOrigin(message.metadata?.origin);
+}
 
 export function messageText(message: ProtocolMessage): string {
   return message.content
@@ -12,6 +25,8 @@ export function messageText(message: ProtocolMessage): string {
 }
 
 export function displayMessageText(message: ProtocolMessage): string {
+  const pluginCommand = messagePluginCommand(message);
+  if (pluginCommand) return pluginCommandText(pluginCommand);
   return parseSkillPromptDisplay(messageText(message)).text;
 }
 

@@ -370,6 +370,43 @@ button.message-skill-chip:hover {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
+.plugin-command-message {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  white-space: normal;
+}
+
+.plugin-command-message-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-family: "DM Mono", monospace;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.plugin-command-message-heading > svg {
+  flex: 0 0 auto;
+}
+
+.plugin-command-message-heading > span,
+.plugin-command-message-args {
+  overflow-wrap: anywhere;
+}
+
+.plugin-command-message-args {
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .queued-prompt-stack {
   display: grid;
   margin: -4px 0 34px;

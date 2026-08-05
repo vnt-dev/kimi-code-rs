@@ -283,6 +283,7 @@ export function useConversationResources({
         userMessageId: target.id,
         createdAt: target.created_at,
         content: target.content,
+        origin: target.metadata?.origin,
       });
       const display = parseSkillPromptDisplay(projected.text);
       await refreshHistory(conversation.id);
