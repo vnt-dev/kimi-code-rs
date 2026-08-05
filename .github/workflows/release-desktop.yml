@@ -58,6 +58,11 @@ jobs:
           prerelease: false
           releaseAssetNamePattern: '[name]_[version]_windows_[arch][setup][ext]'
 
+      - name: Update release download links
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node .github/scripts/update-release-downloads.mjs
+
   release-linux:
     name: Build and publish Linux AppImage and Debian package
     needs: release-windows
@@ -115,6 +120,11 @@ jobs:
           releaseAssetNamePattern: '[name]_[version]_linux_[arch][ext]'
           args: --bundles appimage,deb
 
+      - name: Update release download links
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node .github/scripts/update-release-downloads.mjs
+
   release-macos:
     name: Build and publish macOS
     needs: release-linux
@@ -169,6 +179,11 @@ jobs:
           releaseAssetNamePattern: '[name]_[version]_macos_[arch][ext]'
           args: --target aarch64-apple-darwin
 
+      - name: Update release download links
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node .github/scripts/update-release-downloads.mjs
+
       - name: Build and publish Kimi Code for Intel Mac
         uses: tauri-apps/tauri-action@v1
         env:
@@ -182,3 +197,8 @@ jobs:
           prerelease: false
           releaseAssetNamePattern: '[name]_[version]_macos_[arch][ext]'
           args: --target x86_64-apple-darwin
+
+      - name: Update release download links
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node .github/scripts/update-release-downloads.mjs
