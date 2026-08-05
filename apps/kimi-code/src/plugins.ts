@@ -131,7 +131,7 @@ export interface SlashMenuItem {
   label: string;
   description: string;
   disabled?: boolean;
-  builtin?: "compact" | "fork" | "btw";
+  builtin?: "compact" | "fork" | "btw" | "mcp";
   plugin?: PluginCommandDef;
 }
 

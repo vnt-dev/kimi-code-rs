@@ -55,6 +55,7 @@ export type AgentRpcMethod =
   | "clearContext"
   | "activateSkill"
   | "listPluginCommands"
+  | "listMcpServers"
   | "activatePluginCommand"
   | "createGoal"
   | "getGoal"
@@ -99,6 +100,21 @@ export interface PluginCommandDef {
   description: string;
   body: string;
   path: string;
+}
+
+export type McpServerStatus =
+  | "pending"
+  | "connected"
+  | "failed"
+  | "disabled"
+  | "needs-auth";
+
+export interface McpServerInfo {
+  name: string;
+  transport: "stdio" | "http" | "sse";
+  status: McpServerStatus;
+  toolCount: number;
+  error?: string;
 }
 
 export interface AgentPromptOptions {
@@ -151,6 +167,9 @@ export function createAgentClient(scope: AgentScope) {
     },
     listPluginCommands() {
       return callAgentRpc<PluginCommandDef[]>(scope, "listPluginCommands");
+    },
+    listMcpServers() {
+      return callAgentRpc<McpServerInfo[]>(scope, "listMcpServers");
     },
     activatePluginCommand(pluginId: string, commandName: string, args?: string) {
       return callAgentRpc<void>(scope, "activatePluginCommand", {

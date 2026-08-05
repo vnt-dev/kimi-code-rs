@@ -17,6 +17,7 @@ use crate::{
     agent::{
         context_memory::AgentContextData,
         goal::{GoalSnapshot, GoalToolResult},
+        mcp::McpServerEntry,
         permission_gate::PermissionData,
         plan::PlanData,
         profile::ProfileData,
@@ -80,6 +81,7 @@ pub trait AgentRpcServiceContract: Send + Sync {
         &self,
         payload: EmptyPayload,
     ) -> AgentRpcResult<Vec<PluginCommandDef>>;
+    async fn list_mcp_servers(&self, payload: EmptyPayload) -> AgentRpcResult<Vec<McpServerEntry>>;
     async fn activate_plugin_command(
         &self,
         payload: ActivatePluginCommandPayload,

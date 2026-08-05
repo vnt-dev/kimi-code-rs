@@ -33,6 +33,7 @@ use crate::{
             GoalToolResult,
         },
         loop_::{AGENT_LOOP_SERVICE_ID, AgentLoopServiceHandle, AgentLoopState},
+        mcp::{AGENT_MCP_SERVICE_ID, AgentMcpServiceHandle, McpServerEntry},
         permission_gate::{AGENT_PERMISSION_GATE_ID, AgentPermissionGateHandle, PermissionData},
         permission_mode::{AGENT_PERMISSION_MODE_SERVICE_ID, AgentPermissionModeServiceHandle},
         permission_policy::PermissionMode,
@@ -143,6 +144,7 @@ pub struct AgentRpcService {
     event_bus: EventBusHandle,
     event_service: EventServiceHandle,
     plugins: PluginServiceHandle,
+    mcp: AgentMcpServiceHandle,
     metadata: SessionMetadataHandle,
     files: FileServiceHandle,
     session_context: SessionContext,
@@ -178,6 +180,7 @@ impl AgentRpcService {
         event_bus: EventBusHandle,
         event_service: EventServiceHandle,
         plugins: PluginServiceHandle,
+        mcp: AgentMcpServiceHandle,
         metadata: SessionMetadataHandle,
         files: FileServiceHandle,
         session_context: SessionContext,
@@ -210,6 +213,7 @@ impl AgentRpcService {
             event_bus,
             event_service,
             plugins,
+            mcp,
             metadata,
             files,
             session_context,
@@ -578,6 +582,15 @@ impl AgentRpcServiceContract for AgentRpcService {
         self.plugins.list_plugin_commands().await
     }
 
+    async fn list_mcp_servers(
+        &self,
+        _payload: EmptyPayload,
+    ) -> AgentRpcResult<Vec<McpServerEntry>> {
+        let mut servers = self.mcp.list().await;
+        servers.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(servers)
+    }
+
     async fn activate_plugin_command(
         &self,
         payload: ActivatePluginCommandPayload,
@@ -790,6 +803,7 @@ pub fn register_agent_rpc_service() {
                 (*accessor.get(EVENT_BUS_SERVICE_ID)?).clone(),
                 (*accessor.get(EVENT_SERVICE_ID)?).clone(),
                 (*accessor.get(PLUGIN_SERVICE_ID)?).clone(),
+                (*accessor.get(AGENT_MCP_SERVICE_ID)?).clone(),
                 (*accessor.get(SESSION_METADATA_ID)?).clone(),
                 (*accessor.get(FILE_SERVICE_ID)?).clone(),
                 (*accessor.get(SESSION_CONTEXT_ID)?).clone(),

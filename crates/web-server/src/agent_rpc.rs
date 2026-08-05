@@ -39,6 +39,7 @@ pub enum AgentRpcMethod {
     ClearContext,
     ActivateSkill,
     ListPluginCommands,
+    ListMcpServers,
     ActivatePluginCommand,
     CreateGoal,
     GetGoal,
@@ -196,6 +197,9 @@ pub async fn dispatch_agent_rpc(
         AgentRpcMethod::ListPluginCommands => {
             invoke!(rpc, payload, list_plugin_commands, EmptyPayload)
         }
+        AgentRpcMethod::ListMcpServers => {
+            invoke!(rpc, payload, list_mcp_servers, EmptyPayload)
+        }
         AgentRpcMethod::ActivatePluginCommand => {
             invoke!(
                 rpc,
@@ -242,6 +246,10 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<AgentRpcMethod>("\"listPluginCommands\"").unwrap(),
             AgentRpcMethod::ListPluginCommands
+        ));
+        assert!(matches!(
+            serde_json::from_str::<AgentRpcMethod>("\"listMcpServers\"").unwrap(),
+            AgentRpcMethod::ListMcpServers
         ));
         assert!(matches!(
             serde_json::from_str::<AgentRpcMethod>("\"activatePluginCommand\"").unwrap(),

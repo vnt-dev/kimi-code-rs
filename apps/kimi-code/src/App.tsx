@@ -22,6 +22,7 @@ import {
   prepareSession,
   subscribeAgentEvents,
   unsubscribeAgentEvents,
+  type McpServerInfo,
   type PluginCommandDef,
 } from "./agentRpc";
 import { subscribeToAppEvents } from "./app/appEventSubscriptions";
@@ -206,6 +207,10 @@ export default function App() {
   const [slashMenuActiveIndex, setSlashMenuActiveIndex] = useState(0);
   const [pluginCommands, setPluginCommands] = useState<PluginCommandDef[]>([]);
   const [pluginCommandRevision, setPluginCommandRevision] = useState(0);
+  const [mcpStatusOpen, setMcpStatusOpen] = useState(false);
+  const [mcpStatusBusy, setMcpStatusBusy] = useState(false);
+  const [mcpStatusError, setMcpStatusError] = useState<string>();
+  const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([]);
   const [compactionCommandBusy, setCompactionCommandBusy] = useState(false);
   const [forkCommandBusy, setForkCommandBusy] = useState(false);
   const [queuedPrompts, setQueuedPrompts] = useState<
@@ -303,6 +308,7 @@ export default function App() {
   const backgroundTaskRequests = useRef<Record<string, number>>({});
   const skillsRequest = useRef(0);
   const skillDetailRequest = useRef(0);
+  const mcpStatusRequest = useRef(0);
   const agentSubscriptions = useRef<Map<string, AgentSubscription>>(new Map());
   const pendingAgentSubscriptions = useRef<
     Map<string, PendingAgentSubscription>
@@ -549,6 +555,9 @@ export default function App() {
     activeConversation !== undefined &&
     activeAgentScope?.sessionId === activeConversation.id &&
     activeCompaction?.phase !== "started";
+  const canViewMcpStatus =
+    activeConversation !== undefined &&
+    activeAgentScope?.sessionId === activeConversation.id;
   const slashMenuItems = useMemo<SlashMenuItem[]>(() => {
     const query = prompt.startsWith("/") ? prompt.slice(1).toLowerCase() : "";
     const builtins: SlashMenuItem[] = [
@@ -581,6 +590,14 @@ export default function App() {
         description: t("slash.sideChatDesc"),
         disabled: !canOpenSideChat,
       },
+      {
+        id: "mcp",
+        kind: "builtin",
+        builtin: "mcp",
+        label: "mcp",
+        description: t("slash.mcpDesc"),
+        disabled: !canViewMcpStatus,
+      },
     ];
     const visibleBuiltins = builtins.filter((item) =>
       item.label.toLowerCase().includes(query),
@@ -599,6 +616,7 @@ export default function App() {
     activeCompaction?.phase,
     activeContextPercent,
     canOpenSideChat,
+    canViewMcpStatus,
     canRunCompaction,
     canRunFork,
     language,
@@ -649,6 +667,12 @@ export default function App() {
     sideChatInstance.current += 1;
     sideChatAgentId.current = undefined;
     setSideChat(undefined);
+  }, []);
+
+  const closeMcpStatus = useCallback((): void => {
+    mcpStatusRequest.current += 1;
+    setMcpStatusOpen(false);
+    setMcpStatusBusy(false);
   }, []);
 
   const openPluginCommandDetail = useCallback(
@@ -1078,6 +1102,7 @@ export default function App() {
     setSkillsBusy(false);
     setSkillsError(undefined);
     setSlashMenuOpen(false);
+    closeMcpStatus();
     closeSideChat();
     setCompactionSummaryDetail(undefined);
     setPluginCommandDetail(undefined);
@@ -1089,7 +1114,7 @@ export default function App() {
     setGoalEditBusy(false);
     setUndoMessageTarget(undefined);
     setUndoMessageBusy(false);
-  }, [activeConversation?.id, closeSideChat]);
+  }, [activeConversation?.id, closeMcpStatus, closeSideChat]);
 
   useEffect(() => {
     setActiveAgentScope(undefined);
@@ -1363,7 +1388,10 @@ export default function App() {
       textarea.selectionStart === value.length &&
       textarea.selectionEnd === value.length;
     setSlashMenuOpen(open);
-    if (open) setComposerAddOpen(false);
+    if (open) {
+      setComposerAddOpen(false);
+      closeMcpStatus();
+    }
   };
 
   const undoPrompt = (): void => {
@@ -1940,7 +1968,38 @@ export default function App() {
     }
   };
 
+  const openMcpStatus = async (): Promise<void> => {
+    const scope = activeAgentScope;
+    if (!scope || scope.sessionId !== activeConversation?.id) {
+      showNotice(t("notice.sessionPreparing"));
+      return;
+    }
+    const request = mcpStatusRequest.current + 1;
+    mcpStatusRequest.current = request;
+    setComposerAddOpen(false);
+    setSlashMenuOpen(false);
+    resetPrompt("", scope.sessionId);
+    setMcpStatusOpen(true);
+    setMcpStatusBusy(true);
+    setMcpStatusError(undefined);
+    try {
+      const servers = await createAgentClient(scope).listMcpServers();
+      if (request !== mcpStatusRequest.current) return;
+      setMcpServers(servers);
+    } catch (error) {
+      if (request !== mcpStatusRequest.current) return;
+      setMcpServers([]);
+      setMcpStatusError(conciseError(error));
+    } finally {
+      if (request === mcpStatusRequest.current) setMcpStatusBusy(false);
+    }
+  };
+
   const submitComposer = (): void => {
+    if (prompt.trim().toLowerCase() === "/mcp") {
+      void openMcpStatus();
+      return;
+    }
     const command = parseKnownPluginCommand(prompt, pluginCommands);
     if (command) {
       if (promptAttachments.length > 0 || promptSkills.length > 0) {
@@ -2227,6 +2286,10 @@ export default function App() {
     }
     if (item.builtin === "btw") {
       openSideChatCommand();
+      return;
+    }
+    if (item.builtin === "mcp") {
+      void openMcpStatus();
       return;
     }
     if (!item.plugin || !activeConversation) return;
@@ -2580,6 +2643,10 @@ export default function App() {
               isHistoryLoading={isHistoryLoading}
               isStreaming={isStreaming}
               modeBusy={modeBusy}
+              mcpStatusBusy={mcpStatusBusy}
+              mcpStatusError={mcpStatusError}
+              mcpStatusOpen={mcpStatusOpen}
+              mcpServers={mcpServers}
               modelBusy={modelBusy}
               models={models}
               modelsBusy={modelsBusy}
@@ -2610,6 +2677,7 @@ export default function App() {
               loadAvailableSkills={loadAvailableSkills}
               loadBackgroundTaskOutput={loadBackgroundTaskOutput}
               openSkillDetail={openSkillDetail}
+              closeMcpStatus={closeMcpStatus}
               resolveApproval={resolveApproval}
               respondToInteraction={respondToInteraction}
               selectSlashMenuItem={selectSlashMenuItem}

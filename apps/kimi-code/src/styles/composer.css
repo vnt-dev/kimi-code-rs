@@ -104,6 +104,143 @@
   white-space: nowrap;
 }
 
+.mcp-status-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 26;
+  max-height: min(430px, 54vh);
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 13px;
+  color: var(--text);
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
+  animation: select-menu-in 120ms ease-out;
+}
+
+.mcp-status-popover > header {
+  display: flex;
+  min-height: 42px;
+  padding: 0 13px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mcp-status-popover > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mcp-status-popover > header svg {
+  color: var(--accent);
+}
+
+.mcp-status-popover > header strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mcp-status-popover > header small {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.mcp-status-list {
+  max-height: min(386px, calc(54vh - 42px));
+  padding: 5px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+.mcp-status-row {
+  display: flex;
+  min-height: 58px;
+  padding: 9px 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-radius: 9px;
+}
+
+.mcp-status-row + .mcp-status-row {
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.mcp-status-row > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mcp-status-row > div > strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-status-row > div > small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-status-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.mcp-status-badge > i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.mcp-status-badge.connected {
+  color: var(--accent);
+}
+
+.mcp-status-badge.pending,
+.mcp-status-badge.needs-auth {
+  color: #d69e4c;
+}
+
+.mcp-status-badge.failed,
+.mcp-status-placeholder.error {
+  color: var(--danger);
+}
+
+.mcp-status-placeholder {
+  display: flex;
+  min-height: 104px;
+  padding: 18px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
 .prompt-attachment-list {
   display: flex;
   padding: 1px 3px 10px;

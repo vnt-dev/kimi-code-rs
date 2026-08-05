@@ -13,6 +13,7 @@ import {
   Pause,
   Play,
   Plus,
+  Server,
   ShieldCheck,
   SquarePen,
   Target,
@@ -48,6 +49,7 @@ import type {
   SkillDescriptor,
   TodoItem,
 } from "../types";
+import type { McpServerInfo } from "../agentRpc";
 import {
   BackgroundTaskProgress,
   ContextUsageIndicator,
@@ -61,6 +63,7 @@ import {
   isPlanReviewInteraction,
 } from "./InteractionCards";
 import { RemixSparklingLineIcon } from "./RemixSparklingLineIcon";
+import { McpStatusPopover } from "./McpStatusPopover";
 import type { SkillDetailTarget } from "./sidebars/ChatSidebars";
 
 interface ComposerDockProps {
@@ -87,6 +90,10 @@ interface ComposerDockProps {
   isHistoryLoading: boolean;
   isStreaming: boolean;
   modeBusy: boolean;
+  mcpStatusBusy: boolean;
+  mcpStatusError?: string;
+  mcpStatusOpen: boolean;
+  mcpServers: readonly McpServerInfo[];
   modelBusy: boolean;
   models: Model[];
   modelsBusy: boolean;
@@ -121,6 +128,7 @@ interface ComposerDockProps {
     tail?: number,
   ) => Promise<void>;
   openSkillDetail: (skill: SkillDetailTarget) => Promise<void>;
+  closeMcpStatus: () => void;
   resolveApproval: (
     interaction: AgentInteraction,
     decision: "approved" | "rejected",
@@ -176,6 +184,10 @@ export function ComposerDock({
   isHistoryLoading,
   isStreaming,
   modeBusy,
+  mcpStatusBusy,
+  mcpStatusError,
+  mcpStatusOpen,
+  mcpServers,
   modelBusy,
   models,
   modelsBusy,
@@ -206,6 +218,7 @@ export function ComposerDock({
   loadAvailableSkills,
   loadBackgroundTaskOutput,
   openSkillDetail,
+  closeMcpStatus,
   resolveApproval,
   respondToInteraction,
   selectSlashMenuItem,
@@ -359,6 +372,14 @@ export function ComposerDock({
                 </div>
               )}
               <form className="composer" onSubmit={handleSubmit}>
+                {mcpStatusOpen && (
+                  <McpStatusPopover
+                    servers={mcpServers}
+                    busy={mcpStatusBusy}
+                    error={mcpStatusError}
+                    onClose={closeMcpStatus}
+                  />
+                )}
                 {slashMenuOpen && slashMenuItems.length > 0 && (
                   <div
                     className="slash-command-menu"
@@ -385,6 +406,8 @@ export function ComposerDock({
                             forkCommandBusy ? <span className="spinner" /> : <Copy size={14} />
                           ) : item.builtin === "btw" ? (
                             <MessageSquareText size={14} />
+                          ) : item.builtin === "mcp" ? (
+                            <Server size={14} />
                           ) : (
                             <Package size={14} />
                           )}
