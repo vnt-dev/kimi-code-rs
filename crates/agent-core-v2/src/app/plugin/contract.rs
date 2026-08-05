@@ -22,8 +22,8 @@ use crate::{
 };
 
 use super::types::{
-    EnabledPluginSessionStart, PluginCommandDef, PluginInfo, PluginSummary, PluginUpdateStatus,
-    ReloadSummary,
+    EnabledPluginSessionStart, PluginCommandDef, PluginInfo, PluginInstallProgressCallback,
+    PluginSummary, PluginUpdateStatus, ReloadSummary,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -64,6 +64,13 @@ pub trait PluginServiceContract: Disposable + Send + Sync {
     async fn list_plugins(&self) -> PluginServiceResult<Vec<PluginSummary>>;
     async fn install_plugin(&self, input: InstallPluginInput)
     -> PluginServiceResult<PluginSummary>;
+    async fn install_plugin_with_progress(
+        &self,
+        input: InstallPluginInput,
+        _progress: PluginInstallProgressCallback,
+    ) -> PluginServiceResult<PluginSummary> {
+        self.install_plugin(input).await
+    }
     async fn set_plugin_enabled(&self, input: SetPluginEnabledInput) -> PluginServiceResult<()>;
     async fn set_plugin_mcp_server_enabled(
         &self,

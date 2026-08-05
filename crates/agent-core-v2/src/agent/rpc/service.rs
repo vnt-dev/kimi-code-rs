@@ -571,6 +571,13 @@ impl AgentRpcServiceContract for AgentRpcService {
         Ok(())
     }
 
+    async fn list_plugin_commands(
+        &self,
+        _payload: EmptyPayload,
+    ) -> AgentRpcResult<Vec<crate::app::plugin::PluginCommandDef>> {
+        self.plugins.list_plugin_commands().await
+    }
+
     async fn activate_plugin_command(
         &self,
         payload: ActivatePluginCommandPayload,

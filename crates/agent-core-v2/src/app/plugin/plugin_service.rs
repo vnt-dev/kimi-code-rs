@@ -42,8 +42,8 @@ use super::{
     errors::{PLUGIN_LOAD_FAILED, PLUGIN_NOT_FOUND, ensure_plugin_errors_registered},
     manager::{PluginManager, PluginManagerOptions},
     types::{
-        EnabledPluginSessionStart, PluginCommandDef, PluginInfo, PluginSummary, PluginUpdateStatus,
-        ReloadSummary,
+        EnabledPluginSessionStart, PluginCommandDef, PluginInfo, PluginInstallProgressCallback,
+        PluginSummary, PluginUpdateStatus, ReloadSummary,
     },
 };
 
@@ -249,6 +249,28 @@ impl PluginServiceContract for PluginService {
         let mut manager = self.manager.lock().await;
         self.assert_loaded()?;
         let record = manager.install(&input.source).await?;
+        manager
+            .info(&record.id)
+            .map(|info| info.summary)
+            .ok_or_else(|| {
+                message_error(format!(
+                    "Plugin \"{}\" missing right after install",
+                    record.id
+                ))
+            })
+    }
+
+    async fn install_plugin_with_progress(
+        &self,
+        input: InstallPluginInput,
+        progress: PluginInstallProgressCallback,
+    ) -> PluginServiceResult<PluginSummary> {
+        self.start_initial_load().await;
+        let mut manager = self.manager.lock().await;
+        self.assert_loaded()?;
+        let record = manager
+            .install_with_progress(&input.source, Some(progress))
+            .await?;
         manager
             .info(&record.id)
             .map(|info| info.summary)

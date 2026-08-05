@@ -40,12 +40,22 @@ pub enum PluginArchiveError {
 // Original: archive.ts, downloadZip(). Cancellation of this future cancels the
 // request; the source's internal controller contributes a five-minute timeout.
 pub async fn download_zip(url: &str) -> Result<Vec<u8>, PluginArchiveError> {
-    tokio::time::timeout(DOWNLOAD_TIMEOUT, download_zip_inner(url))
+    download_zip_with_progress(url, None).await
+}
+
+pub async fn download_zip_with_progress(
+    url: &str,
+    progress: Option<&(dyn Fn(u64, Option<u64>) + Send + Sync)>,
+) -> Result<Vec<u8>, PluginArchiveError> {
+    tokio::time::timeout(DOWNLOAD_TIMEOUT, download_zip_inner(url, progress))
         .await
         .map_err(|_| PluginArchiveError::Timeout)?
 }
 
-async fn download_zip_inner(url: &str) -> Result<Vec<u8>, PluginArchiveError> {
+async fn download_zip_inner(
+    url: &str,
+    progress: Option<&(dyn Fn(u64, Option<u64>) + Send + Sync)>,
+) -> Result<Vec<u8>, PluginArchiveError> {
     let response = reqwest::get(url).await?;
     let status = response.status();
     if !status.is_success() {
@@ -54,10 +64,20 @@ async fn download_zip_inner(url: &str) -> Result<Vec<u8>, PluginArchiveError> {
             status_text: status.canonical_reason().unwrap_or_default().to_owned(),
         });
     }
+    let total_bytes = response.content_length();
+    if let Some(progress) = progress {
+        progress(0, total_bytes);
+    }
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
+    let mut downloaded_bytes = 0_u64;
     while let Some(chunk) = stream.next().await {
-        bytes.extend_from_slice(&chunk?);
+        let chunk = chunk?;
+        downloaded_bytes = downloaded_bytes.saturating_add(chunk.len() as u64);
+        bytes.extend_from_slice(&chunk);
+        if let Some(progress) = progress {
+            progress(downloaded_bytes, total_bytes);
+        }
     }
     Ok(bytes)
 }
@@ -190,6 +210,9 @@ fn path_to_string(path: impl AsRef<Path>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use zip::write::SimpleFileOptions;
 
     use super::*;
@@ -203,6 +226,43 @@ mod tests {
             writer.write_all(content).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[tokio::test]
+    async fn reports_downloaded_bytes_and_content_length() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = b"plugin archive bytes".to_vec();
+        let response_body = body.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response_body.len()
+            );
+            socket.write_all(headers.as_bytes()).await.unwrap();
+            socket.write_all(&response_body).await.unwrap();
+        });
+
+        let events = Mutex::new(Vec::new());
+        let progress = |downloaded_bytes, total_bytes| {
+            events.lock().unwrap().push((downloaded_bytes, total_bytes));
+        };
+        let downloaded =
+            download_zip_with_progress(&format!("http://{address}/plugin.zip"), Some(&progress))
+                .await
+                .unwrap();
+        server.await.unwrap();
+
+        assert_eq!(downloaded, body);
+        let events = events.into_inner().unwrap();
+        assert_eq!(events.first(), Some(&(0, Some(body.len() as u64))));
+        assert_eq!(
+            events.last(),
+            Some(&(body.len() as u64, Some(body.len() as u64)))
+        );
     }
 
     #[tokio::test]

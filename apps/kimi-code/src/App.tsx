@@ -21,14 +21,14 @@ import {
   listWorkspaceSessions,
   prepareSession,
   subscribeAgentEvents,
-  unsubscribeAgentEvents
+  unsubscribeAgentEvents,
+  type PluginCommandDef,
 } from "./agentRpc";
 import { subscribeToAppEvents } from "./app/appEventSubscriptions";
 import {
   BACKGROUND_TASK_LIST_LIMIT,
   BACKGROUND_TASK_OUTPUT_TAIL,
   LIVE_TURN_HANDOFF_MS,
-  SLASH_COMMAND_COUNT,
   fetchConversationHistory,
   newQueuedPromptId,
   type AgentSubscription,
@@ -39,6 +39,12 @@ import { createWorkspaceActions } from "./app/createWorkspaceActions";
 import { useChatScroll } from "./app/useChatScroll";
 import { useConversationResources } from "./app/useConversationResources";
 import { useResponsiveSidebar } from "./app/useResponsiveSidebar";
+import {
+  filterPluginCommands,
+  parseKnownPluginCommand,
+  pluginCommandLabel,
+  type SlashMenuItem,
+} from "./plugins";
 import {
   applyColorScheme,
   loadColorScheme,
@@ -194,6 +200,8 @@ export default function App() {
   const [composerAddOpen, setComposerAddOpen] = useState(false);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashMenuActiveIndex, setSlashMenuActiveIndex] = useState(0);
+  const [pluginCommands, setPluginCommands] = useState<PluginCommandDef[]>([]);
+  const [pluginCommandRevision, setPluginCommandRevision] = useState(0);
   const [compactionCommandBusy, setCompactionCommandBusy] = useState(false);
   const [forkCommandBusy, setForkCommandBusy] = useState(false);
   const [queuedPrompts, setQueuedPrompts] = useState<
@@ -537,6 +545,62 @@ export default function App() {
     activeConversation !== undefined &&
     activeAgentScope?.sessionId === activeConversation.id &&
     activeCompaction?.phase !== "started";
+  const slashMenuItems = useMemo<SlashMenuItem[]>(() => {
+    const query = prompt.startsWith("/") ? prompt.slice(1).toLowerCase() : "";
+    const builtins: SlashMenuItem[] = [
+      {
+        id: "compact",
+        kind: "builtin",
+        builtin: "compact",
+        label: "compact",
+        description:
+          activeCompaction?.phase === "started"
+            ? t("slash.compacting")
+            : activeContextPercent === undefined
+              ? t("slash.compactDesc")
+              : t("slash.compactDescPercent", { percent: activeContextPercent }),
+        disabled: !canRunCompaction,
+      },
+      {
+        id: "fork",
+        kind: "builtin",
+        builtin: "fork",
+        label: "fork",
+        description: t("slash.forkDesc"),
+        disabled: !canRunFork,
+      },
+      {
+        id: "btw",
+        kind: "builtin",
+        builtin: "btw",
+        label: "btw",
+        description: t("slash.sideChatDesc"),
+        disabled: !canOpenSideChat,
+      },
+    ];
+    const visibleBuiltins = builtins.filter((item) =>
+      item.label.toLowerCase().includes(query),
+    );
+    const visiblePlugins = filterPluginCommands(pluginCommands, query).map(
+      (command): SlashMenuItem => ({
+        id: `plugin-${command.pluginId}-${command.name}`,
+        kind: "plugin",
+        label: pluginCommandLabel(command),
+        description: command.description,
+        plugin: command,
+      }),
+    );
+    return [...visibleBuiltins, ...visiblePlugins];
+  }, [
+    activeCompaction?.phase,
+    activeContextPercent,
+    canOpenSideChat,
+    canRunCompaction,
+    canRunFork,
+    language,
+    pluginCommands,
+    prompt,
+  ]);
   const activeAgentUsage = activeConversation
     ? agentUsages[activeConversation.id]
     : undefined;
@@ -963,6 +1027,31 @@ export default function App() {
   }, [slashMenuOpen]);
 
   useEffect(() => {
+    const scope = activeAgentScope;
+    if (!scope) {
+      setPluginCommands([]);
+      return;
+    }
+    let active = true;
+    void createAgentClient(scope)
+      .listPluginCommands()
+      .then((commands) => {
+        if (active) setPluginCommands(commands);
+      })
+      .catch(() => {
+        if (active) setPluginCommands([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeAgentScope?.agentId, activeAgentScope?.sessionId, pluginCommandRevision]);
+
+  useEffect(() => {
+    if (slashMenuActiveIndex < slashMenuItems.length) return;
+    setSlashMenuActiveIndex(Math.max(0, slashMenuItems.length - 1));
+  }, [slashMenuActiveIndex, slashMenuItems.length]);
+
+  useEffect(() => {
     promptCompositionRef.current = false;
     skillsRequest.current += 1;
     skillDetailRequest.current += 1;
@@ -1247,11 +1336,13 @@ export default function App() {
   };
 
   const syncSlashMenu = (textarea: HTMLTextAreaElement): void => {
+    const value = textarea.value;
     const open =
       document.activeElement === textarea &&
-      textarea.value.startsWith("/") &&
-      textarea.selectionStart === 1 &&
-      textarea.selectionEnd === 1;
+      value.startsWith("/") &&
+      !/\s/.test(value) &&
+      textarea.selectionStart === value.length &&
+      textarea.selectionEnd === value.length;
     setSlashMenuOpen(open);
     if (open) setComposerAddOpen(false);
   };
@@ -1807,8 +1898,39 @@ export default function App() {
     modelBusy,
   ]);
 
+  const executePluginCommand = async (
+    command: ReturnType<typeof parseKnownPluginCommand>,
+  ): Promise<void> => {
+    if (!command) return;
+    const scope = activeAgentScope;
+    if (!scope || scope.sessionId !== activeConversation?.id) {
+      showNotice(t("notice.sessionPreparing"));
+      return;
+    }
+    try {
+      await createAgentClient(scope).activatePluginCommand(
+        command.pluginId,
+        command.commandName,
+        command.args,
+      );
+      resetPrompt("", scope.sessionId);
+      setSlashMenuOpen(false);
+    } catch (error) {
+      showNotice(conciseError(error));
+    }
+  };
+
   const handleSubmit = (event: FormEvent): void => {
     event.preventDefault();
+    const command = parseKnownPluginCommand(prompt, pluginCommands);
+    if (command) {
+      if (promptAttachments.length > 0 || promptSkills.length > 0) {
+        showNotice(t("plugins.commandAttachmentError"));
+        return;
+      }
+      void executePluginCommand(command);
+      return;
+    }
     void sendPrompt();
   };
 
@@ -2068,6 +2190,32 @@ export default function App() {
     }
   };
 
+  const selectSlashMenuItem = (item: SlashMenuItem): void => {
+    if (item.disabled) return;
+    if (item.builtin === "compact") {
+      void runCompactionCommand();
+      return;
+    }
+    if (item.builtin === "fork") {
+      void runForkCommand();
+      return;
+    }
+    if (item.builtin === "btw") {
+      openSideChatCommand();
+      return;
+    }
+    if (!item.plugin || !activeConversation) return;
+    const value = `/${pluginCommandLabel(item.plugin)} `;
+    resetPrompt(value, activeConversation.id);
+    setSlashMenuOpen(false);
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(value.length, value.length);
+    });
+  };
+
   const handlePromptKeyDown = (
     event: KeyboardEvent<HTMLTextAreaElement>,
   ): void => {
@@ -2082,11 +2230,12 @@ export default function App() {
       (event.key === "ArrowDown" || event.key === "ArrowUp")
     ) {
       event.preventDefault();
+      if (slashMenuItems.length === 0) return;
       setSlashMenuActiveIndex((current) => {
         const delta = event.key === "ArrowDown" ? 1 : -1;
         return (
-          (current + delta + SLASH_COMMAND_COUNT) %
-          SLASH_COMMAND_COUNT
+          (current + delta + slashMenuItems.length) %
+          slashMenuItems.length
         );
       });
       return;
@@ -2097,13 +2246,8 @@ export default function App() {
       !event.shiftKey
     ) {
       event.preventDefault();
-      if (slashMenuActiveIndex === 0) {
-        void runCompactionCommand();
-      } else if (slashMenuActiveIndex === 1) {
-        void runForkCommand();
-      } else {
-        openSideChatCommand();
-      }
+      const item = slashMenuItems[slashMenuActiveIndex];
+      if (item) selectSlashMenuItem(item);
       return;
     }
     if (
@@ -2391,7 +2535,6 @@ export default function App() {
               activeApproval={activeApproval}
               activeBackgroundTasks={activeBackgroundTasks}
               activeCompaction={activeCompaction}
-              activeContextPercent={activeContextPercent}
               activeContextUsage={activeContextUsage}
               activeGoal={activeGoal}
               activeGoalMode={activeGoalMode}
@@ -2401,9 +2544,6 @@ export default function App() {
               activeTodos={activeTodos}
               attachmentInputRef={attachmentInputRef}
               availableSkills={availableSkills}
-              canOpenSideChat={canOpenSideChat}
-              canRunCompaction={canRunCompaction}
-              canRunFork={canRunFork}
               composerAddOpen={composerAddOpen}
               composerAddRef={composerAddRef}
               composerHasContent={composerHasContent}
@@ -2427,6 +2567,7 @@ export default function App() {
               skillsBusy={skillsBusy}
               skillsError={skillsError}
               slashMenuActiveIndex={slashMenuActiveIndex}
+              slashMenuItems={slashMenuItems}
               slashMenuOpen={slashMenuOpen}
               supportedThinkingLevels={supportedThinkingLevels}
               textareaRef={textareaRef}
@@ -2441,12 +2582,10 @@ export default function App() {
               handleSubmit={handleSubmit}
               loadAvailableSkills={loadAvailableSkills}
               loadBackgroundTaskOutput={loadBackgroundTaskOutput}
-              openSideChatCommand={openSideChatCommand}
               openSkillDetail={openSkillDetail}
               resolveApproval={resolveApproval}
               respondToInteraction={respondToInteraction}
-              runCompactionCommand={runCompactionCommand}
-              runForkCommand={runForkCommand}
+              selectSlashMenuItem={selectSlashMenuItem}
               selectPromptSkill={selectPromptSkill}
               setComposerAddOpen={setComposerAddOpen}
               setGoalEditTarget={setGoalEditTarget}
@@ -2543,6 +2682,7 @@ export default function App() {
         }}
         onColorSchemeChange={updateColorScheme}
         onLanguageChange={updateLanguage}
+        onPluginsChanged={() => setPluginCommandRevision((value) => value + 1)}
         onCloseSettings={closeSettings}
         onDismissNotice={() => setNotice(undefined)}
       />

@@ -2546,6 +2546,7 @@ version = "0.2.3"
 dependencies = [
  "kimi-code-agent-core-v2",
  "kimi-code-web-server",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",
@@ -2554,6 +2555,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "url",
 ]
 
 [[package]]

@@ -23,6 +23,7 @@ use crate::{
         task::AgentTaskInfo,
         usage::UsageStatus,
     },
+    app::plugin::PluginCommandDef,
     session::todo::TodoItem,
     tool::ToolSource,
 };
@@ -75,6 +76,10 @@ pub trait AgentRpcServiceContract: Send + Sync {
     ) -> AgentRpcResult<Option<AgentTaskInfo>>;
     async fn clear_context(&self, payload: EmptyPayload) -> AgentRpcResult<()>;
     async fn activate_skill(&self, payload: ActivateSkillPayload) -> AgentRpcResult<()>;
+    async fn list_plugin_commands(
+        &self,
+        payload: EmptyPayload,
+    ) -> AgentRpcResult<Vec<PluginCommandDef>>;
     async fn activate_plugin_command(
         &self,
         payload: ActivatePluginCommandPayload,

@@ -5,9 +5,10 @@ import { Check, ChevronDown, Copy, ExternalLink, RefreshCw, X } from "lucide-rea
 
 import type { ColorScheme } from "./appearance";
 import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
+import PluginSettings from "./PluginSettings";
 import { invoke, isDesktop, openExternalUrl } from "./transport";
 
-type SettingsTab = "general" | "web" | "about";
+type SettingsTab = "general" | "plugins" | "web" | "about";
 type WebServerListenScope = "local" | "global";
 
 interface WebServerStatus {
@@ -144,6 +145,7 @@ export default function SettingsDialog({
   language,
   onColorSchemeChange,
   onLanguageChange,
+  onPluginsChanged,
   onClose,
 }: {
   appVersion?: string;
@@ -151,6 +153,7 @@ export default function SettingsDialog({
   language: Language;
   onColorSchemeChange: (colorScheme: ColorScheme) => void;
   onLanguageChange: (language: Language) => void;
+  onPluginsChanged: () => void;
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -429,6 +432,16 @@ export default function SettingsDialog({
             </button>
             {isDesktop() && (
               <button
+                className={`settings-tab ${activeTab === "plugins" ? "active" : ""}`}
+                type="button"
+                aria-current={activeTab === "plugins" ? "page" : undefined}
+                onClick={() => setActiveTab("plugins")}
+              >
+                {t("settings.tabPlugins")}
+              </button>
+            )}
+            {isDesktop() && (
+              <button
                 className={`settings-tab ${activeTab === "web" ? "active" : ""}`}
                 type="button"
                 aria-current={activeTab === "web" ? "page" : undefined}
@@ -493,6 +506,8 @@ export default function SettingsDialog({
                   />
                 </div>
               </section>
+            ) : activeTab === "plugins" ? (
+              <PluginSettings onChanged={onPluginsChanged} />
             ) : activeTab === "web" ? (
               <section
                 className="settings-section settings-web"

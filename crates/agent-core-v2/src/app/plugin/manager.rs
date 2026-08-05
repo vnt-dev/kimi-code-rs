@@ -25,7 +25,7 @@ use crate::{
 };
 
 use super::{
-    archive::{download_zip, extract_zip},
+    archive::{download_zip_with_progress, extract_zip},
     commands::{LoadPluginCommandOptions, load_plugin_command},
     errors::{PLUGIN_NOT_FOUND, ensure_plugin_errors_registered},
     github_resolver::{GithubSourceInput, resolve_github_commit_sha, resolve_github_source},
@@ -35,8 +35,9 @@ use super::{
     types::{
         EnabledPluginSessionStart, PluginCapabilityState, PluginCommandDef,
         PluginDiagnosticSeverity, PluginGithubMetadata, PluginGithubRef, PluginGithubRefKind,
-        PluginInfo, PluginMcpServerInfo, PluginMcpServerState, PluginMcpTransport, PluginRecord,
-        PluginSource, PluginState, PluginSummary, PluginUpdateStatus, ReloadError, ReloadSummary,
+        PluginInfo, PluginInstallPhase, PluginInstallProgress, PluginInstallProgressCallback,
+        PluginMcpServerInfo, PluginMcpServerState, PluginMcpTransport, PluginRecord, PluginSource,
+        PluginState, PluginSummary, PluginUpdateStatus, ReloadError, ReloadSummary,
         normalize_plugin_id,
     },
 };
@@ -96,17 +97,32 @@ impl PluginManager {
 
     // Original: PluginManager.install().
     pub async fn install(&mut self, source: &str) -> PluginManagerResult<PluginRecord> {
+        self.install_with_progress(source, None).await
+    }
+
+    pub async fn install_with_progress(
+        &mut self,
+        source: &str,
+        progress: Option<PluginInstallProgressCallback>,
+    ) -> PluginManagerResult<PluginRecord> {
+        emit_install_progress(progress.as_ref(), PluginInstallPhase::Resolving, 0, None);
         let resolved = resolve_install_source(source)?;
         let mut temporary_zip_dir = None;
         let prepared = self
-            .prepare_install_source(source, resolved, &mut temporary_zip_dir)
+            .prepare_install_source(source, resolved, &mut temporary_zip_dir, progress.as_ref())
             .await;
         let result = match prepared {
-            Ok(prepared) => self.install_prepared(prepared).await,
+            Ok(prepared) => {
+                emit_install_progress(progress.as_ref(), PluginInstallPhase::Installing, 0, None);
+                self.install_prepared(prepared).await
+            }
             Err(error) => Err(error),
         };
         if let Some(directory) = temporary_zip_dir {
             remove_dir_all_force(Path::new(&directory)).await?;
+        }
+        if result.is_ok() {
+            emit_install_progress(progress.as_ref(), PluginInstallPhase::Complete, 0, None);
         }
         result
     }
@@ -116,6 +132,7 @@ impl PluginManager {
         source: &str,
         resolved: ResolvedSource,
         temporary_zip_dir: &mut Option<String>,
+        progress: Option<&PluginInstallProgressCallback>,
     ) -> PluginManagerResult<PreparedInstall> {
         match resolved {
             ResolvedSource::LocalPath { path } => Ok(PreparedInstall {
@@ -125,7 +142,16 @@ impl PluginManager {
                 github: None,
             }),
             ResolvedSource::ZipUrl { path } => {
-                let buffer = download_zip(&path).await?;
+                let download_progress = |downloaded_bytes, total_bytes| {
+                    emit_install_progress(
+                        progress,
+                        PluginInstallPhase::Downloading,
+                        downloaded_bytes,
+                        total_bytes,
+                    );
+                };
+                let buffer = download_zip_with_progress(&path, Some(&download_progress)).await?;
+                emit_install_progress(progress, PluginInstallPhase::Extracting, 0, None);
                 let directory = create_temporary_directory("kimi-plugin-zip-").await?;
                 *temporary_zip_dir = Some(path_to_string(&directory));
                 let source_root = extract_zip(buffer, &directory).await?;
@@ -158,7 +184,16 @@ impl PluginManager {
                 let zip_url = installed_sha.map_or(resolution.tarball_url, |sha| {
                     format!("https://codeload.github.com/{owner}/{repo}/zip/{sha}")
                 });
-                let buffer = download_zip(&zip_url).await?;
+                let download_progress = |downloaded_bytes, total_bytes| {
+                    emit_install_progress(
+                        progress,
+                        PluginInstallPhase::Downloading,
+                        downloaded_bytes,
+                        total_bytes,
+                    );
+                };
+                let buffer = download_zip_with_progress(&zip_url, Some(&download_progress)).await?;
+                emit_install_progress(progress, PluginInstallPhase::Extracting, 0, None);
                 let directory = create_temporary_directory("kimi-plugin-zip-").await?;
                 *temporary_zip_dir = Some(path_to_string(&directory));
                 let source_root = extract_zip(buffer, &directory).await?;
@@ -591,6 +626,21 @@ impl PluginManager {
     }
 }
 
+fn emit_install_progress(
+    progress: Option<&PluginInstallProgressCallback>,
+    phase: PluginInstallPhase,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+) {
+    if let Some(progress) = progress {
+        progress(PluginInstallProgress {
+            phase,
+            downloaded_bytes,
+            total_bytes,
+        });
+    }
+}
+
 struct PreparedInstall {
     source_root: String,
     original_source: String,
@@ -1006,8 +1056,6 @@ fn plugin_mcp_runtime_name(plugin_id: &str, server_name: &str) -> String {
     format!("plugin-{plugin_id}:{server_name}")
 }
 
-const KIMI_NODE_FALLBACK_SUBCOMMAND: &str = "__plugin_run_node";
-
 fn with_mcp_server_enabled(mut config: McpServerConfig, enabled: bool) -> McpServerConfig {
     match &mut config {
         McpServerConfig::Stdio(config) => config.common.enabled = Some(enabled),
@@ -1030,27 +1078,11 @@ fn with_plugin_mcp_runtime(
     env.insert("KIMI_CODE_HOME".to_owned(), kimi_home_dir.to_owned());
     env.insert("KIMI_PLUGIN_ROOT".to_owned(), plugin_root.to_owned());
     stdio.cwd.get_or_insert_with(|| plugin_root.to_owned());
-    if stdio.command == "node"
-        && is_kimi_native_binary()
-        && let Ok(executable) = std::env::current_exe()
-    {
-        stdio.command = path_to_string(executable);
-        let mut args = vec![KIMI_NODE_FALLBACK_SUBCOMMAND.to_owned()];
-        args.extend(stdio.args.take().unwrap_or_default());
-        stdio.args = Some(args);
-    }
+    // Keep the manifest's executable unchanged. In particular, a desktop GUI
+    // executable is not a Node-compatible host; routing `node` through
+    // `current_exe()` recursively launches desktop windows.
     stdio.env = Some(env);
     McpServerConfig::Stdio(stdio)
-}
-
-fn is_kimi_native_binary() -> bool {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().to_lowercase())
-        })
-        .is_none_or(|name| !name.starts_with("node"))
 }
 
 fn plugin_skill_root(record: &PluginRecord, directory: &str) -> SkillRoot {
@@ -1106,6 +1138,8 @@ struct CombinedInstallError {
 
 #[cfg(test)]
 mod tests {
+    use crate::agent::mcp::{McpServerCommonFields, McpServerStdioConfig};
+
     use super::*;
 
     async fn write_plugin(root: &Path) {
@@ -1135,6 +1169,36 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn node_mcp_server_keeps_node_as_the_executable() {
+        let runtime = with_plugin_mcp_runtime(
+            McpServerConfig::Stdio(McpServerStdioConfig {
+                command: "node".to_owned(),
+                args: Some(vec!["./bin/server.mjs".to_owned()]),
+                env: None,
+                cwd: None,
+                executor: None,
+                common: McpServerCommonFields::default(),
+            }),
+            "C:/plugins/demo",
+            "C:/kimi-home",
+        );
+        let McpServerConfig::Stdio(runtime) = runtime else {
+            panic!("expected stdio config");
+        };
+        assert_eq!(runtime.command, "node");
+        assert_eq!(runtime.args, Some(vec!["./bin/server.mjs".to_owned()]));
+        assert_eq!(runtime.cwd.as_deref(), Some("C:/plugins/demo"));
+        assert_eq!(
+            runtime
+                .env
+                .as_ref()
+                .and_then(|env| env.get("KIMI_PLUGIN_ROOT"))
+                .map(String::as_str),
+            Some("C:/plugins/demo")
+        );
     }
 
     #[tokio::test]

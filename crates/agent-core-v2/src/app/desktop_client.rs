@@ -59,6 +59,11 @@ use crate::{
         message_legacy::{
             MESSAGE_LEGACY_SERVICE_ID, MessageListQuery, PageResponse as MessagePageResponse,
         },
+        plugin::{
+            GetPluginInfoInput, InstallPluginInput, PLUGIN_SERVICE_ID, PluginInfo,
+            PluginInstallProgressCallback, PluginSummary, PluginUpdateStatus, ReloadSummary,
+            RemovePluginInput, SetPluginEnabledInput, SetPluginMcpServerEnabledInput,
+        },
         session_index::SessionSummary,
         session_lifecycle::{
             CreateSessionOptions, ForkSessionOptions, SESSION_LIFECYCLE_SERVICE_ID,
@@ -695,6 +700,100 @@ impl KimiCodeDesktopClient {
             path: skill.path,
             content: skill.content,
         })
+    }
+
+    pub async fn list_plugins(&self) -> Result<Vec<PluginSummary>, String> {
+        self.app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .list_plugins()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn install_plugin(&self, source: String) -> Result<PluginSummary, String> {
+        self.app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .install_plugin(InstallPluginInput { source })
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn install_plugin_with_progress(
+        &self,
+        source: String,
+        progress: PluginInstallProgressCallback,
+    ) -> Result<PluginSummary, String> {
+        self.app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .install_plugin_with_progress(InstallPluginInput { source }, progress)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn set_plugin_enabled(&self, id: String, enabled: bool) -> Result<(), String> {
+        self.app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .set_plugin_enabled(SetPluginEnabledInput { id, enabled })
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn set_plugin_mcp_server_enabled(
+        &self,
+        id: String,
+        server: String,
+        enabled: bool,
+    ) -> Result<(), String> {
+        self.app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .set_plugin_mcp_server_enabled(SetPluginMcpServerEnabledInput {
+                id,
+                server,
+                enabled,
+            })
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn remove_plugin(&self, id: String) -> Result<(), String> {
+        self.app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .remove_plugin(RemovePluginInput { id })
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn reload_plugins(&self) -> Result<ReloadSummary, String> {
+        self.app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .reload_plugins()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn get_plugin_info(&self, id: String) -> Result<PluginInfo, String> {
+        self.app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .get_plugin_info(GetPluginInfoInput { id })
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn check_plugin_updates(&self) -> Result<Vec<PluginUpdateStatus>, String> {
+        self.app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .check_updates()
+            .await
+            .map_err(|error| error.to_string())
     }
 
     pub async fn archive_session(&self, session_id: &str) -> Result<(), String> {

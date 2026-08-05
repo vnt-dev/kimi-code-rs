@@ -12,7 +12,7 @@ pub mod source;
 pub mod store;
 pub mod types;
 
-pub use archive::{PluginArchiveError, download_zip, extract_zip};
+pub use archive::{PluginArchiveError, download_zip, download_zip_with_progress, extract_zip};
 pub use commands::{
     LoadPluginCommandOptions, ParseCommandError, ParseCommandTextOptions, expand_command_arguments,
     load_plugin_command, parse_command_text,

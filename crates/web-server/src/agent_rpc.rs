@@ -38,6 +38,7 @@ pub enum AgentRpcMethod {
     DetachTask,
     ClearContext,
     ActivateSkill,
+    ListPluginCommands,
     ActivatePluginCommand,
     CreateGoal,
     GetGoal,
@@ -192,6 +193,9 @@ pub async fn dispatch_agent_rpc(
         AgentRpcMethod::ActivateSkill => {
             invoke!(rpc, payload, activate_skill, ActivateSkillPayload)
         }
+        AgentRpcMethod::ListPluginCommands => {
+            invoke!(rpc, payload, list_plugin_commands, EmptyPayload)
+        }
         AgentRpcMethod::ActivatePluginCommand => {
             invoke!(
                 rpc,
@@ -234,6 +238,10 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<AgentRpcMethod>("\"startBtw\"").unwrap(),
             AgentRpcMethod::StartBtw
+        ));
+        assert!(matches!(
+            serde_json::from_str::<AgentRpcMethod>("\"listPluginCommands\"").unwrap(),
+            AgentRpcMethod::ListPluginCommands
         ));
         assert!(matches!(
             serde_json::from_str::<AgentRpcMethod>("\"activatePluginCommand\"").unwrap(),

@@ -6,6 +6,8 @@ use std::{
     },
 };
 
+mod plugin_marketplace;
+
 use kimi_code_agent_core_v2::{
     _base::di::lifecycle::DisposableHandle,
     app::{
@@ -17,6 +19,10 @@ use kimi_code_agent_core_v2::{
             KimiCodeDesktopClient,
         },
         file::FileMeta,
+        plugin::{
+            PluginInfo, PluginInstallProgress, PluginInstallProgressCallback, PluginSummary,
+            PluginUpdateStatus, ReloadSummary,
+        },
         session_index::SessionSummary,
     },
 };
@@ -28,6 +34,8 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
+
+use crate::plugin_marketplace::{PluginMarketplace, load_plugin_marketplace};
 
 struct AppState {
     client: Arc<KimiCodeDesktopClient>,
@@ -70,6 +78,14 @@ struct AgentEvent {
 struct AgentInteractionsEvent {
     session_id: String,
     interactions: Vec<DesktopInteraction>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginInstallProgressEvent {
+    operation_id: String,
+    #[serde(flatten)]
+    progress: PluginInstallProgress,
 }
 
 #[tauri::command]
@@ -287,6 +303,84 @@ async fn set_web_server_settings(
 }
 
 #[tauri::command]
+async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginSummary>, String> {
+    state.client.list_plugins().await
+}
+
+#[tauri::command]
+async fn install_plugin(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source: String,
+    operation_id: String,
+) -> Result<PluginSummary, String> {
+    let progress_app = app.clone();
+    let progress_operation_id = operation_id.clone();
+    let progress: PluginInstallProgressCallback = Arc::new(move |progress| {
+        let _ = progress_app.emit(
+            "plugin-install-progress",
+            PluginInstallProgressEvent {
+                operation_id: progress_operation_id.clone(),
+                progress,
+            },
+        );
+    });
+    state
+        .client
+        .install_plugin_with_progress(source, progress)
+        .await
+}
+
+#[tauri::command]
+async fn set_plugin_enabled(
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state.client.set_plugin_enabled(id, enabled).await
+}
+
+#[tauri::command]
+async fn set_plugin_mcp_server_enabled(
+    state: State<'_, AppState>,
+    id: String,
+    server: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .client
+        .set_plugin_mcp_server_enabled(id, server, enabled)
+        .await
+}
+
+#[tauri::command]
+async fn remove_plugin(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.client.remove_plugin(id).await
+}
+
+#[tauri::command]
+async fn reload_plugins(state: State<'_, AppState>) -> Result<ReloadSummary, String> {
+    state.client.reload_plugins().await
+}
+
+#[tauri::command]
+async fn get_plugin_info(state: State<'_, AppState>, id: String) -> Result<PluginInfo, String> {
+    state.client.get_plugin_info(id).await
+}
+
+#[tauri::command]
+async fn check_plugin_updates(
+    state: State<'_, AppState>,
+) -> Result<Vec<PluginUpdateStatus>, String> {
+    state.client.check_plugin_updates().await
+}
+
+#[tauri::command]
+async fn get_plugin_marketplace() -> Result<PluginMarketplace, String> {
+    load_plugin_marketplace().await
+}
+
+#[tauri::command]
 async fn subscribe_agent_events(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -443,6 +537,15 @@ pub fn run() {
             set_goal_mode,
             get_web_server_status,
             set_web_server_settings,
+            list_plugins,
+            install_plugin,
+            set_plugin_enabled,
+            set_plugin_mcp_server_enabled,
+            remove_plugin,
+            reload_plugins,
+            get_plugin_info,
+            check_plugin_updates,
+            get_plugin_marketplace,
             subscribe_agent_events,
             unsubscribe_agent_events,
             respond_interaction

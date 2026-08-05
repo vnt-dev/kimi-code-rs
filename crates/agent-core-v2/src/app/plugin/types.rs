@@ -2,7 +2,10 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/plugin/types.ts`.
 
-use std::{collections::HashMap, sync::LazyLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -297,6 +300,27 @@ pub struct PluginUpdateStatus {
     pub display_version: String,
     pub update_available: bool,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginInstallPhase {
+    Resolving,
+    Downloading,
+    Extracting,
+    Installing,
+    Complete,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInstallProgress {
+    pub phase: PluginInstallPhase,
+    pub downloaded_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+}
+
+pub type PluginInstallProgressCallback = Arc<dyn Fn(PluginInstallProgress) + Send + Sync + 'static>;
 
 pub static PLUGIN_NAME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-z0-9][a-z0-9_-]{0,63}$").expect("plugin name regex must compile")

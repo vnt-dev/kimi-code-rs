@@ -2,7 +2,6 @@ import { invoke } from "../transport";
 import type { MessagePage, ProtocolMessage } from "../types";
 
 export const MAX_PROMPT_SKILLS = 8;
-export const SLASH_COMMAND_COUNT = 3;
 export const LIVE_TURN_HANDOFF_MS = 200;
 export const BACKGROUND_TASK_LIST_LIMIT = 50;
 export const BACKGROUND_TASK_OUTPUT_TAIL = 16_384;

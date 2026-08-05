@@ -30,7 +30,9 @@
   left: 0;
   z-index: 25;
   display: flex;
+  max-height: min(420px, 52vh);
   padding: 6px;
+  overflow-y: auto;
   flex-direction: column;
   gap: 2px;
   border: 1px solid var(--line-strong);

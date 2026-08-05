@@ -54,6 +54,7 @@ export type AgentRpcMethod =
   | "detachTask"
   | "clearContext"
   | "activateSkill"
+  | "listPluginCommands"
   | "activatePluginCommand"
   | "createGoal"
   | "getGoal"
@@ -90,6 +91,14 @@ export interface AgentPromptSubmitResult {
 export interface AgentPromptSkill {
   name: string;
   args?: string;
+}
+
+export interface PluginCommandDef {
+  pluginId: string;
+  name: string;
+  description: string;
+  body: string;
+  path: string;
 }
 
 export interface AgentPromptOptions {
@@ -137,6 +146,16 @@ export function createAgentClient(scope: AgentScope) {
     activateSkill(name: string, args?: string) {
       return callAgentRpc<void>(scope, "activateSkill", {
         name,
+        ...(args ? { args } : {}),
+      });
+    },
+    listPluginCommands() {
+      return callAgentRpc<PluginCommandDef[]>(scope, "listPluginCommands");
+    },
+    activatePluginCommand(pluginId: string, commandName: string, args?: string) {
+      return callAgentRpc<void>(scope, "activatePluginCommand", {
+        pluginId,
+        commandName,
         ...(args ? { args } : {}),
       });
     },

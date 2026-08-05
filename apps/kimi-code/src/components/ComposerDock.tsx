@@ -29,6 +29,7 @@ import {
 } from "react";
 import { BACKGROUND_TASK_DETAIL_TAIL } from "../app/appUtils";
 import type { PromptDraftUpdater } from "../promptDrafts";
+import type { SlashMenuItem } from "../plugins";
 import { thinkingLevelDescription } from "../modelControls";
 import { MAX_PROMPT_ATTACHMENTS } from "../prompt/attachments";
 import type { PromptAttachment } from "../chat/liveTurns";
@@ -68,7 +69,6 @@ interface ComposerDockProps {
   activeApproval?: AgentInteraction;
   activeBackgroundTasks: BackgroundTaskView[];
   activeCompaction?: CompactionEvent;
-  activeContextPercent?: number;
   activeContextUsage?: ContextUsage;
   activeGoal?: GoalSnapshot | null;
   activeGoalMode: boolean;
@@ -78,9 +78,6 @@ interface ComposerDockProps {
   activeTodos: TodoItem[];
   attachmentInputRef: RefObject<HTMLInputElement | null>;
   availableSkills: SkillDescriptor[];
-  canOpenSideChat: boolean;
-  canRunCompaction: boolean;
-  canRunFork: boolean;
   composerAddOpen: boolean;
   composerAddRef: RefObject<HTMLDivElement | null>;
   composerHasContent: boolean;
@@ -104,6 +101,7 @@ interface ComposerDockProps {
   skillsBusy: boolean;
   skillsError?: string;
   slashMenuActiveIndex: number;
+  slashMenuItems: SlashMenuItem[];
   slashMenuOpen: boolean;
   supportedThinkingLevels: string[];
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -122,7 +120,6 @@ interface ComposerDockProps {
     taskId: string,
     tail?: number,
   ) => Promise<void>;
-  openSideChatCommand: () => void;
   openSkillDetail: (skill: SkillDetailTarget) => Promise<void>;
   resolveApproval: (
     interaction: AgentInteraction,
@@ -133,8 +130,7 @@ interface ComposerDockProps {
     interaction: AgentInteraction,
     response: unknown,
   ) => Promise<void>;
-  runCompactionCommand: () => Promise<void>;
-  runForkCommand: () => Promise<void>;
+  selectSlashMenuItem: (item: SlashMenuItem) => void;
   selectPromptSkill: (skill: SkillDescriptor) => void;
   setComposerAddOpen: Dispatch<SetStateAction<boolean>>;
   setGoalEditTarget: Dispatch<SetStateAction<GoalSnapshot | undefined>>;
@@ -162,7 +158,6 @@ export function ComposerDock({
   activeApproval,
   activeBackgroundTasks,
   activeCompaction,
-  activeContextPercent,
   activeContextUsage,
   activeGoal,
   activeGoalMode,
@@ -172,9 +167,6 @@ export function ComposerDock({
   activeTodos,
   attachmentInputRef,
   availableSkills,
-  canOpenSideChat,
-  canRunCompaction,
-  canRunFork,
   composerAddOpen,
   composerAddRef,
   composerHasContent,
@@ -198,6 +190,7 @@ export function ComposerDock({
   skillsBusy,
   skillsError,
   slashMenuActiveIndex,
+  slashMenuItems,
   slashMenuOpen,
   supportedThinkingLevels,
   textareaRef,
@@ -212,12 +205,10 @@ export function ComposerDock({
   handleSubmit,
   loadAvailableSkills,
   loadBackgroundTaskOutput,
-  openSideChatCommand,
   openSkillDetail,
   resolveApproval,
   respondToInteraction,
-  runCompactionCommand,
-  runForkCommand,
+  selectSlashMenuItem,
   selectPromptSkill,
   setComposerAddOpen,
   setGoalEditTarget,
@@ -368,7 +359,7 @@ export function ComposerDock({
                 </div>
               )}
               <form className="composer" onSubmit={handleSubmit}>
-                {slashMenuOpen && (
+                {slashMenuOpen && slashMenuItems.length > 0 && (
                   <div
                     className="slash-command-menu"
                     id="slash-command-menu"
@@ -376,71 +367,32 @@ export function ComposerDock({
                     aria-label={t("slash.commands")}
                     onMouseDown={(event) => event.preventDefault()}
                   >
-                    <button
-                      className={
-                        slashMenuActiveIndex === 0 ? "selected" : undefined
-                      }
-                      id="slash-command-compact"
-                      type="button"
-                      role="menuitem"
-                      disabled={!canRunCompaction}
-                      onMouseEnter={() => setSlashMenuActiveIndex(0)}
-                      onClick={() => void runCompactionCommand()}
-                    >
-                      <span className="slash-command-icon" aria-hidden="true">
-                        {activeCompaction?.phase === "started" ? (
-                          <span className="spinner" />
-                        ) : (
-                          <Minimize2 size={14} />
-                        )}
-                      </span>
-                      <strong>{t("slash.compact")}</strong>
-                      <small>
-                        {activeCompaction?.phase === "started"
-                          ? t("slash.compacting")
-                          : activeContextPercent === undefined
-                            ? t("slash.compactDesc")
-                            : t("slash.compactDescPercent", { percent: activeContextPercent })}
-                      </small>
-                    </button>
-                    <button
-                      className={
-                        slashMenuActiveIndex === 1 ? "selected" : undefined
-                      }
-                      id="slash-command-fork"
-                      type="button"
-                      role="menuitem"
-                      disabled={!canRunFork}
-                      onMouseEnter={() => setSlashMenuActiveIndex(1)}
-                      onClick={() => void runForkCommand()}
-                    >
-                      <span className="slash-command-icon" aria-hidden="true">
-                        {forkCommandBusy ? (
-                          <span className="spinner" />
-                        ) : (
-                          <Copy size={14} />
-                        )}
-                      </span>
-                      <strong>{t("slash.fork")}</strong>
-                      <small>{t("slash.forkDesc")}</small>
-                    </button>
-                    <button
-                      className={
-                        slashMenuActiveIndex === 2 ? "selected" : undefined
-                      }
-                      id="slash-command-btw"
-                      type="button"
-                      role="menuitem"
-                      disabled={!canOpenSideChat}
-                      onMouseEnter={() => setSlashMenuActiveIndex(2)}
-                      onClick={openSideChatCommand}
-                    >
-                      <span className="slash-command-icon" aria-hidden="true">
-                        <MessageSquareText size={14} />
-                      </span>
-                      <strong>{t("sideChat.title")}</strong>
-                      <small>{t("slash.sideChatDesc")}</small>
-                    </button>
+                    {slashMenuItems.map((item, index) => (
+                      <button
+                        className={slashMenuActiveIndex === index ? "selected" : undefined}
+                        id={`slash-command-${item.id}`}
+                        key={item.id}
+                        type="button"
+                        role="menuitem"
+                        disabled={item.disabled}
+                        onMouseEnter={() => setSlashMenuActiveIndex(index)}
+                        onClick={() => selectSlashMenuItem(item)}
+                      >
+                        <span className="slash-command-icon" aria-hidden="true">
+                          {item.builtin === "compact" ? (
+                            activeCompaction?.phase === "started" ? <span className="spinner" /> : <Minimize2 size={14} />
+                          ) : item.builtin === "fork" ? (
+                            forkCommandBusy ? <span className="spinner" /> : <Copy size={14} />
+                          ) : item.builtin === "btw" ? (
+                            <MessageSquareText size={14} />
+                          ) : (
+                            <Package size={14} />
+                          )}
+                        </span>
+                        <strong>/{item.label}</strong>
+                        <small>{item.description}</small>
+                      </button>
+                    ))}
                   </div>
                 )}
                 {promptAttachments.length > 0 && (
@@ -642,12 +594,8 @@ export function ComposerDock({
                     slashMenuOpen ? "slash-command-menu" : undefined
                   }
                   aria-activedescendant={
-                    slashMenuOpen
-                      ? slashMenuActiveIndex === 0
-                        ? "slash-command-compact"
-                        : slashMenuActiveIndex === 1
-                          ? "slash-command-fork"
-                          : "slash-command-btw"
+                    slashMenuOpen && slashMenuItems[slashMenuActiveIndex]
+                      ? `slash-command-${slashMenuItems[slashMenuActiveIndex].id}`
                       : undefined
                   }
                   placeholder={

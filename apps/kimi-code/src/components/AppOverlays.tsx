@@ -46,6 +46,7 @@ interface AppOverlaysProps {
   onSelectDirectory: (path: string) => void;
   onColorSchemeChange: (colorScheme: ColorScheme) => void;
   onLanguageChange: (language: Language) => void;
+  onPluginsChanged: () => void;
   onCloseSettings: () => void;
   onDismissNotice: () => void;
 }
@@ -80,6 +81,7 @@ export function AppOverlays({
   onSelectDirectory,
   onColorSchemeChange,
   onLanguageChange,
+  onPluginsChanged,
   onCloseSettings,
   onDismissNotice,
 }: AppOverlaysProps) {
@@ -138,6 +140,7 @@ export function AppOverlays({
           language={language}
           onColorSchemeChange={onColorSchemeChange}
           onLanguageChange={onLanguageChange}
+          onPluginsChanged={onPluginsChanged}
           onClose={onCloseSettings}
         />
       )}
