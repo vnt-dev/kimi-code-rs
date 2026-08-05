@@ -26,6 +26,7 @@ import {
 import { t } from "../i18n";
 import { projectLiveUserMessage } from "../liveUserMessage";
 import { messageText } from "../chat/messages";
+import type { PluginCommandDetail } from "../pluginCommandMessage";
 import {
   MAX_PROMPT_ATTACHMENTS,
   preparePromptAttachment,
@@ -77,6 +78,7 @@ interface ConversationResourceOptions {
   setAvailableSkills: Setter<SkillDescriptor[]>;
   setCompactionHistoryReady: Setter<Record<string, boolean>>;
   setCompactionSummaryDetail: Setter<CompactionSummaryDetail | undefined>;
+  setPluginCommandDetail: Setter<PluginCommandDetail | undefined>;
   setComposerAddOpen: Setter<boolean>;
   setDeviceCode: Setter<DeviceCode | undefined>;
   setHistoryByConversation: Setter<Record<string, ConversationHistory>>;
@@ -135,6 +137,7 @@ export function useConversationResources({
   setAvailableSkills,
   setCompactionHistoryReady,
   setCompactionSummaryDetail,
+  setPluginCommandDetail,
   setComposerAddOpen,
   setDeviceCode,
   setHistoryByConversation,
@@ -382,6 +385,7 @@ export function useConversationResources({
     setComposerAddOpen(false);
     closeSideChat();
     setCompactionSummaryDetail(undefined);
+    setPluginCommandDetail(undefined);
     setSkillDetailTarget(skill);
     setSkillDetail(undefined);
     setSkillDetailError(undefined);
@@ -419,6 +423,7 @@ export function useConversationResources({
     setSkillDetail(undefined);
     setSkillDetailBusy(false);
     setSkillDetailError(undefined);
+    setPluginCommandDetail(undefined);
     setCompactionSummaryDetail({
       id: message.id,
       content: messageText(message),

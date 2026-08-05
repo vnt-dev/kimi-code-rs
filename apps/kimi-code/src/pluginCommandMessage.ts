@@ -4,6 +4,12 @@ export interface PluginCommandDisplay {
   args?: string;
 }
 
+export interface PluginCommandDetail extends PluginCommandDisplay {
+  id: string;
+  content: string;
+  createdAt: string;
+}
+
 export function pluginCommandFromOrigin(
   origin: unknown,
 ): PluginCommandDisplay | undefined {

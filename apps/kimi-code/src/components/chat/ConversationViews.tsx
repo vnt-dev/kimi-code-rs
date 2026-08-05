@@ -51,6 +51,7 @@ import {
   type PluginCommandDisplay,
 } from "../../chat/messages";
 import { t } from "../../i18n";
+import type { PluginCommandDetail } from "../../pluginCommandMessage";
 import { SkillPromptDisplayContent } from "../../prompt/SkillPromptDisplay";
 import {
   mergeSubagentRuns,
@@ -149,12 +150,14 @@ export function LiveTurnView({
   subagentRuns,
   subagentLiveTurns,
   onSkillOpen,
+  onPluginCommandOpen,
 }: {
   turn: InFlightTurn;
   outlineId?: string;
   subagentRuns?: SubagentRunsByTool;
   subagentLiveTurns?: Record<string, InFlightTurn>;
   onSkillOpen: (name: string) => void;
+  onPluginCommandOpen: (command: PluginCommandDetail) => void;
 }) {
   const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
   const streaming = isTurnRunning(turn);
@@ -170,7 +173,17 @@ export function LiveTurnView({
         </div>
         <div className="user-bubble">
           {turn.pluginCommand ? (
-            <PluginCommandDisplayContent command={turn.pluginCommand} />
+            <PluginCommandDisplayContent
+              command={turn.pluginCommand}
+              onOpen={() =>
+                onPluginCommandOpen({
+                  ...turn.pluginCommand!,
+                  id: turn.userMessageId ?? turn.promptId ?? turn.createdAt,
+                  content: turn.pluginCommandContent ?? "",
+                  createdAt: turn.createdAt,
+                })
+              }
+            />
           ) : (
             <SkillPromptDisplayContent
               text={turn.prompt}
@@ -294,11 +307,13 @@ export function LiveTurnView({
 
 function PluginCommandDisplayContent({
   command,
+  onOpen,
 }: {
   command: PluginCommandDisplay;
+  onOpen?: () => void;
 }) {
-  return (
-    <div className="plugin-command-message">
+  const content = (
+    <>
       <div className="plugin-command-message-heading">
         <TerminalSquare size={14} aria-hidden="true" />
         <span>/{command.pluginId}:{command.commandName}</span>
@@ -306,7 +321,19 @@ function PluginCommandDisplayContent({
       {command.args && (
         <div className="plugin-command-message-args">{command.args}</div>
       )}
-    </div>
+    </>
+  );
+  return onOpen ? (
+    <button
+      className="plugin-command-message"
+      type="button"
+      title={t("plugins.openCommandDetail")}
+      onClick={onOpen}
+    >
+      {content}
+    </button>
+  ) : (
+    <div className="plugin-command-message">{content}</div>
   );
 }
 
@@ -1059,6 +1086,7 @@ export const HistoryTurnView = memo(function HistoryTurnView({
   copiedMessageId,
   onCopy,
   onSkillOpen,
+  onPluginCommandOpen,
   onCompactionSummaryOpen,
   compactionEvent,
 }: {
@@ -1073,6 +1101,7 @@ export const HistoryTurnView = memo(function HistoryTurnView({
   copiedMessageId?: string;
   onCopy: (message: ProtocolMessage) => void;
   onSkillOpen: (name: string) => void;
+  onPluginCommandOpen: (command: PluginCommandDetail) => void;
   onCompactionSummaryOpen: (message: RenderMessage) => void;
   compactionEvent?: CompactionEvent;
 }) {
@@ -1113,6 +1142,7 @@ export const HistoryTurnView = memo(function HistoryTurnView({
           subagentRuns={subagentRuns}
           subagentLiveTurns={subagentLiveTurns}
           onSkillOpen={onSkillOpen}
+          onPluginCommandOpen={onPluginCommandOpen}
           canUndo={turn.user.id === undoableUserMessageId}
           onUndo={onUndoUserMessage}
         />
@@ -1283,6 +1313,7 @@ function UserMessageView({
   subagentRuns,
   subagentLiveTurns,
   onSkillOpen,
+  onPluginCommandOpen,
   canUndo = false,
   onUndo,
 }: {
@@ -1291,6 +1322,7 @@ function UserMessageView({
   subagentRuns?: SubagentRunsByTool;
   subagentLiveTurns?: Record<string, InFlightTurn>;
   onSkillOpen: (name: string) => void;
+  onPluginCommandOpen: (command: PluginCommandDetail) => void;
   canUndo?: boolean;
   onUndo?: (message: RenderMessage) => void;
 }) {
@@ -1304,7 +1336,17 @@ function UserMessageView({
       </div>
       <div className="user-bubble">
         {pluginCommand ? (
-          <PluginCommandDisplayContent command={pluginCommand} />
+          <PluginCommandDisplayContent
+            command={pluginCommand}
+            onOpen={() =>
+              onPluginCommandOpen({
+                ...pluginCommand,
+                id: message.id,
+                content: text,
+                createdAt: message.created_at,
+              })
+            }
+          />
         ) : (
           <SkillPromptDisplayContent
             text={text}

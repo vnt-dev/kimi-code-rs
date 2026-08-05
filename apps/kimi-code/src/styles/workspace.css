@@ -84,6 +84,26 @@
   line-height: 1.55;
 }
 
+.plugin-command-detail-args {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.plugin-command-detail-args > strong {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.plugin-command-detail-args > span {
+  min-width: 0;
+  font-family: "DM Mono", monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .skill-detail-content {
   min-height: 0;
   padding: 18px;

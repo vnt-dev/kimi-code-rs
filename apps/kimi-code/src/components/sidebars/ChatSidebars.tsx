@@ -5,6 +5,7 @@ import {
   FileCode2,
   MessageSquareText,
   Package,
+  TerminalSquare,
   X,
 } from "lucide-react";
 
@@ -14,6 +15,7 @@ import {
   type InFlightTurn,
 } from "../../chat/liveTurns";
 import { localeTag, t } from "../../i18n";
+import type { PluginCommandDetail } from "../../pluginCommandMessage";
 import type { SkillDescriptor } from "../../types";
 import {
   LiveAssistantContent,
@@ -34,6 +36,71 @@ export interface CompactionSummaryDetail {
   id: string;
   content: string;
   createdAt: string;
+}
+
+export function PluginCommandDetailSidebar({
+  command,
+  onClose,
+}: {
+  command: PluginCommandDetail;
+  onClose: () => void;
+}) {
+  const commandLabel = `/${command.pluginId}:${command.commandName}`;
+  return (
+    <aside
+      className="skill-detail-sidebar plugin-command-detail-sidebar"
+      aria-label={t("plugins.commandDetailAria", { command: commandLabel })}
+    >
+      <header className="skill-detail-header">
+        <div className="skill-detail-heading">
+          <span className="skill-detail-icon">
+            <TerminalSquare size={16} />
+          </span>
+          <div>
+            <h2>{commandLabel}</h2>
+            <span>{t("plugins.commandDetailSubtitle")}</span>
+          </div>
+        </div>
+        <button
+          className="icon-button quiet"
+          type="button"
+          aria-label={t("plugins.closeCommandDetail")}
+          title={t("window.close")}
+          onClick={onClose}
+        >
+          <X size={16} />
+        </button>
+      </header>
+
+      {command.args && (
+        <p className="skill-detail-description plugin-command-detail-args">
+          <strong>{t("plugins.commandArgs")}</strong>
+          <span>{command.args}</span>
+        </p>
+      )}
+
+      <div className="skill-detail-content">
+        {command.content ? (
+          <div className="markdown-body skill-detail-markdown">
+            <MarkdownMessage content={command.content} />
+          </div>
+        ) : (
+          <div className="skill-detail-status">
+            {t("plugins.commandDetailEmpty")}
+          </div>
+        )}
+      </div>
+
+      <footer className="skill-detail-path">
+        <TerminalSquare size={12} />
+        <span>
+          {t("plugins.commandSentAt", {
+            time: new Date(command.createdAt).toLocaleString(localeTag()),
+          })}
+        </span>
+      </footer>
+    </aside>
+  );
 }
 
 export interface SideChatState {

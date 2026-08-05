@@ -69,6 +69,7 @@ export interface InFlightTurn {
   error?: string;
   historyBoundaryId?: string;
   pluginCommand?: PluginCommandDisplay;
+  pluginCommandContent?: string;
 }
 
 export interface QueuedAgentChatEvent {
@@ -155,6 +156,7 @@ export function inFlightTurnFromUserMessage(message: LiveUserMessage): InFlightT
     userMessageId: message.userMessageId,
     createdAt: message.createdAt,
     pluginCommand: projected.pluginCommand,
+    pluginCommandContent: projected.pluginCommandContent,
   };
 }
 
@@ -326,6 +328,7 @@ export function reduceAgentChatEvent(
               skills: projected.skills,
               createdAt: projected.createdAt,
               pluginCommand: projected.pluginCommand,
+              pluginCommandContent: projected.pluginCommandContent,
             }
           : {}),
         status: "running",

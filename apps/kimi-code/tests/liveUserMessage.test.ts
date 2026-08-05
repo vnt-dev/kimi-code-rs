@@ -94,6 +94,7 @@ test("user-slash plugin commands display the command instead of expanded markdow
     commandName: "status",
     args: "--json",
   });
+  assert.equal(projected.pluginCommandContent, "# Expanded plugin instructions");
 
 });
 
@@ -105,4 +106,5 @@ test("non-command messages continue to display their original content", () => {
   });
   assert.equal(projected.text, "ordinary prompt");
   assert.equal(projected.pluginCommand, undefined);
+  assert.equal(projected.pluginCommandContent, undefined);
 });

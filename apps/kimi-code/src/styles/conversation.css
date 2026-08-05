@@ -371,11 +371,34 @@ button.message-skill-chip:hover {
 }
 
 .plugin-command-message {
-  display: flex;
+  display: inline-flex;
   min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  align-items: flex-start;
   flex-direction: column;
   gap: 4px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
   white-space: normal;
+}
+
+button.plugin-command-message {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+button.plugin-command-message:hover .plugin-command-message-heading {
+  color: color-mix(in srgb, var(--accent) 82%, var(--text));
+}
+
+button.plugin-command-message:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
 }
 
 .plugin-command-message-heading {

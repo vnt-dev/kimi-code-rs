@@ -104,12 +104,14 @@ import { ComposerDock } from "./components/ComposerDock";
 import { ProjectLanding } from "./components/ProjectLanding";
 import {
   CompactionSummarySidebar,
+  PluginCommandDetailSidebar,
   SideChatSidebar,
   SkillDetailSidebar,
   type CompactionSummaryDetail,
   type SideChatState,
   type SkillDetailTarget,
 } from "./components/sidebars/ChatSidebars";
+import type { PluginCommandDetail } from "./pluginCommandMessage";
 import { mergeDesktopInventory } from "./desktopInventory";
 import {
   applyLanguage,
@@ -196,6 +198,8 @@ export default function App() {
   const [skillDetailError, setSkillDetailError] = useState<string>();
   const [compactionSummaryDetail, setCompactionSummaryDetail] =
     useState<CompactionSummaryDetail>();
+  const [pluginCommandDetail, setPluginCommandDetail] =
+    useState<PluginCommandDetail>();
   const [sideChat, setSideChat] = useState<SideChatState>();
   const [composerAddOpen, setComposerAddOpen] = useState(false);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
@@ -647,6 +651,20 @@ export default function App() {
     setSideChat(undefined);
   }, []);
 
+  const openPluginCommandDetail = useCallback(
+    (command: PluginCommandDetail): void => {
+      closeSideChat();
+      skillDetailRequest.current += 1;
+      setSkillDetailTarget(undefined);
+      setSkillDetail(undefined);
+      setSkillDetailBusy(false);
+      setSkillDetailError(undefined);
+      setCompactionSummaryDetail(undefined);
+      setPluginCommandDetail(command);
+    },
+    [closeSideChat],
+  );
+
   const loadBackgroundTaskOutput = useCallback(
     async (
       scope: { sessionId: string; agentId: string },
@@ -1062,6 +1080,7 @@ export default function App() {
     setSlashMenuOpen(false);
     closeSideChat();
     setCompactionSummaryDetail(undefined);
+    setPluginCommandDetail(undefined);
     setSkillDetailTarget(undefined);
     setSkillDetail(undefined);
     setSkillDetailBusy(false);
@@ -1477,6 +1496,7 @@ export default function App() {
     setAvailableSkills,
     setCompactionHistoryReady,
     setCompactionSummaryDetail,
+    setPluginCommandDetail,
     setComposerAddOpen,
     setDeviceCode,
     setHistoryByConversation,
@@ -2081,6 +2101,7 @@ export default function App() {
     setSkillDetailBusy(false);
     setSkillDetailError(undefined);
     setCompactionSummaryDetail(undefined);
+    setPluginCommandDetail(undefined);
     setSideChat({
       instanceId,
       parentSessionId: conversation.id,
@@ -2480,6 +2501,7 @@ export default function App() {
                       onSkillOpen={(name) =>
                         void openSkillDetail({ name })
                       }
+                      onPluginCommandOpen={openPluginCommandDetail}
                       onCompactionSummaryOpen={openCompactionSummary}
                       compactionEvent={
                         latestHistoryCompactionSummaryId &&
@@ -2501,6 +2523,7 @@ export default function App() {
                       onSkillOpen={(name) =>
                         void openSkillDetail({ name })
                       }
+                      onPluginCommandOpen={openPluginCommandDetail}
                     />
                   )}
                   {activeQueuedPrompts.length > 0 && (
@@ -2625,6 +2648,11 @@ export default function App() {
           <CompactionSummarySidebar
             summary={compactionSummaryDetail}
             onClose={() => setCompactionSummaryDetail(undefined)}
+          />
+        ) : pluginCommandDetail ? (
+          <PluginCommandDetailSidebar
+            command={pluginCommandDetail}
+            onClose={() => setPluginCommandDetail(undefined)}
           />
         ) : skillDetailTarget ? (
           <SkillDetailSidebar

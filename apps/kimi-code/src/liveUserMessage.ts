@@ -21,6 +21,7 @@ export interface ProjectedLiveUserMessage {
   text: string;
   attachments: LiveMessageAttachment[];
   pluginCommand?: PluginCommandDisplay;
+  pluginCommandContent?: string;
 }
 
 function mediaSourceDataUrl(
@@ -81,21 +82,23 @@ export function projectLiveUserMessage(
   message: LiveUserMessage,
 ): ProjectedLiveUserMessage {
   const pluginCommand = pluginCommandFromOrigin(message.origin);
+  const content = message.content
+    .filter(
+      (part): part is Extract<MessageContent, { type: "text" }> =>
+        part.type === "text",
+    )
+    .map((part) => part.text)
+    .join("");
   return {
     text: pluginCommand
       ? pluginCommandText(pluginCommand)
-      : message.content
-          .filter(
-            (part): part is Extract<MessageContent, { type: "text" }> =>
-              part.type === "text",
-          )
-          .map((part) => part.text)
-          .join(""),
+      : content,
     attachments: message.content.flatMap((part, index) => {
       const attachment = projectAttachment(part, index, message.userMessageId);
       return attachment ? [attachment] : [];
     }),
     pluginCommand,
+    pluginCommandContent: pluginCommand ? content : undefined,
   };
 }
 
