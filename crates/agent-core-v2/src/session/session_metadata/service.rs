@@ -218,9 +218,10 @@ impl SessionMetadataService {
             .await?;
         let created = loaded.is_none();
         let mut data = match loaded {
-            Some(data) => {
-                normalize_session_meta(session_meta_from_value(data)?, &self.context.session_id)
-            }
+            Some(data) => normalize_session_meta(
+                session_meta_from_value(data, &self.context.session_id)?,
+                &self.context.session_id,
+            ),
             None => SessionMeta {
                 id: self.context.session_id.clone(),
                 version: Some(SESSION_META_VERSION),
@@ -332,8 +333,18 @@ pub fn normalize_session_meta(mut raw: SessionMeta, session_id: &str) -> Session
     raw.version = Some(SESSION_META_VERSION);
     raw
 }
-fn session_meta_from_value(mut value: serde_json::Value) -> Result<SessionMeta, serde_json::Error> {
+fn session_meta_from_value(
+    mut value: serde_json::Value,
+    session_id: &str,
+) -> Result<SessionMeta, serde_json::Error> {
     if let Some(object) = value.as_object_mut() {
+        // Legacy TypeScript sessions predate the persisted `id` field. The
+        // TypeScript loader normalizes those untyped objects before using the
+        // field, so provide the directory-derived id before Rust's typed
+        // deserialization enforces it.
+        if !object.get("id").is_some_and(Value::is_string) {
+            object.insert("id".into(), Value::String(session_id.into()));
+        }
         let legacy_cwd = object
             .get("workDir")
             .and_then(Value::as_str)
@@ -778,6 +789,10 @@ mod tests {
         (events, subscription)
     }
 
+    fn parse_meta(value: Value) -> Result<SessionMeta, serde_json::Error> {
+        session_meta_from_value(value, "s")
+    }
+
     #[tokio::test]
     async fn creates_seeded_document_without_initial_read_model_mirror() {
         let fixture = fixture(true);
@@ -1022,9 +1037,36 @@ mod tests {
         assert!(fixture.log.entries.lock().unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn load_accepts_legacy_typescript_metadata_without_id() {
+        let store = Arc::new(Store::default());
+        store.values.lock().unwrap().insert(
+            ("sessions/w/s".into(), META_KEY.into()),
+            json!({
+                "title": "Legacy TypeScript session",
+                "createdAt": "2024-01-02T03:04:05Z",
+                "updatedAt": "2024-01-03T03:04:05Z",
+                "archived": false,
+                "workDir": "/legacy",
+                "agents": {},
+                "custom": {},
+            }),
+        );
+        let fixture = fixture_with_store(store, false);
+
+        let metadata = fixture.metadata.read().await.unwrap();
+
+        assert_eq!(metadata.id, "s");
+        assert_eq!(metadata.version, Some(SESSION_META_VERSION));
+        assert_eq!(metadata.cwd.as_deref(), Some("/legacy"));
+        assert_eq!(metadata.created_at, 1_704_164_645_000);
+        assert_eq!(metadata.updated_at, 1_704_251_045_000);
+        assert_eq!(fixture.store.writes.load(Ordering::Relaxed), 0);
+    }
+
     #[test]
     fn normalizes_legacy_version_dates_and_work_dir() {
-        let raw = session_meta_from_value(json!({
+        let raw = parse_meta(json!({
             "id": "old",
             "createdAt": "2024-01-02T03:04:05Z",
             "updatedAt": "invalid",
@@ -1042,7 +1084,7 @@ mod tests {
 
     #[test]
     fn current_cwd_wins_over_legacy_work_dir_and_empty_legacy_value_is_ignored() {
-        let current = session_meta_from_value(json!({
+        let current = parse_meta(json!({
             "id": "s",
             "version": 2,
             "createdAt": 1,
@@ -1054,7 +1096,7 @@ mod tests {
         .unwrap();
         assert_eq!(current.cwd.as_deref(), Some("/current"));
 
-        let null_current = session_meta_from_value(json!({
+        let null_current = parse_meta(json!({
             "id": "s",
             "version": 2,
             "createdAt": 1,
@@ -1066,7 +1108,7 @@ mod tests {
         .unwrap();
         assert_eq!(null_current.cwd.as_deref(), Some("/legacy"));
 
-        let empty_legacy = session_meta_from_value(json!({
+        let empty_legacy = parse_meta(json!({
             "id": "s",
             "version": 2,
             "createdAt": 1,
