@@ -23,5 +23,6 @@ uuid = { version = "1", features = ["v4"] }
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+# Server tests run outside the desktop bootstrap and need a built-in provider.
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls"] }
 tokio-tungstenite = "0.29"

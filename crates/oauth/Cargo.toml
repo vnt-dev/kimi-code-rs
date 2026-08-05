@@ -12,10 +12,14 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 dirs = "6"
 futures-util = "0.3"
 indexmap = { version = "2", features = ["serde"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.11"
 tokio = { version = "1", features = ["fs", "macros", "rt", "sync", "time"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+# Unit tests construct HTTP clients without going through the desktop bootstrap.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }

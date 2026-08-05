@@ -16,7 +16,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 kimi-code-agent-core-v2 = { path = "../../../crates/agent-core-v2" }
 kimi-code-web-server = { path = "../../../crates/web-server" }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

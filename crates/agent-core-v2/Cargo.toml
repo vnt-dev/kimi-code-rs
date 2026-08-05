@@ -30,8 +30,8 @@ percent-encoding = "2"
 portable-pty = "0.9.0"
 regex = "1"
 regress = { version = "0.11.1", default-features = false, features = ["std", "utf16"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
-rmcp = { version = "3.0.0-beta.1", default-features = false, features = ["auth", "client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls-no-provider", "stream"] }
+rmcp = { version = "3.1.0", default-features = false, features = ["auth", "client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 readability = { version = "0.3", default-features = false }
 scraper = { version = "0.27", default-features = false }
 serde = { version = "1", features = ["derive"] }
@@ -51,3 +51,7 @@ zip = { version = "8.2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 uzers = { version = "0.12.2", default-features = false }
+
+[dev-dependencies]
+# Unit tests construct HTTP clients without going through the desktop bootstrap.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
