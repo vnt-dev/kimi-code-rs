@@ -315,14 +315,6 @@ export function AppSidebar({
               aria-controls="account-popover"
               onClick={onToggleProfile}
             >
-              <span className={auth.loggedIn ? "avatar" : "avatar signed-out"}>
-                {auth.loggedIn ? (
-                  <Sparkles size={15} />
-                ) : (
-                  <CircleUserRound size={18} />
-                )}
-                {auth.loggedIn && <i />}
-              </span>
               <span className="account-copy" aria-hidden={sidebarCollapsed}>
                 <strong>
                   {auth.loggedIn ? "Kimi Code" : t("account.login")}

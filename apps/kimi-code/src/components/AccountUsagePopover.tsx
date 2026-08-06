@@ -3,7 +3,6 @@ import {
   LogOut,
   RefreshCw,
   Settings as SettingsIcon,
-  Sparkles,
 } from "lucide-react";
 
 import { resolveAccountMenuVisibility } from "../accountMenu";
@@ -49,9 +48,6 @@ export function AccountUsagePopover({
     >
       <div className="profile-popover-header">
         <div className="profile-identity">
-          <span className="profile-identity-mark">
-            <Sparkles size={14} />
-          </span>
           <span className="profile-identity-copy">
             <span className="profile-identity-title">
               <strong>Kimi Code</strong>

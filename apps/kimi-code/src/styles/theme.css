@@ -326,8 +326,6 @@ input:focus-visible {
   font-size: 13px;
 }
 
-.avatar,
-.profile-identity-mark,
 .assistant-avatar,
 .welcome-mark,
 .landing-folder,
@@ -337,12 +335,6 @@ input:focus-visible {
   background: var(--accent-soft);
   background-image: none;
   box-shadow: none;
-}
-
-.avatar.signed-out {
-  border-color: var(--line);
-  color: var(--muted);
-  background: transparent;
 }
 
 .account-compact-kimi,

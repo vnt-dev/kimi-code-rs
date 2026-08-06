@@ -744,36 +744,6 @@
   background: rgba(139, 124, 246, 0.14);
 }
 
-.avatar {
-  position: relative;
-  display: grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  flex: 0 0 auto;
-  border: 1px solid rgba(139, 124, 246, 0.32);
-  border-radius: 9px;
-  color: #cdc8ff;
-  background: linear-gradient(135deg, #393b40, #2b2d30);
-}
-
-.avatar i {
-  position: absolute;
-  right: -2px;
-  bottom: -2px;
-  width: 8px;
-  height: 8px;
-  border: 2px solid var(--sidebar);
-  border-radius: 50%;
-  background: var(--green);
-}
-
-.avatar.signed-out {
-  color: #858590;
-  border-color: var(--line-strong);
-  background: #313338;
-}
-
 .account-copy {
   display: flex;
   min-width: 0;
@@ -878,18 +848,6 @@
   min-width: 0;
   align-items: center;
   gap: 9px;
-}
-
-.profile-identity-mark {
-  display: grid;
-  width: 29px;
-  height: 29px;
-  place-items: center;
-  flex: 0 0 auto;
-  border: 1px solid rgba(139, 124, 246, 0.3);
-  border-radius: 8px;
-  color: #cec8ff;
-  background: rgba(139, 124, 246, 0.1);
 }
 
 .profile-identity-copy {
