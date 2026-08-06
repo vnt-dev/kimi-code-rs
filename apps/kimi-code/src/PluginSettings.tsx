@@ -10,12 +10,15 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { t } from "./i18n";
+import { t, type TranslationKey } from "./i18n";
 import {
   isThirdPartyEntry,
   marketplaceUpdateAvailable,
   pluginInstallPercent,
   pluginTabNeedsNetwork,
+  type CapabilityId,
+  type CapabilityReadiness,
+  type CapabilityStatus,
   type PluginInfo,
   type PluginInstallProgressEvent,
   type PluginMarketplace,
@@ -68,6 +71,35 @@ function createInstallOperationId(): string {
     `plugin-install-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+const CAPABILITY_STATE_KEYS: Record<CapabilityReadiness, TranslationKey> = {
+  not_installed: "plugins.capability.state.not_installed",
+  partial: "plugins.capability.state.partial",
+  ready: "plugins.capability.state.ready",
+  unsupported: "plugins.capability.state.unsupported",
+};
+
+// `install.step` is a machine key reported by the engine; clients localize it.
+const CAPABILITY_STEP_KEYS: Record<string, TranslationKey> = {
+  plugin: "plugins.capability.step.plugin",
+  "mcp-config": "plugins.capability.step.mcp-config",
+  download: "plugins.capability.step.download",
+  app: "plugins.capability.step.app",
+  service: "plugins.capability.step.service",
+  permissions: "plugins.capability.step.permissions",
+  runtime: "plugins.capability.step.runtime",
+  daemon: "plugins.capability.step.daemon",
+  skill: "plugins.capability.step.skill",
+  "standalone-skill-migration": "plugins.capability.step.standalone-skill-migration",
+};
+
+function capabilityStepLabel(step: string): string {
+  const key = CAPABILITY_STEP_KEYS[step];
+  return key ? t(key) : step;
+}
+
+const CAPABILITY_POLL_INTERVAL_MS = 700;
+const CAPABILITY_POLL_ATTEMPTS = 260; // ~3 minutes of runtime setup budget
+
 export default function PluginSettings({ onChanged }: { onChanged: () => void }) {
   const [tab, setTab] = useState<PluginTab>("installed");
   const [query, setQuery] = useState("");
@@ -88,6 +120,11 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   const installOperationRef = useRef<string | undefined>(undefined);
   const progressClearTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const marketAttemptedRef = useRef(false);
+  const [capabilities, setCapabilities] = useState<CapabilityStatus[]>([]);
+  const [capabilityBusy, setCapabilityBusy] = useState<CapabilityId>();
+  const capabilityAttemptedRef = useRef(false);
+  const capabilityPollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const capabilityPollAttemptsRef = useRef(0);
 
   const loadInstalled = useCallback(async (reload = false): Promise<void> => {
     setInstalledLoading(true);
@@ -133,6 +170,121 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     if (!pluginTabNeedsNetwork(tab) || marketAttemptedRef.current) return;
     void loadMarketData();
   }, [loadMarketData, tab]);
+
+  const loadCapabilities = useCallback(async (): Promise<CapabilityStatus[]> => {
+    try {
+      const next = await invoke<CapabilityStatus[]>("list_capabilities");
+      setCapabilities(next);
+      return next;
+    } catch {
+      // Detection is best-effort — the marketplace rows still render without it.
+      return [];
+    }
+  }, []);
+
+  const stopCapabilityPolling = useCallback((): void => {
+    if (capabilityPollTimerRef.current !== undefined) {
+      clearTimeout(capabilityPollTimerRef.current);
+      capabilityPollTimerRef.current = undefined;
+    }
+  }, []);
+
+  const finishCapabilityInstall = useCallback(
+    async (nextNotice?: string): Promise<void> => {
+      stopCapabilityPolling();
+      setCapabilityBusy(undefined);
+      if (nextNotice) setNotice(nextNotice);
+      await loadCapabilities();
+      // The install rewires a plugin layer, so the installed list changes too.
+      await loadInstalled();
+      onChanged();
+    },
+    [loadCapabilities, loadInstalled, onChanged, stopCapabilityPolling],
+  );
+
+  const pollCapabilityInstall = useCallback(
+    async (id: CapabilityId, name: string): Promise<void> => {
+      try {
+        const status = await invoke<CapabilityStatus>("get_capability", { id });
+        setCapabilities((current) =>
+          current.map((item) => (item.id === id ? status : item)),
+        );
+        if (!status.install.running) {
+          await finishCapabilityInstall(
+            status.install.error
+              ? t("plugins.operationFailed", { error: status.install.error })
+              : t("plugins.capability.installedNotice", { name }),
+          );
+          return;
+        }
+      } catch (error) {
+        await finishCapabilityInstall(t("plugins.operationFailed", { error: messageOf(error) }));
+        return;
+      }
+      capabilityPollAttemptsRef.current += 1;
+      if (capabilityPollAttemptsRef.current >= CAPABILITY_POLL_ATTEMPTS) {
+        await finishCapabilityInstall();
+        return;
+      }
+      capabilityPollTimerRef.current = setTimeout(
+        () => void pollCapabilityInstall(id, name),
+        CAPABILITY_POLL_INTERVAL_MS,
+      );
+    },
+    [finishCapabilityInstall],
+  );
+
+  // Follow (never restart) a running background install until it settles.
+  const followCapabilityInstall = useCallback(
+    (id: CapabilityId, name: string): void => {
+      stopCapabilityPolling();
+      capabilityPollAttemptsRef.current = 0;
+      setCapabilityBusy(id);
+      capabilityPollTimerRef.current = setTimeout(
+        () => void pollCapabilityInstall(id, name),
+        CAPABILITY_POLL_INTERVAL_MS,
+      );
+    },
+    [pollCapabilityInstall, stopCapabilityPolling],
+  );
+
+  useEffect(() => {
+    if (tab !== "official" || capabilityAttemptedRef.current) return;
+    capabilityAttemptedRef.current = true;
+    void loadCapabilities().then((next) => {
+      const running = next.find((capability) => capability.install.running);
+      if (running) followCapabilityInstall(running.id, running.displayName);
+    });
+  }, [followCapabilityInstall, loadCapabilities, tab]);
+
+  useEffect(() => () => stopCapabilityPolling(), [stopCapabilityPolling]);
+
+  const installCapability = async (capability: CapabilityStatus): Promise<void> => {
+    if (capabilityBusy || busy) return;
+    setNotice(undefined);
+    try {
+      // An install already running (started from another panel or client) is
+      // followed, not restarted — the service rejects duplicate starts even
+      // though the original is healthy.
+      const started = capability.install.running
+        ? capability
+        : await invoke<CapabilityStatus>("install_capability", { id: capability.id });
+      setCapabilities((current) =>
+        current.map((item) => (item.id === started.id ? started : item)),
+      );
+      if (started.install.running) {
+        followCapabilityInstall(capability.id, capability.displayName);
+      } else {
+        await finishCapabilityInstall(
+          started.install.error
+            ? t("plugins.operationFailed", { error: started.install.error })
+            : t("plugins.capability.installedNotice", { name: capability.displayName }),
+        );
+      }
+    } catch (error) {
+      await finishCapabilityInstall(t("plugins.operationFailed", { error: messageOf(error) }));
+    }
+  };
 
   useEffect(() => {
     let disposed = false;
@@ -325,6 +477,10 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     const tierMatches = tab === "official" ? entry.tier === "official" : entry.tier !== "official";
     return tierMatches && matches(entry.displayName, entry.description, entry.keywords);
   });
+  // Built-in capabilities merge into the official tab, ahead of the catalog.
+  const visibleCapabilities = capabilities.filter((capability) =>
+    matches(capability.displayName, capability.description),
+  );
   const loading = tab === "installed"
     ? installedLoading
     : pluginTabNeedsNetwork(tab)
@@ -481,7 +637,69 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
                 <button className={`settings-toggle ${plugin.enabled ? "active" : ""}`} type="button" role="switch" aria-label={t("plugins.toggle", { name: plugin.displayName })} aria-checked={plugin.enabled} disabled={busy === `toggle:${plugin.id}`} onClick={() => void togglePlugin(plugin)}><span /></button>
               </article>
             );
-          }) : visibleMarket.map((entry) => {
+          }) : (<>
+          {tab === "official" && visibleCapabilities.map((capability) => {
+            const running = capability.install.running;
+            const percent = capability.install.percent;
+            return (
+              <article className="plugin-card market" key={capability.id}>
+                <span className="plugin-avatar">{initials(capability.displayName)}</span>
+                <div className="plugin-card-body">
+                  <div className="plugin-card-title">
+                    <strong>{capability.displayName}</strong>
+                    {capability.version && <span>v{capability.version}</span>}
+                    <span className="official">{t("plugins.official")}</span>
+                    <span className={`capability-state ${capability.state}`}>
+                      {t(CAPABILITY_STATE_KEYS[capability.state])}
+                    </span>
+                  </div>
+                  <p>{capability.description}</p>
+                  {running && (
+                    <div
+                      className="plugin-install-progress capability-progress"
+                      role="progressbar"
+                      aria-label={t("plugins.capability.installing")}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      {...(percent === undefined ? {} : { "aria-valuenow": percent })}
+                    >
+                      <div className="plugin-install-progress-label">
+                        <strong>
+                          {capability.install.step
+                            ? capabilityStepLabel(capability.install.step)
+                            : t("plugins.capability.installing")}
+                        </strong>
+                        <span>{percent === undefined ? "" : `${percent}%`}</span>
+                      </div>
+                      <div className={`plugin-install-progress-track ${percent === undefined ? "indeterminate" : ""}`}>
+                        <span style={percent === undefined ? undefined : { width: `${percent}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  {!running && capability.install.error && (
+                    <p className="plugin-capability-error">{capability.install.error}</p>
+                  )}
+                </div>
+                <div className="plugin-market-actions">
+                  <button
+                    className="primary"
+                    type="button"
+                    disabled={!capability.supported || running || !!capabilityBusy || !!busy}
+                    onClick={() => void installCapability(capability)}
+                  >
+                    {!capability.supported
+                      ? t("plugins.capability.unsupportedAction")
+                      : running
+                        ? t("plugins.capability.installing")
+                        : capability.state === "ready"
+                          ? t("plugins.capability.reinstall")
+                          : t("plugins.install")}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+          {visibleMarket.map((entry) => {
             const installed = installedById.get(entry.id);
             const update = marketplaceUpdateAvailable(installed, entry) || githubUpdates.get(entry.id)?.updateAvailable;
             return (
@@ -501,7 +719,10 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
               </article>
             );
           })}
-          {((tab === "installed" && visiblePlugins.length === 0) || (tab !== "installed" && visibleMarket.length === 0)) && !loading && (
+          </>)}
+          {((tab === "installed" && visiblePlugins.length === 0) ||
+            (tab === "official" && visibleCapabilities.length === 0 && visibleMarket.length === 0) ||
+            (tab === "third-party" && visibleMarket.length === 0)) && !loading && (
             <div className="plugin-empty"><Package size={25} /><p>{normalizedQuery ? t("plugins.noResults") : t(tab === "installed" ? "plugins.noneInstalled" : "plugins.noneAvailable")}</p></div>
           )}
         </div>

@@ -119,6 +119,36 @@ export interface PluginMarketplace {
   plugins: PluginMarketplaceEntry[];
 }
 
+export type CapabilityId = "kimi-cu" | "kimi-webbridge";
+export type CapabilityReadiness = "not_installed" | "partial" | "ready" | "unsupported";
+export type CapabilityStepState = "ok" | "missing" | "failed";
+
+export interface CapabilityStep {
+  id: string;
+  state: CapabilityStepState;
+  detail?: string;
+  optional?: boolean;
+}
+
+export interface CapabilityInstallProgress {
+  running: boolean;
+  step?: string;
+  percent?: number;
+  error?: string;
+}
+
+export interface CapabilityStatus {
+  id: CapabilityId;
+  pluginId?: string;
+  displayName: string;
+  description: string;
+  supported: boolean;
+  state: CapabilityReadiness;
+  version?: string;
+  steps: CapabilityStep[];
+  install: CapabilityInstallProgress;
+}
+
 export interface ParsedPluginCommand {
   pluginId: string;
   commandName: string;

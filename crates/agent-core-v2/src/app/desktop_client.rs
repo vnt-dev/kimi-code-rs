@@ -52,6 +52,7 @@ use crate::{
         agent_app_runtime::bootstrap_agent_app,
         auth::{OAuthToolkitContract, OAuthToolkitService, config_section::SERVICES_SECTION},
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
+        capability::{CAPABILITY_SERVICE_ID, CapabilityStatus},
         config::{CONFIG_SERVICE_ID, ConfigTarget},
         event::event_bus::EVENT_BUS_SERVICE_ID,
         file::{FILE_SERVICE_ID, FileByteStream, FileMeta, FileServiceError, SaveOptions},
@@ -787,6 +788,33 @@ impl KimiCodeDesktopClient {
             .get(PLUGIN_SERVICE_ID)
             .map_err(|error| error.to_string())?
             .check_updates()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn list_capabilities(&self) -> Result<Vec<CapabilityStatus>, String> {
+        self.app
+            .get(CAPABILITY_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .list_capabilities()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn get_capability(&self, id: String) -> Result<CapabilityStatus, String> {
+        self.app
+            .get(CAPABILITY_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .get_capability(&id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn install_capability(&self, id: String) -> Result<CapabilityStatus, String> {
+        self.app
+            .get(CAPABILITY_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .install_capability(&id)
             .await
             .map_err(|error| error.to_string())
     }

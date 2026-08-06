@@ -216,6 +216,34 @@
   color: #db8585;
 }
 
+.plugin-card-title span.capability-state {
+  color: var(--muted);
+  background: var(--control-hover);
+}
+
+.plugin-card-title span.capability-state.ready {
+  color: #4caf7d;
+  background: color-mix(in srgb, #4caf7d 12%, transparent);
+}
+
+.plugin-card-title span.capability-state.partial {
+  color: #b28b45;
+  background: color-mix(in srgb, #b28b45 12%, transparent);
+}
+
+.plugin-card-title span.capability-state.unsupported {
+  color: #db8585;
+  background: color-mix(in srgb, #db8585 12%, transparent);
+}
+
+.plugin-card-body .capability-progress {
+  margin-top: 8px;
+}
+
+.plugin-card-body .plugin-capability-error {
+  color: #db8585;
+}
+
 .plugin-card-body > p {
   margin-top: 5px;
   overflow: hidden;

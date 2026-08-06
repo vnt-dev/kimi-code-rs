@@ -12,6 +12,7 @@ use kimi_code_agent_core_v2::{
     _base::di::lifecycle::DisposableHandle,
     app::{
         bootstrap::resolve_kimi_home,
+        capability::CapabilityStatus,
         desktop_client::{
             DesktopAuthStatus, DesktopContextUsage, DesktopDeviceCode, DesktopInteraction,
             DesktopManagedUsage, DesktopMessagePage, DesktopModel, DesktopPrepareSessionRequest,
@@ -308,6 +309,24 @@ async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginSummary>, 
 }
 
 #[tauri::command]
+async fn list_capabilities(state: State<'_, AppState>) -> Result<Vec<CapabilityStatus>, String> {
+    state.client.list_capabilities().await
+}
+
+#[tauri::command]
+async fn get_capability(state: State<'_, AppState>, id: String) -> Result<CapabilityStatus, String> {
+    state.client.get_capability(id).await
+}
+
+#[tauri::command]
+async fn install_capability(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<CapabilityStatus, String> {
+    state.client.install_capability(id).await
+}
+
+#[tauri::command]
 async fn install_plugin(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -540,6 +559,9 @@ pub fn run() {
             get_web_server_status,
             set_web_server_settings,
             list_plugins,
+            list_capabilities,
+            get_capability,
+            install_capability,
             install_plugin,
             set_plugin_enabled,
             set_plugin_mcp_server_enabled,
