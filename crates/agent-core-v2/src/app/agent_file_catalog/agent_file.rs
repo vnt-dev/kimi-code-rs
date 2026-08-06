@@ -111,6 +111,7 @@ pub fn parse_agent_file_text(
         tools,
         disallowed_tools,
         subagents,
+        model: non_empty_string(frontmatter.get("model")),
         prompt,
         path: options.path.into(),
         source: options.source,
@@ -227,11 +228,12 @@ mod tests {
     fn parses_fields_lists_and_trimmed_prompt() {
         let definition = parse(
             "/repo/code-reviewer.md",
-            "---\nname: code-reviewer\ndescription: Reviews code\nwhenToUse: Before merging\noverride: true\ntools: Read, Grep\ndisallowedTools:\n  - Bash\nsubagents:\n  - explore\n---\n\nReview carefully.\n",
+            "---\nname: code-reviewer\ndescription: Reviews code\nwhenToUse: Before merging\nmodel: fast-model\noverride: true\ntools: Read, Grep\ndisallowedTools:\n  - Bash\nsubagents:\n  - explore\n---\n\nReview carefully.\n",
         )
         .unwrap();
         assert_eq!(definition.name, "code-reviewer");
         assert_eq!(definition.when_to_use.as_deref(), Some("Before merging"));
+        assert_eq!(definition.model.as_deref(), Some("fast-model"));
         assert!(definition.is_override);
         assert_eq!(definition.tools, Some(vec!["Read".into(), "Grep".into()]));
         assert_eq!(definition.disallowed_tools, Some(vec!["Bash".into()]));

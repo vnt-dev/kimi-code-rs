@@ -43,6 +43,7 @@ pub fn agent_profile_from_file(
         tools: definition.tools,
         disallowed_tools: definition.disallowed_tools,
         subagents: definition.subagents,
+        model: definition.model,
         system_prompt,
         prompt_prefix: None,
         summary_policy: None,
@@ -64,6 +65,7 @@ mod tests {
             tools: None,
             disallowed_tools: None,
             subagents: Some(vec!["explore".into()]),
+            model: Some("fast-model".into()),
             prompt: "${base_prompt}${skills_section}".into(),
             path: "/agents/review.md".into(),
             source,
@@ -81,6 +83,7 @@ mod tests {
         assert_eq!(profile.when_to_use.as_deref(), Some("before merging"));
         assert_eq!(profile.is_override, Some(true));
         assert_eq!(profile.subagents, Some(vec!["explore".into()]));
+        assert_eq!(profile.model.as_deref(), Some("fast-model"));
     }
 
     #[test]

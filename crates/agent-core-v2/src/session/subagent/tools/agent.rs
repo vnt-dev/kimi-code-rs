@@ -42,7 +42,7 @@ use crate::{
     app::{
         agent_profile_catalog::{
             AgentProfile, AgentProfilePromptPrefixContext, apply_profile_prompt_prefix,
-            subagent_allowlist_for, subagent_type_not_allowed_message,
+            subagent_allowlist_for, subagent_model_alias, subagent_type_not_allowed_message,
         },
         config::{CONFIG_SERVICE_ID, ConfigServiceHandle},
     },
@@ -364,11 +364,12 @@ impl AgentTool {
             let profile = self.catalog.get(requested_profile_name).ok_or_else(|| {
                 other_error(format!("Unknown agent type: \"{requested_profile_name}\""))
             })?;
-            let model = own
+            let caller_model = own
                 .config
                 .model_alias
                 .clone()
                 .ok_or_else(|| other_error("Caller agent has no model bound"))?;
+            let model = subagent_model_alias(Some(profile.as_ref()), caller_model);
             let created = self
                 .lifecycle
                 .create(CreateAgentOptions {
@@ -494,16 +495,27 @@ impl AgentTool {
         &self,
         target: &crate::_base::di::scope::ScopeHandle,
     ) -> Result<(), BoxError> {
-        let model_alias = self
+        let caller_model = self
             .profile
             .data()?
             .config
             .model_alias
             .ok_or_else(|| other_error("Caller agent has no model bound"))?;
+        let child_profile_name = target
+            .get(AGENT_PROFILE_SERVICE_ID)?
+            .data()?
+            .config
+            .profile_name;
+        let child_profile = child_profile_name
+            .as_deref()
+            .and_then(|name| self.catalog.get(name));
         target
             .get(AGENT_PROFILE_SERVICE_ID)?
             .update(ProfileUpdateData {
-                model_alias: Some(model_alias),
+                model_alias: Some(subagent_model_alias(
+                    child_profile.as_deref(),
+                    caller_model,
+                )),
                 ..ProfileUpdateData::default()
             })?;
         Ok(())
@@ -835,6 +847,11 @@ fn build_profile_descriptions(
             } else {
                 format!("- {}: {}", profile.name, details.join(" "))
             };
+            let model_line = profile
+                .model
+                .as_deref()
+                .map(|model| format!("\n  Model: {model}"))
+                .unwrap_or_default();
             let policy = ToolActivationPolicy {
                 tools: profile.tools.clone(),
                 disallowed_tools: profile.disallowed_tools.clone(),
@@ -851,9 +868,9 @@ fn build_profile_descriptions(
                     .map(|tool| tool.name.as_str())
                     .collect::<Vec<_>>();
                 return if effective_tools.is_empty() {
-                    format!("{header}\n  Tools: none")
+                    format!("{header}\n  Tools: none{model_line}")
                 } else {
-                    format!("{header}\n  Tools: {}", effective_tools.join(", "))
+                    format!("{header}\n  Tools: {}{model_line}", effective_tools.join(", "))
                 };
             }
             match active_tools {
@@ -863,7 +880,7 @@ fn build_profile_descriptions(
                     .is_some_and(|tools| !tools.is_empty()) =>
                 {
                     format!(
-                        "{header}\n  Tools: all except {}",
+                        "{header}\n  Tools: all except {}{model_line}",
                         profile
                             .disallowed_tools
                             .as_ref()
@@ -871,9 +888,9 @@ fn build_profile_descriptions(
                             .join(", ")
                     )
                 }
-                None => format!("{header}\n  Tools: all"),
-                Some(tools) if tools.is_empty() => format!("{header}\n  Tools: none"),
-                Some(tools) => format!("{header}\n  Tools: {}", tools.join(", ")),
+                None => format!("{header}\n  Tools: all{model_line}"),
+                Some(tools) if tools.is_empty() => format!("{header}\n  Tools: none{model_line}"),
+                Some(tools) => format!("{header}\n  Tools: {}{model_line}", tools.join(", ")),
             }
         })
         .collect::<Vec<_>>()
@@ -995,6 +1012,7 @@ mod tests {
             disallowed_tools: disallowed_tools
                 .map(|tools| tools.iter().map(|tool| (*tool).into()).collect()),
             subagents: None,
+            model: None,
             system_prompt: Arc::new(|_: &AgentProfileContext| String::new()),
             prompt_prefix: None,
             summary_policy: None,
@@ -1143,5 +1161,27 @@ mod tests {
                 is_tool_active(policy, name, source) && name != "Read"
             });
         assert!(externally_restricted.contains("Tools: none"));
+    }
+
+    #[test]
+    fn profile_descriptions_show_pinned_model() {
+        let pinned = Arc::new(AgentProfile {
+            name: "pinned".into(),
+            description: Some("Pinned model agent".into()),
+            when_to_use: None,
+            is_override: None,
+            tools: None,
+            disallowed_tools: None,
+            subagents: None,
+            model: Some("fast-model".into()),
+            system_prompt: Arc::new(|_: &AgentProfileContext| String::new()),
+            prompt_prefix: None,
+            summary_policy: None,
+        });
+        let descriptions = build_profile_descriptions(&[pinned], &[], |_, _, _| true);
+        assert!(
+            descriptions.contains("- pinned: Pinned model agent\n  Tools: all\n  Model: fast-model"),
+            "{descriptions}"
+        );
     }
 }

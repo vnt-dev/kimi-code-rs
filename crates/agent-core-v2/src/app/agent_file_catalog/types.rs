@@ -25,6 +25,7 @@ pub struct AgentFileDefinition {
     pub tools: Option<Vec<String>>,
     pub disallowed_tools: Option<Vec<String>>,
     pub subagents: Option<Vec<String>>,
+    pub model: Option<String>,
     pub prompt: String,
     pub path: String,
     pub source: AgentFileSource,

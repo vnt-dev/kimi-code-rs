@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::_base::utils::render_prompt::render_prompt;
 
-pub use super::contract::AgentProfileContext;
+pub use super::contract::{AgentProfile, AgentProfileContext};
 
 const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("system.md");
 
@@ -61,6 +61,18 @@ pub fn subagent_type_not_allowed_message(name: &str, allowlist: &[String]) -> St
     format!(
         "Subagent type \"{name}\" is not allowed for this agent. Allowed subagent types: {allowed}."
     )
+}
+
+// No source equivalent: profiles can pin a `model` (agent-file frontmatter).
+// A pinned model wins over the caller's current model when binding a
+// subagent; profiles without one keep the inherit-from-caller behavior.
+pub fn subagent_model_alias(
+    profile: Option<&AgentProfile>,
+    caller_model: String,
+) -> String {
+    profile
+        .and_then(|profile| profile.model.clone())
+        .unwrap_or(caller_model)
 }
 
 // Original: systemPromptVars().
@@ -258,5 +270,34 @@ mod tests {
             subagent_type_not_allowed_message("plan", &[]),
             "Subagent type \"plan\" is not allowed for this agent. Allowed subagent types: none."
         );
+    }
+
+    #[test]
+    fn subagent_model_alias_prefers_profile_pinned_model() {
+        use std::sync::Arc;
+
+        let profile = |model: Option<&str>| AgentProfile {
+            name: "worker".into(),
+            description: None,
+            when_to_use: None,
+            is_override: None,
+            tools: None,
+            disallowed_tools: None,
+            subagents: None,
+            model: model.map(Into::into),
+            system_prompt: Arc::new(|_| String::new()),
+            prompt_prefix: None,
+            summary_policy: None,
+        };
+
+        assert_eq!(
+            subagent_model_alias(Some(&profile(Some("pinned"))), "caller".into()),
+            "pinned"
+        );
+        assert_eq!(
+            subagent_model_alias(Some(&profile(None)), "caller".into()),
+            "caller"
+        );
+        assert_eq!(subagent_model_alias(None, "caller".into()), "caller");
     }
 }

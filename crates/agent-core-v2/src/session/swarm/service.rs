@@ -32,7 +32,9 @@ use crate::{
         user_tool::AGENT_USER_TOOL_SERVICE_ID,
     },
     app::{
-        agent_profile_catalog::{AgentProfilePromptPrefixContext, apply_profile_prompt_prefix},
+        agent_profile_catalog::{
+            AgentProfilePromptPrefixContext, apply_profile_prompt_prefix, subagent_model_alias,
+        },
         bootstrap::{BOOTSTRAP_SERVICE_ID, BootstrapServiceHandle},
         event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID},
     },
@@ -166,7 +168,7 @@ impl SessionSwarmService {
         caller: &ScopeHandle,
         child: &ScopeHandle,
     ) -> Result<(), BoxError> {
-        let model_alias = caller
+        let caller_model = caller
             .get(AGENT_PROFILE_SERVICE_ID)?
             .data()?
             .config
@@ -174,10 +176,21 @@ impl SessionSwarmService {
             .ok_or_else(|| {
                 Box::new(io::Error::other("Caller agent has no model bound")) as BoxError
             })?;
+        let child_profile_name = child
+            .get(AGENT_PROFILE_SERVICE_ID)?
+            .data()?
+            .config
+            .profile_name;
+        let child_profile = child_profile_name
+            .as_deref()
+            .and_then(|name| self.inner.catalog.get(name));
         child
             .get(AGENT_PROFILE_SERVICE_ID)?
             .update(ProfileUpdateData {
-                model_alias: Some(model_alias),
+                model_alias: Some(subagent_model_alias(
+                    child_profile.as_deref(),
+                    caller_model,
+                )),
                 ..ProfileUpdateData::default()
             })?;
         Ok(())
@@ -206,9 +219,10 @@ impl SessionSwarmService {
                 ))) as BoxError
             })?;
         let caller_data = caller.get(AGENT_PROFILE_SERVICE_ID)?.data()?;
-        let model = caller_data.config.model_alias.clone().ok_or_else(|| {
+        let caller_model = caller_data.config.model_alias.clone().ok_or_else(|| {
             Box::new(io::Error::other("Caller agent has no model bound")) as BoxError
         })?;
+        let model = subagent_model_alias(Some(profile.as_ref()), caller_model);
         let child = self
             .inner
             .lifecycle

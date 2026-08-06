@@ -56,6 +56,7 @@ mod tests {
             tools: None,
             disallowed_tools: None,
             subagents: None,
+            model: None,
             system_prompt: Arc::new(|_: &AgentProfileContext| String::new()),
             prompt_prefix: prefix,
             summary_policy: None,

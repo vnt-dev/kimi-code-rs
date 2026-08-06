@@ -101,6 +101,7 @@ mod tests {
                     tools: None,
                     disallowed_tools: None,
                     subagents: None,
+                    model: None,
                     prompt: "${base_prompt}".into(),
                     path: "/a.md".into(),
                     source: AgentFileSource::Project,

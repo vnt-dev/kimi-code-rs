@@ -47,6 +47,7 @@ fn plan_profile() -> AgentProfile {
         tools: Some(tools),
         disallowed_tools: None,
         subagents: None,
+        model: None,
         system_prompt: Arc::new(move |context| {
             render_system_prompt(
                 &role,
