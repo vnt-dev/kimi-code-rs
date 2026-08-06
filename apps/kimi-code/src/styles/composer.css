@@ -98,7 +98,7 @@
 .slash-command-menu small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -147,7 +147,7 @@
 
 .mcp-status-popover > header small {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .mcp-status-list {
@@ -192,7 +192,7 @@
 .mcp-status-row > div > small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -203,7 +203,7 @@
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -289,7 +289,7 @@
 
 .prompt-file-preview small {
   color: #64646e;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .prompt-attachment img,
@@ -309,7 +309,7 @@
 .prompt-attachment figcaption {
   overflow: hidden;
   color: #777781;
-  font-size: 8px;
+  font-size: 11px;
   line-height: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -510,7 +510,7 @@
 .composer-add-heading {
   padding: 4px 8px 6px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -523,8 +523,8 @@
 .composer-add-item {
   display: flex;
   width: 100%;
-  min-height: 43px;
-  padding: 7px 8px;
+  min-height: 49px;
+  padding: 8px;
   align-items: center;
   gap: 10px;
   border: 0;
@@ -571,13 +571,14 @@
 
 .composer-add-item strong {
   color: var(--text);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
 }
 
 .composer-add-item small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .composer-add-empty {
@@ -588,7 +589,7 @@
   justify-content: center;
   gap: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   text-align: center;
 }
 
@@ -604,7 +605,7 @@
   color: var(--text);
   background: transparent;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .toolbar-select {
@@ -643,7 +644,7 @@
   min-width: 0;
   overflow: hidden;
   color: #aaaab4;
-  font-size: 9.5px;
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -721,7 +722,7 @@
 .toolbar-select-menu strong {
   overflow: hidden;
   color: #c6c4cc;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -730,7 +731,7 @@
 .toolbar-select-menu small {
   overflow: hidden;
   color: #62616b;
-  font-size: 8.5px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -759,7 +760,7 @@
 
 .model-select .toolbar-select-menu small,
 .permission-select .toolbar-select-menu small {
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .effort-select .toolbar-select-trigger {
@@ -839,7 +840,7 @@
 }
 
 .mode-toolbar-button span {
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .mode-toolbar-button:hover:not(:disabled) {
@@ -1001,7 +1002,7 @@
 
 .usage-section-heading small {
   color: #5f5d68;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -1047,7 +1048,7 @@
 .token-usage-breakdown small {
   overflow: hidden;
   color: #716e7b;
-  font-size: 10px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1055,7 +1056,7 @@
 .token-usage-breakdown b {
   color: #b7b3bf;
   font-family: "DM Mono", monospace;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -1069,7 +1070,7 @@
 
 .token-usage-models > strong {
   color: #625f6a;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 520;
 }
 
@@ -1095,7 +1096,7 @@
 .token-usage-models i {
   overflow: hidden;
   color: #8f8b97;
-  font-size: 10.5px;
+  font-size: 12px;
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1105,13 +1106,13 @@
   flex: 0 0 auto;
   color: #9e94e2;
   font-family: "DM Mono", monospace;
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-weight: 500;
 }
 
 .token-usage-models > div > small {
   color: #6c6974;
-  font-size: 9.5px;
+  font-size: 11.5px;
   white-space: nowrap;
 }
 
@@ -1123,7 +1124,7 @@
 
 .token-usage-models > small {
   color: #5f5d68;
-  font-size: 9.5px;
+  font-size: 11.5px;
 }
 
 .token-usage-empty {
@@ -1161,7 +1162,7 @@
 
 .send-zone > span {
   color: #55555f;
-  font-size: 8.5px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -1196,6 +1197,6 @@
 .composer-caption {
   margin: 8px 0 0;
   color: #464650;
-  font-size: 8.5px;
+  font-size: 11px;
   text-align: center;
 }

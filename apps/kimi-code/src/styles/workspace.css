@@ -59,7 +59,7 @@
 
 .skill-detail-heading span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .skill-detail-icon {
@@ -93,7 +93,7 @@
 .plugin-command-detail-args > strong {
   flex: 0 0 auto;
   color: var(--text);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -267,7 +267,7 @@
   border-radius: 7px;
   color: var(--muted);
   background: var(--control);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .side-chat-composer {
@@ -344,7 +344,7 @@
   gap: 7px;
   border-top: 1px solid var(--line);
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 11.5px;
 }
 
 .skill-detail-path > svg {
@@ -468,7 +468,7 @@
   gap: 5px;
   color: #5f5f69;
   font-family: "DM Mono", monospace;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .path-line span {

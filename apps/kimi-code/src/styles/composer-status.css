@@ -59,19 +59,19 @@
 
 .mode-status-heading strong {
   color: #c9c6d0;
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-weight: 590;
 }
 
 .mode-status-heading small {
   color: #65626d;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .mode-status-detail {
   overflow: hidden;
   color: #797681;
-  font-size: 8.8px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -93,7 +93,7 @@
   color: #77747f;
   background: rgba(255, 255, 255, 0.018);
   cursor: pointer;
-  font-size: 8.5px;
+  font-size: 11px;
 }
 
 .mode-status-actions button:hover:not(:disabled) {
@@ -141,7 +141,7 @@
   border-color: #42454c;
   color: #c1c3c8;
   background: #2b2d30;
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .mode-status-card.plan .mode-status-actions button:hover:not(:disabled) {
@@ -231,13 +231,13 @@
 
 .composer-goal-heading strong {
   color: var(--text);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .composer-goal-heading small {
   color: var(--accent);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .composer-goal-card.paused .composer-goal-heading small {
@@ -251,7 +251,7 @@
 .composer-goal-objective {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -273,7 +273,7 @@
   color: var(--muted);
   background: var(--surface-2);
   cursor: pointer;
-  font-size: 9.5px;
+  font-size: 11.5px;
 }
 
 .composer-goal-actions button:hover:not(:disabled) {
@@ -359,7 +359,7 @@
   box-shadow:
     0 8px 24px rgba(0, 0, 0, 0.18),
     inset 0 1px rgba(255, 255, 255, 0.025);
-  font-size: 9.5px;
+  font-size: 11.5px;
   cursor: default;
   transition:
     color 150ms ease,
@@ -491,14 +491,14 @@
 
 .todo-popover-heading strong {
   color: #c9c6d0;
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-weight: 590;
 }
 
 .todo-popover-heading span {
   color: #706c78;
   font-family: "DM Mono", monospace;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .todo-list {
@@ -523,7 +523,7 @@
   gap: 7px;
   border-radius: 7px;
   color: #92909a;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.45;
   transition:
     color 140ms ease,
@@ -626,7 +626,7 @@
 .background-task-popover-heading span {
   color: var(--muted);
   font-family: "DM Mono", monospace;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .background-task-list {
@@ -730,7 +730,7 @@
 .background-task-copy small {
   color: var(--muted);
   font-family: "DM Mono", monospace;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .background-task-chevron {
@@ -751,7 +751,7 @@
 
 .background-task-detail > span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .background-task-detail pre {
@@ -764,7 +764,7 @@
   color: var(--text);
   background: var(--surface-deep);
   font-family: "DM Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

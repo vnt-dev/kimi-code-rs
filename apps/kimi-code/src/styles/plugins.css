@@ -199,7 +199,7 @@
   border-radius: 5px;
   color: var(--muted);
   background: var(--control-hover);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .plugin-card-title span.official {
@@ -557,7 +557,7 @@
   display: block;
   margin-top: 3px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .plugin-diagnostics p {

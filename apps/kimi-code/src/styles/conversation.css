@@ -61,7 +61,7 @@
   margin: 0;
   color: #746ba7;
   font-family: "DM Mono", monospace;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.18em;
 }
@@ -141,7 +141,7 @@
   margin-top: 5px;
   overflow: hidden;
   color: #64646e;
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.5;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -179,7 +179,7 @@
 .history-error {
   margin: -18px auto 28px;
   color: #c78383;
-  font-size: 10px;
+  font-size: 12px;
   text-align: center;
 }
 
@@ -253,14 +253,14 @@
   align-items: center;
   gap: 9px;
   color: #aaaab3;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 550;
 }
 
 .message-meta time {
   color: #50505a;
   font-family: "DM Mono", monospace;
-  font-size: 8.5px;
+  font-size: 11px;
   font-weight: 400;
 }
 
@@ -443,7 +443,7 @@ button.plugin-command-message:focus-visible {
   justify-content: space-between;
   gap: 12px;
   color: #777782;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .queued-prompt-stack > header span {
@@ -456,7 +456,7 @@ button.plugin-command-message:focus-visible {
 
 .queued-prompt-stack > header small {
   color: #5e5e68;
-  font-size: 8.5px;
+  font-size: 11px;
 }
 
 .queued-prompt {
@@ -511,7 +511,7 @@ button.plugin-command-message:focus-visible {
   color: #666671;
   background: rgba(255, 255, 255, 0.035);
   font-family: "DM Mono", monospace;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .queued-prompt > footer > span.next {
@@ -536,7 +536,7 @@ button.plugin-command-message:focus-visible {
   color: #777782;
   background: transparent;
   cursor: pointer;
-  font-size: 8.5px;
+  font-size: 11px;
 }
 
 .queued-prompt button:hover:not(:disabled) {
@@ -680,13 +680,13 @@ button.plugin-command-message:focus-visible {
   color: #797985;
   background: transparent;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .thinking-block p {
   margin: 9px 0 3px 20px;
   color: #666671;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.7;
   white-space: pre-wrap;
 }
@@ -730,7 +730,7 @@ button.plugin-command-message:focus-visible {
 .live-turn-status {
   margin-left: auto;
   color: #777782;
-  font-size: 8.5px;
+  font-size: 11px;
   font-weight: 450;
 }
 

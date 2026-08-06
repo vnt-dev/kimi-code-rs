@@ -23,7 +23,7 @@
   box-shadow: 0 5px 18px rgba(0, 0, 0, 0.26);
   content: attr(data-image-path);
   font-family: "DM Mono", monospace;
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.4;
   opacity: 0;
   pointer-events: none;
@@ -106,7 +106,7 @@
   color: #c9c9d1;
   background: rgba(38, 40, 46, 0.9);
   font-family: "DM Mono", monospace;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.45;
   text-align: center;
   text-overflow: ellipsis;

@@ -43,7 +43,7 @@
 
 .interaction-card-heading small {
   color: #a9a5b1;
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .interaction-card-heading strong {
@@ -79,7 +79,7 @@
 
 .question-item legend > span {
   color: #8f83cf;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -93,7 +93,7 @@
 
 .question-item legend > small {
   color: #aaabb1;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -169,7 +169,7 @@
 .question-options button small {
   overflow: hidden;
   color: #a5a7ad;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.45;
   text-overflow: ellipsis;
 }
@@ -186,7 +186,7 @@
 .plan-review-feedback > span,
 .plan-review-options > span {
   color: #a7a9af;
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .question-other input,
@@ -281,7 +281,7 @@
   border-radius: 9px;
   color: #bcb8c2;
   background: #2b2d30;
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.62;
 }
 
@@ -310,7 +310,7 @@
   overflow: hidden;
   color: #66616f;
   font-family: "DM Mono", monospace;
-  font-size: 7.5px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -384,12 +384,12 @@
 }
 
 .plan-review-option strong {
-  font-size: 9.5px;
+  font-size: 11.5px;
 }
 
 .plan-review-option small {
   color: #77717f;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .interaction-card.plan-review-card {
@@ -415,7 +415,7 @@
 
 .plan-review-card .interaction-card-heading small {
   color: #a7a9af;
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .plan-review-card .interaction-card-heading strong {
@@ -445,7 +445,7 @@
 
 .plan-review-card .plan-review-path {
   color: #a4a6ad;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .plan-review-card .plan-review-options {
@@ -456,7 +456,7 @@
 .plan-review-card .plan-review-options > span,
 .plan-review-card .plan-review-feedback > span {
   color: #b0b2b8;
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .plan-review-card .plan-review-option {
@@ -480,7 +480,7 @@
 
 .plan-review-card .plan-review-option small {
   color: #adafb6;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -577,7 +577,7 @@
 
 .approval-heading span {
   color: #9a7b4d;
-  font-size: 8.5px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -620,7 +620,7 @@
   gap: 6px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   color: #65636a;
-  font-size: 8.5px;
+  font-size: 11px;
 }
 
 .approval-command code {
@@ -630,7 +630,7 @@
   overflow: auto;
   color: #d8d4c9;
   font-family: "DM Mono", monospace;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
@@ -643,7 +643,7 @@
   border-radius: 8px;
   color: #aaa6a0;
   background: #2b2d30;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .approval-footer {
@@ -657,7 +657,7 @@
 .approval-footer p {
   margin: 0;
   color: #68656a;
-  font-size: 8.5px;
+  font-size: 11px;
 }
 
 .approval-actions {
@@ -678,7 +678,7 @@
   color: #9b989e;
   background: rgba(255, 255, 255, 0.025);
   cursor: pointer;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .approval-actions button:hover:not(:disabled) {

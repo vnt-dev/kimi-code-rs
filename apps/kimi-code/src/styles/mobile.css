@@ -146,7 +146,7 @@
   .web-runtime.mobile-layout .path-line {
     max-width: calc(100vw - 150px);
     margin-top: 3px;
-    font-size: 10px;
+    font-size: 12px;
   }
 
   .web-runtime.mobile-layout .chat-title-menu {

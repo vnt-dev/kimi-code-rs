@@ -172,7 +172,7 @@ input:focus-visible {
 
 .titlebar-brand-copy span {
   color: var(--subtle);
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.08em;
 }
 
