@@ -199,6 +199,7 @@ pub struct DesktopProviderModel {
     pub max_context_size: u64,
     pub capabilities: Vec<String>,
     pub support_efforts: Vec<String>,
+    pub default_effort: Option<String>,
     pub adaptive_thinking: Option<bool>,
 }
 
@@ -225,6 +226,7 @@ pub struct DesktopProviderModelInput {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub support_efforts: Vec<String>,
+    pub default_effort: Option<String>,
     pub adaptive_thinking: Option<bool>,
 }
 
@@ -586,6 +588,7 @@ impl KimiCodeDesktopClient {
                         .then(|| model.capabilities.clone()),
                     support_efforts: (!model.support_efforts.is_empty())
                         .then(|| model.support_efforts.clone()),
+                    default_effort: model.default_effort.clone(),
                     adaptive_thinking: model.adaptive_thinking,
                     ..ModelRecord::default()
                 },
@@ -1649,6 +1652,11 @@ fn validate_provider_input(
             .filter(|name| !name.is_empty());
         deduplicate_trimmed(&mut model.capabilities);
         deduplicate_trimmed(&mut model.support_efforts);
+        model.default_effort = model
+            .default_effort
+            .take()
+            .map(|effort| effort.trim().to_owned())
+            .filter(|effort| !effort.is_empty());
         if model.model.is_empty() {
             return Err("Model ID cannot be empty.".to_owned());
         }
@@ -1657,6 +1665,16 @@ fn validate_provider_input(
         }
         if model.max_context_size == 0 {
             return Err("Model context size must be greater than zero.".to_owned());
+        }
+        if model
+            .default_effort
+            .as_ref()
+            .is_some_and(|default| !model.support_efforts.iter().any(|effort| effort == default))
+        {
+            return Err(format!(
+                "Default effort for model `{}` must be one of its supported efforts.",
+                model.model
+            ));
         }
         if !model_names.insert(model.model.clone()) {
             return Err(format!(
@@ -1705,6 +1723,7 @@ fn desktop_providers(providers: &ProvidersSection, models: &ModelsSection) -> Ve
                     max_context_size: model.max_context_size.map_or(0, NonZeroU64::get),
                     capabilities: model.capabilities.clone().unwrap_or_default(),
                     support_efforts: model.support_efforts.clone().unwrap_or_default(),
+                    default_effort: model.default_effort.clone(),
                     adaptive_thinking: model.adaptive_thinking,
                 })
                 .collect::<Vec<_>>();
@@ -1989,6 +2008,7 @@ mod tests {
             max_context_size: 131_072,
             capabilities: vec!["tool_use".into(), "thinking".into()],
             support_efforts: vec!["low".into(), "high".into()],
+            default_effort: Some("high".into()),
             adaptive_thinking: Some(true),
         };
         let saved = client
@@ -2005,6 +2025,7 @@ mod tests {
             .await
             .unwrap();
         assert!(saved.has_api_key);
+        assert_eq!(saved.models[0].default_effort.as_deref(), Some("high"));
         assert_eq!(
             saved.base_url.as_deref(),
             Some("https://api.example.test/v1")
@@ -2015,6 +2036,23 @@ mod tests {
                 .get("apiKey")
                 .is_none()
         );
+
+        let mut invalid_model = model.clone();
+        invalid_model.default_effort = Some("max".into());
+        let invalid_error = client
+            .save_provider(DesktopSaveProviderInput {
+                original_id: Some("example-provider".into()),
+                id: "example-provider".into(),
+                provider_type: "openai".into(),
+                api_key: None,
+                replace_api_key: false,
+                base_url: "https://api.example.test/v1".into(),
+                default_model: Some("example-model".into()),
+                models: vec![invalid_model],
+            })
+            .await
+            .unwrap_err();
+        assert!(invalid_error.contains("must be one of its supported efforts"));
 
         let models = client.list_models().await.unwrap();
         assert!(models.iter().any(|model| {
@@ -2039,6 +2077,7 @@ mod tests {
         let persisted = std::fs::read_to_string(home.join("config.toml")).unwrap();
         assert!(persisted.contains("YOUR_API_KEY"));
         assert!(persisted.contains("openai_responses"));
+        assert!(persisted.contains("default_effort = \"high\""));
 
         client
             .delete_provider("example-provider".into())

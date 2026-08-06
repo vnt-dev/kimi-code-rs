@@ -11,6 +11,7 @@ export interface ProviderModel {
   maxContextSize: number;
   capabilities: string[];
   supportEfforts: string[];
+  defaultEffort?: string;
   adaptiveThinking?: boolean;
 }
 
@@ -30,6 +31,7 @@ export interface ProviderModelDraft {
   maxContextSize: string;
   capabilities: string[];
   supportEfforts: string[];
+  defaultEffort: string;
   adaptiveThinking?: boolean;
 }
 
@@ -63,7 +65,8 @@ export type ProviderValidationError =
   | "modelRequired"
   | "modelDuplicate"
   | "contextRequired"
-  | "contextInvalid";
+  | "contextInvalid"
+  | "defaultEffortInvalid";
 
 export const PROVIDER_PROTOCOLS: readonly ProviderProtocol[] = [
   "kimi",
@@ -73,6 +76,18 @@ export const PROVIDER_PROTOCOLS: readonly ProviderProtocol[] = [
   "google-genai",
 ];
 
+export const PROVIDER_CAPABILITIES = [
+  "tool_use",
+  "thinking",
+  "always_thinking",
+  "image_in",
+  "video_in",
+  "audio_in",
+  "dynamically_loaded_tools",
+] as const;
+
+export const PROVIDER_EFFORTS = ["low", "medium", "high", "max"] as const;
+
 export function createProviderModelDraft(): ProviderModelDraft {
   return {
     model: "",
@@ -80,6 +95,7 @@ export function createProviderModelDraft(): ProviderModelDraft {
     maxContextSize: "",
     capabilities: ["tool_use", "thinking"],
     supportEfforts: [],
+    defaultEffort: "",
     adaptiveThinking: true,
   };
 }
@@ -110,6 +126,7 @@ export function providerDraft(provider: ProviderSummary): ProviderDraft {
       maxContextSize: model.maxContextSize ? String(model.maxContextSize) : "",
       capabilities: [...model.capabilities],
       supportEfforts: [...model.supportEfforts],
+      defaultEffort: model.defaultEffort ?? "",
       adaptiveThinking: model.adaptiveThinking,
     })),
   };
@@ -144,6 +161,12 @@ export function validateProviderDraft(
     if (!/^\d+$/.test(model.maxContextSize.trim()) || Number(model.maxContextSize) < 1) {
       return "contextInvalid";
     }
+    if (
+      model.defaultEffort &&
+      !model.supportEfforts.includes(model.defaultEffort)
+    ) {
+      return "defaultEffortInvalid";
+    }
   }
   return undefined;
 }
@@ -167,6 +190,7 @@ export function saveProviderInput(
       maxContextSize: Number(model.maxContextSize.trim()),
       capabilities: [...model.capabilities],
       supportEfforts: [...model.supportEfforts],
+      defaultEffort: model.defaultEffort || undefined,
       adaptiveThinking: model.adaptiveThinking,
     })),
   };

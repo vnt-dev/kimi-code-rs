@@ -823,7 +823,8 @@ mod tests {
                     "displayName": "Example Model",
                     "maxContextSize": 131072,
                     "capabilities": ["tool_use", "thinking"],
-                    "supportEfforts": [],
+                    "supportEfforts": ["low", "high"],
+                    "defaultEffort": "high",
                     "adaptiveThinking": true
                 }]
             }}),
@@ -831,6 +832,7 @@ mod tests {
         .await;
         assert_eq!(provider["ok"], true);
         assert_eq!(provider["result"]["id"], "example-provider");
+        assert_eq!(provider["result"]["models"][0]["defaultEffort"], "high");
         assert!(provider["result"].get("apiKey").is_none());
         let providers = rpc_call(
             &http,

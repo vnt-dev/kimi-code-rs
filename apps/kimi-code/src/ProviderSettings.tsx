@@ -16,6 +16,8 @@ import {
 import { t } from "./i18n";
 import SettingsSelect from "./components/SettingsSelect";
 import {
+  PROVIDER_CAPABILITIES,
+  PROVIDER_EFFORTS,
   PROVIDER_PROTOCOLS,
   createProviderDraft,
   createProviderModelDraft,
@@ -42,6 +44,35 @@ function validationMessage(error: ProviderValidationError): string {
 
 function protocolLabel(protocol: ProviderProtocol): string {
   return t(`providers.type.${protocol}`);
+}
+
+function capabilityLabel(capability: string): string {
+  switch (capability) {
+    case "tool_use": return t("providers.capability.toolUse");
+    case "thinking": return t("providers.capability.thinking");
+    case "always_thinking": return t("providers.capability.alwaysThinking");
+    case "image_in": return t("providers.capability.imageInput");
+    case "video_in": return t("providers.capability.videoInput");
+    case "audio_in": return t("providers.capability.audioInput");
+    case "dynamically_loaded_tools": return t("providers.capability.dynamicTools");
+    default: return capability;
+  }
+}
+
+function effortLabel(effort: string): string {
+  switch (effort) {
+    case "low": return t("providers.effort.low");
+    case "medium": return t("providers.effort.medium");
+    case "high": return t("providers.effort.high");
+    case "max": return t("providers.effort.max");
+    default: return effort;
+  }
+}
+
+function toggleValue(values: string[], value: string): string[] {
+  return values.includes(value)
+    ? values.filter((candidate) => candidate !== value)
+    : [...values, value];
 }
 
 function ProviderForm({
@@ -274,39 +305,122 @@ function ProviderForm({
           <span />
         </div>
         {draft.models.map((model, index) => (
-          <div className="provider-model-row" key={index}>
-            <input
-              aria-label={t("providers.modelId")}
-              value={model.model}
-              disabled={busy}
-              placeholder="model-id"
-              onChange={(event) => updateModel(index, (current) => ({ ...current, model: event.target.value }))}
-            />
-            <input
-              aria-label={t("providers.contextSize")}
-              inputMode="numeric"
-              value={model.maxContextSize}
-              disabled={busy}
-              placeholder="262144"
-              onChange={(event) => updateModel(index, (current) => ({ ...current, maxContextSize: event.target.value }))}
-            />
-            <input
-              aria-label={t("providers.displayName")}
-              value={model.displayName}
-              disabled={busy}
-              placeholder={t("providers.optional")}
-              onChange={(event) => updateModel(index, (current) => ({ ...current, displayName: event.target.value }))}
-            />
-            <button
-              className="provider-remove-model"
-              type="button"
-              aria-label={t("providers.removeModel")}
-              disabled={busy || draft.models.length === 1}
-              onClick={() => markChanged((current) => ({
-                ...current,
-                models: current.models.filter((_, modelIndex) => modelIndex !== index),
-              }))}
-            ><Trash2 size={14} /></button>
+          <div className="provider-model-entry" key={index}>
+            <div className="provider-model-row">
+              <input
+                aria-label={t("providers.modelId")}
+                value={model.model}
+                disabled={busy}
+                placeholder="model-id"
+                onChange={(event) => updateModel(index, (current) => ({ ...current, model: event.target.value }))}
+              />
+              <input
+                aria-label={t("providers.contextSize")}
+                inputMode="numeric"
+                value={model.maxContextSize}
+                disabled={busy}
+                placeholder="262144"
+                onChange={(event) => updateModel(index, (current) => ({ ...current, maxContextSize: event.target.value }))}
+              />
+              <input
+                aria-label={t("providers.displayName")}
+                value={model.displayName}
+                disabled={busy}
+                placeholder={t("providers.optional")}
+                onChange={(event) => updateModel(index, (current) => ({ ...current, displayName: event.target.value }))}
+              />
+              <button
+                className="provider-remove-model"
+                type="button"
+                aria-label={t("providers.removeModel")}
+                disabled={busy || draft.models.length === 1}
+                onClick={() => markChanged((current) => ({
+                  ...current,
+                  models: current.models.filter((_, modelIndex) => modelIndex !== index),
+                }))}
+              ><Trash2 size={14} /></button>
+            </div>
+            <div className="provider-model-options">
+              <div className="provider-model-option">
+                <div className="provider-model-option-label">
+                  <strong>{t("providers.modelCapabilities")}</strong>
+                  <small>{t("providers.capabilitiesHint")}</small>
+                </div>
+                <div className="provider-option-chips">
+                  {Array.from(new Set([...PROVIDER_CAPABILITIES, ...model.capabilities])).map((capability) => (
+                    <button
+                      key={capability}
+                      type="button"
+                      className={model.capabilities.includes(capability) ? "active" : ""}
+                      aria-pressed={model.capabilities.includes(capability)}
+                      disabled={busy}
+                      onClick={() => updateModel(index, (current) => ({
+                        ...current,
+                        capabilities: toggleValue(current.capabilities, capability),
+                      }))}
+                    >
+                      {model.capabilities.includes(capability) && <Check size={12} />}
+                      {capabilityLabel(capability)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="provider-model-option provider-effort-option">
+                <div className="provider-model-option-label">
+                  <strong>{t("providers.supportEfforts")}</strong>
+                  <small>{t("providers.effortsHint")}</small>
+                </div>
+                <div className="provider-option-chips">
+                  {Array.from(new Set([...PROVIDER_EFFORTS, ...model.supportEfforts])).map((effort) => (
+                    <button
+                      key={effort}
+                      type="button"
+                      className={model.supportEfforts.includes(effort) ? "active" : ""}
+                      aria-pressed={model.supportEfforts.includes(effort)}
+                      disabled={busy}
+                      onClick={() => updateModel(index, (current) => {
+                        const supportEfforts = toggleValue(current.supportEfforts, effort);
+                        return {
+                          ...current,
+                          supportEfforts,
+                          defaultEffort: supportEfforts.includes(current.defaultEffort)
+                            ? current.defaultEffort
+                            : "",
+                          capabilities: supportEfforts.length > 0 &&
+                            !current.capabilities.includes("thinking") &&
+                            !current.capabilities.includes("always_thinking")
+                            ? [...current.capabilities, "thinking"]
+                            : current.capabilities,
+                        };
+                      })}
+                    >
+                      {model.supportEfforts.includes(effort) && <Check size={12} />}
+                      {effortLabel(effort)}
+                    </button>
+                  ))}
+                </div>
+                <div className="provider-effort-default">
+                  <span>{t("providers.defaultEffort")}</span>
+                  <SettingsSelect
+                    className="provider-select provider-effort-select"
+                    value={model.defaultEffort}
+                    disabled={busy || model.supportEfforts.length === 0}
+                    ariaLabel={t("providers.defaultEffort")}
+                    options={[
+                      { value: "", label: t("providers.automaticEffort") },
+                      ...model.supportEfforts.map((effort) => ({
+                        value: effort,
+                        label: effortLabel(effort),
+                      })),
+                    ]}
+                    onChange={(defaultEffort) => updateModel(index, (current) => ({
+                      ...current,
+                      defaultEffort,
+                    }))}
+                  />
+                </div>
+              </div>
+            </div>
           </div>
         ))}
       </div>
