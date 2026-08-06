@@ -553,7 +553,7 @@
   min-width: 0;
   height: 100%;
   padding: 0 3px 0 9px;
-  grid-template-columns: 15px minmax(0, 1fr) auto;
+  grid-template-columns: 15px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   border: 0;
@@ -570,20 +570,42 @@
   font-size: 11.5px;
 }
 
-.conversation-meta {
-  display: flex;
-  align-items: center;
+.conversation-status-slot {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
 }
 
-.conversation-running-indicator {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  flex: 0 0 auto;
-  border: 1.5px solid #3b3b48;
-  border-top-color: #9587ee;
+.conversation-status-indicator,
+.conversation-archive-button {
+  grid-area: 1 / 1;
+}
+
+.conversation-status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transition: opacity 120ms ease;
+}
+
+.conversation-status-indicator.running {
+  width: 13px;
+  height: 13px;
+  border: 2px solid #414151;
+  border-top-color: #a699ff;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
+}
+
+.conversation-status-indicator.completed {
+  background: #4e9cff;
+  box-shadow: 0 0 7px rgba(78, 156, 255, 0.48);
+}
+
+.conversation-status-indicator.attention {
+  background: #e4aa3a;
+  box-shadow: 0 0 7px rgba(228, 170, 58, 0.48);
 }
 
 .conversation-archive-button {
@@ -604,6 +626,11 @@
 .conversation-row:hover .conversation-archive-button,
 .conversation-archive-button:focus-visible {
   opacity: 1;
+}
+
+.conversation-row:hover .conversation-status-indicator,
+.conversation-status-slot:focus-within .conversation-status-indicator {
+  opacity: 0;
 }
 
 .conversation-archive-button:hover {

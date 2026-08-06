@@ -127,6 +127,15 @@ import {
   thinkingLevelsForModel
 } from "./modelControls";
 import {
+  ensureNotificationPermission,
+  listenForNotificationActions,
+  loadNotificationsEnabled,
+  saveNotificationsEnabled,
+  sendConversationNotification,
+  shouldNotifyConversation,
+  type ConversationNotification,
+} from "./notifications";
+import {
   buildAgentPromptInput
 } from "./prompt/attachments";
 import { buildSkillPromptText } from "./prompt/skills";
@@ -229,6 +238,9 @@ export default function App() {
   const [colorScheme, setColorScheme] =
     useState<ColorScheme>(loadColorScheme);
   const [language, setLanguageState] = useState<Language>(loadLanguage);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    loadNotificationsEnabled,
+  );
   const [appVersion, setAppVersion] = useState<string>();
   const [accountUsage, setAccountUsage] = useState<AccountUsage>();
   const [accountUsageBusy, setAccountUsageBusy] = useState(false);
@@ -240,6 +252,8 @@ export default function App() {
   const [interactions, setInteractions] = useState<
     Record<string, AgentInteraction[]>
   >({});
+  const [unreadCompletedConversations, setUnreadCompletedConversations] =
+    useState<Record<string, true>>({});
   const [resolvingInteraction, setResolvingInteraction] = useState<string>();
   const [compactions, setCompactions] = useState<
     Record<string, CompactionEvent>
@@ -290,6 +304,8 @@ export default function App() {
     Record<string, InFlightTurn>
   >({});
   const inFlightTurnsRef = useRef(inFlightTurns);
+  const desktopRef = useRef(desktop);
+  const notificationsEnabledRef = useRef(notificationsEnabled);
   const [activeAgentScope, setActiveAgentScope] = useState<{
     sessionId: string;
     agentId: string;
@@ -339,6 +355,8 @@ export default function App() {
     [desktop],
   );
   activeConversationIdRef.current = activeConversation?.id;
+  desktopRef.current = desktop;
+  notificationsEnabledRef.current = notificationsEnabled;
   const activePromptDraft = promptDraftFor(
     promptDrafts,
     activeConversation?.id,
@@ -663,6 +681,53 @@ export default function App() {
     noticeTimer.current = window.setTimeout(() => setNotice(undefined), 3600);
   };
 
+  const notifyConversation = (
+    notification: Omit<ConversationNotification, "conversationTitle">,
+  ): void => {
+    if (
+      notification.kind === "completed" &&
+      notification.sessionId !== activeConversationIdRef.current
+    ) {
+      setUnreadCompletedConversations((current) => ({
+        ...current,
+        [notification.sessionId]: true,
+      }));
+    }
+    if (!notificationsEnabledRef.current) return;
+    const windowFocused =
+      document.hasFocus() && document.visibilityState === "visible";
+    if (
+      !shouldNotifyConversation(
+        notification.sessionId,
+        activeConversationIdRef.current,
+        windowFocused,
+      )
+    ) {
+      return;
+    }
+    const conversation = desktopRef.current.projects
+      .flatMap((project) => project.conversations)
+      .find((item) => item.id === notification.sessionId);
+    void sendConversationNotification({
+      ...notification,
+      conversationTitle: conversation?.title,
+    }).catch(() => {
+      // Notification delivery failures must not interrupt the active session.
+    });
+  };
+
+  const openNotificationSession = (sessionId: string): void => {
+    const project = desktopRef.current.projects.find((item) =>
+      item.conversations.some((conversation) => conversation.id === sessionId),
+    );
+    if (!project) return;
+    updateDesktop((current) => ({
+      ...current,
+      activeProjectId: project.id,
+      activeConversationId: sessionId,
+    }));
+  };
+
   const closeSideChat = useCallback((): void => {
     sideChatInstance.current += 1;
     sideChatAgentId.current = undefined;
@@ -969,6 +1034,22 @@ export default function App() {
     saveLanguage(nextLanguage);
   };
 
+  const updateNotificationsEnabled = async (enabled: boolean): Promise<void> => {
+    if (enabled) {
+      try {
+        if (!(await ensureNotificationPermission(true))) {
+          showNotice(t("settings.notificationsPermissionDenied"));
+          return;
+        }
+      } catch {
+        showNotice(t("settings.notificationsPermissionDenied"));
+        return;
+      }
+    }
+    setNotificationsEnabled(enabled);
+    saveNotificationsEnabled(enabled);
+  };
+
   useLayoutEffect(() => {
     applyColorScheme(colorScheme);
   }, [colorScheme]);
@@ -1236,11 +1317,45 @@ export default function App() {
         setSwarmModeBySession,
         setUndoMessageTarget,
         setWebAuthOpen,
+        notifyConversation,
         showNotice,
         updateDesktop,
       }),
     [],
   );
+
+  useEffect(() => {
+    const conversationId = activeConversation?.id;
+    if (!conversationId) return;
+    setUnreadCompletedConversations((current) => {
+      if (!current[conversationId]) return current;
+      const next = { ...current };
+      delete next[conversationId];
+      return next;
+    });
+  }, [activeConversation?.id]);
+
+  useEffect(() => {
+    let disposed = false;
+    let listener: Awaited<ReturnType<typeof listenForNotificationActions>>;
+    void listenForNotificationActions((sessionId) => {
+      openNotificationSession(sessionId);
+    })
+      .then((registered) => {
+        if (disposed) {
+          registered?.();
+        } else {
+          listener = registered;
+        }
+      })
+      .catch(() => {
+        // Desktop platforms without notification action events still show alerts.
+      });
+    return () => {
+      disposed = true;
+      listener?.();
+    };
+  }, []);
 
   useEffect(() => {
     const conversationId = activeConversation?.id;
@@ -2442,6 +2557,8 @@ export default function App() {
           activeProject={activeProject}
           activeConversation={activeConversation}
           inFlightTurns={inFlightTurns}
+          interactions={interactions}
+          unreadCompletedConversations={unreadCompletedConversations}
           auth={auth}
           appVersion={appVersion}
           accountUsage={accountUsage}
@@ -2751,6 +2868,7 @@ export default function App() {
         appVersion={appVersion}
         colorScheme={colorScheme}
         language={language}
+        notificationsEnabled={notificationsEnabled}
         notice={notice}
         onCloseLogin={() => {
           if (!loginBusy) setLoginOpen(false);
@@ -2782,6 +2900,7 @@ export default function App() {
         }}
         onColorSchemeChange={updateColorScheme}
         onLanguageChange={updateLanguage}
+        onNotificationsEnabledChange={updateNotificationsEnabled}
         onProvidersChanged={() => void loadModels()}
         onPluginsChanged={() => setPluginCommandRevision((value) => value + 1)}
         onCloseSettings={closeSettings}

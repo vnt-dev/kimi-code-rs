@@ -19,9 +19,11 @@ import {
   type RefObject,
 } from "react";
 import { isTurnRunning, type InFlightTurn } from "../chat/liveTurns";
+import { conversationStatus } from "../conversationStatus";
 import { t } from "../i18n";
 import type {
   AccountUsage,
+  AgentInteraction,
   AuthStatus,
   Conversation,
   DesktopState,
@@ -35,6 +37,8 @@ interface AppSidebarProps {
   activeProject?: Project;
   activeConversation?: Conversation;
   inFlightTurns: Record<string, InFlightTurn>;
+  interactions: Record<string, AgentInteraction[]>;
+  unreadCompletedConversations: Record<string, true>;
   auth: AuthStatus;
   appVersion?: string;
   accountUsage?: AccountUsage;
@@ -68,6 +72,8 @@ export function AppSidebar({
   activeProject,
   activeConversation,
   inFlightTurns,
+  interactions,
+  unreadCompletedConversations,
   auth,
   appVersion,
   accountUsage,
@@ -210,57 +216,79 @@ export function AppSidebar({
                   >
                     <div className="conversation-list-clip">
                       <div className="conversation-list">
-                      {project.conversations.map((conversation) => (
-                        <div
-                          className={`conversation-row ${
-                            conversation.id === activeConversation?.id
-                              ? "selected"
-                              : ""
-                          }`}
-                          key={conversation.id}
-                        >
-                          <button
-                            className="conversation-select"
-                            type="button"
-                            onClick={() =>
-                              onSelectConversation(project.id, conversation.id)
-                            }
-                            title={conversation.title}
-                          >
-                            <MessageSquareText size={14} />
-                            <span className="conversation-title">
-                              {conversation.title}
-                            </span>
-                            {isTurnRunning(inFlightTurns[conversation.id]) && (
-                              <span className="conversation-meta">
-                                <span
-                                  className="conversation-running-indicator"
-                                  role="status"
-                                  aria-label={t("conversation.running")}
-                                  title={t("conversation.running")}
-                                />
+                        {project.conversations.map((conversation) => {
+                          const status = conversationStatus({
+                            interactions: interactions[conversation.id],
+                            running: isTurnRunning(
+                              inFlightTurns[conversation.id],
+                            ),
+                            completedUnread:
+                              unreadCompletedConversations[conversation.id] ===
+                              true,
+                          });
+                          const statusLabel =
+                            status === "attention"
+                              ? t("conversation.needsAttention")
+                              : status === "running"
+                                ? t("conversation.running")
+                                : t("conversation.completedUnread");
+                          return (
+                            <div
+                              className={`conversation-row ${
+                                conversation.id === activeConversation?.id
+                                  ? "selected"
+                                  : ""
+                              }`}
+                              key={conversation.id}
+                            >
+                              <button
+                                className="conversation-select"
+                                type="button"
+                                onClick={() =>
+                                  onSelectConversation(
+                                    project.id,
+                                    conversation.id,
+                                  )
+                                }
+                                title={conversation.title}
+                              >
+                                <MessageSquareText size={14} />
+                                <span className="conversation-title">
+                                  {conversation.title}
+                                </span>
+                              </button>
+                              <span className="conversation-status-slot">
+                                {status && (
+                                  <span
+                                    className={`conversation-status-indicator ${status}`}
+                                    role="status"
+                                    aria-label={statusLabel}
+                                    title={statusLabel}
+                                  />
+                                )}
+                                <button
+                                  className="conversation-archive-button"
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    onSetRemovalTarget({
+                                      kind: "conversation",
+                                      projectId: project.id,
+                                      conversationId: conversation.id,
+                                      title: conversation.title,
+                                    });
+                                  }}
+                                  title={t("conversation.archive")}
+                                  aria-label={t("conversation.archiveNamed", {
+                                    title: conversation.title,
+                                  })}
+                                >
+                                  <Archive size={12} />
+                                </button>
                               </span>
-                            )}
-                          </button>
-                          <button
-                            className="conversation-archive-button"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onSetRemovalTarget({
-                                kind: "conversation",
-                                projectId: project.id,
-                                conversationId: conversation.id,
-                                title: conversation.title,
-                              });
-                            }}
-                            title={t("conversation.archive")}
-                            aria-label={t("conversation.archiveNamed", { title: conversation.title })}
-                          >
-                            <Archive size={12} />
-                          </button>
-                        </div>
-                      ))}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>

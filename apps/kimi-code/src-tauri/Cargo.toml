@@ -16,11 +16,16 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 kimi-code-agent-core-v2 = { path = "../../../crates/agent-core-v2" }
 kimi-code-web-server = { path = "../../../crates/web-server" }
+notify-rust = "4.18"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
+
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.7.3"

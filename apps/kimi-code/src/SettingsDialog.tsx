@@ -45,8 +45,10 @@ export default function SettingsDialog({
   appVersion,
   colorScheme,
   language,
+  notificationsEnabled,
   onColorSchemeChange,
   onLanguageChange,
+  onNotificationsEnabledChange,
   onProvidersChanged,
   onPluginsChanged,
   onClose,
@@ -54,8 +56,10 @@ export default function SettingsDialog({
   appVersion?: string;
   colorScheme: ColorScheme;
   language: Language;
+  notificationsEnabled: boolean;
   onColorSchemeChange: (colorScheme: ColorScheme) => void;
   onLanguageChange: (language: Language) => void;
+  onNotificationsEnabledChange: (enabled: boolean) => Promise<void>;
   onProvidersChanged: () => void;
   onPluginsChanged: () => void;
   onClose: () => void;
@@ -75,6 +79,7 @@ export default function SettingsDialog({
   const [webBusy, setWebBusy] = useState(true);
   const [webError, setWebError] = useState<string>();
   const [webCopied, setWebCopied] = useState(false);
+  const [notificationBusy, setNotificationBusy] = useState(false);
   const updateToastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -297,6 +302,16 @@ export default function SettingsDialog({
     }
   };
 
+  const toggleNotifications = async (): Promise<void> => {
+    if (notificationBusy || !isDesktop()) return;
+    setNotificationBusy(true);
+    try {
+      await onNotificationsEnabledChange(!notificationsEnabled);
+    } finally {
+      setNotificationBusy(false);
+    }
+  };
+
   return (
     <div
       className="settings-backdrop"
@@ -372,50 +387,85 @@ export default function SettingsDialog({
 
           <main className="settings-dialog-content">
             {activeTab === "general" ? (
-              <section
-                className="settings-section"
-                aria-labelledby="appearance-heading"
-              >
-                <h3 id="appearance-heading">{t("settings.appearance")}</h3>
-                <div className="settings-row">
-                  <span className="settings-row-label">
-                    {t("settings.theme")}
-                  </span>
-                  <div
-                    className="settings-segmented"
-                    role="group"
-                    aria-label={t("settings.themeGroup")}
-                  >
-                    <button
-                      className={colorScheme === "light" ? "active" : ""}
-                      type="button"
-                      aria-pressed={colorScheme === "light"}
-                      onClick={() => onColorSchemeChange("light")}
+              <>
+                <section
+                  className="settings-section"
+                  aria-labelledby="appearance-heading"
+                >
+                  <h3 id="appearance-heading">{t("settings.appearance")}</h3>
+                  <div className="settings-row">
+                    <span className="settings-row-label">
+                      {t("settings.theme")}
+                    </span>
+                    <div
+                      className="settings-segmented"
+                      role="group"
+                      aria-label={t("settings.themeGroup")}
                     >
-                      {t("settings.themeLight")}
-                    </button>
+                      <button
+                        className={colorScheme === "light" ? "active" : ""}
+                        type="button"
+                        aria-pressed={colorScheme === "light"}
+                        onClick={() => onColorSchemeChange("light")}
+                      >
+                        {t("settings.themeLight")}
+                      </button>
+                      <button
+                        className={colorScheme === "dark" ? "active" : ""}
+                        type="button"
+                        aria-pressed={colorScheme === "dark"}
+                        onClick={() => onColorSchemeChange("dark")}
+                      >
+                        {t("settings.themeDark")}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-row-label">
+                      {t("settings.language")}
+                    </span>
+                    <SettingsSelect
+                      value={language}
+                      options={LANGUAGE_OPTIONS}
+                      ariaLabel={t("settings.language")}
+                      onChange={onLanguageChange}
+                    />
+                  </div>
+                </section>
+
+                <section
+                  className="settings-section"
+                  aria-labelledby="notifications-heading"
+                >
+                  <h3 id="notifications-heading">
+                    {t("settings.notifications")}
+                  </h3>
+                  <p className="settings-section-copy">
+                    {isDesktop()
+                      ? t("settings.notificationsDescription")
+                      : t("settings.notificationsDesktopOnly")}
+                  </p>
+                  <div className="settings-row">
+                    <div>
+                      <span className="settings-row-label">
+                        {t("settings.notificationsEnabled")}
+                      </span>
+                      <small>{t("settings.notificationsEvents")}</small>
+                    </div>
                     <button
-                      className={colorScheme === "dark" ? "active" : ""}
+                      className={`settings-toggle ${isDesktop() && notificationsEnabled ? "active" : ""}`}
                       type="button"
-                      aria-pressed={colorScheme === "dark"}
-                      onClick={() => onColorSchemeChange("dark")}
+                      role="switch"
+                      aria-label={t("settings.notificationsEnabled")}
+                      aria-checked={isDesktop() && notificationsEnabled}
+                      disabled={!isDesktop() || notificationBusy}
+                      onClick={() => void toggleNotifications()}
                     >
-                      {t("settings.themeDark")}
+                      <span />
                     </button>
                   </div>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-row-label">
-                    {t("settings.language")}
-                  </span>
-                  <SettingsSelect
-                    value={language}
-                    options={LANGUAGE_OPTIONS}
-                    ariaLabel={t("settings.language")}
-                    onChange={onLanguageChange}
-                  />
-                </div>
-              </section>
+                </section>
+              </>
             ) : activeTab === "providers" ? (
               <ProviderSettings onChanged={onProvidersChanged} />
             ) : activeTab === "plugins" ? (

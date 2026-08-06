@@ -54,6 +54,8 @@ import type {
   TodoItem,
 } from "../types";
 import { conciseError } from "../utils/errors";
+import { userAttentionForInteraction } from "../conversationStatus";
+import { finalLiveResponseText } from "../notificationUtils";
 import {
   BACKGROUND_TASK_DETAIL_TAIL,
   fetchConversationHistory,
@@ -101,6 +103,11 @@ interface AppEventSubscriptions {
   setSwarmModeBySession: Setter<Record<string, boolean>>;
   setUndoMessageTarget: Setter<RenderMessage | undefined>;
   setWebAuthOpen: Setter<boolean>;
+  notifyConversation: (notification: {
+    sessionId: string;
+    kind: "completed" | "question" | "approval" | "planReview";
+    content?: string;
+  }) => void;
   showNotice: (message: string) => void;
   updateDesktop: (recipe: (current: DesktopState) => DesktopState) => void;
 }
@@ -137,9 +144,12 @@ export function subscribeToAppEvents({
   setSwarmModeBySession,
   setUndoMessageTarget,
   setWebAuthOpen,
+  notifyConversation,
   showNotice,
   updateDesktop,
 }: AppEventSubscriptions): () => void {
+    const notifiedCompletions = new Set<string>();
+    const notifiedInteractions = new Set<string>();
     const refreshDesktopInventory = async (): Promise<void> => {
       const request = desktopInventoryRequest.current + 1;
       desktopInventoryRequest.current = request;
@@ -388,6 +398,38 @@ export function subscribeToAppEvents({
         }
         if (isAgentChatEvent(payload.event)) {
           const chatEvent = payload.event;
+          if (
+            isMainAgentEvent &&
+            chatEvent.type === "turn.ended" &&
+            chatEvent.reason === "completed"
+          ) {
+            const notificationKey = `${payload.sessionId}:${String(chatEvent.turnId)}`;
+            if (!notifiedCompletions.has(notificationKey)) {
+              notifiedCompletions.add(notificationKey);
+              const projectedTurns = reduceQueuedAgentChatEvents(
+                inFlightTurnsRef.current,
+                [
+                  ...queuedAgentChatEvents.current.filter(
+                    (queued) =>
+                      queued.agentId === MAIN_AGENT_ID &&
+                      queued.sessionId === payload.sessionId,
+                  ),
+                  {
+                    sessionId: payload.sessionId,
+                    agentId: payload.agentId,
+                    event: chatEvent,
+                  },
+                ],
+              );
+              notifyConversation({
+                sessionId: payload.sessionId,
+                kind: "completed",
+                content: finalLiveResponseText(
+                  projectedTurns[payload.sessionId],
+                ),
+              });
+            }
+          }
           if (
             isMainAgentEvent &&
             chatEvent.type === "turn.started" &&
@@ -691,6 +733,17 @@ export function subscribeToAppEvents({
     const unlistenInteractions = listen<AgentInteractionsEvent>(
       "agent-interactions",
       (event) => {
+        for (const interaction of event.payload.interactions) {
+          const notificationKey = `${event.payload.sessionId}:${interaction.id}`;
+          const attention = userAttentionForInteraction(interaction);
+          if (!attention || notifiedInteractions.has(notificationKey)) continue;
+          notifiedInteractions.add(notificationKey);
+          notifyConversation({
+            sessionId: event.payload.sessionId,
+            kind: attention.kind,
+            content: attention.content,
+          });
+        }
         setInteractions((current) => ({
           ...current,
           [event.payload.sessionId]: event.payload.interactions,

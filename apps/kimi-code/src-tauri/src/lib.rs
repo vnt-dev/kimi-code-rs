@@ -60,6 +60,63 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+#[cfg(desktop)]
+#[tauri::command]
+fn show_conversation_notification(app: AppHandle, session_id: String, title: String, body: String) {
+    #[cfg(windows)]
+    {
+        std::thread::spawn(move || {
+            let app_id = if tauri::is_dev() {
+                tauri_winrt_notification::Toast::POWERSHELL_APP_ID.to_owned()
+            } else {
+                app.config().identifier.clone()
+            };
+            let app_for_action = app.clone();
+            let toast = tauri_winrt_notification::Toast::new(&app_id)
+                .title(&title)
+                .text1(&body)
+                .on_activated(move |_| {
+                    show_main_window(&app_for_action);
+                    let _ = app_for_action.emit("notification-open-session", &session_id);
+                    Ok(())
+                });
+            let _ = toast.show();
+        });
+    }
+
+    #[cfg(not(windows))]
+    std::thread::spawn(move || {
+        let mut notification = notify_rust::Notification::new();
+        notification.summary(&title).body(&body).auto_icon();
+
+        #[cfg(target_os = "macos")]
+        {
+            let application_id = if tauri::is_dev() {
+                "com.apple.Terminal"
+            } else {
+                &app.config().identifier
+            };
+            let _ = notify_rust::set_application(application_id);
+        }
+
+        let Ok(handle) = notification.show() else {
+            return;
+        };
+        let app_for_action = app.clone();
+        let _ = handle.wait_for_response(move |response: &notify_rust::NotificationResponse| {
+            if !matches!(
+                response,
+                notify_rust::NotificationResponse::Default
+                    | notify_rust::NotificationResponse::Action(_)
+            ) {
+                return;
+            }
+            show_main_window(&app_for_action);
+            let _ = app_for_action.emit("notification-open-session", &session_id);
+        });
+    });
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DeviceCodeEvent {
@@ -515,6 +572,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -548,6 +606,17 @@ pub fn run() {
                         }
                     })
                     .build(app)?;
+            }
+
+            #[cfg(desktop)]
+            if let Some(main_window) = app.get_webview_window("main") {
+                let window_to_hide = main_window.clone();
+                main_window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window_to_hide.hide();
+                    }
+                });
             }
 
             let client = Arc::new(
@@ -640,7 +709,8 @@ pub fn run() {
             get_plugin_marketplace,
             subscribe_agent_events,
             unsubscribe_agent_events,
-            respond_interaction
+            respond_interaction,
+            show_conversation_notification
         ])
         .build(tauri::generate_context!())
         .expect("error while building Kimi Code desktop")

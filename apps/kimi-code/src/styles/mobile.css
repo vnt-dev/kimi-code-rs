@@ -103,6 +103,11 @@
     opacity: 1;
   }
 
+  .web-runtime.mobile-layout .conversation-status-slot {
+    width: 34px;
+    height: 34px;
+  }
+
   .web-runtime.mobile-layout .account-area {
     padding-bottom: calc(10px + env(safe-area-inset-bottom));
   }
@@ -596,5 +601,9 @@
   .web-runtime .project-actions .icon-button,
   .web-runtime .conversation-archive-button {
     opacity: 1;
+  }
+
+  .web-runtime .conversation-status-indicator {
+    opacity: 0;
   }
 }
