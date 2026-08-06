@@ -12,10 +12,12 @@
 use std::{
     collections::HashMap,
     error::Error,
+    panic::AssertUnwindSafe,
     sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
@@ -56,8 +58,22 @@ pub struct CapabilityService {
     // node Maps iterate in insertion order.
     entries: IndexMap<CapabilityId, Arc<dyn CapabilityEntry>>,
     install_progress: Arc<Mutex<HashMap<CapabilityId, CapabilityInstallProgress>>>,
+    plugins: Option<PluginServiceHandle>,
     platform: String,
     arch: String,
+}
+
+struct PluginRemovalReservation {
+    plugins: Option<PluginServiceHandle>,
+    plugin_id: Option<String>,
+}
+
+impl Drop for PluginRemovalReservation {
+    fn drop(&mut self) {
+        if let (Some(plugins), Some(plugin_id)) = (&self.plugins, &self.plugin_id) {
+            plugins.release_plugin_removal(plugin_id);
+        }
+    }
 }
 
 impl CapabilityService {
@@ -71,7 +87,7 @@ impl CapabilityService {
             arch: bootstrap.arch().to_owned(),
             kimi_home_dir: bootstrap.home_dir().to_owned(),
             user_home_dir: bootstrap.os_home_dir().to_owned(),
-            plugins,
+            plugins: plugins.clone(),
             host_process,
             fetch_impl: None,
             applications_dir: None,
@@ -87,6 +103,7 @@ impl CapabilityService {
                 (CapabilityId::KimiWebbridge, create_kimi_webbridge_entry(ctx)),
             ]),
             install_progress: Arc::new(Mutex::new(HashMap::new())),
+            plugins: Some(plugins),
             platform,
             arch,
         }
@@ -101,6 +118,7 @@ impl CapabilityService {
                 .map(|entry| (entry.id(), entry))
                 .collect(),
             install_progress: Arc::new(Mutex::new(HashMap::new())),
+            plugins: None,
             platform: node_platform(),
             arch: node_arch(),
         }
@@ -266,11 +284,31 @@ impl CapabilityServiceContract for CapabilityService {
             );
         }
 
+        let reserved_plugin_id = entry.plugin_id().map(str::to_owned);
+        if let (Some(plugins), Some(plugin_id)) = (&self.plugins, &reserved_plugin_id)
+            && let Err(error) = plugins.reserve_plugin_removal(plugin_id).await
+        {
+            self.install_progress.lock().unwrap().insert(
+                entry.id(),
+                CapabilityInstallProgress {
+                    running: false,
+                    error: Some(error.to_string()),
+                    ..CapabilityInstallProgress::default()
+                },
+            );
+            return Err(error);
+        }
+
         let entry_id = entry.id();
         let reporter_progress = Arc::clone(&self.install_progress);
         let final_progress = Arc::clone(&self.install_progress);
         let installing = Arc::clone(&entry);
+        let plugins = self.plugins.clone();
         tokio::spawn(async move {
+            let _reservation = PluginRemovalReservation {
+                plugins,
+                plugin_id: reserved_plugin_id,
+            };
             let report: CapabilityInstallReporter = Box::new(move |step, percent| {
                 reporter_progress.lock().unwrap().insert(
                     entry_id,
@@ -282,13 +320,15 @@ impl CapabilityServiceContract for CapabilityService {
                     },
                 );
             });
-            let result = installing.install(report).await;
+            let result = AssertUnwindSafe(installing.install(report))
+                .catch_unwind()
+                .await;
             let mut progress = final_progress.lock().unwrap();
             match result {
-                Ok(()) => {
+                Ok(Ok(())) => {
                     progress.insert(entry_id, CapabilityInstallProgress::default());
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     progress.insert(
                         entry_id,
                         CapabilityInstallProgress {
@@ -299,10 +339,21 @@ impl CapabilityServiceContract for CapabilityService {
                         },
                     );
                 }
+                Err(_) => {
+                    progress.insert(
+                        entry_id,
+                        CapabilityInstallProgress {
+                            running: false,
+                            step: None,
+                            percent: None,
+                            error: Some("Capability installation task panicked".to_owned()),
+                        },
+                    );
+                }
             }
         });
 
-        self.status_of(&entry).await
+        Ok(self.status_of_safe(&entry).await)
     }
 }
 

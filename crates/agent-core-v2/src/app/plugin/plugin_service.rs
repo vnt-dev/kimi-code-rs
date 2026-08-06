@@ -3,12 +3,14 @@
 //! Original: `packages/agent-core-v2/src/app/plugin/pluginService.ts`.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     error::Error,
+    panic::AssertUnwindSafe,
     sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use serde_json::{Map, Value};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
@@ -99,6 +101,7 @@ pub struct PluginService {
     initial_load_notify: Notify,
     status: Mutex<ServiceStatus>,
     install_operations: Arc<Mutex<HashMap<String, PluginInstallOperation>>>,
+    removal_reservations: Mutex<HashSet<String>>,
     on_did_reload: Arc<Emitter<ReloadSummary>>,
     disposables: DisposableStore,
 }
@@ -133,6 +136,7 @@ impl PluginService {
             initial_load_notify: Notify::new(),
             status: Mutex::new(ServiceStatus::default()),
             install_operations: Arc::new(Mutex::new(HashMap::new())),
+            removal_reservations: Mutex::new(HashSet::new()),
             on_did_reload: emitter,
             disposables,
         }
@@ -290,10 +294,19 @@ impl PluginServiceContract for PluginService {
         input: InstallPluginInput,
         operation_id: String,
     ) -> PluginServiceResult<()> {
-        self.install_operations
-            .lock()
-            .unwrap()
-            .insert(operation_id.clone(), PluginInstallOperation::started(operation_id.clone()));
+        {
+            let mut operations = self.install_operations.lock().unwrap();
+            if operations.values().any(|operation| !operation.is_finished()) {
+                return Err(message_error("Another plugin installation is already in progress"));
+            }
+            // A newly accepted operation supersedes an already-observed or
+            // abandoned terminal snapshot and keeps this registry bounded.
+            operations.clear();
+            operations.insert(
+                operation_id.clone(),
+                PluginInstallOperation::started(operation_id.clone(), input.source.clone()),
+            );
+        }
         tokio::spawn(async move {
             let operations = Arc::clone(&self.install_operations);
             let progress_operation_id = operation_id.clone();
@@ -308,12 +321,15 @@ impl PluginServiceContract for PluginService {
                     operation.total_bytes = update.total_bytes;
                 }
             });
-            let result = self.install_plugin_with_progress(input, progress).await;
+            let result = AssertUnwindSafe(self.install_plugin_with_progress(input, progress))
+                .catch_unwind()
+                .await;
             let mut operations = self.install_operations.lock().unwrap();
             if let Some(operation) = operations.get_mut(&operation_id) {
                 match result {
-                    Ok(_) => operation.phase = PluginInstallPhase::Complete,
-                    Err(error) => operation.error = Some(error.to_string()),
+                    Ok(Ok(_)) => operation.phase = PluginInstallPhase::Complete,
+                    Ok(Err(error)) => operation.error = Some(error.to_string()),
+                    Err(_) => operation.error = Some("Plugin installation task panicked".to_owned()),
                 }
             }
         });
@@ -327,6 +343,33 @@ impl PluginServiceContract for PluginService {
             operations.remove(operation_id);
         }
         Some(operation)
+    }
+
+    fn list_plugin_install_operations(&self) -> Vec<PluginInstallOperation> {
+        self.install_operations
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    async fn reserve_plugin_removal(&self, id: &str) -> PluginServiceResult<()> {
+        self.start_initial_load().await;
+        let _manager = self.manager.lock().await;
+        self.assert_loaded()?;
+        self.removal_reservations
+            .lock()
+            .unwrap()
+            .insert(id.to_lowercase());
+        Ok(())
+    }
+
+    fn release_plugin_removal(&self, id: &str) {
+        self.removal_reservations
+            .lock()
+            .unwrap()
+            .remove(&id.to_lowercase());
     }
 
     async fn set_plugin_enabled(&self, input: SetPluginEnabledInput) -> PluginServiceResult<()> {
@@ -352,6 +395,17 @@ impl PluginServiceContract for PluginService {
         self.start_initial_load().await;
         let mut manager = self.manager.lock().await;
         self.assert_loaded()?;
+        if self
+            .removal_reservations
+            .lock()
+            .unwrap()
+            .contains(&input.id.to_lowercase())
+        {
+            return Err(message_error(format!(
+                "Plugin \"{}\" is required by a capability installation in progress",
+                input.id
+            )));
+        }
         manager.remove(&input.id).await
     }
 
@@ -672,6 +726,67 @@ mod tests {
         assert!(settled.error.is_some(), "{settled:?}");
         // Terminal states are reported exactly once — the read above pruned it.
         assert!(service.plugin_install_progress("op-1").is_none());
+        tokio::fs::remove_dir_all(home).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn background_install_state_is_discoverable_and_rejects_overlap() {
+        let home = std::env::temp_dir().join(format!("plugin-service-{}", uuid::Uuid::new_v4()));
+        let service = Arc::new(service(&home, HashMap::new()));
+        service.install_operations.lock().unwrap().insert(
+            "running".to_owned(),
+            PluginInstallOperation::started("running".to_owned(), "demo.zip".to_owned()),
+        );
+
+        assert_eq!(
+            service.list_plugin_install_operations()[0].source,
+            "demo.zip"
+        );
+        let error = Arc::clone(&service)
+            .install_plugin_in_background(
+                InstallPluginInput {
+                    source: "other.zip".to_owned(),
+                },
+                "other".to_owned(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("already in progress"));
+        let _ = tokio::fs::remove_dir_all(home).await;
+    }
+
+    #[tokio::test]
+    async fn capability_reservation_blocks_removal_until_released() {
+        let home = std::env::temp_dir().join(format!("plugin-service-{}", uuid::Uuid::new_v4()));
+        let source = home.join("source");
+        tokio::fs::create_dir_all(&source).await.unwrap();
+        tokio::fs::write(source.join("kimi.plugin.json"), r#"{"name":"demo"}"#)
+            .await
+            .unwrap();
+        let service = service(&home, HashMap::new());
+        service
+            .install_plugin(InstallPluginInput {
+                source: source.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+
+        service.reserve_plugin_removal("demo").await.unwrap();
+        let error = service
+            .remove_plugin(RemovePluginInput {
+                id: "demo".to_owned(),
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("capability installation"));
+        service.release_plugin_removal("demo");
+        service
+            .remove_plugin(RemovePluginInput {
+                id: "demo".to_owned(),
+            })
+            .await
+            .unwrap();
+        assert!(service.list_plugins().await.unwrap().is_empty());
         tokio::fs::remove_dir_all(home).await.unwrap();
     }
 

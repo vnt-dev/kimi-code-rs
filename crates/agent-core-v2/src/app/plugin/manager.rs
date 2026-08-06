@@ -119,7 +119,10 @@ impl PluginManager {
             Err(error) => Err(error),
         };
         if let Some(directory) = temporary_zip_dir {
-            remove_dir_all_force(Path::new(&directory)).await?;
+            // Temporary cleanup is not part of the install commit. In
+            // particular, a scanner holding a file open on Windows must not
+            // make a successfully persisted plugin look failed to callers.
+            let _ = remove_dir_all_force(Path::new(&directory)).await;
         }
         if result.is_ok() {
             emit_install_progress(progress.as_ref(), PluginInstallPhase::Complete, 0, None);
@@ -233,15 +236,21 @@ impl PluginManager {
             return Err(message_error(message));
         };
         let id = normalize_plugin_id(&manifest.name);
-        let managed_copy =
-            copy_plugin_to_managed_root(&self.kimi_home_dir, &id, &prepared.source_root).await?;
+        let previous_root = self.records.get(&id).map(|record| record.root.as_str());
+        let managed_copy = copy_plugin_to_managed_root(
+            &self.kimi_home_dir,
+            &id,
+            &prepared.source_root,
+            previous_root,
+        )
+        .await?;
         let result = self
             .publish_prepared_record(&id, &managed_copy, prepared)
             .await;
         match result {
             Ok(record) => {
                 if let Some(previous) = &managed_copy.previous_root {
-                    let _ = remove_dir_all_force(Path::new(previous)).await;
+                    let _ = remove_managed_plugin_root(&self.kimi_home_dir, previous).await;
                 }
                 Ok(record)
             }
@@ -348,11 +357,15 @@ impl PluginManager {
     pub async fn remove(&mut self, id: &str) -> PluginManagerResult<()> {
         let key = normalize_plugin_id(id);
         let mut next = self.records.clone();
-        if next.shift_remove(&key).is_none() {
+        let Some(removed) = next.shift_remove(&key) else {
             return Err(plugin_not_found(id));
-        }
+        };
         self.persist(&next).await?;
         self.records = next;
+        // Registry removal is the commit point. Managed files are no longer
+        // reachable by the runtime, so cleanup is best-effort and cannot turn
+        // a successful uninstall into a reported failure.
+        let _ = remove_managed_plugin_root(&self.kimi_home_dir, &removed.root).await;
         Ok(())
     }
 
@@ -791,65 +804,55 @@ async fn copy_plugin_to_managed_root(
     kimi_home_dir: &str,
     id: &str,
     source_root: &str,
+    previous_root: Option<&str>,
 ) -> PluginManagerResult<ManagedPluginCopy> {
-    let managed_root = Path::new(kimi_home_dir).join("plugins/managed").join(id);
-    let Some(managed_dir) = managed_root.parent() else {
-        return Err(message_error("managed plugin root has no parent directory"));
-    };
-    tokio::fs::create_dir_all(managed_dir).await?;
-    let staging_root = managed_dir.join(format!("{id}-{}", uuid::Uuid::new_v4()));
-    let previous_root = PathBuf::from(format!("{}-previous", staging_root.to_string_lossy()));
+    let managed_dir = Path::new(kimi_home_dir).join("plugins/managed");
+    tokio::fs::create_dir_all(&managed_dir).await?;
+    let nonce = uuid::Uuid::new_v4();
+    let staging_root = managed_dir.join(format!(".{id}-{nonce}.staging"));
+    let managed_root = managed_dir.join(format!("{id}-{nonce}"));
     if let Err(error) = copy_directory(source_root, &staging_root).await {
         let _ = remove_dir_all_force(&staging_root).await;
         return Err(error);
     }
-    let mut moved_previous = false;
-    let mut published = false;
-    let publish = async {
-        match tokio::fs::rename(&managed_root, &previous_root).await {
-            Ok(()) => moved_previous = true,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-        tokio::fs::rename(&staging_root, &managed_root).await?;
-        published = true;
-        Ok::<(), std::io::Error>(())
-    }
-    .await;
-    if let Err(error) = publish {
-        let _ = remove_dir_all_force(if published {
-            &managed_root
-        } else {
-            &staging_root
-        })
-        .await;
-        if moved_previous {
-            tokio::fs::rename(&previous_root, &managed_root).await?;
-        }
+    if let Err(error) = tokio::fs::rename(&staging_root, &managed_root).await {
+        let _ = remove_dir_all_force(&staging_root).await;
         return Err(Box::new(error));
     }
     let canonical_root = match tokio::fs::canonicalize(&managed_root).await {
         Ok(root) => root,
         Err(error) => {
             remove_dir_all_force(&managed_root).await?;
-            if moved_previous {
-                tokio::fs::rename(&previous_root, &managed_root).await?;
-            }
             return Err(Box::new(error));
         }
     };
     Ok(ManagedPluginCopy {
         root: path_to_string(canonical_root),
-        previous_root: moved_previous.then(|| path_to_string(previous_root)),
+        previous_root: previous_root.map(str::to_owned),
     })
 }
 
 async fn rollback_managed_plugin_copy(copy: &ManagedPluginCopy) -> PluginManagerResult<()> {
     remove_dir_all_force(Path::new(&copy.root)).await?;
-    if let Some(previous) = &copy.previous_root {
-        tokio::fs::rename(previous, &copy.root).await?;
-    }
     Ok(())
+}
+
+async fn remove_managed_plugin_root(kimi_home_dir: &str, root: &str) -> std::io::Result<()> {
+    let managed_dir = Path::new(kimi_home_dir).join("plugins/managed");
+    let managed_dir = match tokio::fs::canonicalize(&managed_dir).await {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let root = match tokio::fs::canonicalize(root).await {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if root.parent() != Some(managed_dir.as_path()) {
+        return Ok(());
+    }
+    remove_dir_all_force(&root).await
 }
 
 async fn copy_directory(source: &str, destination: &Path) -> PluginManagerResult<()> {
@@ -1212,6 +1215,7 @@ mod tests {
             discover_skills: None,
         });
         let record = manager.install(source.to_str().unwrap()).await.unwrap();
+        let first_root = record.root.clone();
         assert_eq!(record.id, "demo");
         assert_eq!(record.skill_count, 1);
         assert_eq!(manager.summaries()[0].command_count, 1);
@@ -1229,6 +1233,12 @@ mod tests {
         });
         loaded.load().await.unwrap();
         assert!(!loaded.get("demo").unwrap().enabled);
+        let updated = loaded.install(source.to_str().unwrap()).await.unwrap();
+        assert_ne!(updated.root, first_root);
+        assert!(!Path::new(&first_root).exists());
+        let installed_root = updated.root.clone();
+        loaded.remove("demo").await.unwrap();
+        assert!(!Path::new(&installed_root).exists());
         tokio::fs::remove_dir_all(base).await.unwrap();
     }
 

@@ -84,6 +84,17 @@ pub trait PluginServiceContract: Disposable + Send + Sync {
     /// operation (complete or failed) is removed by the read — it is reported
     /// exactly once.
     fn plugin_install_progress(&self, operation_id: &str) -> Option<PluginInstallOperation>;
+    /// Returns the operation that a newly-mounted client should resume.
+    /// The service currently permits only one background install at a time.
+    fn list_plugin_install_operations(&self) -> Vec<PluginInstallOperation> {
+        Vec::new()
+    }
+    /// Prevents a capability's wiring plugin from being removed while the
+    /// capability is still installing runtime layers around it.
+    async fn reserve_plugin_removal(&self, _id: &str) -> PluginServiceResult<()> {
+        Ok(())
+    }
+    fn release_plugin_removal(&self, _id: &str) {}
     async fn set_plugin_enabled(&self, input: SetPluginEnabledInput) -> PluginServiceResult<()>;
     async fn set_plugin_mcp_server_enabled(
         &self,

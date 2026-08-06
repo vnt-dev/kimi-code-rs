@@ -13,6 +13,7 @@ export type PluginInstallPhase =
 
 export interface PluginInstallOperation {
   operationId: string;
+  source: string;
   phase: PluginInstallPhase;
   downloadedBytes: number;
   totalBytes?: number;

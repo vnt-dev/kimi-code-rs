@@ -340,6 +340,13 @@ async fn get_plugin_install_progress(
 }
 
 #[tauri::command]
+async fn list_plugin_install_operations(
+    state: State<'_, AppState>,
+) -> Result<Vec<PluginInstallOperation>, String> {
+    state.client.list_plugin_install_operations().await
+}
+
+#[tauri::command]
 async fn set_plugin_enabled(
     state: State<'_, AppState>,
     id: String,
@@ -553,6 +560,7 @@ pub fn run() {
             install_capability,
             install_plugin,
             get_plugin_install_progress,
+            list_plugin_install_operations,
             set_plugin_enabled,
             set_plugin_mcp_server_enabled,
             remove_plugin,

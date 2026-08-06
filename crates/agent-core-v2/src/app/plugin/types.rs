@@ -329,6 +329,7 @@ pub type PluginInstallProgressCallback = Arc<dyn Fn(PluginInstallProgress) + Sen
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallOperation {
     pub operation_id: String,
+    pub source: String,
     pub phase: PluginInstallPhase,
     pub downloaded_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -338,9 +339,10 @@ pub struct PluginInstallOperation {
 }
 
 impl PluginInstallOperation {
-    pub fn started(operation_id: String) -> Self {
+    pub fn started(operation_id: String, source: String) -> Self {
         Self {
             operation_id,
+            source,
             phase: PluginInstallPhase::Resolving,
             downloaded_bytes: 0,
             total_bytes: None,

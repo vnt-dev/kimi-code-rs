@@ -82,6 +82,7 @@ test("plugin install progress uses real download bytes when total size is known"
   assert.equal(
     pluginInstallPercent({
       operationId: "install-1",
+      source: "demo.zip",
       phase: "downloading",
       downloadedBytes: 50,
       totalBytes: 100,
@@ -91,6 +92,7 @@ test("plugin install progress uses real download bytes when total size is known"
   assert.equal(
     pluginInstallPercent({
       operationId: "install-1",
+      source: "demo.zip",
       phase: "downloading",
       downloadedBytes: 50,
     }),
@@ -99,6 +101,7 @@ test("plugin install progress uses real download bytes when total size is known"
   assert.equal(
     pluginInstallPercent({
       operationId: "install-1",
+      source: "demo.zip",
       phase: "complete",
       downloadedBytes: 0,
     }),

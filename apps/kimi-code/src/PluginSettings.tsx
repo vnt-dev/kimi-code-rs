@@ -98,7 +98,6 @@ function capabilityStepLabel(step: string): string {
 }
 
 const CAPABILITY_POLL_INTERVAL_MS = 700;
-const CAPABILITY_POLL_ATTEMPTS = 260; // ~3 minutes of runtime setup budget
 const PLUGIN_INSTALL_POLL_INTERVAL_MS = 500;
 
 export default function PluginSettings({ onChanged }: { onChanged: () => void }) {
@@ -119,14 +118,16 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   const [detailBusy, setDetailBusy] = useState(false);
   const [installProgress, setInstallProgress] = useState<PluginInstallOperation>();
   const installOperationRef = useRef<string | undefined>(undefined);
+  const pluginMutationRef = useRef(false);
+  const pluginPollFailuresRef = useRef(0);
   const progressClearTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pluginPollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const marketAttemptedRef = useRef(false);
   const [capabilities, setCapabilities] = useState<CapabilityStatus[]>([]);
   const [capabilityBusy, setCapabilityBusy] = useState<CapabilityId>();
+  const capabilityOperationRef = useRef(false);
   const capabilityAttemptedRef = useRef(false);
   const capabilityPollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const capabilityPollAttemptsRef = useRef(0);
 
   const loadInstalled = useCallback(async (reload = false): Promise<void> => {
     setInstalledLoading(true);
@@ -194,6 +195,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   const finishCapabilityInstall = useCallback(
     async (nextNotice?: string): Promise<void> => {
       stopCapabilityPolling();
+      capabilityOperationRef.current = false;
       setCapabilityBusy(undefined);
       if (nextNotice) setNotice(nextNotice);
       await loadCapabilities();
@@ -207,25 +209,30 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   const pollCapabilityInstall = useCallback(
     async (id: CapabilityId, name: string): Promise<void> => {
       try {
-        const status = await invoke<CapabilityStatus>("get_capability", { id });
-        setCapabilities((current) =>
-          current.map((item) => (item.id === id ? status : item)),
-        );
+        const next = await invoke<CapabilityStatus[]>("list_capabilities");
+        const status = next.find((item) => item.id === id);
+        setCapabilities(next);
+        if (!status) throw new Error(`Capability ${id} disappeared`);
         if (!status.install.running) {
           await finishCapabilityInstall(
             status.install.error
               ? t("plugins.operationFailed", { error: status.install.error })
-              : t("plugins.capability.installedNotice", { name }),
+              : t(
+                  status.state === "ready"
+                    ? "plugins.capability.installedNotice"
+                    : "plugins.capability.partialNotice",
+                  { name },
+                ),
           );
           return;
         }
-      } catch (error) {
-        await finishCapabilityInstall(t("plugins.operationFailed", { error: messageOf(error) }));
-        return;
-      }
-      capabilityPollAttemptsRef.current += 1;
-      if (capabilityPollAttemptsRef.current >= CAPABILITY_POLL_ATTEMPTS) {
-        await finishCapabilityInstall();
+      } catch {
+        // The engine owns the operation. A transient RPC/detection failure
+        // must not turn it into a client-side failure or stop following it.
+        capabilityPollTimerRef.current = setTimeout(
+          () => void pollCapabilityInstall(id, name),
+          CAPABILITY_POLL_INTERVAL_MS,
+        );
         return;
       }
       capabilityPollTimerRef.current = setTimeout(
@@ -240,7 +247,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   const followCapabilityInstall = useCallback(
     (id: CapabilityId, name: string): void => {
       stopCapabilityPolling();
-      capabilityPollAttemptsRef.current = 0;
+      capabilityOperationRef.current = true;
       setCapabilityBusy(id);
       capabilityPollTimerRef.current = setTimeout(
         () => void pollCapabilityInstall(id, name),
@@ -262,7 +269,9 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   useEffect(() => () => stopCapabilityPolling(), [stopCapabilityPolling]);
 
   const installCapability = async (capability: CapabilityStatus): Promise<void> => {
-    if (capabilityBusy || busy) return;
+    if (capabilityOperationRef.current || pluginMutationRef.current) return;
+    capabilityOperationRef.current = true;
+    setCapabilityBusy(capability.id);
     setNotice(undefined);
     try {
       // An install already running (started from another panel or client) is
@@ -280,7 +289,12 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
         await finishCapabilityInstall(
           started.install.error
             ? t("plugins.operationFailed", { error: started.install.error })
-            : t("plugins.capability.installedNotice", { name: capability.displayName }),
+            : t(
+                started.state === "ready"
+                  ? "plugins.capability.installedNotice"
+                  : "plugins.capability.partialNotice",
+                { name: capability.displayName },
+              ),
         );
       }
     } catch (error) {
@@ -331,12 +345,15 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   };
 
   const install = async (source: string, label: string): Promise<void> => {
+    if (pluginMutationRef.current || capabilityOperationRef.current) return;
+    pluginMutationRef.current = true;
     const operationId = createInstallOperationId();
     installOperationRef.current = operationId;
     if (progressClearTimerRef.current) clearTimeout(progressClearTimerRef.current);
     if (pluginPollTimerRef.current !== undefined) clearTimeout(pluginPollTimerRef.current);
     setInstallProgress({
       operationId,
+      source,
       phase: "resolving",
       downloadedBytes: 0,
     });
@@ -347,6 +364,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
       await invoke("install_plugin", { source, operationId });
     } catch (error) {
       installOperationRef.current = undefined;
+      pluginMutationRef.current = false;
       setInstallProgress(undefined);
       setBusy(undefined);
       setNotice(t("plugins.operationFailed", { error: messageOf(error) }));
@@ -358,6 +376,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   const pollPluginInstall = async (operationId: string, label: string): Promise<void> => {
     const stopWithError = async (error: string): Promise<void> => {
       installOperationRef.current = undefined;
+      pluginMutationRef.current = false;
       setInstallProgress(undefined);
       setBusy(undefined);
       setNotice(t("plugins.operationFailed", { error }));
@@ -369,12 +388,22 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
         { operationId },
       );
     } catch (error) {
+      pluginPollFailuresRef.current += 1;
+      if (pluginPollFailuresRef.current < 5 && installOperationRef.current === operationId) {
+        pluginPollTimerRef.current = setTimeout(
+          () => void pollPluginInstall(operationId, label),
+          PLUGIN_INSTALL_POLL_INTERVAL_MS,
+        );
+        return;
+      }
       await stopWithError(messageOf(error));
       return;
     }
+    pluginPollFailuresRef.current = 0;
     if (!operation) {
       // The engine dropped the operation (e.g. restart) — refresh and stop.
       installOperationRef.current = undefined;
+      pluginMutationRef.current = false;
       setInstallProgress(undefined);
       setBusy(undefined);
       await loadInstalled();
@@ -387,10 +416,16 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
       return;
     }
     if (operation.phase === "complete") {
-      await refreshAfterMutation(t("plugins.installedNotice", { name: label }));
-      setTab("installed");
-      setCustomSource("");
-      setBusy(undefined);
+      try {
+        await refreshAfterMutation(t("plugins.installedNotice", { name: label }));
+        setTab("installed");
+        setCustomSource("");
+      } catch (error) {
+        setNotice(t("plugins.operationFailed", { error: messageOf(error) }));
+      } finally {
+        pluginMutationRef.current = false;
+        setBusy(undefined);
+      }
       progressClearTimerRef.current = setTimeout(() => {
         if (installOperationRef.current === operationId) {
           installOperationRef.current = undefined;
@@ -404,6 +439,26 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
       PLUGIN_INSTALL_POLL_INTERVAL_MS,
     );
   };
+
+  useEffect(() => {
+    let active = true;
+    void invoke<PluginInstallOperation[]>("list_plugin_install_operations")
+      .then((operations) => {
+        if (!active || operations.length === 0 || installOperationRef.current) return;
+        const operation = operations[0];
+        installOperationRef.current = operation.operationId;
+        pluginMutationRef.current = true;
+        setInstallProgress(operation);
+        setBusy(`install:${operation.source}`);
+        void pollPluginInstall(operation.operationId, operation.source);
+      })
+      .catch(() => {
+        // Installed plugin listing remains usable if operation recovery fails.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const installPercent = installProgress
     ? pluginInstallPercent(installProgress)
@@ -433,6 +488,8 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   };
 
   const togglePlugin = async (plugin: PluginSummary): Promise<void> => {
+    if (pluginMutationRef.current || capabilityOperationRef.current) return;
+    pluginMutationRef.current = true;
     setBusy(`toggle:${plugin.id}`);
     try {
       await invoke("set_plugin_enabled", { id: plugin.id, enabled: !plugin.enabled });
@@ -447,11 +504,14 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     } catch (error) {
       setNotice(t("plugins.operationFailed", { error: messageOf(error) }));
     } finally {
+      pluginMutationRef.current = false;
       setBusy(undefined);
     }
   };
 
   const removePlugin = async (id: string, label: string): Promise<void> => {
+    if (pluginMutationRef.current || capabilityOperationRef.current) return;
+    pluginMutationRef.current = true;
     setBusy(`remove:${id}`);
     try {
       await invoke("remove_plugin", { id });
@@ -460,6 +520,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     } catch (error) {
       setNotice(t("plugins.operationFailed", { error: messageOf(error) }));
     } finally {
+      pluginMutationRef.current = false;
       setBusy(undefined);
     }
   };
@@ -478,6 +539,8 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
 
   const toggleMcp = async (server: string, enabled: boolean): Promise<void> => {
     if (!detail) return;
+    if (pluginMutationRef.current || capabilityOperationRef.current) return;
+    pluginMutationRef.current = true;
     setBusy(`mcp:${detail.id}:${server}`);
     try {
       await invoke("set_plugin_mcp_server_enabled", {
@@ -490,6 +553,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     } catch (error) {
       setNotice(t("plugins.operationFailed", { error: messageOf(error) }));
     } finally {
+      pluginMutationRef.current = false;
       setBusy(undefined);
     }
   };
@@ -515,6 +579,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     : pluginTabNeedsNetwork(tab)
       ? marketLoading
       : false;
+  const mutationBusy = !!busy || !!capabilityBusy;
   const showSkeleton = tab === "installed"
     ? installedLoading && plugins.length === 0
     : pluginTabNeedsNetwork(tab) && marketLoading;
@@ -537,7 +602,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
             type="button"
             role="switch"
             aria-checked={detail.enabled}
-            disabled={busy === `toggle:${detail.id}`}
+            disabled={mutationBusy}
             onClick={() => void togglePlugin(detail)}
           ><span /></button>
         </div>
@@ -566,7 +631,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
               type="button"
               role="switch"
               aria-checked={server.enabled}
-              disabled={busy === `mcp:${detail.id}:${server.name}`}
+              disabled={mutationBusy}
               onClick={() => void toggleMcp(server.name, !server.enabled)}
             ><span /></button>
           </div>
@@ -581,7 +646,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
           </div></>
         )}
         <div className="plugin-detail-actions">
-          <button className="plugin-danger" type="button" onClick={() => setConfirm({ kind: "remove", id: detail.id, label: detail.displayName })}>
+          <button className="plugin-danger" type="button" disabled={mutationBusy} onClick={() => setConfirm({ kind: "remove", id: detail.id, label: detail.displayName })}>
             <Trash2 size={14} /> {t("plugins.remove")}
           </button>
         </div>
@@ -594,7 +659,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     <section className="plugin-settings" aria-labelledby="plugins-heading">
       <div className="plugin-settings-heading">
         <div><h3 id="plugins-heading">{t("plugins.title")}</h3><p>{t("plugins.description")}</p></div>
-        <button className="plugin-icon-button" type="button" aria-label={t("plugins.refresh")} disabled={loading} onClick={() => void refresh()}>
+        <button className="plugin-icon-button" type="button" aria-label={t("plugins.refresh")} disabled={loading || mutationBusy} onClick={() => void refresh()}>
           <RefreshCw size={15} className={loading ? "spinning" : undefined} />
         </button>
       </div>
@@ -639,7 +704,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
           <p>{t("plugins.customDescription")}</p>
           <div className="plugin-source-input">
             <input value={customSource} onChange={(event) => setCustomSource(event.target.value)} placeholder={t("plugins.customPlaceholder")} />
-            <button type="button" disabled={!customSource.trim() || !!busy} onClick={requestCustomInstall}>{t("plugins.install")}</button>
+            <button type="button" disabled={!customSource.trim() || mutationBusy} onClick={requestCustomInstall}>{t("plugins.install")}</button>
           </div>
           <button className="plugin-folder-button" type="button" onClick={() => void pickNativeDirectory().then((path) => path && setCustomSource(path))}>
             <FolderOpen size={15} /> {t("plugins.chooseFolder")}
@@ -659,11 +724,11 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
                   <p>{capabilityText(plugin)}</p>
                   <div className="plugin-card-actions">
                     <button type="button" disabled={detailBusy} onClick={() => void openDetail(plugin.id)}>{t("plugins.details")}</button>
-                    {update && updateSource && <button className="primary" type="button" disabled={!!busy} onClick={() => entry ? requestInstall(entry) : setConfirm({ kind: "install", label: plugin.displayName, source: updateSource })}>{t("plugins.update")}</button>}
-                    <button className="danger-text" type="button" onClick={() => setConfirm({ kind: "remove", id: plugin.id, label: plugin.displayName })}>{t("plugins.remove")}</button>
+                    {update && updateSource && <button className="primary" type="button" disabled={mutationBusy} onClick={() => entry ? requestInstall(entry) : setConfirm({ kind: "install", label: plugin.displayName, source: updateSource })}>{t("plugins.update")}</button>}
+                    <button className="danger-text" type="button" disabled={mutationBusy} onClick={() => setConfirm({ kind: "remove", id: plugin.id, label: plugin.displayName })}>{t("plugins.remove")}</button>
                   </div>
                 </div>
-                <button className={`settings-toggle ${plugin.enabled ? "active" : ""}`} type="button" role="switch" aria-label={t("plugins.toggle", { name: plugin.displayName })} aria-checked={plugin.enabled} disabled={busy === `toggle:${plugin.id}`} onClick={() => void togglePlugin(plugin)}><span /></button>
+                <button className={`settings-toggle ${plugin.enabled ? "active" : ""}`} type="button" role="switch" aria-label={t("plugins.toggle", { name: plugin.displayName })} aria-checked={plugin.enabled} disabled={mutationBusy} onClick={() => void togglePlugin(plugin)}><span /></button>
               </article>
             );
           }) : (<>
@@ -713,7 +778,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
                   <button
                     className="primary"
                     type="button"
-                    disabled={!capability.supported || running || !!capabilityBusy || !!busy}
+                    disabled={!capability.supported || running || mutationBusy}
                     onClick={() => void installCapability(capability)}
                   >
                     {!capability.supported
@@ -741,7 +806,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
                 </div>
                 <div className="plugin-market-actions">
                   {entry.homepage && <button className="plugin-icon-button" type="button" aria-label={t("plugins.website")} onClick={() => void openExternalUrl(entry.homepage!)}><ExternalLink size={14} /></button>}
-                  <button className={installed && !update ? "installed" : "primary"} type="button" disabled={(installed && !update) || !!busy} onClick={() => requestInstall(entry)}>
+                  <button className={installed && !update ? "installed" : "primary"} type="button" disabled={(installed && !update) || mutationBusy} onClick={() => requestInstall(entry)}>
                     {installed ? update ? t("plugins.update") : t("plugins.installed") : t("plugins.install")}
                   </button>
                 </div>
@@ -763,7 +828,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
             <AlertTriangle size={22} />
             <h4>{t(confirm.kind === "remove" ? "plugins.removeTitle" : "plugins.trustTitle", { name: confirm.label })}</h4>
             <p>{t(confirm.kind === "remove" ? "plugins.removeWarning" : "plugins.trustWarning")}</p>
-            <div><button type="button" autoFocus onClick={() => setConfirm(undefined)}>{t("common.cancel")}</button><button className="danger" type="button" onClick={() => { const state = confirm; setConfirm(undefined); if (state.kind === "remove" && state.id) void removePlugin(state.id, state.label); else if (state.source) void install(state.source, state.label); }}>{t(confirm.kind === "remove" ? "plugins.remove" : "plugins.trustInstall")}</button></div>
+            <div><button type="button" autoFocus onClick={() => setConfirm(undefined)}>{t("common.cancel")}</button><button className="danger" type="button" disabled={mutationBusy} onClick={() => { const state = confirm; setConfirm(undefined); if (state.kind === "remove" && state.id) void removePlugin(state.id, state.label); else if (state.source) void install(state.source, state.label); }}>{t(confirm.kind === "remove" ? "plugins.remove" : "plugins.trustInstall")}</button></div>
           </div>
         </div>
       )}

@@ -742,6 +742,16 @@ impl KimiCodeDesktopClient {
         Ok(plugins.plugin_install_progress(&operation_id))
     }
 
+    pub async fn list_plugin_install_operations(
+        &self,
+    ) -> Result<Vec<PluginInstallOperation>, String> {
+        let plugins = self
+            .app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        Ok(plugins.list_plugin_install_operations())
+    }
+
     pub async fn set_plugin_enabled(&self, id: String, enabled: bool) -> Result<(), String> {
         self.app
             .get(PLUGIN_SERVICE_ID)
