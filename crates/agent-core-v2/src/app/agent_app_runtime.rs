@@ -192,6 +192,7 @@ fn register_agent_app_services_once() {
                 register_web_search_provider_service,
             },
             auth_legacy::register_auth_legacy_service,
+            capability::register_capability_service,
             config::{register_config_registry, register_config_service},
             cron::register_cron_task_persistence_service,
             edit::register_file_edit_service,
@@ -308,6 +309,7 @@ fn register_agent_app_services_once() {
     register_builtin_skill_source();
     register_user_file_skill_source();
     register_plugin_service();
+    register_capability_service();
     register_workspace_persistence();
     register_workspace_registry_service();
     register_host_folder_browser();
