@@ -118,9 +118,9 @@ mod tests {
         app::{
             plugin::{
                 EnabledPluginSessionStart, GetPluginInfoInput, InstallPluginInput,
-                PluginCommandDef, PluginInfo, PluginServiceContract, PluginServiceResult,
-                PluginSummary, PluginUpdateStatus, ReloadSummary, RemovePluginInput,
-                SetPluginEnabledInput, SetPluginMcpServerEnabledInput,
+                PluginCommandDef, PluginInfo, PluginInstallOperation, PluginServiceContract,
+                PluginServiceResult, PluginSummary, PluginUpdateStatus, ReloadSummary,
+                RemovePluginInput, SetPluginEnabledInput, SetPluginMcpServerEnabledInput,
             },
             skill_catalog::{SkillDiscoveryContract, SkillDiscoveryResult, SkillRoot, SkillSource},
         },
@@ -166,6 +166,16 @@ mod tests {
         }
         async fn remove_plugin(&self, _: RemovePluginInput) -> PluginServiceResult<()> {
             Self::unsupported()
+        }
+        async fn install_plugin_in_background(
+            self: Arc<Self>,
+            _: InstallPluginInput,
+            _: String,
+        ) -> PluginServiceResult<()> {
+            Self::unsupported()
+        }
+        fn plugin_install_progress(&self, _: &str) -> Option<PluginInstallOperation> {
+            None
         }
         async fn reload_plugins(&self) -> PluginServiceResult<ReloadSummary> {
             Self::unsupported()

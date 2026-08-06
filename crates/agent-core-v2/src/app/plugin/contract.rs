@@ -22,8 +22,8 @@ use crate::{
 };
 
 use super::types::{
-    EnabledPluginSessionStart, PluginCommandDef, PluginInfo, PluginInstallProgressCallback,
-    PluginSummary, PluginUpdateStatus, ReloadSummary,
+    EnabledPluginSessionStart, PluginCommandDef, PluginInfo, PluginInstallOperation,
+    PluginInstallProgressCallback, PluginSummary, PluginUpdateStatus, ReloadSummary,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -71,6 +71,19 @@ pub trait PluginServiceContract: Disposable + Send + Sync {
     ) -> PluginServiceResult<PluginSummary> {
         self.install_plugin(input).await
     }
+    /// Starts an install on a background task and returns immediately;
+    /// progress and the terminal result live in memory and are polled through
+    /// `plugin_install_progress`. Mirrors the capability install model so
+    /// transports without an event channel (web RPC) can follow installs.
+    async fn install_plugin_in_background(
+        self: Arc<Self>,
+        input: InstallPluginInput,
+        operation_id: String,
+    ) -> PluginServiceResult<()>;
+    /// Returns the current snapshot of a background install. A finished
+    /// operation (complete or failed) is removed by the read — it is reported
+    /// exactly once.
+    fn plugin_install_progress(&self, operation_id: &str) -> Option<PluginInstallOperation>;
     async fn set_plugin_enabled(&self, input: SetPluginEnabledInput) -> PluginServiceResult<()>;
     async fn set_plugin_mcp_server_enabled(
         &self,

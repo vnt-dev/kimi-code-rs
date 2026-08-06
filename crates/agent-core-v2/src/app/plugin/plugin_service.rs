@@ -42,8 +42,9 @@ use super::{
     errors::{PLUGIN_LOAD_FAILED, PLUGIN_NOT_FOUND, ensure_plugin_errors_registered},
     manager::{PluginManager, PluginManagerOptions},
     types::{
-        EnabledPluginSessionStart, PluginCommandDef, PluginInfo, PluginInstallProgressCallback,
-        PluginSummary, PluginUpdateStatus, ReloadSummary,
+        EnabledPluginSessionStart, PluginCommandDef, PluginInfo, PluginInstallOperation,
+        PluginInstallPhase, PluginInstallProgressCallback, PluginSummary, PluginUpdateStatus,
+        ReloadSummary,
     },
 };
 
@@ -97,6 +98,7 @@ pub struct PluginService {
     initial_load: Mutex<InitialLoadState>,
     initial_load_notify: Notify,
     status: Mutex<ServiceStatus>,
+    install_operations: Arc<Mutex<HashMap<String, PluginInstallOperation>>>,
     on_did_reload: Arc<Emitter<ReloadSummary>>,
     disposables: DisposableStore,
 }
@@ -130,6 +132,7 @@ impl PluginService {
             initial_load: Mutex::new(InitialLoadState::NotStarted),
             initial_load_notify: Notify::new(),
             status: Mutex::new(ServiceStatus::default()),
+            install_operations: Arc::new(Mutex::new(HashMap::new())),
             on_did_reload: emitter,
             disposables,
         }
@@ -280,6 +283,50 @@ impl PluginServiceContract for PluginService {
                     record.id
                 ))
             })
+    }
+
+    async fn install_plugin_in_background(
+        self: Arc<Self>,
+        input: InstallPluginInput,
+        operation_id: String,
+    ) -> PluginServiceResult<()> {
+        self.install_operations
+            .lock()
+            .unwrap()
+            .insert(operation_id.clone(), PluginInstallOperation::started(operation_id.clone()));
+        tokio::spawn(async move {
+            let operations = Arc::clone(&self.install_operations);
+            let progress_operation_id = operation_id.clone();
+            let progress: PluginInstallProgressCallback = Arc::new(move |update| {
+                if let Some(operation) = operations
+                    .lock()
+                    .unwrap()
+                    .get_mut(&progress_operation_id)
+                {
+                    operation.phase = update.phase;
+                    operation.downloaded_bytes = update.downloaded_bytes;
+                    operation.total_bytes = update.total_bytes;
+                }
+            });
+            let result = self.install_plugin_with_progress(input, progress).await;
+            let mut operations = self.install_operations.lock().unwrap();
+            if let Some(operation) = operations.get_mut(&operation_id) {
+                match result {
+                    Ok(_) => operation.phase = PluginInstallPhase::Complete,
+                    Err(error) => operation.error = Some(error.to_string()),
+                }
+            }
+        });
+        Ok(())
+    }
+
+    fn plugin_install_progress(&self, operation_id: &str) -> Option<PluginInstallOperation> {
+        let mut operations = self.install_operations.lock().unwrap();
+        let operation = operations.get(operation_id)?.clone();
+        if operation.is_finished() {
+            operations.remove(operation_id);
+        }
+        Some(operation)
     }
 
     async fn set_plugin_enabled(&self, input: SetPluginEnabledInput) -> PluginServiceResult<()> {
@@ -590,6 +637,41 @@ mod tests {
             error.downcast_ref::<Error2>().unwrap().code,
             PLUGIN_LOAD_FAILED
         );
+        tokio::fs::remove_dir_all(home).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn background_install_reports_progress_and_prunes_terminal_state() {
+        let home = std::env::temp_dir().join(format!("plugin-service-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(home.join("plugins"))
+            .await
+            .unwrap();
+        let service = Arc::new(service(&home, HashMap::new()));
+        Arc::clone(&service)
+            .install_plugin_in_background(
+                InstallPluginInput {
+                    source: home.join("missing-plugin.zip").to_string_lossy().into_owned(),
+                },
+                "op-1".to_owned(),
+            )
+            .await
+            .unwrap();
+
+        // A missing local source fails fast; poll until the error lands.
+        let mut settled = None;
+        for _ in 0..50 {
+            if let Some(operation) = service.plugin_install_progress("op-1")
+                && operation.is_finished()
+            {
+                settled = Some(operation);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let settled = settled.expect("install never settled");
+        assert!(settled.error.is_some(), "{settled:?}");
+        // Terminal states are reported exactly once — the read above pruned it.
+        assert!(service.plugin_install_progress("op-1").is_none());
         tokio::fs::remove_dir_all(home).await.unwrap();
     }
 

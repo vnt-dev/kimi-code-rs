@@ -322,6 +322,37 @@ pub struct PluginInstallProgress {
 
 pub type PluginInstallProgressCallback = Arc<dyn Fn(PluginInstallProgress) + Send + Sync + 'static>;
 
+/// Pollable snapshot of a background plugin install started by
+/// `install_plugin_in_background`. Terminal states (`Complete` phase or a set
+/// `error`) are removed on read, so each finished operation is reported once.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInstallOperation {
+    pub operation_id: String,
+    pub phase: PluginInstallPhase,
+    pub downloaded_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl PluginInstallOperation {
+    pub fn started(operation_id: String) -> Self {
+        Self {
+            operation_id,
+            phase: PluginInstallPhase::Resolving,
+            downloaded_bytes: 0,
+            total_bytes: None,
+            error: None,
+        }
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.error.is_some() || self.phase == PluginInstallPhase::Complete
+    }
+}
+
 pub static PLUGIN_NAME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-z0-9][a-z0-9_-]{0,63}$").expect("plugin name regex must compile")
 });

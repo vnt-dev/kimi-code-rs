@@ -24,10 +24,10 @@ use crate::{
         capability::host::{FetchBodyStream, FetchLike, FetchResponse},
         plugin::{
             EnabledPluginSessionStart, GetPluginInfoInput, InstallPluginInput, PluginCommandDef,
-            PluginInfo, PluginMcpServerInfo, PluginMcpTransport, PluginServiceContract,
-            PluginServiceHandle, PluginServiceResult, PluginSource, PluginState, PluginSummary,
-            ReloadSummary, RemovePluginInput, SetPluginEnabledInput, SetPluginMcpServerEnabledInput,
-            PluginUpdateStatus,
+            PluginInfo, PluginInstallOperation, PluginMcpServerInfo, PluginMcpTransport,
+            PluginServiceContract, PluginServiceHandle, PluginServiceResult, PluginSource,
+            PluginState, PluginSummary, ReloadSummary, RemovePluginInput, SetPluginEnabledInput,
+            SetPluginMcpServerEnabledInput, PluginUpdateStatus,
         },
         skill_catalog::SkillRoot,
     },
@@ -392,6 +392,18 @@ impl PluginServiceContract for FakePluginService {
 
     async fn remove_plugin(&self, _: RemovePluginInput) -> PluginServiceResult<()> {
         unimplemented!()
+    }
+
+    async fn install_plugin_in_background(
+        self: Arc<Self>,
+        _: InstallPluginInput,
+        _: String,
+    ) -> PluginServiceResult<()> {
+        unimplemented!()
+    }
+
+    fn plugin_install_progress(&self, _: &str) -> Option<PluginInstallOperation> {
+        None
     }
 
     async fn reload_plugins(&self) -> PluginServiceResult<ReloadSummary> {
