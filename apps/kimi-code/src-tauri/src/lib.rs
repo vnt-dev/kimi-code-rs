@@ -31,6 +31,10 @@ use kimi_code_web_server::{
 };
 use serde::Serialize;
 use serde_json::Value;
+#[cfg(desktop)]
+use tauri::menu::MenuBuilder;
+#[cfg(desktop)]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
@@ -40,6 +44,20 @@ struct AppState {
     subscriptions: Mutex<HashMap<String, DisposableHandle>>,
     next_subscription_id: AtomicU64,
     _application_event_subscription: DisposableHandle,
+}
+
+#[cfg(desktop)]
+const TRAY_SHOW_MENU_ID: &str = "tray-show";
+#[cfg(desktop)]
+const TRAY_QUIT_MENU_ID: &str = "tray-quit";
+
+#[cfg(desktop)]
+fn show_main_window(app: &AppHandle) {
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.show();
+        let _ = main_window.unminimize();
+        let _ = main_window.set_focus();
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -501,6 +519,37 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            #[cfg(desktop)]
+            if let Some(icon) = app.default_window_icon() {
+                let tray_menu = MenuBuilder::new(app)
+                    .text(TRAY_SHOW_MENU_ID, "Show Kimi Code")
+                    .separator()
+                    .text(TRAY_QUIT_MENU_ID, "Quit")
+                    .build()?;
+
+                TrayIconBuilder::with_id("kimi-code")
+                    .icon(icon.clone())
+                    .menu(&tray_menu)
+                    .tooltip("Kimi Code")
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        TRAY_SHOW_MENU_ID => show_main_window(app),
+                        TRAY_QUIT_MENU_ID => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            show_main_window(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
+            }
+
             let client = Arc::new(
                 KimiCodeDesktopClient::bootstrap(env!("CARGO_PKG_VERSION")).map_err(|error| {
                     format!("failed to initialize Kimi Code agent core: {error}")
