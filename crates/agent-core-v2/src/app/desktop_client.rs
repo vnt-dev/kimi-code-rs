@@ -637,10 +637,7 @@ impl KimiCodeDesktopClient {
             .catalog()
             .list_skills()
             .into_iter()
-            .filter(|skill| {
-                skill.metadata.is_sub_skill != Some(true)
-                    && is_user_activatable_skill_type(skill.metadata.kind.as_deref())
-            })
+            .filter(|skill| is_user_activatable_skill_type(skill.metadata.kind.as_deref()))
             .map(|skill| DesktopSkill {
                 name: skill.name,
                 description: skill.description,
@@ -681,9 +678,7 @@ impl KimiCodeDesktopClient {
             .get_skill(name)
             .ok_or_else(|| format!("Skill `{name}` was not found."))?;
 
-        if skill.metadata.is_sub_skill == Some(true)
-            || !is_user_activatable_skill_type(skill.metadata.kind.as_deref())
-        {
+        if !is_user_activatable_skill_type(skill.metadata.kind.as_deref()) {
             return Err(format!("Skill `{name}` is not available for direct use."));
         }
 
@@ -1805,5 +1800,64 @@ mod tests {
         assert_eq!(usage.estimated_tokens, 4_000.0);
         assert_eq!(usage.max_context_tokens, 128_000);
         assert_eq!(usage.usage_ratio, 0.5);
+    }
+
+    #[tokio::test]
+    async fn session_skills_include_sub_skills_for_listing_and_content() {
+        let root = std::env::temp_dir().join(format!(
+            "kimi-desktop-sub-skills-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let home = root.join("home");
+        let work_dir = root.join("workspace");
+        std::fs::create_dir_all(&home).unwrap();
+        let parent_dir = work_dir.join(".kimi-code/skills/parent");
+        std::fs::create_dir_all(parent_dir.join("child")).unwrap();
+        std::fs::write(
+            parent_dir.join("SKILL.md"),
+            "---\nname: parent\ndescription: Parent skill\nhas-sub-skill: true\n---\nParent body.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            parent_dir.join("child").join("SKILL.md"),
+            "---\nname: child\ndescription: Child skill\n---\nChild body.\n",
+        )
+        .unwrap();
+        let client = KimiCodeDesktopClient::new(&home, "test").unwrap();
+        client
+            .configure_models(&[managed_model("first")])
+            .await
+            .unwrap();
+        let prepared = client
+            .prepare_session(DesktopPrepareSessionRequest {
+                session_id: None,
+                work_dir: work_dir.to_string_lossy().into_owned(),
+                model: Some("kimi-code/first".into()),
+                thinking: Some("high".into()),
+                permission: Some(PermissionMode::Yolo),
+            })
+            .await
+            .unwrap();
+
+        let skills = client
+            .list_session_skills(&prepared.session_id)
+            .await
+            .unwrap();
+        let names = skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"parent"), "{names:?}");
+        assert!(names.contains(&"parent.child"), "{names:?}");
+
+        let content = client
+            .get_session_skill_content(&prepared.session_id, "parent.child")
+            .await
+            .unwrap();
+        assert_eq!(content.name, "parent.child");
+        assert!(content.content.contains("Child body."));
+
+        drop(client);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
