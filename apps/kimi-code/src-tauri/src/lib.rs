@@ -21,8 +21,7 @@ use kimi_code_agent_core_v2::{
         },
         file::FileMeta,
         plugin::{
-            PluginInfo, PluginInstallProgress, PluginInstallProgressCallback, PluginSummary,
-            PluginUpdateStatus, ReloadSummary,
+            PluginInfo, PluginInstallOperation, PluginSummary, PluginUpdateStatus, ReloadSummary,
         },
         session_index::SessionSummary,
     },
@@ -79,14 +78,6 @@ struct AgentEvent {
 struct AgentInteractionsEvent {
     session_id: String,
     interactions: Vec<DesktopInteraction>,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PluginInstallProgressEvent {
-    operation_id: String,
-    #[serde(flatten)]
-    progress: PluginInstallProgress,
 }
 
 #[tauri::command]
@@ -328,26 +319,24 @@ async fn install_capability(
 
 #[tauri::command]
 async fn install_plugin(
-    app: AppHandle,
     state: State<'_, AppState>,
     source: String,
     operation_id: String,
-) -> Result<PluginSummary, String> {
-    let progress_app = app.clone();
-    let progress_operation_id = operation_id.clone();
-    let progress: PluginInstallProgressCallback = Arc::new(move |progress| {
-        let _ = progress_app.emit(
-            "plugin-install-progress",
-            PluginInstallProgressEvent {
-                operation_id: progress_operation_id.clone(),
-                progress,
-            },
-        );
-    });
+) -> Result<(), String> {
+    // The install runs in the background on the engine; the panel polls
+    // `get_plugin_install_progress` for phase/byte progress.
     state
         .client
-        .install_plugin_with_progress(source, progress)
+        .install_plugin_in_background(source, operation_id)
         .await
+}
+
+#[tauri::command]
+async fn get_plugin_install_progress(
+    state: State<'_, AppState>,
+    operation_id: String,
+) -> Result<Option<PluginInstallOperation>, String> {
+    state.client.plugin_install_progress(operation_id).await
 }
 
 #[tauri::command]
@@ -563,6 +552,7 @@ pub fn run() {
             get_capability,
             install_capability,
             install_plugin,
+            get_plugin_install_progress,
             set_plugin_enabled,
             set_plugin_mcp_server_enabled,
             remove_plugin,

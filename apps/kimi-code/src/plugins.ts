@@ -11,11 +11,12 @@ export type PluginInstallPhase =
   | "installing"
   | "complete";
 
-export interface PluginInstallProgressEvent {
+export interface PluginInstallOperation {
   operationId: string;
   phase: PluginInstallPhase;
   downloadedBytes: number;
   totalBytes?: number;
+  error?: string;
 }
 
 export interface PluginGithubRef {
@@ -232,7 +233,7 @@ export function pluginTabNeedsNetwork(tab: PluginTab): boolean {
 }
 
 export function pluginInstallPercent(
-  progress: PluginInstallProgressEvent,
+  progress: PluginInstallOperation,
 ): number | undefined {
   switch (progress.phase) {
     case "resolving":

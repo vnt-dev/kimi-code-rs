@@ -20,14 +20,14 @@ import {
   type CapabilityReadiness,
   type CapabilityStatus,
   type PluginInfo,
-  type PluginInstallProgressEvent,
+  type PluginInstallOperation,
   type PluginMarketplace,
   type PluginMarketplaceEntry,
   type PluginSummary,
   type PluginTab,
   type PluginUpdateStatus,
 } from "./plugins";
-import { invoke, listen, openExternalUrl, pickNativeDirectory } from "./transport";
+import { invoke, openExternalUrl, pickNativeDirectory } from "./transport";
 import { formatBytes } from "./utils/format";
 
 interface ConfirmState {
@@ -99,6 +99,7 @@ function capabilityStepLabel(step: string): string {
 
 const CAPABILITY_POLL_INTERVAL_MS = 700;
 const CAPABILITY_POLL_ATTEMPTS = 260; // ~3 minutes of runtime setup budget
+const PLUGIN_INSTALL_POLL_INTERVAL_MS = 500;
 
 export default function PluginSettings({ onChanged }: { onChanged: () => void }) {
   const [tab, setTab] = useState<PluginTab>("installed");
@@ -116,9 +117,10 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   const [confirm, setConfirm] = useState<ConfirmState>();
   const [detail, setDetail] = useState<PluginInfo>();
   const [detailBusy, setDetailBusy] = useState(false);
-  const [installProgress, setInstallProgress] = useState<PluginInstallProgressEvent>();
+  const [installProgress, setInstallProgress] = useState<PluginInstallOperation>();
   const installOperationRef = useRef<string | undefined>(undefined);
   const progressClearTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pluginPollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const marketAttemptedRef = useRef(false);
   const [capabilities, setCapabilities] = useState<CapabilityStatus[]>([]);
   const [capabilityBusy, setCapabilityBusy] = useState<CapabilityId>();
@@ -286,23 +288,13 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     }
   };
 
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void listen<PluginInstallProgressEvent>("plugin-install-progress", (event) => {
-      if (event.payload.operationId === installOperationRef.current) {
-        setInstallProgress(event.payload);
-      }
-    }).then((nextUnlisten) => {
-      if (disposed) nextUnlisten();
-      else unlisten = nextUnlisten;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
+  useEffect(
+    () => () => {
+      if (pluginPollTimerRef.current !== undefined) clearTimeout(pluginPollTimerRef.current);
       if (progressClearTimerRef.current) clearTimeout(progressClearTimerRef.current);
-    };
-  }, []);
+    },
+    [],
+  );
 
   const installedById = useMemo(
     () => new Map(plugins.map((plugin) => [plugin.id, plugin])),
@@ -342,6 +334,7 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     const operationId = createInstallOperationId();
     installOperationRef.current = operationId;
     if (progressClearTimerRef.current) clearTimeout(progressClearTimerRef.current);
+    if (pluginPollTimerRef.current !== undefined) clearTimeout(pluginPollTimerRef.current);
     setInstallProgress({
       operationId,
       phase: "resolving",
@@ -350,30 +343,66 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     setBusy(`install:${label}`);
     setNotice(undefined);
     try {
+      // Starts the background install on the engine; progress is polled below.
       await invoke("install_plugin", { source, operationId });
+    } catch (error) {
+      installOperationRef.current = undefined;
+      setInstallProgress(undefined);
+      setBusy(undefined);
+      setNotice(t("plugins.operationFailed", { error: messageOf(error) }));
+      return;
+    }
+    void pollPluginInstall(operationId, label);
+  };
+
+  const pollPluginInstall = async (operationId: string, label: string): Promise<void> => {
+    const stopWithError = async (error: string): Promise<void> => {
+      installOperationRef.current = undefined;
+      setInstallProgress(undefined);
+      setBusy(undefined);
+      setNotice(t("plugins.operationFailed", { error }));
+    };
+    let operation: PluginInstallOperation | undefined;
+    try {
+      operation = await invoke<PluginInstallOperation | undefined>(
+        "get_plugin_install_progress",
+        { operationId },
+      );
+    } catch (error) {
+      await stopWithError(messageOf(error));
+      return;
+    }
+    if (!operation) {
+      // The engine dropped the operation (e.g. restart) — refresh and stop.
+      installOperationRef.current = undefined;
+      setInstallProgress(undefined);
+      setBusy(undefined);
+      await loadInstalled();
+      onChanged();
+      return;
+    }
+    setInstallProgress(operation);
+    if (operation.error !== undefined) {
+      await stopWithError(operation.error);
+      return;
+    }
+    if (operation.phase === "complete") {
       await refreshAfterMutation(t("plugins.installedNotice", { name: label }));
       setTab("installed");
       setCustomSource("");
-      setInstallProgress((current) =>
-        current?.operationId === operationId
-          ? { ...current, phase: "complete" }
-          : current,
-      );
+      setBusy(undefined);
       progressClearTimerRef.current = setTimeout(() => {
         if (installOperationRef.current === operationId) {
           installOperationRef.current = undefined;
           setInstallProgress(undefined);
         }
       }, 900);
-    } catch (error) {
-      if (installOperationRef.current === operationId) {
-        installOperationRef.current = undefined;
-        setInstallProgress(undefined);
-      }
-      setNotice(t("plugins.operationFailed", { error: messageOf(error) }));
-    } finally {
-      setBusy(undefined);
+      return;
     }
+    pluginPollTimerRef.current = setTimeout(
+      () => void pollPluginInstall(operationId, label),
+      PLUGIN_INSTALL_POLL_INTERVAL_MS,
+    );
   };
 
   const installPercent = installProgress

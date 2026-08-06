@@ -62,7 +62,7 @@ use crate::{
         },
         plugin::{
             GetPluginInfoInput, InstallPluginInput, PLUGIN_SERVICE_ID, PluginInfo,
-            PluginInstallProgressCallback, PluginSummary, PluginUpdateStatus, ReloadSummary,
+            PluginInstallOperation, PluginSummary, PluginUpdateStatus, ReloadSummary,
             RemovePluginInput, SetPluginEnabledInput, SetPluginMcpServerEnabledInput,
         },
         session_index::SessionSummary,
@@ -716,17 +716,30 @@ impl KimiCodeDesktopClient {
             .map_err(|error| error.to_string())
     }
 
-    pub async fn install_plugin_with_progress(
+    pub async fn install_plugin_in_background(
         &self,
         source: String,
-        progress: PluginInstallProgressCallback,
-    ) -> Result<PluginSummary, String> {
-        self.app
+        operation_id: String,
+    ) -> Result<(), String> {
+        let plugins = self
+            .app
             .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?
-            .install_plugin_with_progress(InstallPluginInput { source }, progress)
+            .map_err(|error| error.to_string())?;
+        Arc::clone(&plugins.0)
+            .install_plugin_in_background(InstallPluginInput { source }, operation_id)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    pub async fn plugin_install_progress(
+        &self,
+        operation_id: String,
+    ) -> Result<Option<PluginInstallOperation>, String> {
+        let plugins = self
+            .app
+            .get(PLUGIN_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        Ok(plugins.plugin_install_progress(&operation_id))
     }
 
     pub async fn set_plugin_enabled(&self, id: String, enabled: bool) -> Result<(), String> {
