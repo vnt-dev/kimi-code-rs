@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::{
     AgentRpcRequest, DesktopStateChange, RpcError, app_events::ApplicationEventBus,
-    dispatch_agent_rpc, server::RpcConnection,
+    dispatch_agent_rpc, load_plugin_marketplace, server::RpcConnection,
 };
 
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, RpcError> {
@@ -98,6 +98,37 @@ struct BrowseFoldersArgs {
     path: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct PluginIdArgs {
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallPluginArgs {
+    source: String,
+    operation_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginInstallOperationArgs {
+    operation_id: String,
+}
+
+#[derive(Deserialize)]
+struct SetPluginEnabledArgs {
+    id: String,
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct SetPluginMcpServerEnabledArgs {
+    id: String,
+    server: String,
+    enabled: bool,
+}
+
 pub(crate) async fn dispatch_rpc(
     client: &Arc<KimiCodeDesktopClient>,
     events: &ApplicationEventBus,
@@ -133,6 +164,99 @@ pub(crate) async fn dispatch_rpc(
         "logout" => encode(client.logout().await.map_err(RpcError::transport)?),
         "list_models" => encode(client.list_models().await.map_err(RpcError::transport)?),
         "refresh_models" => encode(client.refresh_models().await.map_err(RpcError::transport)?),
+        "list_plugins" => encode(client.list_plugins().await.map_err(RpcError::transport)?),
+        "list_capabilities" => encode(
+            client
+                .list_capabilities()
+                .await
+                .map_err(RpcError::transport)?,
+        ),
+        "get_capability" => {
+            let args: PluginIdArgs = decode(args)?;
+            encode(
+                client
+                    .get_capability(args.id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "install_capability" => {
+            let args: PluginIdArgs = decode(args)?;
+            encode(
+                client
+                    .install_capability(args.id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "install_plugin" => {
+            let args: InstallPluginArgs = decode(args)?;
+            client
+                .install_plugin_in_background(args.source, args.operation_id)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
+        }
+        "get_plugin_install_progress" => {
+            let args: PluginInstallOperationArgs = decode(args)?;
+            encode(
+                client
+                    .plugin_install_progress(args.operation_id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "list_plugin_install_operations" => encode(
+            client
+                .list_plugin_install_operations()
+                .await
+                .map_err(RpcError::transport)?,
+        ),
+        "set_plugin_enabled" => {
+            let args: SetPluginEnabledArgs = decode(args)?;
+            client
+                .set_plugin_enabled(args.id, args.enabled)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
+        }
+        "set_plugin_mcp_server_enabled" => {
+            let args: SetPluginMcpServerEnabledArgs = decode(args)?;
+            client
+                .set_plugin_mcp_server_enabled(args.id, args.server, args.enabled)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
+        }
+        "remove_plugin" => {
+            let args: PluginIdArgs = decode(args)?;
+            client
+                .remove_plugin(args.id)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
+        }
+        "reload_plugins" => encode(client.reload_plugins().await.map_err(RpcError::transport)?),
+        "get_plugin_info" => {
+            let args: PluginIdArgs = decode(args)?;
+            encode(
+                client
+                    .get_plugin_info(args.id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "check_plugin_updates" => encode(
+            client
+                .check_plugin_updates()
+                .await
+                .map_err(RpcError::transport)?,
+        ),
+        "get_plugin_marketplace" => encode(
+            load_plugin_marketplace()
+                .await
+                .map_err(RpcError::transport)?,
+        ),
         "list_skills" => {
             let args: SessionArgs = decode(args)?;
             encode(

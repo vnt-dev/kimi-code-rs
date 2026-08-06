@@ -6,8 +6,6 @@ use std::{
     },
 };
 
-mod plugin_marketplace;
-
 use kimi_code_agent_core_v2::{
     _base::di::lifecycle::DisposableHandle,
     app::{
@@ -27,15 +25,14 @@ use kimi_code_agent_core_v2::{
     },
 };
 use kimi_code_web_server::{
-    AgentRpcRequest, AssetProvider, DesktopStateChange, RpcError, WebAsset, WebServerController,
-    WebServerSettings, WebServerStatus, dispatch_agent_rpc,
+    AgentRpcRequest, AssetProvider, DesktopStateChange, PluginMarketplace, RpcError, WebAsset,
+    WebServerController, WebServerSettings, WebServerStatus, dispatch_agent_rpc,
+    load_plugin_marketplace,
 };
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
-
-use crate::plugin_marketplace::{PluginMarketplace, load_plugin_marketplace};
 
 struct AppState {
     client: Arc<KimiCodeDesktopClient>,
@@ -305,7 +302,10 @@ async fn list_capabilities(state: State<'_, AppState>) -> Result<Vec<CapabilityS
 }
 
 #[tauri::command]
-async fn get_capability(state: State<'_, AppState>, id: String) -> Result<CapabilityStatus, String> {
+async fn get_capability(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<CapabilityStatus, String> {
     state.client.get_capability(id).await
 }
 

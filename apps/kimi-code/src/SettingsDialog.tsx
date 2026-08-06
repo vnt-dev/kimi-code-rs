@@ -430,16 +430,14 @@ export default function SettingsDialog({
             >
               {t("settings.tabGeneral")}
             </button>
-            {isDesktop() && (
-              <button
-                className={`settings-tab ${activeTab === "plugins" ? "active" : ""}`}
-                type="button"
-                aria-current={activeTab === "plugins" ? "page" : undefined}
-                onClick={() => setActiveTab("plugins")}
-              >
-                {t("settings.tabPlugins")}
-              </button>
-            )}
+            <button
+              className={`settings-tab ${activeTab === "plugins" ? "active" : ""}`}
+              type="button"
+              aria-current={activeTab === "plugins" ? "page" : undefined}
+              onClick={() => setActiveTab("plugins")}
+            >
+              {t("settings.tabPlugins")}
+            </button>
             {isDesktop() && (
               <button
                 className={`settings-tab ${activeTab === "web" ? "active" : ""}`}

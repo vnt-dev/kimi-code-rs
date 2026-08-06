@@ -629,11 +629,39 @@ mod tests {
         std::env::temp_dir().join(format!("kimi-web-server-{}", Uuid::new_v4()))
     }
 
+    async fn rpc_call(
+        http: &Client,
+        origin: &str,
+        token: &str,
+        connection_id: &str,
+        id: &str,
+        command: &str,
+        args: Value,
+    ) -> Value {
+        http.post(format!("{origin}/_kimi/v1/rpc"))
+            .bearer_auth(token)
+            .header("x-kimi-connection-id", connection_id)
+            .json(&json!({"id": id, "command": command, "args": args}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn authenticates_bridge_routes_and_serves_spa_assets() {
         let root = temp_dir();
         let home = root.join("home");
         std::fs::create_dir_all(&home).unwrap();
+        let plugin_source = root.join("web-plugin");
+        std::fs::create_dir_all(&plugin_source).unwrap();
+        std::fs::write(
+            plugin_source.join("kimi.plugin.json"),
+            r#"{"name":"web-plugin"}"#,
+        )
+        .unwrap();
         let client = Arc::new(KimiCodeDesktopClient::new(&home, "test").unwrap());
         let assets: Arc<dyn AssetProvider> = Arc::new(|path: &str| match path {
             "index.html" => Some(WebAsset {
@@ -761,6 +789,81 @@ mod tests {
             serde_json::from_str(websocket.next().await.unwrap().unwrap().to_text().unwrap())
                 .unwrap();
         let connection_id = ready["connectionId"].as_str().unwrap().to_owned();
+
+        let plugins: Value = http
+            .post(format!("{origin}/_kimi/v1/rpc"))
+            .bearer_auth(token)
+            .header("x-kimi-connection-id", &connection_id)
+            .json(&json!({"id":"rpc-plugins", "command":"list_plugins", "args":{}}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(plugins["ok"], true);
+        assert_eq!(plugins["result"], json!([]));
+
+        let install = rpc_call(
+            &http,
+            &origin,
+            token,
+            &connection_id,
+            "rpc-plugin-install",
+            "install_plugin",
+            json!({
+                "source": plugin_source.to_string_lossy(),
+                "operationId": "web-plugin-install"
+            }),
+        )
+        .await;
+        assert_eq!(install["ok"], true);
+
+        let mut progress = Value::Null;
+        for _ in 0..100 {
+            progress = rpc_call(
+                &http,
+                &origin,
+                token,
+                &connection_id,
+                "rpc-plugin-progress",
+                "get_plugin_install_progress",
+                json!({"operationId": "web-plugin-install"}),
+            )
+            .await;
+            if progress["result"]["phase"] == "complete" || progress["result"]["error"].is_string()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(progress["ok"], true);
+        assert_eq!(progress["result"]["phase"], "complete");
+
+        let plugins = rpc_call(
+            &http,
+            &origin,
+            token,
+            &connection_id,
+            "rpc-plugins-after-install",
+            "list_plugins",
+            json!({}),
+        )
+        .await;
+        assert_eq!(plugins["result"].as_array().unwrap().len(), 1);
+        assert_eq!(plugins["result"][0]["id"], "web-plugin");
+
+        let remove = rpc_call(
+            &http,
+            &origin,
+            token,
+            &connection_id,
+            "rpc-plugin-remove",
+            "remove_plugin",
+            json!({"id": "web-plugin"}),
+        )
+        .await;
+        assert_eq!(remove["ok"], true);
 
         events.desktop_state_changed(crate::DesktopStateChange::WorkspaceUpserted {
             workspace_id: "workspace-from-desktop".into(),

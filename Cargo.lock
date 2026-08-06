@@ -2601,7 +2601,6 @@ version = "0.2.4"
 dependencies = [
  "kimi-code-agent-core-v2",
  "kimi-code-web-server",
- "reqwest",
  "rustls",
  "serde",
  "serde_json",
@@ -2611,7 +2610,6 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",
- "url",
 ]
 
 [[package]]
@@ -2687,6 +2685,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "url",
  "uuid",
  "windows-sys 0.61.2",
 ]

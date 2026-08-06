@@ -27,7 +27,7 @@ import {
   type PluginTab,
   type PluginUpdateStatus,
 } from "./plugins";
-import { invoke, openExternalUrl, pickNativeDirectory } from "./transport";
+import { invoke, isDesktop, openExternalUrl, pickNativeDirectory } from "./transport";
 import { formatBytes } from "./utils/format";
 
 interface ConfirmState {
@@ -706,9 +706,11 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
             <input value={customSource} onChange={(event) => setCustomSource(event.target.value)} placeholder={t("plugins.customPlaceholder")} />
             <button type="button" disabled={!customSource.trim() || mutationBusy} onClick={requestCustomInstall}>{t("plugins.install")}</button>
           </div>
-          <button className="plugin-folder-button" type="button" onClick={() => void pickNativeDirectory().then((path) => path && setCustomSource(path))}>
-            <FolderOpen size={15} /> {t("plugins.chooseFolder")}
-          </button>
+          {isDesktop() && (
+            <button className="plugin-folder-button" type="button" onClick={() => void pickNativeDirectory().then((path) => path && setCustomSource(path))}>
+              <FolderOpen size={15} /> {t("plugins.chooseFolder")}
+            </button>
+          )}
         </div>
       ) : (
         <div className="plugin-list">
