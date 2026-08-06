@@ -2782,6 +2782,7 @@ export default function App() {
         }}
         onColorSchemeChange={updateColorScheme}
         onLanguageChange={updateLanguage}
+        onProvidersChanged={() => void loadModels()}
         onPluginsChanged={() => setPluginCommandRevision((value) => value + 1)}
         onCloseSettings={closeSettings}
         onDismissNotice={() => setNotice(undefined)}

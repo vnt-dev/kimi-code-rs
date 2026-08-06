@@ -289,7 +289,34 @@
 }
 
 .settings-select-menu > button > svg {
+  flex: 0 0 auto;
   color: #8b7cf6;
+}
+
+.settings-select-option-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+}
+
+.settings-select-option-copy > span {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+
+.settings-select-option-copy > small {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.35;
+  text-overflow: ellipsis;
 }
 
 .settings-version {

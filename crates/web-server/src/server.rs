@@ -804,6 +804,57 @@ mod tests {
         assert_eq!(plugins["ok"], true);
         assert_eq!(plugins["result"], json!([]));
 
+        let provider = rpc_call(
+            &http,
+            &origin,
+            token,
+            &connection_id,
+            "rpc-provider-save",
+            "save_provider",
+            json!({"input": {
+                "id": "example-provider",
+                "type": "openai",
+                "apiKey": "YOUR_API_KEY",
+                "replaceApiKey": true,
+                "baseUrl": "https://api.example.test/v1",
+                "defaultModel": "example-model",
+                "models": [{
+                    "model": "example-model",
+                    "displayName": "Example Model",
+                    "maxContextSize": 131072,
+                    "capabilities": ["tool_use", "thinking"],
+                    "supportEfforts": [],
+                    "adaptiveThinking": true
+                }]
+            }}),
+        )
+        .await;
+        assert_eq!(provider["ok"], true);
+        assert_eq!(provider["result"]["id"], "example-provider");
+        assert!(provider["result"].get("apiKey").is_none());
+        let providers = rpc_call(
+            &http,
+            &origin,
+            token,
+            &connection_id,
+            "rpc-providers",
+            "list_providers",
+            json!({}),
+        )
+        .await;
+        assert_eq!(providers["result"].as_array().unwrap().len(), 1);
+        let provider_delete = rpc_call(
+            &http,
+            &origin,
+            token,
+            &connection_id,
+            "rpc-provider-delete",
+            "delete_provider",
+            json!({"id": "example-provider"}),
+        )
+        .await;
+        assert_eq!(provider_delete["ok"], true);
+
         let install = rpc_call(
             &http,
             &origin,

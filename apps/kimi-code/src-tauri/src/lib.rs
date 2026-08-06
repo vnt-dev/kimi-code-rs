@@ -14,8 +14,8 @@ use kimi_code_agent_core_v2::{
         desktop_client::{
             DesktopAuthStatus, DesktopContextUsage, DesktopDeviceCode, DesktopInteraction,
             DesktopManagedUsage, DesktopMessagePage, DesktopModel, DesktopPrepareSessionRequest,
-            DesktopPreparedSession, DesktopSkill, DesktopSkillContent, DesktopWorkspace,
-            KimiCodeDesktopClient,
+            DesktopPreparedSession, DesktopProvider, DesktopSaveProviderInput, DesktopSkill,
+            DesktopSkillContent, DesktopWorkspace, KimiCodeDesktopClient,
         },
         file::FileMeta,
         plugin::{
@@ -292,6 +292,24 @@ async fn set_web_server_settings(
 }
 
 #[tauri::command]
+async fn list_providers(state: State<'_, AppState>) -> Result<Vec<DesktopProvider>, String> {
+    state.client.list_providers().await
+}
+
+#[tauri::command]
+async fn save_provider(
+    state: State<'_, AppState>,
+    input: DesktopSaveProviderInput,
+) -> Result<DesktopProvider, String> {
+    state.client.save_provider(input).await
+}
+
+#[tauri::command]
+async fn delete_provider(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.client.delete_provider(id).await
+}
+
+#[tauri::command]
 async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginSummary>, String> {
     state.client.list_plugins().await
 }
@@ -554,6 +572,9 @@ pub fn run() {
             set_goal_mode,
             get_web_server_status,
             set_web_server_settings,
+            list_providers,
+            save_provider,
+            delete_provider,
             list_plugins,
             list_capabilities,
             get_capability,

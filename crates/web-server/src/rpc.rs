@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use kimi_code_agent_core_v2::app::desktop_client::{
-    DesktopPrepareSessionRequest, KimiCodeDesktopClient,
+    DesktopPrepareSessionRequest, DesktopSaveProviderInput, KimiCodeDesktopClient,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -129,6 +129,11 @@ struct SetPluginMcpServerEnabledArgs {
     enabled: bool,
 }
 
+#[derive(Deserialize)]
+struct SaveProviderArgs {
+    input: DesktopSaveProviderInput,
+}
+
 pub(crate) async fn dispatch_rpc(
     client: &Arc<KimiCodeDesktopClient>,
     events: &ApplicationEventBus,
@@ -164,6 +169,24 @@ pub(crate) async fn dispatch_rpc(
         "logout" => encode(client.logout().await.map_err(RpcError::transport)?),
         "list_models" => encode(client.list_models().await.map_err(RpcError::transport)?),
         "refresh_models" => encode(client.refresh_models().await.map_err(RpcError::transport)?),
+        "list_providers" => encode(client.list_providers().await.map_err(RpcError::transport)?),
+        "save_provider" => {
+            let args: SaveProviderArgs = decode(args)?;
+            encode(
+                client
+                    .save_provider(args.input)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "delete_provider" => {
+            let args: PluginIdArgs = decode(args)?;
+            client
+                .delete_provider(args.id)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
+        }
         "list_plugins" => encode(client.list_plugins().await.map_err(RpcError::transport)?),
         "list_capabilities" => encode(
             client

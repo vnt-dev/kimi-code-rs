@@ -5,6 +5,7 @@
 
 use std::{
     collections::HashSet,
+    num::NonZeroU64,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -22,7 +23,7 @@ use kimi_code_oauth::{
     create_kimi_default_headers, fetch_managed_kimi_code_models,
     managed_usage::DEFAULT_KIMI_CODE_BASE_URL,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -53,7 +54,7 @@ use crate::{
         auth::{OAuthToolkitContract, OAuthToolkitService, config_section::SERVICES_SECTION},
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         capability::{CAPABILITY_SERVICE_ID, CapabilityStatus},
-        config::{CONFIG_SERVICE_ID, ConfigTarget},
+        config::{CONFIG_SERVICE_ID, ConfigServiceHandle, ConfigTarget},
         event::event_bus::EVENT_BUS_SERVICE_ID,
         file::{FILE_SERVICE_ID, FileByteStream, FileMeta, FileServiceError, SaveOptions},
         host_folder_browser::{FS_HOST_FOLDER_BROWSER_ID, FsBrowseResponse, FsHomeResponse},
@@ -77,10 +78,14 @@ use crate::{
     kosong::{
         model::{
             MODEL_CATALOG_SERVICE_ID, Model, ModelCatalogItem,
-            contract::{DEFAULT_MODEL_SECTION, MODELS_SECTION},
+            contract::{DEFAULT_MODEL_SECTION, MODELS_SECTION, ModelRecord, ModelsSection},
             thinking::THINKING_SECTION,
         },
-        provider::config::PROVIDERS_SECTION,
+        protocol::identity::Protocol,
+        provider::{
+            ENV_MODEL_PROVIDER_KEY, ProviderConfig, ProviderType, ProvidersSection,
+            config::PROVIDERS_SECTION,
+        },
     },
     session::{
         agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID, ensure_main_agent},
@@ -184,6 +189,58 @@ pub struct DesktopModel {
     pub protocol: String,
     pub support_efforts: Vec<String>,
     pub default_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopProviderModel {
+    pub model: String,
+    pub display_name: Option<String>,
+    pub max_context_size: u64,
+    pub capabilities: Vec<String>,
+    pub support_efforts: Vec<String>,
+    pub adaptive_thinking: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopProvider {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub provider_type: String,
+    pub base_url: Option<String>,
+    pub default_model: Option<String>,
+    pub has_api_key: bool,
+    pub managed: bool,
+    pub models: Vec<DesktopProviderModel>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DesktopProviderModelInput {
+    pub model: String,
+    pub display_name: Option<String>,
+    pub max_context_size: u64,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub support_efforts: Vec<String>,
+    pub adaptive_thinking: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DesktopSaveProviderInput {
+    pub original_id: Option<String>,
+    pub id: String,
+    #[serde(rename = "type")]
+    pub provider_type: String,
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub replace_api_key: bool,
+    pub base_url: String,
+    pub default_model: Option<String>,
+    pub models: Vec<DesktopProviderModelInput>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -448,6 +505,177 @@ impl KimiCodeDesktopClient {
         let models = self.fetch_models().await?;
         self.configure_models(&models).await?;
         self.configured_desktop_models().await
+    }
+
+    pub async fn list_providers(&self) -> Result<Vec<DesktopProvider>, String> {
+        let config = self
+            .app
+            .get(CONFIG_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        config.ready().await.map_err(|error| error.to_string())?;
+        let providers = user_section::<ProvidersSection>(&config, PROVIDERS_SECTION)?;
+        let models = user_section::<ModelsSection>(&config, MODELS_SECTION)?;
+        Ok(desktop_providers(&providers, &models))
+    }
+
+    pub async fn save_provider(
+        &self,
+        input: DesktopSaveProviderInput,
+    ) -> Result<DesktopProvider, String> {
+        let input = validate_provider_input(input)?;
+        let _guard = self.config_gate.lock().await;
+        let config = self
+            .app
+            .get(CONFIG_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        config.ready().await.map_err(|error| error.to_string())?;
+
+        let old_providers_value = config.inspect(PROVIDERS_SECTION).user_value;
+        let old_models_value = config.inspect(MODELS_SECTION).user_value;
+        let old_default_value = config.inspect(DEFAULT_MODEL_SECTION).user_value;
+        let mut providers = section_from_value::<ProvidersSection>(old_providers_value.as_ref())?;
+        let mut models = section_from_value::<ModelsSection>(old_models_value.as_ref())?;
+        let original_id = input.original_id.as_deref();
+        if original_id.is_some_and(is_managed_provider_id) || is_managed_provider_id(&input.id) {
+            return Err("Managed OAuth providers cannot be edited here.".to_owned());
+        }
+        if original_id.is_none() && providers.contains_key(&input.id) {
+            return Err(format!("Provider `{}` already exists.", input.id));
+        }
+        if let Some(original_id) = original_id
+            && original_id != input.id
+            && providers.contains_key(&input.id)
+        {
+            return Err(format!("Provider `{}` already exists.", input.id));
+        }
+
+        let previous_provider = match original_id {
+            Some(original_id) => providers
+                .shift_remove(original_id)
+                .ok_or_else(|| format!("Provider `{original_id}` does not exist."))?,
+            None => ProviderConfig::default(),
+        };
+        if let Some(original_id) = original_id {
+            models.retain(|_, model| model.provider.as_deref() != Some(original_id));
+        }
+
+        let protocol = protocol_for_provider_type(&input.provider_type)?;
+        let mut provider = previous_provider;
+        provider.provider_type = Some(ProviderType::new(input.provider_type.clone()));
+        provider.base_url = Some(input.base_url.clone());
+        provider.default_model = input
+            .default_model
+            .as_ref()
+            .map(|model| provider_model_config_id(&input.id, model));
+        if input.replace_api_key || original_id.is_none() {
+            provider.api_key = input.api_key.clone();
+        }
+        providers.insert(input.id.clone(), provider);
+
+        for model in &input.models {
+            let config_id = provider_model_config_id(&input.id, &model.model);
+            models.insert(
+                config_id,
+                ModelRecord {
+                    provider: Some(input.id.clone()),
+                    model: Some(model.model.clone()),
+                    protocol: Some(protocol),
+                    max_context_size: NonZeroU64::new(model.max_context_size),
+                    display_name: model.display_name.clone(),
+                    capabilities: (!model.capabilities.is_empty())
+                        .then(|| model.capabilities.clone()),
+                    support_efforts: (!model.support_efforts.is_empty())
+                        .then(|| model.support_efforts.clone()),
+                    adaptive_thinking: model.adaptive_thinking,
+                    ..ModelRecord::default()
+                },
+            );
+        }
+
+        let old_default = old_default_value.as_ref().and_then(Value::as_str);
+        let old_default_belonged_to_provider = original_id.is_some()
+            && old_default.is_some_and(|model_id| {
+                section_from_value::<ModelsSection>(old_models_value.as_ref())
+                    .ok()
+                    .and_then(|models| models.get(model_id).cloned())
+                    .and_then(|model| model.provider)
+                    .as_deref()
+                    == original_id
+            });
+        let next_default = if old_default_belonged_to_provider {
+            input
+                .default_model
+                .as_ref()
+                .or_else(|| input.models.first().map(|model| &model.model))
+                .map(|model| Value::String(provider_model_config_id(&input.id, model)))
+        } else {
+            old_default_value.clone()
+        };
+
+        replace_provider_sections(
+            &config,
+            old_providers_value,
+            old_models_value,
+            Some(serde_json::to_value(&providers).map_err(|error| error.to_string())?),
+            Some(serde_json::to_value(&models).map_err(|error| error.to_string())?),
+            next_default,
+        )
+        .await?;
+        self.models_configured.store(true, Ordering::Release);
+        desktop_providers(&providers, &models)
+            .into_iter()
+            .find(|provider| provider.id == input.id)
+            .ok_or_else(|| "The saved provider could not be reloaded.".to_owned())
+    }
+
+    pub async fn delete_provider(&self, id: String) -> Result<(), String> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err("A provider id is required.".to_owned());
+        }
+        if is_managed_provider_id(id) {
+            return Err("Managed OAuth providers cannot be deleted here.".to_owned());
+        }
+        let _guard = self.config_gate.lock().await;
+        let config = self
+            .app
+            .get(CONFIG_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        config.ready().await.map_err(|error| error.to_string())?;
+        let old_providers_value = config.inspect(PROVIDERS_SECTION).user_value;
+        let old_models_value = config.inspect(MODELS_SECTION).user_value;
+        let old_default_value = config.inspect(DEFAULT_MODEL_SECTION).user_value;
+        let mut providers = section_from_value::<ProvidersSection>(old_providers_value.as_ref())?;
+        if providers.shift_remove(id).is_none() {
+            return Ok(());
+        }
+        let mut models = section_from_value::<ModelsSection>(old_models_value.as_ref())?;
+        models.retain(|_, model| model.provider.as_deref() != Some(id));
+        let next_default = old_default_value
+            .as_ref()
+            .and_then(Value::as_str)
+            .map_or_else(
+                || old_default_value.clone(),
+                |model_id| {
+                    if models.contains_key(model_id) {
+                        old_default_value.clone()
+                    } else {
+                        models.keys().next().cloned().map(Value::String)
+                    }
+                },
+            );
+        replace_provider_sections(
+            &config,
+            old_providers_value,
+            old_models_value,
+            Some(serde_json::to_value(&providers).map_err(|error| error.to_string())?),
+            Some(serde_json::to_value(&models).map_err(|error| error.to_string())?),
+            next_default,
+        )
+        .await?;
+        self.models_configured
+            .store(!models.is_empty(), Ordering::Release);
+        Ok(())
     }
 
     async fn configured_desktop_models(&self) -> Result<Vec<DesktopModel>, String> {
@@ -1331,6 +1559,231 @@ impl KimiCodeDesktopClient {
     }
 }
 
+fn user_section<T: DeserializeOwned + Default>(
+    config: &ConfigServiceHandle,
+    domain: &str,
+) -> Result<T, String> {
+    section_from_value(config.inspect(domain).user_value.as_ref())
+}
+
+fn section_from_value<T: DeserializeOwned + Default>(value: Option<&Value>) -> Result<T, String> {
+    value.map_or_else(
+        || Ok(T::default()),
+        |value| serde_json::from_value(value.clone()).map_err(|error| error.to_string()),
+    )
+}
+
+fn is_managed_provider_id(id: &str) -> bool {
+    id == KIMI_CODE_PROVIDER_NAME
+}
+
+fn protocol_for_provider_type(provider_type: &str) -> Result<Protocol, String> {
+    match provider_type {
+        "kimi" | "openai" => Ok(Protocol::OpenAi),
+        "openai_responses" => Ok(Protocol::OpenAiResponses),
+        "anthropic" => Ok(Protocol::Anthropic),
+        "google-genai" => Ok(Protocol::GoogleGenAi),
+        _ => Err(format!("Unsupported provider protocol `{provider_type}`.")),
+    }
+}
+
+fn provider_model_config_id(provider_id: &str, model: &str) -> String {
+    format!("{provider_id}/{model}")
+}
+
+fn validate_provider_input(
+    mut input: DesktopSaveProviderInput,
+) -> Result<DesktopSaveProviderInput, String> {
+    input.id = input.id.trim().to_owned();
+    input.original_id = input
+        .original_id
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty());
+    input.provider_type = input.provider_type.trim().to_owned();
+    input.base_url = input.base_url.trim().trim_end_matches('/').to_owned();
+    input.api_key = input
+        .api_key
+        .map(|key| key.trim().to_owned())
+        .filter(|key| !key.is_empty());
+    input.default_model = input
+        .default_model
+        .map(|model| model.trim().to_owned())
+        .filter(|model| !model.is_empty());
+
+    let mut id_chars = input.id.chars();
+    if input.id.is_empty()
+        || input.id.len() > 64
+        || !id_chars.next().is_some_and(char::is_alphanumeric)
+        || !id_chars
+            .all(|character| character.is_alphanumeric() || matches!(character, '-' | '_' | ' '))
+        || input.id == ENV_MODEL_PROVIDER_KEY
+    {
+        return Err(
+            "Provider name must start with a letter or number and contain only letters, numbers, spaces, '-' or '_'."
+                .to_owned(),
+        );
+    }
+    protocol_for_provider_type(&input.provider_type)?;
+    let url = url::Url::parse(&input.base_url)
+        .map_err(|_| "Base URL must be a valid HTTP or HTTPS URL.".to_owned())?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err("Base URL must be a valid HTTP or HTTPS URL.".to_owned());
+    }
+    if input.original_id.is_none() && input.api_key.is_none() {
+        return Err("API Key is required when adding a provider.".to_owned());
+    }
+    if input.models.is_empty() {
+        return Err("At least one model is required.".to_owned());
+    }
+    if input.models.len() > 64 {
+        return Err("A provider can configure at most 64 models.".to_owned());
+    }
+
+    let mut model_names = HashSet::new();
+    for model in &mut input.models {
+        model.model = model.model.trim().to_owned();
+        model.display_name = model
+            .display_name
+            .take()
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty());
+        deduplicate_trimmed(&mut model.capabilities);
+        deduplicate_trimmed(&mut model.support_efforts);
+        if model.model.is_empty() {
+            return Err("Model ID cannot be empty.".to_owned());
+        }
+        if model.model.len() > 128 {
+            return Err("Model ID cannot exceed 128 characters.".to_owned());
+        }
+        if model.max_context_size == 0 {
+            return Err("Model context size must be greater than zero.".to_owned());
+        }
+        if !model_names.insert(model.model.clone()) {
+            return Err(format!(
+                "Model `{}` is configured more than once.",
+                model.model
+            ));
+        }
+    }
+    if input
+        .default_model
+        .as_ref()
+        .is_some_and(|default| !model_names.contains(default))
+    {
+        return Err("Default model must be one of the provider models.".to_owned());
+    }
+    if input.default_model.is_none() {
+        input.default_model = input.models.first().map(|model| model.model.clone());
+    }
+    Ok(input)
+}
+
+fn deduplicate_trimmed(values: &mut Vec<String>) {
+    let mut seen = HashSet::new();
+    values.retain_mut(|value| {
+        *value = value.trim().to_owned();
+        !value.is_empty() && seen.insert(value.clone())
+    });
+}
+
+fn desktop_providers(providers: &ProvidersSection, models: &ModelsSection) -> Vec<DesktopProvider> {
+    providers
+        .iter()
+        .filter(|(id, _)| id.as_str() != ENV_MODEL_PROVIDER_KEY)
+        .map(|(id, provider)| {
+            let provider_models = models
+                .iter()
+                .filter(|(_, model)| model.provider.as_deref() == Some(id.as_str()))
+                .map(|(config_id, model)| DesktopProviderModel {
+                    model: model.model.clone().unwrap_or_else(|| {
+                        config_id
+                            .strip_prefix(&format!("{id}/"))
+                            .unwrap_or(config_id)
+                            .to_owned()
+                    }),
+                    display_name: model.display_name.clone(),
+                    max_context_size: model.max_context_size.map_or(0, NonZeroU64::get),
+                    capabilities: model.capabilities.clone().unwrap_or_default(),
+                    support_efforts: model.support_efforts.clone().unwrap_or_default(),
+                    adaptive_thinking: model.adaptive_thinking,
+                })
+                .collect::<Vec<_>>();
+            let default_model = provider.default_model.as_ref().and_then(|default_id| {
+                models
+                    .get(default_id)
+                    .and_then(|model| model.model.clone())
+                    .or_else(|| {
+                        default_id
+                            .strip_prefix(&format!("{id}/"))
+                            .map(str::to_owned)
+                    })
+            });
+            DesktopProvider {
+                id: id.clone(),
+                provider_type: provider
+                    .provider_type
+                    .as_ref()
+                    .map_or_else(|| "openai".to_owned(), ToString::to_string),
+                base_url: provider.base_url.clone(),
+                default_model,
+                has_api_key: provider
+                    .api_key
+                    .as_deref()
+                    .is_some_and(|key| !key.trim().is_empty()),
+                managed: provider.oauth.is_some() || is_managed_provider_id(id),
+                models: provider_models,
+            }
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn replace_provider_sections(
+    config: &ConfigServiceHandle,
+    old_providers: Option<Value>,
+    old_models: Option<Value>,
+    next_providers: Option<Value>,
+    next_models: Option<Value>,
+    next_default: Option<Value>,
+) -> Result<(), String> {
+    config
+        .replace(PROVIDERS_SECTION, next_providers, ConfigTarget::User)
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = config
+        .replace(MODELS_SECTION, next_models, ConfigTarget::User)
+        .await
+    {
+        let rollback = config
+            .replace(PROVIDERS_SECTION, old_providers, ConfigTarget::User)
+            .await;
+        return Err(rollback_message(error.to_string(), rollback.err()));
+    }
+    if let Err(error) = config
+        .replace(DEFAULT_MODEL_SECTION, next_default, ConfigTarget::User)
+        .await
+    {
+        let models_rollback = config
+            .replace(MODELS_SECTION, old_models, ConfigTarget::User)
+            .await;
+        let providers_rollback = config
+            .replace(PROVIDERS_SECTION, old_providers, ConfigTarget::User)
+            .await;
+        let rollback = models_rollback.err().or_else(|| providers_rollback.err());
+        return Err(rollback_message(error.to_string(), rollback));
+    }
+    Ok(())
+}
+
+fn rollback_message(
+    error: String,
+    rollback: Option<crate::app::config::ConfigServiceError>,
+) -> String {
+    rollback.map_or(error.clone(), |rollback| {
+        format!("{error}; provider configuration rollback also failed: {rollback}")
+    })
+}
+
 fn map_desktop_model(
     item: ModelCatalogItem,
     resolved: Option<&Model>,
@@ -1482,7 +1935,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        DesktopChatEvent, DesktopChatRequest, DesktopPrepareSessionRequest, KimiCodeDesktopClient,
+        DesktopChatEvent, DesktopChatRequest, DesktopPrepareSessionRequest,
+        DesktopProviderModelInput, DesktopSaveProviderInput, KimiCodeDesktopClient,
         ManagedKimiCodeModelInfo, context_usage_from_size, map_desktop_model,
     };
     use crate::{
@@ -1520,6 +1974,88 @@ mod tests {
         assert!(model.is_default);
         assert!(model.supports_reasoning);
         assert!(model.supports_tools);
+    }
+
+    #[tokio::test]
+    async fn provider_configuration_keeps_secrets_out_of_responses_and_removes_models_together() {
+        let root =
+            std::env::temp_dir().join(format!("kimi-desktop-providers-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let client = KimiCodeDesktopClient::new(&home, "test").unwrap();
+        let model = DesktopProviderModelInput {
+            model: "example-model".into(),
+            display_name: Some("Example Model".into()),
+            max_context_size: 131_072,
+            capabilities: vec!["tool_use".into(), "thinking".into()],
+            support_efforts: vec!["low".into(), "high".into()],
+            adaptive_thinking: Some(true),
+        };
+        let saved = client
+            .save_provider(DesktopSaveProviderInput {
+                original_id: None,
+                id: "example-provider".into(),
+                provider_type: "openai".into(),
+                api_key: Some("YOUR_API_KEY".into()),
+                replace_api_key: true,
+                base_url: "https://api.example.test/v1/".into(),
+                default_model: Some("example-model".into()),
+                models: vec![model.clone()],
+            })
+            .await
+            .unwrap();
+        assert!(saved.has_api_key);
+        assert_eq!(
+            saved.base_url.as_deref(),
+            Some("https://api.example.test/v1")
+        );
+        assert!(
+            serde_json::to_value(&saved)
+                .unwrap()
+                .get("apiKey")
+                .is_none()
+        );
+
+        let models = client.list_models().await.unwrap();
+        assert!(models.iter().any(|model| {
+            model.id == "example-provider/example-model"
+                && model.model == "example-model"
+                && model.protocol == "openai"
+        }));
+
+        client
+            .save_provider(DesktopSaveProviderInput {
+                original_id: Some("example-provider".into()),
+                id: "example-provider".into(),
+                provider_type: "openai_responses".into(),
+                api_key: None,
+                replace_api_key: false,
+                base_url: "https://responses.example.test/v1".into(),
+                default_model: Some("example-model".into()),
+                models: vec![model],
+            })
+            .await
+            .unwrap();
+        let persisted = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        assert!(persisted.contains("YOUR_API_KEY"));
+        assert!(persisted.contains("openai_responses"));
+
+        client
+            .delete_provider("example-provider".into())
+            .await
+            .unwrap();
+        assert!(client.list_providers().await.unwrap().is_empty());
+        assert!(
+            !client
+                .list_models()
+                .await
+                .unwrap()
+                .iter()
+                .any(|model| model.id == "example-provider/example-model")
+        );
+
+        drop(client);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn managed_model(id: &str) -> ManagedKimiCodeModelInfo {
@@ -1855,10 +2391,8 @@ mod tests {
 
     #[tokio::test]
     async fn session_skills_include_sub_skills_for_listing_and_content() {
-        let root = std::env::temp_dir().join(format!(
-            "kimi-desktop-sub-skills-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("kimi-desktop-sub-skills-{}", uuid::Uuid::new_v4()));
         let home = root.join("home");
         let work_dir = root.join("workspace");
         std::fs::create_dir_all(&home).unwrap();

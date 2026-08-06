@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { Check, ChevronDown, Copy, ExternalLink, RefreshCw, X } from "lucide-react";
+import { Copy, ExternalLink, RefreshCw, X } from "lucide-react";
 
 import type { ColorScheme } from "./appearance";
+import SettingsSelect from "./components/SettingsSelect";
 import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
 import PluginSettings from "./PluginSettings";
+import ProviderSettings from "./ProviderSettings";
 import { invoke, isDesktop, openExternalUrl } from "./transport";
 
-type SettingsTab = "general" | "plugins" | "web" | "about";
+type SettingsTab = "general" | "providers" | "plugins" | "web" | "about";
 type WebServerListenScope = "local" | "global";
 
 interface WebServerStatus {
@@ -39,112 +41,13 @@ function webServerStateLabel(state: WebServerStatus["state"] = "stopped"): strin
   }
 }
 
-interface SettingsSelectOption<T extends string> {
-  value: T;
-  label: string;
-}
-
-function SettingsSelect<T extends string>({
-  value,
-  options,
-  ariaLabel,
-  className,
-  disabled = false,
-  onChange,
-}: {
-  value: T;
-  options: readonly SettingsSelectOption<T>[];
-  ariaLabel: string;
-  className?: string;
-  disabled?: boolean;
-  onChange: (value: T) => void;
-}) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: PointerEvent): void => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, [open]);
-
-  useEffect(() => {
-    if (disabled) setOpen(false);
-  }, [disabled]);
-
-  const activeLabel =
-    options.find((option) => option.value === value)?.label ?? value;
-
-  return (
-    <div
-      className={[
-        "settings-select",
-        className,
-        open ? "open" : undefined,
-        disabled ? "disabled" : undefined,
-      ]
-        .filter(Boolean)
-        .join(" ")}
-      ref={rootRef}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && open) {
-          event.stopPropagation();
-          setOpen(false);
-        }
-      }}
-    >
-      <button
-        className="settings-select-trigger"
-        type="button"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span>{activeLabel}</span>
-        <ChevronDown size={14} />
-      </button>
-      {open && (
-        <div
-          className="settings-select-menu"
-          role="listbox"
-          aria-label={ariaLabel}
-        >
-          {options.map((option) => {
-            const selected = option.value === value;
-            return (
-              <button
-                key={option.value}
-                className={selected ? "selected" : undefined}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                onClick={() => {
-                  onChange(option.value);
-                  setOpen(false);
-                }}
-              >
-                <span>{option.label}</span>
-                {selected && <Check size={14} />}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function SettingsDialog({
   appVersion,
   colorScheme,
   language,
   onColorSchemeChange,
   onLanguageChange,
+  onProvidersChanged,
   onPluginsChanged,
   onClose,
 }: {
@@ -153,6 +56,7 @@ export default function SettingsDialog({
   language: Language;
   onColorSchemeChange: (colorScheme: ColorScheme) => void;
   onLanguageChange: (language: Language) => void;
+  onProvidersChanged: () => void;
   onPluginsChanged: () => void;
   onClose: () => void;
 }) {
@@ -431,6 +335,14 @@ export default function SettingsDialog({
               {t("settings.tabGeneral")}
             </button>
             <button
+              className={`settings-tab ${activeTab === "providers" ? "active" : ""}`}
+              type="button"
+              aria-current={activeTab === "providers" ? "page" : undefined}
+              onClick={() => setActiveTab("providers")}
+            >
+              {t("settings.tabProviders")}
+            </button>
+            <button
               className={`settings-tab ${activeTab === "plugins" ? "active" : ""}`}
               type="button"
               aria-current={activeTab === "plugins" ? "page" : undefined}
@@ -504,6 +416,8 @@ export default function SettingsDialog({
                   />
                 </div>
               </section>
+            ) : activeTab === "providers" ? (
+              <ProviderSettings onChanged={onProvidersChanged} />
             ) : activeTab === "plugins" ? (
               <PluginSettings onChanged={onPluginsChanged} />
             ) : activeTab === "web" ? (
