@@ -780,6 +780,19 @@
   transition: max-width 160ms ease, opacity 100ms ease;
 }
 
+.account-avatar {
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.account-avatar-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--subtle);
+}
+
 .collapsed .account-button {
   padding: 0 8px;
   gap: 0;

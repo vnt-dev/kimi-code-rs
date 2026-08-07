@@ -16,12 +16,12 @@ use std::{
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use kimi_code_oauth::{
-    AuthManagedUsageResult, AuthenticatedServiceOptions, BoosterWalletInfo, CredentialKind,
-    DeviceAuthorization, DeviceCodeObserver, KIMI_CODE_PROVIDER_NAME, KimiHostIdentity,
-    KimiIdentityOptions, KimiOAuthLoginOptions, ManagedKimiCodeApplyOptions,
-    ManagedKimiCodeModelInfo, OAuthManagerError, UsageRow, apply_managed_kimi_code_config,
-    create_kimi_default_headers, fetch_managed_kimi_code_models,
-    managed_usage::DEFAULT_KIMI_CODE_BASE_URL,
+    AuthManagedUsageResult, AuthManagedUserInfoResult, AuthenticatedServiceOptions,
+    BoosterWalletInfo, CredentialKind, DeviceAuthorization, DeviceCodeObserver,
+    KIMI_CODE_PROVIDER_NAME, KimiHostIdentity, KimiIdentityOptions, KimiOAuthLoginOptions,
+    ManagedKimiCodeApplyOptions, ManagedKimiCodeModelInfo, ManagedUserInfo, ManagedUserInfoPhone,
+    OAuthManagerError, UsageRow, apply_managed_kimi_code_config, create_kimi_default_headers,
+    fetch_managed_kimi_code_models, managed_usage::DEFAULT_KIMI_CODE_BASE_URL,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
@@ -160,6 +160,66 @@ impl From<BoosterWalletInfo> for DesktopBoosterWalletInfo {
             monthly_charge_limit_cents: value.monthly_charge_limit_cents,
             monthly_used_cents: value.monthly_used_cents,
             currency: value.currency,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopManagedUserInfo {
+    pub user_id: String,
+    pub nickname: String,
+    pub status: String,
+    pub region: String,
+    pub user_level: i64,
+    pub user_level_name: String,
+    pub domain: i64,
+    pub domain_name: String,
+    pub global_id: Option<String>,
+    pub bio: Option<String>,
+    pub avatar: Option<String>,
+    pub username: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<DesktopManagedUserInfoPhone>,
+    pub created_time: Option<String>,
+    pub last_login_time: Option<String>,
+}
+
+impl From<ManagedUserInfo> for DesktopManagedUserInfo {
+    fn from(value: ManagedUserInfo) -> Self {
+        Self {
+            user_id: value.user_id,
+            nickname: value.nickname,
+            status: value.status,
+            region: value.region,
+            user_level: value.user_level,
+            user_level_name: value.user_level_name,
+            domain: value.domain,
+            domain_name: value.domain_name,
+            global_id: value.global_id,
+            bio: value.bio,
+            avatar: value.avatar,
+            username: value.username,
+            email: value.email,
+            phone: value.phone.map(Into::into),
+            created_time: value.created_time,
+            last_login_time: value.last_login_time,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopManagedUserInfoPhone {
+    pub country_code: String,
+    pub number: String,
+}
+
+impl From<ManagedUserInfoPhone> for DesktopManagedUserInfoPhone {
+    fn from(value: ManagedUserInfoPhone) -> Self {
+        Self {
+            country_code: value.country_code,
+            number: value.number,
         }
     }
 }
@@ -460,6 +520,20 @@ impl KimiCodeDesktopClient {
                 extra_usage: extra_usage.map(Into::into),
             }),
             AuthManagedUsageResult::Error { message, .. } => Err(message),
+        }
+    }
+
+    pub async fn managed_user_info(&self) -> Result<DesktopManagedUserInfo, String> {
+        match self
+            .oauth
+            .get_managed_user_info(
+                Some(KIMI_CODE_PROVIDER_NAME),
+                AuthenticatedServiceOptions::default(),
+            )
+            .await
+        {
+            AuthManagedUserInfoResult::Ok { user_info } => Ok((*user_info).into()),
+            AuthManagedUserInfoResult::Error { message, .. } => Err(message),
         }
     }
 

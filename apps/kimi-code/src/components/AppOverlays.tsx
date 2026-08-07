@@ -5,7 +5,13 @@ import type { Language } from "../i18n";
 import { t } from "../i18n";
 import SettingsDialog from "../SettingsDialog";
 import { isDesktop } from "../transport";
-import type { DeviceCode, GoalSnapshot } from "../types";
+import type {
+  AccountUsage,
+  AuthStatus,
+  DeviceCode,
+  GoalSnapshot,
+  ManagedUserInfo,
+} from "../types";
 import {
   DirectoryPickerDialog,
   GoalEditDialog,
@@ -30,12 +36,19 @@ interface AppOverlaysProps {
   directoryPickerOpen: boolean;
   settingsOpen: boolean;
   appVersion?: string;
+  auth: AuthStatus;
+  accountProfile?: ManagedUserInfo;
+  accountUsage?: AccountUsage;
+  accountUsageBusy: boolean;
+  accountUsageError?: string;
   colorScheme: ColorScheme;
   language: Language;
   notificationsEnabled: boolean;
   notice?: string;
   onCloseLogin: () => void;
   onStartLogin: () => void;
+  onRefreshAccountUsage: () => void;
+  onSignOut: () => void;
   onSubmitCredential: (credential: string) => void;
   onCloseRemoval: () => void;
   onConfirmRemoval: () => void;
@@ -68,12 +81,19 @@ export function AppOverlays({
   directoryPickerOpen,
   settingsOpen,
   appVersion,
+  auth,
+  accountProfile,
+  accountUsage,
+  accountUsageBusy,
+  accountUsageError,
   colorScheme,
   language,
   notificationsEnabled,
   notice,
   onCloseLogin,
   onStartLogin,
+  onRefreshAccountUsage,
+  onSignOut,
   onSubmitCredential,
   onCloseRemoval,
   onConfirmRemoval,
@@ -145,6 +165,14 @@ export function AppOverlays({
           colorScheme={colorScheme}
           language={language}
           notificationsEnabled={notificationsEnabled}
+          auth={auth}
+          accountProfile={accountProfile}
+          accountUsage={accountUsage}
+          accountUsageBusy={accountUsageBusy}
+          accountUsageError={accountUsageError}
+          onRefreshAccountUsage={onRefreshAccountUsage}
+          onLogin={onStartLogin}
+          onSignOut={onSignOut}
           onColorSchemeChange={onColorSchemeChange}
           onLanguageChange={onLanguageChange}
           onNotificationsEnabledChange={onNotificationsEnabledChange}

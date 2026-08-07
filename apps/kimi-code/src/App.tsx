@@ -178,6 +178,7 @@ import type {
   DesktopState,
   DeviceCode,
   GoalSnapshot,
+  ManagedUserInfo,
   Model,
   PlanData,
   ProtocolMessage,
@@ -245,6 +246,7 @@ export default function App() {
   const [accountUsage, setAccountUsage] = useState<AccountUsage>();
   const [accountUsageBusy, setAccountUsageBusy] = useState(false);
   const [accountUsageError, setAccountUsageError] = useState<string>();
+  const [accountProfile, setAccountProfile] = useState<ManagedUserInfo>();
   const [modelsBusy, setModelsBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
@@ -319,6 +321,7 @@ export default function App() {
   const profileRef = useRef<HTMLDivElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
   const accountUsageRequest = useRef(0);
+  const accountProfileRequest = useRef(0);
   const historyRequests = useRef<Record<string, number>>({});
   const desktopInventoryRequest = useRef(0);
   const backgroundTaskRequests = useRef<Record<string, number>>({});
@@ -1008,6 +1011,17 @@ export default function App() {
     }
   };
 
+  const loadAccountProfile = async (): Promise<void> => {
+    const request = accountProfileRequest.current + 1;
+    accountProfileRequest.current = request;
+    try {
+      const profile = await invoke<ManagedUserInfo>("account_profile");
+      if (request === accountProfileRequest.current) setAccountProfile(profile);
+    } catch {
+      // Profile display is best-effort; keep the previous value on failure.
+    }
+  };
+
   const toggleProfile = (): void => {
     const opening = !profileOpen;
     setProfileOpen(opening);
@@ -1078,7 +1092,10 @@ export default function App() {
         .then((status) => {
           if (!active) return;
           setAuth(status);
-          if (status.loggedIn) void refreshModels();
+          if (status.loggedIn) {
+            void refreshModels();
+            void loadAccountProfile();
+          }
         })
         .catch(() => {
           // Vite's browser preview has no Tauri bridge; the actual desktop app does.
@@ -1617,6 +1634,7 @@ export default function App() {
     handleAttachmentInput,
     handlePromptPaste,
   } = useConversationResources({
+    accountProfileRequest,
     accountUsageRequest,
     activeAgentScope,
     activeCompaction,
@@ -1627,11 +1645,13 @@ export default function App() {
     composerAddOpen,
     historyRequests,
     inFlightTurnsRef,
+    loadAccountProfile,
     promptAttachments,
     promptSkills,
     refreshModels,
     resetPrompt,
     selectedModel,
+    setAccountProfile,
     setAccountUsage,
     setAccountUsageBusy,
     setAccountUsageError,
@@ -2560,7 +2580,7 @@ export default function App() {
           interactions={interactions}
           unreadCompletedConversations={unreadCompletedConversations}
           auth={auth}
-          appVersion={appVersion}
+          accountProfile={accountProfile}
           accountUsage={accountUsage}
           accountUsageBusy={accountUsageBusy}
           accountUsageError={accountUsageError}
@@ -2866,6 +2886,11 @@ export default function App() {
         directoryPickerOpen={directoryPickerOpen}
         settingsOpen={settingsOpen}
         appVersion={appVersion}
+        auth={auth}
+        accountProfile={accountProfile}
+        accountUsage={accountUsage}
+        accountUsageBusy={accountUsageBusy}
+        accountUsageError={accountUsageError}
         colorScheme={colorScheme}
         language={language}
         notificationsEnabled={notificationsEnabled}
@@ -2874,6 +2899,8 @@ export default function App() {
           if (!loginBusy) setLoginOpen(false);
         }}
         onStartLogin={() => void startLogin()}
+        onRefreshAccountUsage={() => void loadAccountUsage()}
+        onSignOut={() => void signOut()}
         onSubmitCredential={(credential) => {
           setWebCredential(credential);
           setWebAuthOpen(false);

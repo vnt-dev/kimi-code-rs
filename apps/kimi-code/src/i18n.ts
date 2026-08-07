@@ -13,6 +13,7 @@ const zh = {
   "settings.close": "关闭设置",
   "settings.tabs": "设置分类",
   "settings.tabGeneral": "通用",
+  "settings.tabAccount": "账户",
   "settings.tabWeb": "Web",
   "settings.tabProviders": "供应商",
   "settings.tabPlugins": "插件",
@@ -357,6 +358,9 @@ const zh = {
   "account.monthlyUsed": "本月已用 {amount}",
   "account.monthlyLimit": "上限 {amount}",
   "account.monthlyLimitUnlimited": "月度上限：不限",
+  "account.defaultUserName": "Kimi 用户",
+  "account.signedIn": "已登录",
+  "account.signedOutHint": "登录后可查看账户和模型权益",
 
 
 
@@ -665,6 +669,7 @@ const en: Record<TranslationKey, string> = {
   "settings.close": "Close settings",
   "settings.tabs": "Settings categories",
   "settings.tabGeneral": "General",
+  "settings.tabAccount": "Account",
   "settings.tabWeb": "Web",
   "settings.tabProviders": "Providers",
   "settings.tabPlugins": "Plugins",
@@ -1009,6 +1014,9 @@ const en: Record<TranslationKey, string> = {
   "account.monthlyUsed": "{amount} used this month",
   "account.monthlyLimit": "Limit {amount}",
   "account.monthlyLimitUnlimited": "Monthly limit: none",
+  "account.defaultUserName": "Kimi User",
+  "account.signedIn": "Signed in",
+  "account.signedOutHint": "Sign in to view your account and model access",
 
 
 

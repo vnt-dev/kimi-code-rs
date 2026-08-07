@@ -221,6 +221,30 @@ export interface AccountUsage {
   extraUsage: BoosterWalletInfo | null;
 }
 
+export interface ManagedUserInfoPhone {
+  countryCode: string;
+  number: string;
+}
+
+export interface ManagedUserInfo {
+  userId: string;
+  nickname: string;
+  status: string;
+  region: string;
+  userLevel: number;
+  userLevelName: string;
+  domain: number;
+  domainName: string;
+  globalId?: string;
+  bio?: string;
+  avatar?: string;
+  username?: string;
+  email?: string;
+  phone?: ManagedUserInfoPhone;
+  createdTime?: string;
+  lastLoginTime?: string;
+}
+
 export interface DeviceCode {
   userCode: string;
   verificationUri: string;

@@ -548,6 +548,87 @@
   }
 }
 
+.settings-account-card {
+  display: flex;
+  padding: 14px 16px;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--segment-surface);
+}
+
+.settings-account-meta {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.settings-account-name-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-account-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-account-badge {
+  padding: 1px 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.settings-account-sub {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-account-action {
+  display: inline-flex;
+  min-height: 32px;
+  padding: 0 12px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-account-action:hover {
+  background: var(--control-hover);
+}
+
+.settings-account-action.primary {
+  border-color: var(--accent-border);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.settings-account-action.danger:hover {
+  border-color: color-mix(in srgb, var(--danger, #cf7777) 32%, var(--line));
+  color: var(--danger, #cf7777);
+}
+
 @media (max-width: 760px) {
   .sidebar:not(.collapsed) {
     box-shadow: var(--mobile-sidebar-shadow);

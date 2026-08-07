@@ -4,13 +4,15 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { Copy, ExternalLink, RefreshCw, X } from "lucide-react";
 
 import type { ColorScheme } from "./appearance";
+import AccountSettings from "./AccountSettings";
 import SettingsSelect from "./components/SettingsSelect";
 import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
 import PluginSettings from "./PluginSettings";
 import ProviderSettings from "./ProviderSettings";
 import { invoke, isDesktop, openExternalUrl } from "./transport";
+import type { AccountUsage, AuthStatus, ManagedUserInfo } from "./types";
 
-type SettingsTab = "general" | "providers" | "plugins" | "web" | "about";
+type SettingsTab = "general" | "account" | "providers" | "plugins" | "web" | "about";
 type WebServerListenScope = "local" | "global";
 
 interface WebServerStatus {
@@ -46,6 +48,14 @@ export default function SettingsDialog({
   colorScheme,
   language,
   notificationsEnabled,
+  auth,
+  accountProfile,
+  accountUsage,
+  accountUsageBusy,
+  accountUsageError,
+  onRefreshAccountUsage,
+  onLogin,
+  onSignOut,
   onColorSchemeChange,
   onLanguageChange,
   onNotificationsEnabledChange,
@@ -57,6 +67,14 @@ export default function SettingsDialog({
   colorScheme: ColorScheme;
   language: Language;
   notificationsEnabled: boolean;
+  auth: AuthStatus;
+  accountProfile?: ManagedUserInfo;
+  accountUsage?: AccountUsage;
+  accountUsageBusy: boolean;
+  accountUsageError?: string;
+  onRefreshAccountUsage: () => void;
+  onLogin: () => void;
+  onSignOut: () => void;
   onColorSchemeChange: (colorScheme: ColorScheme) => void;
   onLanguageChange: (language: Language) => void;
   onNotificationsEnabledChange: (enabled: boolean) => Promise<void>;
@@ -350,6 +368,14 @@ export default function SettingsDialog({
               {t("settings.tabGeneral")}
             </button>
             <button
+              className={`settings-tab ${activeTab === "account" ? "active" : ""}`}
+              type="button"
+              aria-current={activeTab === "account" ? "page" : undefined}
+              onClick={() => setActiveTab("account")}
+            >
+              {t("settings.tabAccount")}
+            </button>
+            <button
               className={`settings-tab ${activeTab === "providers" ? "active" : ""}`}
               type="button"
               aria-current={activeTab === "providers" ? "page" : undefined}
@@ -466,6 +492,17 @@ export default function SettingsDialog({
                   </div>
                 </section>
               </>
+            ) : activeTab === "account" ? (
+              <AccountSettings
+                auth={auth}
+                profile={accountProfile}
+                usage={accountUsage}
+                usageBusy={accountUsageBusy}
+                usageError={accountUsageError}
+                onRefreshUsage={onRefreshAccountUsage}
+                onLogin={onLogin}
+                onSignOut={onSignOut}
+              />
             ) : activeTab === "providers" ? (
               <ProviderSettings onChanged={onProvidersChanged} />
             ) : activeTab === "plugins" ? (

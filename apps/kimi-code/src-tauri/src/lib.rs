@@ -13,7 +13,8 @@ use kimi_code_agent_core_v2::{
         capability::CapabilityStatus,
         desktop_client::{
             DesktopAuthStatus, DesktopContextUsage, DesktopDeviceCode, DesktopInteraction,
-            DesktopManagedUsage, DesktopMessagePage, DesktopModel, DesktopPrepareSessionRequest,
+            DesktopManagedUsage, DesktopManagedUserInfo, DesktopMessagePage, DesktopModel,
+            DesktopPrepareSessionRequest,
             DesktopPreparedSession, DesktopProvider, DesktopSaveProviderInput, DesktopSkill,
             DesktopSkillContent, DesktopWorkspace, KimiCodeDesktopClient,
         },
@@ -174,6 +175,11 @@ async fn auth_status(state: State<'_, AppState>) -> Result<DesktopAuthStatus, St
 #[tauri::command]
 async fn account_usage(state: State<'_, AppState>) -> Result<DesktopManagedUsage, String> {
     state.client.managed_usage().await
+}
+
+#[tauri::command]
+async fn account_profile(state: State<'_, AppState>) -> Result<DesktopManagedUserInfo, String> {
+    state.client.managed_user_info().await
 }
 
 #[tauri::command]
@@ -683,6 +689,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             auth_status,
             account_usage,
+            account_profile,
             login,
             logout,
             list_models,

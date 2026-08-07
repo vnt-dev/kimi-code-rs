@@ -7,10 +7,11 @@ import {
 
 import { resolveAccountMenuVisibility } from "../accountMenu";
 import { localeTag, t } from "../i18n";
-import type { AccountUsage, ManagedUsageRow } from "../types";
+import type { AccountUsage, ManagedUsageRow, ManagedUserInfo } from "../types";
+import { AccountAvatar } from "./AccountAvatar";
 
 export function AccountUsagePopover({
-  appVersion,
+  profile,
   loggedIn,
   usage,
   busy,
@@ -20,7 +21,7 @@ export function AccountUsagePopover({
   onOpenSettings,
   onSignOut,
 }: {
-  appVersion?: string;
+  profile?: ManagedUserInfo;
   loggedIn: boolean;
   usage?: AccountUsage;
   busy: boolean;
@@ -48,10 +49,17 @@ export function AccountUsagePopover({
     >
       <div className="profile-popover-header">
         <div className="profile-identity">
+          {loggedIn && <AccountAvatar profile={profile} size={28} />}
           <span className="profile-identity-copy">
             <span className="profile-identity-title">
-              <strong>Kimi Code</strong>
-              {appVersion && <small>v{appVersion}</small>}
+              <strong>
+                {loggedIn
+                  ? profile?.nickname || t("account.defaultUserName")
+                  : t("account.login")}
+              </strong>
+              {loggedIn && profile?.userLevelName && (
+                <small>{profile.userLevelName}</small>
+              )}
             </span>
           </span>
         </div>
@@ -138,7 +146,7 @@ export function AccountUsagePopover({
   );
 }
 
-function ManagedUsageProgress({
+export function ManagedUsageProgress({
   row,
   primary,
 }: {
@@ -179,7 +187,7 @@ function ManagedUsageProgress({
   );
 }
 
-function BoosterWalletSummary({
+export function BoosterWalletSummary({
   wallet,
 }: {
   wallet: NonNullable<AccountUsage["extraUsage"]>;

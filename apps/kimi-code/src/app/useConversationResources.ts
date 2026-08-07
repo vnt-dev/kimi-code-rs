@@ -41,6 +41,7 @@ import type {
   CompactionEvent,
   Conversation,
   DeviceCode,
+  ManagedUserInfo,
   Model,
   SkillContent,
   SkillDescriptor,
@@ -56,6 +57,7 @@ import {
 type Setter<T> = Dispatch<SetStateAction<T>>;
 
 interface ConversationResourceOptions {
+  accountProfileRequest: RefObject<number>;
   accountUsageRequest: RefObject<number>;
   activeAgentScope?: { sessionId: string; agentId: string };
   activeCompaction?: CompactionEvent;
@@ -66,11 +68,13 @@ interface ConversationResourceOptions {
   composerAddOpen: boolean;
   historyRequests: RefObject<Record<string, number>>;
   inFlightTurnsRef: RefObject<Record<string, InFlightTurn>>;
+  loadAccountProfile: () => Promise<void>;
   promptAttachments: PromptAttachment[];
   promptSkills: SkillDescriptor[];
   refreshModels: () => Promise<void>;
   resetPrompt: (value?: string, conversationId?: string) => void;
   selectedModel?: Model;
+  setAccountProfile: Setter<ManagedUserInfo | undefined>;
   setAccountUsage: Setter<AccountUsage | undefined>;
   setAccountUsageBusy: Setter<boolean>;
   setAccountUsageError: Setter<string | undefined>;
@@ -115,6 +119,7 @@ interface ConversationResourceOptions {
 }
 
 export function useConversationResources({
+  accountProfileRequest,
   accountUsageRequest,
   activeAgentScope,
   activeCompaction,
@@ -125,11 +130,13 @@ export function useConversationResources({
   composerAddOpen,
   historyRequests,
   inFlightTurnsRef,
+  loadAccountProfile,
   promptAttachments,
   promptSkills,
   refreshModels,
   resetPrompt,
   selectedModel,
+  setAccountProfile,
   setAccountUsage,
   setAccountUsageBusy,
   setAccountUsageError,
@@ -176,6 +183,7 @@ export function useConversationResources({
         setLoginOpen(false);
         showNotice(t("notice.loginSuccess"));
         void refreshModels();
+        void loadAccountProfile();
       }
     } catch (error) {
       showNotice(conciseError(error));
@@ -192,6 +200,8 @@ export function useConversationResources({
       setAccountUsage(undefined);
       setAccountUsageBusy(false);
       setAccountUsageError(undefined);
+      accountProfileRequest.current += 1;
+      setAccountProfile(undefined);
       setProfileOpen(false);
       showNotice(t("notice.logoutSuccess"));
     } catch (error) {

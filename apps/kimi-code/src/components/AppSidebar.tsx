@@ -11,7 +11,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
-  Sparkles,
 } from "lucide-react";
 import {
   type CSSProperties,
@@ -27,8 +26,10 @@ import type {
   AuthStatus,
   Conversation,
   DesktopState,
+  ManagedUserInfo,
   Project,
 } from "../types";
+import { AccountAvatar } from "./AccountAvatar";
 import { AccountUsagePopover } from "./AccountUsagePopover";
 import type { RemovalTarget } from "./AppDialogs";
 
@@ -40,7 +41,7 @@ interface AppSidebarProps {
   interactions: Record<string, AgentInteraction[]>;
   unreadCompletedConversations: Record<string, true>;
   auth: AuthStatus;
-  appVersion?: string;
+  accountProfile?: ManagedUserInfo;
   accountUsage?: AccountUsage;
   accountUsageBusy: boolean;
   accountUsageError?: string;
@@ -75,7 +76,7 @@ export function AppSidebar({
   interactions,
   unreadCompletedConversations,
   auth,
-  appVersion,
+  accountProfile,
   accountUsage,
   accountUsageBusy,
   accountUsageError,
@@ -315,15 +316,16 @@ export function AppSidebar({
               aria-controls="account-popover"
               onClick={onToggleProfile}
             >
+              {auth.loggedIn && (
+                <AccountAvatar profile={accountProfile} size={24} />
+              )}
               <span className="account-copy" aria-hidden={sidebarCollapsed}>
                 <strong>
-                  {auth.loggedIn ? "Kimi Code" : t("account.login")}
-                </strong>
-                <small>
                   {auth.loggedIn
-                    ? t("account.connected")
-                    : t("account.loginHint")}
-                </small>
+                    ? accountProfile?.nickname || t("account.defaultUserName")
+                    : t("account.login")}
+                </strong>
+                {!auth.loggedIn && <small>{t("account.loginHint")}</small>}
               </span>
               {auth.loggedIn ? (
                 <MoreHorizontal
@@ -354,7 +356,7 @@ export function AppSidebar({
                 onClick={onToggleProfile}
               >
                 {auth.loggedIn ? (
-                  <Sparkles size={14} />
+                  <AccountAvatar profile={accountProfile} size={20} />
                 ) : (
                   <CircleUserRound size={15} />
                 )}
@@ -362,7 +364,7 @@ export function AppSidebar({
             </div>
             {profileOpen && (
               <AccountUsagePopover
-                appVersion={appVersion}
+                profile={accountProfile}
                 loggedIn={auth.loggedIn}
                 usage={accountUsage}
                 busy={accountUsageBusy}
