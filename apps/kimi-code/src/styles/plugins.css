@@ -54,7 +54,7 @@
   border: 1px solid var(--line);
   border-radius: 7px;
   color: var(--text);
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
   cursor: pointer;
 }
 
@@ -121,7 +121,7 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--muted);
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
 }
 
 .plugin-search:focus-within {
@@ -152,7 +152,7 @@
   gap: 11px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
 }
 
 .plugin-card:hover {
@@ -344,7 +344,7 @@
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
 }
 
 .plugin-source-input:focus-within {
@@ -435,7 +435,7 @@
   height: 5px;
   overflow: hidden;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 14%, var(--segment-surface));
+  background: color-mix(in srgb, var(--accent) 14%, var(--sd-surface, var(--segment-surface)));
 }
 
 .plugin-install-progress-track > span {
@@ -459,7 +459,7 @@
 .plugin-skeletons span {
   height: 78px;
   border-radius: 10px;
-  background: linear-gradient(90deg, var(--segment-surface), var(--control-hover), var(--segment-surface));
+  background: linear-gradient(90deg, var(--sd-surface, var(--segment-surface)), var(--control-hover), var(--sd-surface, var(--segment-surface)));
   background-size: 200% 100%;
   animation: plugin-skeleton 1.2s ease-in-out infinite;
 }
@@ -489,7 +489,7 @@
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 9px;
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
 }
 
 .plugin-meta > div {
@@ -535,7 +535,7 @@
   gap: 12px;
   border: 1px solid var(--line);
   border-bottom: 0;
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
 }
 
 .plugin-mcp-row:first-of-type {
@@ -627,7 +627,7 @@
   border: 1px solid var(--line);
   border-radius: 7px;
   color: var(--text);
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
   cursor: pointer;
   font-size: 12px;
 }

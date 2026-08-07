@@ -5,25 +5,32 @@
   display: grid;
   padding: 32px;
   place-items: center;
-  background: var(--dialog-overlay);
+  background: rgba(13, 17, 23, 0.32);
   animation: settings-fade-in 150ms ease-out;
 }
 
 .settings-dialog {
+  --sd-surface: #191e25;
+  --sd-hover: rgba(255, 255, 255, 0.05);
   position: relative;
   display: flex;
-  width: min(760px, calc(100vw - 32px));
-  height: min(680px, calc(100vh - 64px));
+  width: min(980px, 96vw);
+  height: min(780px, calc(100vh - 64px));
   min-height: 360px;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 0.5px solid var(--line);
   border-radius: 16px;
   color: var(--text);
   background: var(--dialog-surface);
   box-shadow: var(--dialog-shadow);
   outline: none;
   animation: settings-dialog-in 180ms ease-out;
+}
+
+html[data-color-scheme="light"] .settings-dialog {
+  --sd-surface: #f5f6f8;
+  --sd-hover: rgba(0, 0, 0, 0.03);
 }
 
 .settings-toast {
@@ -61,43 +68,7 @@
 
 .settings-toast button:hover {
   color: var(--text);
-  background: var(--control-hover);
-}
-
-.settings-dialog-header {
-  display: flex;
-  min-height: 58px;
-  padding: 20px 22px 14px;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.settings-dialog-header h2 {
-  margin: 0;
-  color: var(--text);
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 1.25;
-}
-
-.settings-dialog-close {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  margin-top: -5px;
-  padding: 0;
-  place-items: center;
-  border: 0;
-  border-radius: 6px;
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-}
-
-.settings-dialog-close:hover {
-  color: var(--text);
-  background: var(--control-hover);
+  background: var(--sd-hover);
 }
 
 .settings-dialog-layout {
@@ -109,54 +80,132 @@
 .settings-tabs {
   display: flex;
   width: 148px;
-  padding: 8px;
+  padding: 0 8px 8px;
   flex: 0 0 auto;
   flex-direction: column;
   gap: 2px;
+  border-right: 0.5px solid var(--line);
+}
+
+.settings-tabs-header {
+  display: flex;
+  min-height: 50px;
+  padding: 0 12px;
+  align-items: center;
+}
+
+.settings-tabs-header h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.25;
 }
 
 .settings-tab {
-  min-height: 38px;
+  display: flex;
+  min-height: 34px;
   padding: 8px 10px;
+  align-items: center;
+  gap: 8px;
   border: 0;
   border-radius: 8px;
   color: var(--muted);
   background: transparent;
   text-align: left;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-tab svg {
+  flex: 0 0 auto;
 }
 
 .settings-tab:hover {
   color: var(--text);
-  background: var(--control-hover);
+  background: var(--sd-hover);
 }
 
 .settings-tab.active {
-  color: var(--accent);
-  background: var(--accent-soft);
-  font-weight: 500;
+  color: var(--text);
+  background: var(--sd-hover);
+}
+
+.settings-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.settings-region {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.settings-region-header {
+  display: flex;
+  min-height: 50px;
+  padding-right: 20px;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+.settings-dialog-close {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-dialog-close:hover {
+  color: var(--text);
+  background: var(--sd-hover);
 }
 
 .settings-dialog-content {
   min-width: 0;
-  padding: 8px 20px 20px 24px;
+  padding: 8px 32px 20px;
   flex: 1;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.settings-dialog-content:hover {
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.settings-dialog-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.settings-dialog-content::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: transparent;
+}
+
+.settings-dialog-content:hover::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
 }
 
 .settings-section {
   padding: 16px 0;
-  border-bottom: 1px solid var(--line);
 }
 
 .settings-section h3 {
   margin: 0 0 12px;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--text);
+  font-size: 14px;
   font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .settings-row {
@@ -170,7 +219,8 @@
 
 .settings-row-label {
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 475;
 }
 
 .settings-segmented {
@@ -178,9 +228,9 @@
   padding: 2px;
   align-items: center;
   gap: 2px;
-  border: 1px solid var(--line);
+  border: 0.5px solid var(--line);
   border-radius: 8px;
-  background: var(--segment-surface);
+  background: var(--sd-surface);
 }
 
 .settings-segmented button {
@@ -220,10 +270,10 @@
   padding: 0 8px 0 12px;
   align-items: center;
   gap: 6px;
-  border: 1px solid var(--line);
+  border: 0.5px solid var(--line);
   border-radius: 8px;
   color: var(--text);
-  background: var(--segment-surface);
+  background: var(--sd-surface);
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
@@ -259,7 +309,7 @@
   right: 0;
   min-width: 100%;
   padding: 4px;
-  border: 1px solid var(--line);
+  border: 0.5px solid var(--line);
   border-radius: 8px;
   background: var(--dialog-surface);
   box-shadow: var(--dialog-shadow);
@@ -333,15 +383,15 @@
 
 .settings-update-button {
   display: inline-flex;
-  min-height: 32px;
+  min-height: 30px;
   padding: 0 12px;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 0.5px solid var(--line);
+  border-radius: 6px;
   color: var(--text);
-  background: var(--segment-surface);
+  background: var(--sd-surface);
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
@@ -349,7 +399,7 @@
 
 .settings-update-button:hover:not(:disabled) {
   border-color: var(--accent);
-  background: var(--control-hover);
+  background: var(--sd-hover);
 }
 
 .settings-update-button:disabled {
@@ -375,7 +425,7 @@
   overflow-y: auto;
   border-radius: 8px;
   color: var(--muted);
-  background: var(--control-hover);
+  background: var(--sd-hover);
   white-space: pre-wrap;
 }
 
@@ -398,8 +448,8 @@
 .settings-section-copy {
   margin: -4px 0 14px;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .settings-row > div small,
@@ -407,38 +457,38 @@
 .settings-desktop-only {
   display: block;
   margin-top: 3px;
-  color: var(--muted);
+  color: var(--subtle);
   font-size: 12px;
 }
 
 .settings-toggle {
-  width: 38px;
-  height: 22px;
+  width: 36px;
+  height: 20px;
   padding: 2px;
-  border: 1px solid var(--line-strong);
+  border: 0.5px solid var(--line-strong);
   border-radius: 999px;
-  background: var(--segment-surface);
+  background: var(--line);
   cursor: pointer;
   transition: background 140ms ease;
 }
 
 .settings-toggle span {
   display: block;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
-  background: var(--muted);
+  background: #fff;
   transition: transform 140ms ease, background 140ms ease;
 }
 
 .settings-toggle.active {
   border-color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--accent);
 }
 
 .settings-toggle.active span {
   transform: translateX(16px);
-  background: var(--accent);
+  background: #fff;
 }
 
 .settings-toggle:disabled {
@@ -450,10 +500,10 @@
   width: 100px;
   height: 32px;
   padding: 0 9px;
-  border: 1px solid var(--line);
+  border: 0.5px solid var(--line);
   border-radius: 8px;
   color: var(--text);
-  background: var(--segment-surface);
+  background: var(--sd-surface);
   font-size: 13px;
   outline: none;
 }
@@ -482,9 +532,9 @@
   padding: 11px 12px;
   align-items: center;
   gap: 10px;
-  border: 1px solid var(--line);
+  border: 0.5px solid var(--line);
   border-radius: 9px;
-  background: var(--segment-surface);
+  background: var(--sd-surface);
 }
 
 .settings-web-status .state {
@@ -550,12 +600,12 @@
 
 .settings-account-card {
   display: flex;
-  padding: 14px 16px;
+  padding: 16px;
   align-items: center;
   gap: 12px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--segment-surface);
+  border: 0.5px solid var(--line);
+  border-radius: 16px;
+  background: var(--sd-surface);
 }
 
 .settings-account-meta {
@@ -575,8 +625,8 @@
 .settings-account-name {
   overflow: hidden;
   color: var(--text);
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -593,20 +643,20 @@
 
 .settings-account-sub {
   margin-top: 3px;
-  color: var(--muted);
+  color: var(--subtle);
   font-size: 12px;
 }
 
 .settings-account-action {
   display: inline-flex;
-  min-height: 32px;
+  min-height: 30px;
   padding: 0 12px;
   align-items: center;
   justify-content: center;
   gap: 6px;
   flex: 0 0 auto;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 0.5px solid var(--line);
+  border-radius: 6px;
   color: var(--text);
   background: transparent;
   cursor: pointer;
@@ -615,7 +665,7 @@
 }
 
 .settings-account-action:hover {
-  background: var(--control-hover);
+  background: var(--sd-hover);
 }
 
 .settings-account-action.primary {
@@ -654,12 +704,24 @@
 
   .settings-tabs {
     width: auto;
-    padding: 8px 12px;
+    padding: 8px;
     flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 0.5px solid var(--line);
+  }
+
+  .settings-tabs-header {
+    display: none;
   }
 
   .settings-tab {
     flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .settings-region-header {
+    min-height: 42px;
   }
 
   .settings-dialog-content {

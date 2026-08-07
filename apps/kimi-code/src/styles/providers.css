@@ -40,7 +40,7 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
@@ -165,7 +165,7 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
   font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
@@ -226,7 +226,7 @@
   padding: 16px;
   border-top: 1px solid var(--line);
   border-radius: 0 0 10px 10px;
-  background: color-mix(in srgb, var(--dialog-surface) 92%, var(--segment-surface));
+  background: color-mix(in srgb, var(--dialog-surface) 92%, var(--sd-surface, var(--segment-surface)));
 }
 
 .provider-fields-grid {
@@ -264,7 +264,7 @@
   border-radius: 8px;
   outline: none;
   color: var(--text);
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
   font: inherit;
   font-size: 13px;
 }
@@ -287,7 +287,7 @@
   border-radius: 8px;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--dialog-surface) 35%, transparent), transparent),
-    var(--segment-surface);
+    var(--sd-surface, var(--segment-surface));
   font-size: 14px;
   font-weight: 500;
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
@@ -295,7 +295,7 @@
 
 .provider-select .settings-select-trigger:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-  background: color-mix(in srgb, var(--segment-surface) 84%, var(--accent-soft));
+  background: color-mix(in srgb, var(--sd-surface, var(--segment-surface)) 84%, var(--accent-soft));
 }
 
 .provider-select.open .settings-select-trigger {
@@ -444,7 +444,7 @@
   padding-top: 6px;
   padding-bottom: 6px;
   color: var(--muted);
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
   font-size: 11px;
   font-weight: 500;
 }
@@ -476,7 +476,7 @@
   display: grid;
   padding: 3px 7px 10px;
   gap: 10px;
-  background: color-mix(in srgb, var(--segment-surface) 48%, transparent);
+  background: color-mix(in srgb, var(--sd-surface, var(--segment-surface)) 48%, transparent);
 }
 
 .provider-model-entry:last-child .provider-model-options {
@@ -640,7 +640,7 @@
   border: 1px solid var(--line);
   border-radius: 6px;
   color: var(--text);
-  background: var(--segment-surface);
+  background: var(--sd-surface, var(--segment-surface));
   cursor: pointer;
   font-size: 11px;
 }

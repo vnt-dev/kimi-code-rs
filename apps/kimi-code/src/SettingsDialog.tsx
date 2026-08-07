@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { Copy, ExternalLink, RefreshCw, X } from "lucide-react";
+import { Copy, ExternalLink, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
 
 import type { ColorScheme } from "./appearance";
 import AccountSettings from "./AccountSettings";
@@ -345,26 +345,18 @@ export default function SettingsDialog({
         aria-labelledby="settings-dialog-title"
         tabIndex={-1}
       >
-        <header className="settings-dialog-header">
-          <h2 id="settings-dialog-title">{t("settings.title")}</h2>
-          <button
-            className="settings-dialog-close"
-            type="button"
-            aria-label={t("settings.close")}
-            onClick={onClose}
-          >
-            <X size={17} />
-          </button>
-        </header>
-
         <div className="settings-dialog-layout">
           <nav className="settings-tabs" aria-label={t("settings.tabs")}>
+            <div className="settings-tabs-header">
+              <h2 id="settings-dialog-title">{t("settings.title")}</h2>
+            </div>
             <button
               className={`settings-tab ${activeTab === "general" ? "active" : ""}`}
               type="button"
               aria-current={activeTab === "general" ? "page" : undefined}
               onClick={() => setActiveTab("general")}
             >
+              <SlidersHorizontal size={15} />
               {t("settings.tabGeneral")}
             </button>
             <button
@@ -373,6 +365,7 @@ export default function SettingsDialog({
               aria-current={activeTab === "account" ? "page" : undefined}
               onClick={() => setActiveTab("account")}
             >
+              <User size={15} />
               {t("settings.tabAccount")}
             </button>
             <button
@@ -381,6 +374,7 @@ export default function SettingsDialog({
               aria-current={activeTab === "providers" ? "page" : undefined}
               onClick={() => setActiveTab("providers")}
             >
+              <Zap size={15} />
               {t("settings.tabProviders")}
             </button>
             <button
@@ -389,6 +383,7 @@ export default function SettingsDialog({
               aria-current={activeTab === "plugins" ? "page" : undefined}
               onClick={() => setActiveTab("plugins")}
             >
+              <Puzzle size={15} />
               {t("settings.tabPlugins")}
             </button>
             {isDesktop() && (
@@ -398,6 +393,7 @@ export default function SettingsDialog({
                 aria-current={activeTab === "web" ? "page" : undefined}
                 onClick={() => setActiveTab("web")}
               >
+                <Globe size={15} />
                 {t("settings.tabWeb")}
               </button>
             )}
@@ -407,11 +403,24 @@ export default function SettingsDialog({
               aria-current={activeTab === "about" ? "page" : undefined}
               onClick={() => setActiveTab("about")}
             >
+              <Info size={15} />
               {t("settings.tabAbout")}
             </button>
           </nav>
 
-          <main className="settings-dialog-content">
+          <div className="settings-region">
+            <div className="settings-region-header">
+              <button
+                className="settings-dialog-close"
+                type="button"
+                aria-label={t("settings.close")}
+                onClick={onClose}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <main className="settings-dialog-content">
             {activeTab === "general" ? (
               <>
                 <section
@@ -673,7 +682,8 @@ export default function SettingsDialog({
                 )}
               </section>
             )}
-          </main>
+            </main>
+          </div>
         </div>
 
         {updateToast && (
