@@ -4,6 +4,7 @@ import type { RenderMessage } from "../chat/history";
 import type { Language } from "../i18n";
 import { t } from "../i18n";
 import SettingsDialog from "../SettingsDialog";
+import { CustomAgentManagerDialog } from "./CustomAgentManagerDialog";
 import { isDesktop } from "../transport";
 import type {
   AccountUsage,
@@ -35,6 +36,8 @@ interface AppOverlaysProps {
   goalEditBusy: boolean;
   directoryPickerOpen: boolean;
   settingsOpen: boolean;
+  agentManagerOpen: boolean;
+  agentManagerWorkspace?: { id: string; name: string };
   appVersion?: string;
   auth: AuthStatus;
   accountProfile?: ManagedUserInfo;
@@ -64,6 +67,7 @@ interface AppOverlaysProps {
   onProvidersChanged: () => void;
   onPluginsChanged: () => void;
   onCloseSettings: () => void;
+  onCloseAgentManager: () => void;
   onDismissNotice: () => void;
 }
 
@@ -80,6 +84,8 @@ export function AppOverlays({
   goalEditBusy,
   directoryPickerOpen,
   settingsOpen,
+  agentManagerOpen,
+  agentManagerWorkspace,
   appVersion,
   auth,
   accountProfile,
@@ -109,6 +115,7 @@ export function AppOverlays({
   onProvidersChanged,
   onPluginsChanged,
   onCloseSettings,
+  onCloseAgentManager,
   onDismissNotice,
 }: AppOverlaysProps) {
   return (
@@ -179,6 +186,14 @@ export function AppOverlays({
           onProvidersChanged={onProvidersChanged}
           onPluginsChanged={onPluginsChanged}
           onClose={onCloseSettings}
+        />
+      )}
+
+      {agentManagerOpen && agentManagerWorkspace && (
+        <CustomAgentManagerDialog
+          workspaceId={agentManagerWorkspace.id}
+          projectName={agentManagerWorkspace.name}
+          onClose={onCloseAgentManager}
         />
       )}
 

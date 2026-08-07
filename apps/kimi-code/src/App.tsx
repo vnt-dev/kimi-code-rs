@@ -1,4 +1,5 @@
 import {
+  Bot,
   Folder,
   Menu,
   SquarePen
@@ -236,6 +237,7 @@ export default function App() {
   const [deviceCode, setDeviceCode] = useState<DeviceCode>();
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [agentManagerOpen, setAgentManagerOpen] = useState(false);
   const [colorScheme, setColorScheme] =
     useState<ColorScheme>(loadColorScheme);
   const [language, setLanguageState] = useState<Language>(loadLanguage);
@@ -2639,7 +2641,16 @@ export default function App() {
                 </div>
               </div>
               <div className="header-actions">
-                <button className="icon-button" title={t("conversation.create")} onClick={() => void createConversation(activeProject)}>
+                <button
+                  className="icon-button"
+                  type="button"
+                  title={t("agents.open")}
+                  aria-label={t("agents.open")}
+                  onClick={() => setAgentManagerOpen(true)}
+                >
+                  <Bot size={17} />
+                </button>
+                <button className="icon-button" type="button" title={t("conversation.create")} onClick={() => void createConversation(activeProject)}>
                   <SquarePen size={17} />
                 </button>
               </div>
@@ -2885,6 +2896,8 @@ export default function App() {
         goalEditBusy={goalEditBusy}
         directoryPickerOpen={directoryPickerOpen}
         settingsOpen={settingsOpen}
+        agentManagerOpen={agentManagerOpen}
+        agentManagerWorkspace={activeProject ? { id: activeProject.id, name: activeProject.name } : undefined}
         appVersion={appVersion}
         auth={auth}
         accountProfile={accountProfile}
@@ -2931,6 +2944,7 @@ export default function App() {
         onProvidersChanged={() => void loadModels()}
         onPluginsChanged={() => setPluginCommandRevision((value) => value + 1)}
         onCloseSettings={closeSettings}
+        onCloseAgentManager={() => setAgentManagerOpen(false)}
         onDismissNotice={() => setNotice(undefined)}
       />
 

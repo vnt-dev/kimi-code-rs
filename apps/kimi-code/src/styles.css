@@ -14,6 +14,7 @@
 @import "./styles/responsive.css";
 @import "./styles/theme.css";
 @import "./styles/settings.css";
+@import "./styles/agents.css";
 @import "./styles/plugins.css";
 @import "./styles/providers.css";
 @import "./styles/mobile.css";

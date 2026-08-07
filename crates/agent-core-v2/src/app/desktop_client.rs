@@ -6,7 +6,7 @@
 use std::{
     collections::HashSet,
     num::NonZeroU64,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -51,6 +51,10 @@ use crate::{
     },
     app::{
         agent_app_runtime::bootstrap_agent_app,
+        agent_file_catalog::{
+            AgentFileSource, ManagedAgentFile, delete_managed_agent_file, list_managed_agent_files,
+            resolve_agent_project_root, save_managed_agent_file,
+        },
         auth::{OAuthToolkitContract, OAuthToolkitService, config_section::SERVICES_SECTION},
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         capability::{CAPABILITY_SERVICE_ID, CapabilityStatus},
@@ -87,8 +91,10 @@ use crate::{
             config::PROVIDERS_SECTION,
         },
     },
+    os::interface::host_file_system::HOST_FILE_SYSTEM_SERVICE_ID,
     session::{
         agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID, ensure_main_agent},
+        agent_profile_catalog::SESSION_AGENT_PROFILE_CATALOG_ID,
         interaction::{Interaction, InteractionKind, SESSION_INTERACTION_SERVICE_ID},
         session_context::SESSION_CONTEXT_ID,
         skill_catalog::SESSION_SKILL_CATALOG_ID,
@@ -321,6 +327,50 @@ pub struct DesktopSkillContent {
     pub source: String,
     pub path: String,
     pub content: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DesktopCustomAgentScope {
+    App,
+    Project,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopCustomAgent {
+    pub scope: DesktopCustomAgentScope,
+    pub relative_path: String,
+    pub path: String,
+    pub content: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub when_to_use: Option<String>,
+    pub is_override: bool,
+    pub tools: Option<Vec<String>>,
+    pub disallowed_tools: Option<Vec<String>>,
+    pub subagents: Option<Vec<String>>,
+    pub model: Option<String>,
+    pub valid: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DesktopSaveCustomAgentInput {
+    pub workspace_id: String,
+    pub scope: DesktopCustomAgentScope,
+    #[serde(default)]
+    pub relative_path: Option<String>,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DesktopDeleteCustomAgentInput {
+    pub workspace_id: String,
+    pub scope: DesktopCustomAgentScope,
+    pub relative_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1001,6 +1051,115 @@ impl KimiCodeDesktopClient {
             path: skill.path,
             content: skill.content,
         })
+    }
+
+    pub async fn list_custom_agents(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<DesktopCustomAgent>, String> {
+        let mut agents = Vec::new();
+        for scope in [
+            DesktopCustomAgentScope::App,
+            DesktopCustomAgentScope::Project,
+        ] {
+            let root = self.custom_agent_root(workspace_id, scope).await?;
+            let source = custom_agent_source(scope);
+            agents.extend(
+                list_managed_agent_files(&root, source)
+                    .await?
+                    .into_iter()
+                    .map(|file| map_desktop_custom_agent(scope, file)),
+            );
+        }
+        agents.sort_by(|left, right| {
+            custom_agent_scope_order(left.scope)
+                .cmp(&custom_agent_scope_order(right.scope))
+                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.relative_path.cmp(&right.relative_path))
+        });
+        Ok(agents)
+    }
+
+    pub async fn save_custom_agent(
+        &self,
+        input: DesktopSaveCustomAgentInput,
+    ) -> Result<DesktopCustomAgent, String> {
+        let root = self
+            .custom_agent_root(&input.workspace_id, input.scope)
+            .await?;
+        let file = save_managed_agent_file(
+            &root,
+            custom_agent_source(input.scope),
+            input.relative_path.as_deref(),
+            &input.content,
+        )
+        .await?;
+        self.reload_active_agent_catalogs().await?;
+        Ok(map_desktop_custom_agent(input.scope, file))
+    }
+
+    pub async fn delete_custom_agent(
+        &self,
+        input: DesktopDeleteCustomAgentInput,
+    ) -> Result<(), String> {
+        let root = self
+            .custom_agent_root(&input.workspace_id, input.scope)
+            .await?;
+        delete_managed_agent_file(&root, &input.relative_path).await?;
+        self.reload_active_agent_catalogs().await
+    }
+
+    async fn custom_agent_root(
+        &self,
+        workspace_id: &str,
+        scope: DesktopCustomAgentScope,
+    ) -> Result<PathBuf, String> {
+        match scope {
+            DesktopCustomAgentScope::App => Ok(self.home_dir.join("agents")),
+            DesktopCustomAgentScope::Project => {
+                let workspace_id = workspace_id.trim();
+                if workspace_id.is_empty() {
+                    return Err("A workspace id is required for project agents.".into());
+                }
+                let registry = self
+                    .app
+                    .get(WORKSPACE_REGISTRY_SERVICE_ID)
+                    .map_err(|error| error.to_string())?;
+                let workspace = registry
+                    .get(workspace_id)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("Workspace `{workspace_id}` was not found."))?;
+                let fs = self
+                    .app
+                    .get(HOST_FILE_SYSTEM_SERVICE_ID)
+                    .map_err(|error| error.to_string())?;
+                let project_root =
+                    resolve_agent_project_root(fs.0.as_ref(), Path::new(&workspace.root), None)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                Ok(project_root.join(".kimi-code/agents"))
+            }
+        }
+    }
+
+    async fn reload_active_agent_catalogs(&self) -> Result<(), String> {
+        let sessions = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        for session in sessions.list() {
+            let catalog = session
+                .get(SESSION_AGENT_PROFILE_CATALOG_ID)
+                .map_err(|error| error.to_string())?;
+            catalog.reload().await.map_err(|error| {
+                format!(
+                    "Agent file was updated, but session {} could not reload it: {error}",
+                    session.id()
+                )
+            })?;
+        }
+        Ok(())
     }
 
     pub async fn list_plugins(&self) -> Result<Vec<PluginSummary>, String> {
@@ -1941,6 +2100,65 @@ fn map_desktop_workspace(workspace: Workspace) -> DesktopWorkspace {
         name: workspace.name,
         created_at: workspace.created_at_millis,
         last_opened_at: workspace.last_opened_at_millis,
+    }
+}
+
+fn map_desktop_custom_agent(
+    scope: DesktopCustomAgentScope,
+    file: ManagedAgentFile,
+) -> DesktopCustomAgent {
+    let fallback_name = Path::new(&file.relative_path)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&file.relative_path)
+        .to_owned();
+    let definition = file.definition;
+    DesktopCustomAgent {
+        scope,
+        relative_path: file.relative_path,
+        path: file.path,
+        content: file.content,
+        name: definition
+            .as_ref()
+            .map(|definition| definition.name.clone())
+            .unwrap_or(fallback_name),
+        description: definition
+            .as_ref()
+            .map(|definition| definition.description.clone()),
+        when_to_use: definition
+            .as_ref()
+            .and_then(|definition| definition.when_to_use.clone()),
+        is_override: definition
+            .as_ref()
+            .is_some_and(|definition| definition.is_override),
+        tools: definition
+            .as_ref()
+            .and_then(|definition| definition.tools.clone()),
+        disallowed_tools: definition
+            .as_ref()
+            .and_then(|definition| definition.disallowed_tools.clone()),
+        subagents: definition
+            .as_ref()
+            .and_then(|definition| definition.subagents.clone()),
+        model: definition
+            .as_ref()
+            .and_then(|definition| definition.model.clone()),
+        valid: definition.is_some(),
+        error: file.error,
+    }
+}
+
+fn custom_agent_source(scope: DesktopCustomAgentScope) -> AgentFileSource {
+    match scope {
+        DesktopCustomAgentScope::App => AgentFileSource::User,
+        DesktopCustomAgentScope::Project => AgentFileSource::Project,
+    }
+}
+
+fn custom_agent_scope_order(scope: DesktopCustomAgentScope) -> u8 {
+    match scope {
+        DesktopCustomAgentScope::App => 0,
+        DesktopCustomAgentScope::Project => 1,
     }
 }
 

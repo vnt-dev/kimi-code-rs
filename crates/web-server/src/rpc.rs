@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use kimi_code_agent_core_v2::app::desktop_client::{
-    DesktopPrepareSessionRequest, DesktopSaveProviderInput, KimiCodeDesktopClient,
+    DesktopDeleteCustomAgentInput, DesktopPrepareSessionRequest, DesktopSaveCustomAgentInput,
+    DesktopSaveProviderInput, KimiCodeDesktopClient,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -51,6 +52,22 @@ struct CreateWorkspaceArgs {
 struct SkillArgs {
     session_id: String,
     name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceAgentArgs {
+    workspace_id: String,
+}
+
+#[derive(Deserialize)]
+struct SaveCustomAgentArgs {
+    input: DesktopSaveCustomAgentInput,
+}
+
+#[derive(Deserialize)]
+struct DeleteCustomAgentArgs {
+    input: DesktopDeleteCustomAgentInput,
 }
 
 #[derive(Deserialize)]
@@ -303,6 +320,32 @@ pub(crate) async fn dispatch_rpc(
                     .await
                     .map_err(RpcError::transport)?,
             )
+        }
+        "list_custom_agents" => {
+            let args: WorkspaceAgentArgs = decode(args)?;
+            encode(
+                client
+                    .list_custom_agents(&args.workspace_id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "save_custom_agent" => {
+            let args: SaveCustomAgentArgs = decode(args)?;
+            encode(
+                client
+                    .save_custom_agent(args.input)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "delete_custom_agent" => {
+            let args: DeleteCustomAgentArgs = decode(args)?;
+            client
+                .delete_custom_agent(args.input)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
         }
         "upload_file" => {
             let args: UploadFileArgs = decode(args)?;

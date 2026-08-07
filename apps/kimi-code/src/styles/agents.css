@@ -1,0 +1,642 @@
+.agent-manager-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 82;
+  display: grid;
+  padding: 28px;
+  place-items: center;
+  background: rgba(13, 17, 23, 0.38);
+  backdrop-filter: blur(3px);
+  animation: settings-fade-in 150ms ease-out;
+}
+
+.agent-manager-dialog {
+  position: relative;
+  display: flex;
+  width: min(1080px, 96vw);
+  height: min(800px, calc(100vh - 56px));
+  min-height: 480px;
+  overflow: hidden;
+  flex-direction: column;
+  border: 0.5px solid var(--line);
+  border-radius: 16px;
+  color: var(--text);
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
+  outline: none;
+  animation: settings-dialog-in 180ms ease-out;
+}
+
+.agent-manager-header {
+  display: flex;
+  min-height: 68px;
+  padding: 0 18px 0 20px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 0.5px solid var(--line);
+}
+
+.agent-manager-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+}
+
+.agent-manager-title-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-radius: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.agent-manager-title h2,
+.agent-manager-title p {
+  margin: 0;
+}
+
+.agent-manager-title h2 {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+}
+
+.agent-manager-title p {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.agent-manager-close {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.agent-manager-close:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.agent-manager-scope-tabs {
+  display: flex;
+  min-height: 46px;
+  padding: 0 20px;
+  align-items: stretch;
+  gap: 22px;
+  border-bottom: 0.5px solid var(--line);
+}
+
+.agent-manager-scope-tabs button {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  padding: 0 2px;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.agent-manager-scope-tabs button::after {
+  position: absolute;
+  right: 0;
+  bottom: -0.5px;
+  left: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: transparent;
+  content: "";
+}
+
+.agent-manager-scope-tabs button.active {
+  color: var(--text);
+}
+
+.agent-manager-scope-tabs button.active::after {
+  background: var(--accent);
+}
+
+.agent-manager-scope-tabs em {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--subtle);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-manager-scope-tabs small {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--subtle);
+  background: var(--control);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.agent-manager-body {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: 270px minmax(0, 1fr);
+}
+
+.agent-manager-list-pane {
+  display: flex;
+  min-height: 0;
+  padding: 14px 10px 12px;
+  flex-direction: column;
+  border-right: 0.5px solid var(--line);
+  background: color-mix(in srgb, var(--dialog-surface) 94%, var(--text) 6%);
+}
+
+.agent-manager-list-heading {
+  display: flex;
+  min-height: 43px;
+  padding: 0 7px 9px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-manager-list-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.agent-manager-list-heading strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-manager-list-heading small {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--subtle);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-manager-list-heading button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.agent-manager-list-heading button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.agent-manager-list {
+  display: flex;
+  min-height: 0;
+  overflow-y: auto;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.agent-manager-list-item {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-manager-list-item:hover {
+  background: var(--hover);
+}
+
+.agent-manager-list-item.active {
+  border-color: color-mix(in srgb, var(--accent) 23%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.agent-manager-agent-icon {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.agent-manager-list-item.invalid .agent-manager-agent-icon {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+
+.agent-manager-agent-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-manager-agent-copy strong,
+.agent-manager-agent-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-manager-agent-copy strong {
+  font-family: "DM Mono", monospace;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.agent-manager-agent-copy small {
+  color: var(--subtle);
+  font-size: 10.5px;
+}
+
+.agent-manager-override {
+  padding: 2px 5px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  color: #d59a58;
+  background: rgba(213, 154, 88, 0.1);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.agent-manager-new {
+  display: flex;
+  min-height: 34px;
+  margin-top: 10px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 550;
+}
+
+.agent-manager-new:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.agent-manager-list-state,
+.agent-manager-empty {
+  display: flex;
+  min-height: 150px;
+  padding: 20px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--subtle);
+  font-size: 11px;
+  text-align: center;
+}
+
+.agent-manager-list-state {
+  flex-direction: row;
+}
+
+.agent-manager-empty strong {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.agent-manager-editor-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--dialog-surface);
+}
+
+.agent-manager-editor-heading {
+  display: flex;
+  min-height: 57px;
+  padding: 10px 16px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 0.5px solid var(--line);
+}
+
+.agent-manager-editor-heading > div:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.agent-manager-editor-heading > div:first-child span {
+  font-family: "DM Mono", monospace;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.agent-manager-editor-heading small {
+  overflow: hidden;
+  color: var(--subtle);
+  font-family: "DM Mono", monospace;
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-manager-editor-state span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--subtle);
+  font-size: 10.5px;
+}
+
+.agent-manager-editor-state span.dirty {
+  color: #d59a58;
+}
+
+.agent-manager-message {
+  display: flex;
+  margin: 10px 14px 0;
+  padding: 8px 10px;
+  align-items: flex-start;
+  gap: 7px;
+  border: 1px solid;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.agent-manager-message svg {
+  margin-top: 1px;
+  flex: 0 0 auto;
+}
+
+.agent-manager-message.error {
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.agent-manager-message.success {
+  border-color: rgba(77, 167, 116, 0.25);
+  color: #62b987;
+  background: rgba(77, 167, 116, 0.06);
+}
+
+.agent-manager-editor {
+  width: calc(100% - 28px);
+  min-height: 0;
+  margin: 12px 14px 0;
+  padding: 15px 17px;
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+  color: var(--text);
+  background: color-mix(in srgb, var(--control) 70%, var(--dialog-surface));
+  font-family: "DM Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  tab-size: 2;
+}
+
+.agent-manager-editor:focus {
+  border-color: color-mix(in srgb, var(--accent) 58%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.agent-manager-editor:disabled {
+  opacity: 0.7;
+}
+
+.agent-manager-editor-footer {
+  display: flex;
+  min-height: 30px;
+  padding: 0 17px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--subtle);
+  font-size: 9.5px;
+}
+
+.agent-manager-actions {
+  display: grid;
+  min-height: 52px;
+  padding: 8px 14px 12px;
+  align-items: center;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  border-top: 0.5px solid var(--line);
+}
+
+.agent-manager-actions button,
+.agent-manager-editor-empty button,
+.agent-manager-confirm button {
+  display: inline-flex;
+  min-height: 32px;
+  padding: 7px 11px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--control);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.agent-manager-actions button:last-child {
+  min-width: 92px;
+  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+  color: white;
+  background: var(--accent);
+}
+
+.agent-manager-actions button.danger,
+.agent-manager-confirm button.danger {
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.agent-manager-actions button:hover:not(:disabled),
+.agent-manager-editor-empty button:hover:not(:disabled),
+.agent-manager-confirm button:hover:not(:disabled) {
+  filter: brightness(1.07);
+}
+
+.agent-manager-actions button:disabled,
+.agent-manager-confirm button:disabled,
+.agent-manager-new:disabled,
+.agent-manager-list-heading button:disabled {
+  opacity: 0.46;
+  cursor: default;
+}
+
+.agent-manager-editor-empty {
+  display: flex;
+  min-height: 0;
+  padding: 40px;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  flex-direction: column;
+  color: var(--subtle);
+  text-align: center;
+}
+
+.agent-manager-editor-empty h3 {
+  margin: 14px 0 6px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.agent-manager-editor-empty p {
+  max-width: 340px;
+  margin: 0 0 18px;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.agent-manager-confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  padding: 24px;
+  place-items: center;
+  background: rgba(10, 12, 16, 0.5);
+  backdrop-filter: blur(3px);
+}
+
+.agent-manager-confirm {
+  display: flex;
+  width: min(390px, calc(100vw - 48px));
+  padding: 24px;
+  align-items: center;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: 13px;
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
+  text-align: center;
+}
+
+.agent-manager-confirm-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 11px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.agent-manager-confirm h3 {
+  margin: 13px 0 7px;
+  font-size: 15px;
+}
+
+.agent-manager-confirm p {
+  margin: 0 0 19px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.agent-manager-confirm > div {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .agent-manager-backdrop {
+    padding: 0;
+  }
+
+  .agent-manager-dialog {
+    width: 100vw;
+    height: 100vh;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .agent-manager-title p,
+  .agent-manager-scope-tabs em {
+    display: none;
+  }
+
+  .agent-manager-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(150px, 30vh) minmax(0, 1fr);
+  }
+
+  .agent-manager-list-pane {
+    border-right: 0;
+    border-bottom: 0.5px solid var(--line);
+  }
+
+  .agent-manager-editor-heading {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .agent-manager-editor {
+    width: calc(100% - 20px);
+    margin-right: 10px;
+    margin-left: 10px;
+  }
+}

@@ -79,6 +79,19 @@ pub async fn project_agent_roots(
     Ok(roots)
 }
 
+/// Resolve the repository root used by project-scoped agent discovery.
+///
+/// Management surfaces use this helper when they need to create the canonical
+/// `.kimi-code/agents` directory before it exists. Keeping the resolution here
+/// ensures reads and writes agree on what "current project" means.
+pub async fn resolve_agent_project_root(
+    fs: &dyn HostFileSystemService,
+    work_dir: &Path,
+    warn: Option<&AgentRootWarn<'_>>,
+) -> Result<PathBuf, HostFsError> {
+    find_project_root(fs, work_dir, warn).await
+}
+
 // Original: configuredAgentRoots().
 pub async fn configured_agent_roots(
     fs: &dyn HostFileSystemService,

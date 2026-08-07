@@ -12,11 +12,12 @@ use kimi_code_agent_core_v2::{
         bootstrap::resolve_kimi_home,
         capability::CapabilityStatus,
         desktop_client::{
-            DesktopAuthStatus, DesktopContextUsage, DesktopDeviceCode, DesktopInteraction,
+            DesktopAuthStatus, DesktopContextUsage, DesktopCustomAgent,
+            DesktopDeleteCustomAgentInput, DesktopDeviceCode, DesktopInteraction,
             DesktopManagedUsage, DesktopManagedUserInfo, DesktopMessagePage, DesktopModel,
             DesktopPrepareSessionRequest, DesktopPreparedSession, DesktopProvider,
-            DesktopSaveProviderInput, DesktopSkill, DesktopSkillContent, DesktopWorkspace,
-            KimiCodeDesktopClient,
+            DesktopSaveCustomAgentInput, DesktopSaveProviderInput, DesktopSkill,
+            DesktopSkillContent, DesktopWorkspace, KimiCodeDesktopClient,
         },
         file::FileMeta,
         plugin::{
@@ -237,6 +238,30 @@ async fn get_skill_content(
         .client
         .get_session_skill_content(&session_id, &name)
         .await
+}
+
+#[tauri::command]
+async fn list_custom_agents(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> Result<Vec<DesktopCustomAgent>, String> {
+    state.client.list_custom_agents(&workspace_id).await
+}
+
+#[tauri::command]
+async fn save_custom_agent(
+    state: State<'_, AppState>,
+    input: DesktopSaveCustomAgentInput,
+) -> Result<DesktopCustomAgent, String> {
+    state.client.save_custom_agent(input).await
+}
+
+#[tauri::command]
+async fn delete_custom_agent(
+    state: State<'_, AppState>,
+    input: DesktopDeleteCustomAgentInput,
+) -> Result<(), String> {
+    state.client.delete_custom_agent(input).await
 }
 
 #[tauri::command]
@@ -696,6 +721,9 @@ pub fn run() {
             refresh_models,
             list_skills,
             get_skill_content,
+            list_custom_agents,
+            save_custom_agent,
+            delete_custom_agent,
             upload_file,
             set_default_model,
             list_workspaces,
