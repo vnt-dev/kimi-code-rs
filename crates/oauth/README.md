@@ -76,8 +76,8 @@ where the corresponding API provides an override.
 - `identity`: device ID, user-agent, and Kimi request headers.
 - `managed_auth`, `managed_config`, and `managed_provision`: managed Kimi Code
   credentials and host configuration.
-- `managed_models`, `managed_usage`, `managed_feedback`, and
-  `managed_feedback_upload`: managed service APIs.
+- `managed_models`, `managed_usage`, `managed_userinfo`, `managed_feedback`,
+  and `managed_feedback_upload`: managed service APIs.
 - `open_platform`, `custom_registry`, and `refresh_provider_models`: external
   provider model discovery and configuration.
 - `model_alias_merge`: preservation of host-owned model alias fields during

@@ -33,6 +33,10 @@ use super::{
         BoosterWalletInfo, FetchManagedUsageResult, UsageRow, fetch_managed_usage,
         kimi_code_usage_url,
     },
+    managed_userinfo::{
+        FetchManagedUserInfoResult, ManagedUserInfo, fetch_managed_user_info,
+        kimi_code_user_info_url,
+    },
     manager::{
         DeviceCodeObserver, LoginAbortSignal, LoginOptions, OAuthManager, OAuthManagerError,
         OAuthManagerRuntime, OAuthRefreshOutcome, SystemOAuthManagerRuntime,
@@ -258,6 +262,17 @@ pub enum AuthManagedUsageResult {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuthManagedUserInfoResult {
+    Ok {
+        user_info: Box<ManagedUserInfo>,
+    },
+    Error {
+        status: Option<u16>,
+        message: String,
+    },
+}
+
 #[derive(Clone)]
 pub struct BearerTokenProvider {
     manager: Arc<OAuthManager>,
@@ -421,6 +436,32 @@ impl<A> KimiOAuthToolkit<A> {
             },
             FetchManagedUsageResult::Error { status, message } => {
                 AuthManagedUsageResult::Error { status, message }
+            }
+        }
+    }
+
+    // Original: KimiOAuthToolkit.getManagedUserInfo()
+    pub async fn get_managed_user_info(
+        &self,
+        provider_name: Option<&str>,
+        options: AuthenticatedServiceOptions<'_>,
+    ) -> AuthManagedUserInfoResult {
+        let access_token = match self.service_access_token(provider_name, &options).await {
+            Ok(token) => token,
+            Err(message) => {
+                return AuthManagedUserInfoResult::Error {
+                    status: None,
+                    message,
+                };
+            }
+        };
+        let url = managed_user_info_url(options.base_url);
+        match fetch_managed_user_info(&url, &access_token, None).await {
+            FetchManagedUserInfoResult::Ok { user_info } => {
+                AuthManagedUserInfoResult::Ok { user_info }
+            }
+            FetchManagedUserInfoResult::Error { status, message } => {
+                AuthManagedUserInfoResult::Error { status, message }
             }
         }
     }
@@ -818,6 +859,12 @@ fn normalize_oauth_host(oauth_host: &str) -> String {
 fn managed_usage_url(base_url: Option<&str>) -> String {
     base_url.map_or_else(kimi_code_usage_url, |base_url| {
         format!("{}/usages", base_url.trim_end_matches('/'))
+    })
+}
+
+fn managed_user_info_url(base_url: Option<&str>) -> String {
+    base_url.map_or_else(kimi_code_user_info_url, |base_url| {
+        format!("{}/me", base_url.trim_end_matches('/'))
     })
 }
 
