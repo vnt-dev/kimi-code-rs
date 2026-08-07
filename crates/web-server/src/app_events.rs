@@ -44,6 +44,10 @@ pub enum DesktopStateChange {
         #[serde(rename = "sessionId")]
         session_id: String,
     },
+    SessionsDeleted {
+        #[serde(rename = "sessionIds")]
+        session_ids: Vec<String>,
+    },
 }
 
 #[derive(Default)]
@@ -85,10 +89,18 @@ impl ApplicationEventBus {
     }
 
     pub(crate) fn desktop_state_changed(&self, change: DesktopStateChange) {
-        if let DesktopStateChange::SessionArchived { session_id } = &change
-            && let Ok(mut goal_modes) = self.goal_modes.lock()
-        {
-            goal_modes.remove(session_id);
+        if let Ok(mut goal_modes) = self.goal_modes.lock() {
+            match &change {
+                DesktopStateChange::SessionArchived { session_id } => {
+                    goal_modes.remove(session_id);
+                }
+                DesktopStateChange::SessionsDeleted { session_ids } => {
+                    for session_id in session_ids {
+                        goal_modes.remove(session_id);
+                    }
+                }
+                _ => {}
+            }
         }
         if let Ok(payload) = serde_json::to_value(change) {
             self.emit(DESKTOP_STATE_CHANGED_EVENT, payload);
@@ -182,5 +194,33 @@ mod tests {
         assert_eq!(received.len(), 2);
         assert_eq!(received[0]["enabled"], true);
         assert_eq!(received[1]["enabled"], false);
+    }
+
+    #[test]
+    fn deleting_sessions_clears_goal_modes_and_serializes_all_ids() {
+        let events = Arc::new(ApplicationEventBus::default());
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let received_for_handler = Arc::clone(&received);
+        let _subscription = events.subscribe(Arc::new(move |event, payload| {
+            if event == DESKTOP_STATE_CHANGED_EVENT {
+                received_for_handler.lock().unwrap().push(payload);
+            }
+        }));
+        events.set_goal_mode("session-1".into(), true);
+        events.set_goal_mode("session-2".into(), true);
+
+        events.desktop_state_changed(DesktopStateChange::SessionsDeleted {
+            session_ids: vec!["session-1".into(), "session-2".into()],
+        });
+
+        assert!(!events.goal_mode("session-1"));
+        assert!(!events.goal_mode("session-2"));
+        let received = received.lock().unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0]["kind"], "sessions_deleted");
+        assert_eq!(
+            received[0]["sessionIds"],
+            serde_json::json!(["session-1", "session-2"])
+        );
     }
 }

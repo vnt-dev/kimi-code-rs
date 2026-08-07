@@ -55,6 +55,7 @@ pub type SessionIndexResult<T> = Result<T, SessionIndexError>;
 pub trait SessionIndexContract: Send + Sync {
     async fn list(&self, query: SessionListQuery) -> SessionIndexResult<Page<SessionSummary>>;
     async fn get(&self, id: &str) -> SessionIndexResult<Option<SessionSummary>>;
+    async fn remove(&self, id: &str) -> SessionIndexResult<()>;
     async fn count_active(&self, workspace_ids: &[String]) -> SessionIndexResult<usize>;
 }
 

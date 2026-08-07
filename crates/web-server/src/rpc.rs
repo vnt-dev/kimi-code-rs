@@ -28,6 +28,12 @@ struct SessionArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SessionsArgs {
+    session_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GoalModeArgs {
     session_id: String,
     enabled: bool,
@@ -407,6 +413,19 @@ pub(crate) async fn dispatch_rpc(
                 .await
                 .map_err(RpcError::transport)?,
         ),
+        "delete_archived_sessions" => {
+            let args: SessionsArgs = decode(args)?;
+            let session_ids = client
+                .delete_archived_sessions(&args.session_ids)
+                .await
+                .map_err(RpcError::transport)?;
+            if !session_ids.is_empty() {
+                events.desktop_state_changed(DesktopStateChange::SessionsDeleted {
+                    session_ids: session_ids.clone(),
+                });
+            }
+            encode(session_ids)
+        }
         "fork_session" => {
             let args: SessionArgs = decode(args)?;
             let session_id = client

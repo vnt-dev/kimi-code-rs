@@ -328,6 +328,22 @@ async fn list_archived_sessions(state: State<'_, AppState>) -> Result<Vec<Sessio
 }
 
 #[tauri::command]
+async fn delete_archived_sessions(
+    state: State<'_, AppState>,
+    session_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let session_ids = state.client.delete_archived_sessions(&session_ids).await?;
+    if !session_ids.is_empty() {
+        state
+            .web_server
+            .desktop_state_changed(DesktopStateChange::SessionsDeleted {
+                session_ids: session_ids.clone(),
+            });
+    }
+    Ok(session_ids)
+}
+
+#[tauri::command]
 async fn fork_session(state: State<'_, AppState>, session_id: String) -> Result<String, String> {
     let session_id = state.client.fork_session(&session_id).await?;
     state
@@ -750,6 +766,7 @@ pub fn run() {
             remove_workspace,
             list_workspace_sessions,
             list_archived_sessions,
+            delete_archived_sessions,
             fork_session,
             archive_session,
             restore_session,

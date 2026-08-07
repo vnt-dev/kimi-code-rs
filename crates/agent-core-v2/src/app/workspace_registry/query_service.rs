@@ -98,6 +98,10 @@ mod tests {
             Ok(None)
         }
 
+        async fn remove(&self, _id: &str) -> SessionIndexResult<()> {
+            Ok(())
+        }
+
         async fn count_active(&self, _workspace_ids: &[String]) -> SessionIndexResult<usize> {
             Ok(0)
         }

@@ -124,6 +124,7 @@ pub trait SessionLifecycleServiceContract: Disposable + Send + Sync {
         &self,
         session_id: &str,
     ) -> Result<Option<SessionScopeHandle>, SessionLifecycleError>;
+    async fn delete_archived(&self, session_id: &str) -> Result<bool, SessionLifecycleError>;
     async fn fork(
         &self,
         options: ForkSessionOptions,

@@ -455,6 +455,9 @@ mod tests {
         ) -> Result<Option<SessionScopeHandle>, SessionLifecycleError> {
             Ok(None)
         }
+        async fn delete_archived(&self, _: &str) -> Result<bool, SessionLifecycleError> {
+            Ok(false)
+        }
         async fn fork(
             &self,
             _: ForkSessionOptions,

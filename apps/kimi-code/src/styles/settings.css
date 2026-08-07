@@ -746,6 +746,30 @@ html[data-color-scheme="light"] .settings-dialog {
   font-size: 12px;
 }
 
+.settings-archived-delete-all {
+  display: inline-flex;
+  min-height: 26px;
+  padding: 0 7px;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  color: var(--danger);
+  background: transparent;
+  cursor: pointer;
+  font-size: 11.5px;
+}
+
+.settings-archived-delete-all:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+
+.settings-archived-delete-all:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .settings-archived-card {
   overflow: hidden;
   border: 0.5px solid var(--line-strong);
@@ -794,9 +818,16 @@ html[data-color-scheme="light"] .settings-dialog {
   font-variant-numeric: tabular-nums;
 }
 
-.settings-archived-restore {
+.settings-archived-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.settings-archived-restore,
+.settings-archived-delete {
   display: inline-flex;
-  min-width: 74px;
+  min-width: 68px;
   min-height: 32px;
   padding: 0 11px;
   align-items: center;
@@ -817,7 +848,17 @@ html[data-color-scheme="light"] .settings-dialog {
   background: var(--accent-soft);
 }
 
-.settings-archived-restore:disabled {
+.settings-archived-delete {
+  color: var(--danger);
+}
+
+.settings-archived-delete:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+
+.settings-archived-restore:disabled,
+.settings-archived-delete:disabled {
   cursor: wait;
   opacity: 0.62;
 }
@@ -834,6 +875,82 @@ html[data-color-scheme="light"] .settings-dialog {
   background: var(--sd-surface);
   font-size: 13px;
   text-align: center;
+}
+
+.settings-archived-confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  padding: 20px;
+  place-items: center;
+  background: var(--dialog-overlay);
+}
+
+.settings-archived-confirm {
+  width: min(410px, 100%);
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
+}
+
+.settings-archived-confirm-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.settings-archived-confirm h4 {
+  margin: 12px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-archived-confirm p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.settings-archived-confirm-actions {
+  display: flex;
+  margin-top: 20px;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-archived-confirm-actions button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--sd-surface);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.settings-archived-confirm-actions button.danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, var(--dialog-surface));
+}
+
+.settings-archived-confirm-actions button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.settings-archived-confirm-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 
 @keyframes settings-update-spin {
@@ -1012,8 +1129,27 @@ html[data-color-scheme="light"] .settings-dialog {
     gap: 10px;
   }
 
-  .settings-archived-restore {
-    min-width: 68px;
+  .settings-archived-actions {
+    gap: 5px;
+  }
+
+  .settings-archived-restore,
+  .settings-archived-delete {
+    min-width: 62px;
     min-height: 40px;
+    padding: 0 8px;
+  }
+
+  .settings-archived-delete-all {
+    min-height: 40px;
+    padding: 0 6px;
+  }
+
+  .settings-archived-confirm-backdrop {
+    padding: 14px;
+  }
+
+  .settings-archived-confirm {
+    padding: 18px;
   }
 }

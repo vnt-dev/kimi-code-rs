@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  archivedSessionIdsForWorkspace,
   filterArchivedSessions,
   formatArchivedTime,
   groupArchivedSessions,
+  removeArchivedSessions,
 } from "../src/archivedSessions.ts";
 import type { SessionSummary } from "../src/types.ts";
 
@@ -80,25 +82,53 @@ test("archived settings support archive time, creation time, and name sorting", 
   );
 });
 
-test("archived sessions are grouped by workspace path with a safe fallback", () => {
+test("archived sessions are grouped by workspace id with a safe path fallback", () => {
   const groups = groupArchivedSessions(
     [
       session("one"),
       session("two"),
-      session("unknown", { cwd: undefined }),
+      session("unknown", { workspaceId: "workspace-2", cwd: undefined }),
     ],
     "Unknown workspace",
   );
 
   assert.deepEqual(
     groups.map((group) => [
+      group.workspaceId,
       group.path,
       group.sessions.map((item) => item.id),
     ]),
     [
-      ["/workspace/one", ["one", "two"]],
-      ["Unknown workspace", ["unknown"]],
+      ["workspace-1", "/workspace/one", ["one", "two"]],
+      ["workspace-2", "Unknown workspace", ["unknown"]],
     ],
   );
   assert.equal(formatArchivedTime(Number.NaN), "—");
+});
+
+test("workspace deletion targets all archived sessions regardless of search results", () => {
+  const sessions = [
+    session("visible", { title: "Match" }),
+    session("hidden", { title: "Different" }),
+    session("other", { workspaceId: "workspace-2" }),
+    session("active", { archived: false }),
+  ];
+  const filtered = filterArchivedSessions(sessions, {
+    ...baseOptions,
+    query: "match",
+  });
+
+  assert.deepEqual(filtered.map((item) => item.id), ["visible"]);
+  assert.deepEqual(
+    archivedSessionIdsForWorkspace(sessions, "workspace-1"),
+    ["visible", "hidden"],
+  );
+});
+
+test("deleted ids are removed without affecting other archived sessions", () => {
+  const sessions = [session("one"), session("two"), session("three")];
+  const remaining = removeArchivedSessions(sessions, ["one", "two", "missing"]);
+
+  assert.deepEqual(remaining.map((item) => item.id), ["three"]);
+  assert.deepEqual(removeArchivedSessions(sessions, []), sessions);
 });

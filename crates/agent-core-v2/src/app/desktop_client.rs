@@ -972,6 +972,60 @@ impl KimiCodeDesktopClient {
             .collect())
     }
 
+    pub async fn delete_archived_sessions(
+        &self,
+        session_ids: &[String],
+    ) -> Result<Vec<String>, String> {
+        let mut seen = HashSet::new();
+        let session_ids = session_ids
+            .iter()
+            .map(|session_id| session_id.trim())
+            .filter(|session_id| !session_id.is_empty())
+            .filter(|session_id| seen.insert((*session_id).to_owned()))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let index = self
+            .app
+            .get(SESSION_INDEX_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let mut existing = Vec::with_capacity(session_ids.len());
+        for session_id in session_ids {
+            let Some(session) = index
+                .get(&session_id)
+                .await
+                .map_err(|error| error.to_string())?
+            else {
+                continue;
+            };
+            if !session.archived {
+                return Err(format!(
+                    "Session `{session_id}` must be archived before it can be deleted."
+                ));
+            }
+            existing.push(session_id);
+        }
+
+        let lifecycle = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let mut deleted = Vec::with_capacity(existing.len());
+        for session_id in existing {
+            if lifecycle
+                .delete_archived(&session_id)
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                deleted.push(session_id);
+            }
+        }
+        Ok(deleted)
+    }
+
     pub async fn fork_session(&self, session_id: &str) -> Result<String, String> {
         let session_id = session_id.trim();
         if session_id.is_empty() {
@@ -2288,6 +2342,7 @@ fn map_desktop_interactions(interactions: Vec<Interaction>) -> Vec<DesktopIntera
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use indexmap::IndexMap;
     use serde_json::json;
 
     use super::{
@@ -2301,7 +2356,10 @@ mod tests {
             permission_policy::PermissionMode,
         },
         app::{
+            bootstrap::BOOTSTRAP_SERVICE_ID,
+            cron::{CRON_SESSION_TAG, CRON_TASK_PERSISTENCE_SERVICE_ID, CronTask, CronTaskQuery},
             event::event_bus::{DomainEvent, EVENT_BUS_SERVICE_ID},
+            session_index::SESSION_INDEX_SERVICE_ID,
             session_lifecycle::SESSION_LIFECYCLE_SERVICE_ID,
         },
         kosong::model::ModelCatalogItem,
@@ -2564,6 +2622,147 @@ mod tests {
         assert_eq!(restored.id, prepared.session_id);
         assert!(!restored.archived);
         assert!(client.list_archived_sessions().await.unwrap().is_empty());
+
+        drop(client);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn archived_sessions_can_be_permanently_deleted_in_batches() {
+        let root = std::env::temp_dir().join(format!(
+            "kimi-desktop-delete-archived-sessions-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let home = root.join("home");
+        let first_work_dir = root.join("workspace-one");
+        let second_work_dir = root.join("workspace-two");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&first_work_dir).unwrap();
+        std::fs::create_dir_all(&second_work_dir).unwrap();
+        let client = KimiCodeDesktopClient::new(&home, "test").unwrap();
+        client
+            .configure_models(&[managed_model("first")])
+            .await
+            .unwrap();
+
+        let prepare = |work_dir: &std::path::Path| DesktopPrepareSessionRequest {
+            session_id: None,
+            work_dir: work_dir.to_string_lossy().into_owned(),
+            model: Some("kimi-code/first".into()),
+            thinking: Some("high".into()),
+            permission: Some(PermissionMode::Yolo),
+        };
+        let first = client
+            .prepare_session(prepare(&first_work_dir))
+            .await
+            .unwrap();
+        let second = client
+            .prepare_session(prepare(&first_work_dir))
+            .await
+            .unwrap();
+        let active = client
+            .prepare_session(prepare(&first_work_dir))
+            .await
+            .unwrap();
+        let other = client
+            .prepare_session(prepare(&second_work_dir))
+            .await
+            .unwrap();
+        client.archive_session(&first.session_id).await.unwrap();
+        client.archive_session(&second.session_id).await.unwrap();
+        client.archive_session(&other.session_id).await.unwrap();
+
+        let index = client.app.get(SESSION_INDEX_SERVICE_ID).unwrap();
+        let first_summary = index.get(&first.session_id).await.unwrap().unwrap();
+        let first_session_dir = client
+            .app
+            .get(BOOTSTRAP_SERVICE_ID)
+            .unwrap()
+            .session_dir(&first_summary.workspace_id, &first.session_id);
+        assert!(first_session_dir.is_dir());
+
+        let cron = client.app.get(CRON_TASK_PERSISTENCE_SERVICE_ID).unwrap();
+        let tagged_task = CronTask {
+            id: "deadbeef".into(),
+            cron: "0 9 * * *".into(),
+            prompt: "delete me".into(),
+            created_at: 1.0,
+            recurring: Some(true),
+            last_fired_at: None,
+            tags: Some(IndexMap::from_iter([(
+                CRON_SESSION_TAG.into(),
+                first.session_id.clone(),
+            )])),
+        };
+        let unrelated_task = CronTask {
+            id: "cafebabe".into(),
+            tags: None,
+            ..tagged_task.clone()
+        };
+        cron.save(&first_summary.workspace_id, &tagged_task)
+            .await
+            .unwrap();
+        cron.save(&first_summary.workspace_id, &unrelated_task)
+            .await
+            .unwrap();
+
+        let preflight_error = client
+            .delete_archived_sessions(&[first.session_id.clone(), active.session_id.clone()])
+            .await
+            .unwrap_err();
+        assert!(preflight_error.contains("must be archived"));
+        assert!(index.get(&first.session_id).await.unwrap().is_some());
+        let lifecycle = client.app.get(SESSION_LIFECYCLE_SERVICE_ID).unwrap();
+        let active_error = lifecycle
+            .delete_archived(&active.session_id)
+            .await
+            .unwrap_err();
+        assert!(
+            active_error
+                .to_string()
+                .contains("active or changing state")
+        );
+
+        let deleted = client
+            .delete_archived_sessions(&[
+                first.session_id.clone(),
+                " ".into(),
+                second.session_id.clone(),
+                first.session_id.clone(),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(
+            deleted,
+            vec![first.session_id.clone(), second.session_id.clone()]
+        );
+        assert!(!first_session_dir.exists());
+        assert!(index.get(&first.session_id).await.unwrap().is_none());
+        assert!(index.get(&second.session_id).await.unwrap().is_none());
+        assert!(index.get(&active.session_id).await.unwrap().is_some());
+        assert!(index.get(&other.session_id).await.unwrap().is_some());
+        assert_eq!(
+            client
+                .delete_archived_sessions(&[first.session_id.clone(), second.session_id.clone()])
+                .await
+                .unwrap(),
+            Vec::<String>::new()
+        );
+
+        let remaining_tasks = cron
+            .list(CronTaskQuery {
+                workspace_id: first_summary.workspace_id,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            remaining_tasks
+                .into_iter()
+                .map(|task| task.id)
+                .collect::<Vec<_>>(),
+            vec![unrelated_task.id]
+        );
+        assert_eq!(client.list_archived_sessions().await.unwrap().len(), 1);
 
         drop(client);
         let _ = std::fs::remove_dir_all(root);

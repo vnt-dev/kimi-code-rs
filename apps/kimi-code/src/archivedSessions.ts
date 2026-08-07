@@ -6,6 +6,7 @@ export type ArchivedSessionSort =
   | "name-asc";
 
 export interface ArchivedSessionGroup {
+  workspaceId: string;
   path: string;
   sessions: SessionSummary[];
 }
@@ -68,20 +69,41 @@ export function groupArchivedSessions(
   sessions: readonly SessionSummary[],
   unknownWorkspaceLabel: string,
 ): ArchivedSessionGroup[] {
-  const groups = new Map<string, SessionSummary[]>();
+  const groups = new Map<string, ArchivedSessionGroup>();
   for (const session of sessions) {
     const path = archivedSessionPath(session, unknownWorkspaceLabel);
-    const group = groups.get(path);
+    const group = groups.get(session.workspaceId);
     if (group) {
-      group.push(session);
+      group.sessions.push(session);
     } else {
-      groups.set(path, [session]);
+      groups.set(session.workspaceId, {
+        workspaceId: session.workspaceId,
+        path,
+        sessions: [session],
+      });
     }
   }
-  return [...groups].map(([path, groupedSessions]) => ({
-    path,
-    sessions: groupedSessions,
-  }));
+  return [...groups.values()];
+}
+
+export function archivedSessionIdsForWorkspace(
+  sessions: readonly SessionSummary[],
+  workspaceId: string,
+): string[] {
+  return sessions
+    .filter(
+      (session) => session.archived && session.workspaceId === workspaceId,
+    )
+    .map((session) => session.id);
+}
+
+export function removeArchivedSessions(
+  sessions: readonly SessionSummary[],
+  deletedSessionIds: readonly string[],
+): SessionSummary[] {
+  const deleted = new Set(deletedSessionIds);
+  if (deleted.size === 0) return [...sessions];
+  return sessions.filter((session) => !deleted.has(session.id));
 }
 
 export function formatArchivedTime(timestamp: number): string {

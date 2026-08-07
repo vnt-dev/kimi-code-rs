@@ -309,6 +309,12 @@ export function listArchivedSessions(): Promise<SessionSummary[]> {
   return invoke<SessionSummary[]>("list_archived_sessions");
 }
 
+export function deleteArchivedSessions(
+  sessionIds: string[],
+): Promise<string[]> {
+  return invoke<string[]>("delete_archived_sessions", { sessionIds });
+}
+
 export function forkSession(sessionId: string): Promise<string> {
   return invoke<string>("fork_session", { sessionId });
 }

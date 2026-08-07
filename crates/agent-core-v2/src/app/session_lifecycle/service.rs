@@ -4,7 +4,7 @@
 //! `packages/agent-core-v2/src/app/sessionLifecycle/sessionLifecycleService.ts`.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -107,6 +107,8 @@ use super::{
 
 const SESSION_NOT_FOUND: &str = "session.not_found";
 const SESSION_ALREADY_EXISTS: &str = "session.already_exists";
+const SESSION_BUSY: &str = "session.busy";
+const SESSION_NOT_ARCHIVED: &str = "session.not_archived";
 const SESSION_INDEX_KEY: &str = "session_index.jsonl";
 const SESSION_STATE_KEY: &str = "state.json";
 
@@ -116,6 +118,17 @@ type ResumeFuture = Shared<BoxFuture<'static, ResumeResult>>;
 struct ResumeEntry {
     generation: u64,
     future: ResumeFuture,
+}
+
+struct DeleteSessionGuard {
+    inner: Arc<SessionLifecycleInner>,
+    session_id: String,
+}
+
+impl Drop for DeleteSessionGuard {
+    fn drop(&mut self) {
+        self.inner.deleting.lock().unwrap().remove(&self.session_id);
+    }
 }
 
 struct SessionLifecycleInner {
@@ -134,6 +147,7 @@ struct SessionLifecycleInner {
     telemetry: TelemetryServiceHandle,
     sessions: Mutex<IndexMap<String, SessionScopeHandle>>,
     resuming: Mutex<HashMap<String, ResumeEntry>>,
+    deleting: Mutex<HashSet<String>>,
     next_resume_generation: AtomicU64,
     did_create: Emitter<SessionCreatedEvent>,
     did_close: Emitter<SessionClosedEvent>,
@@ -181,6 +195,7 @@ impl SessionLifecycleService {
                 telemetry,
                 sessions: Mutex::new(IndexMap::new()),
                 resuming: Mutex::new(HashMap::new()),
+                deleting: Mutex::new(HashSet::new()),
                 next_resume_generation: AtomicU64::new(1),
                 did_create: Emitter::new(),
                 did_close: Emitter::new(),
@@ -626,6 +641,38 @@ impl SessionLifecycleService {
         Ok(())
     }
 
+    async fn delete_cron_tasks(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> Result<(), SessionLifecycleError> {
+        let tasks = self
+            .inner
+            .cron_store
+            .list(CronTaskQuery {
+                workspace_id: workspace_id.into(),
+            })
+            .await
+            .map_err(boxed_error)?;
+        for task in tasks {
+            if task
+                .tags
+                .as_ref()
+                .and_then(|tags| tags.get(CRON_SESSION_TAG))
+                .map(String::as_str)
+                != Some(session_id)
+            {
+                continue;
+            }
+            self.inner
+                .cron_store
+                .delete(workspace_id, &task.id)
+                .await
+                .map_err(boxed_error)?;
+        }
+        Ok(())
+    }
+
     async fn read_meta_from_disk(
         &self,
         workspace_id: &str,
@@ -759,17 +806,6 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
     }
 
     async fn resume(&self, session_id: &str) -> ResumeResult {
-        let in_flight = {
-            let resuming = self.inner.resuming.lock().unwrap();
-            resuming.get(session_id).map(|entry| entry.future.clone())
-        };
-        if let Some(future) = in_flight {
-            return future.await;
-        }
-        if let Some(live) = self.inner.sessions.lock().unwrap().get(session_id).cloned() {
-            return Ok(Some(live));
-        }
-
         let generation = self
             .inner
             .next_resume_generation
@@ -804,14 +840,42 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
         }
         .boxed()
         .shared();
-        self.inner.resuming.lock().unwrap().insert(
-            session_id.into(),
-            ResumeEntry {
-                generation,
-                future: future.clone(),
-            },
-        );
-        future.await
+
+        enum ResumeState {
+            Existing(ResumeFuture),
+            Live(SessionScopeHandle),
+            Started,
+        }
+        let state = {
+            let deleting = self.inner.deleting.lock().unwrap();
+            if deleting.contains(session_id) {
+                return Err(Arc::new(Error2::new(
+                    SESSION_BUSY,
+                    format!("session {session_id} is being deleted"),
+                )));
+            }
+            let mut resuming = self.inner.resuming.lock().unwrap();
+            if let Some(entry) = resuming.get(session_id) {
+                ResumeState::Existing(entry.future.clone())
+            } else if let Some(live) = self.inner.sessions.lock().unwrap().get(session_id).cloned()
+            {
+                ResumeState::Live(live)
+            } else {
+                resuming.insert(
+                    session_id.into(),
+                    ResumeEntry {
+                        generation,
+                        future: future.clone(),
+                    },
+                );
+                ResumeState::Started
+            }
+        };
+        match state {
+            ResumeState::Existing(existing) => existing.await,
+            ResumeState::Live(live) => Ok(Some(live)),
+            ResumeState::Started => future.await,
+        }
     }
 
     async fn close(&self, session_id: &str) -> Result<(), SessionLifecycleError> {
@@ -875,6 +939,68 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
             .await
             .map_err(boxed_error)?;
         Ok(Some(handle))
+    }
+
+    async fn delete_archived(&self, session_id: &str) -> Result<bool, SessionLifecycleError> {
+        {
+            let mut deleting = self.inner.deleting.lock().unwrap();
+            if deleting.contains(session_id)
+                || self.inner.resuming.lock().unwrap().contains_key(session_id)
+                || self.inner.sessions.lock().unwrap().contains_key(session_id)
+            {
+                return Err(Arc::new(Error2::new(
+                    SESSION_BUSY,
+                    format!("session {session_id} is active or changing state"),
+                )));
+            }
+            deleting.insert(session_id.into());
+        }
+        let _delete_guard = DeleteSessionGuard {
+            inner: Arc::clone(&self.inner),
+            session_id: session_id.into(),
+        };
+
+        async {
+            let Some(summary) = self
+                .inner
+                .index
+                .get(session_id)
+                .await
+                .map_err(boxed_error)?
+            else {
+                return Ok(false);
+            };
+            if !summary.archived {
+                return Err(Arc::new(Error2::new(
+                    SESSION_NOT_ARCHIVED,
+                    format!("session {session_id} must be archived before it can be deleted"),
+                )) as SessionLifecycleError);
+            }
+
+            self.delete_cron_tasks(&summary.workspace_id, session_id)
+                .await?;
+            self.inner
+                .host_fs
+                .remove(
+                    &self
+                        .inner
+                        .bootstrap
+                        .session_dir(&summary.workspace_id, session_id),
+                )
+                .await
+                .map_err(shared_error)?;
+            self.inner
+                .index
+                .remove(session_id)
+                .await
+                .map_err(boxed_error)?;
+            self.inner.event.publish(GlobalDomainEvent {
+                event_type: "event.session.deleted".into(),
+                payload: json!({"sessionId": session_id}),
+            });
+            Ok(true)
+        }
+        .await
     }
 
     async fn fork(

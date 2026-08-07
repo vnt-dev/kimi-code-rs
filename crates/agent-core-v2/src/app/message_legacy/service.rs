@@ -605,6 +605,10 @@ mod tests {
             Ok(self.get(session_id))
         }
 
+        async fn delete_archived(&self, _: &str) -> Result<bool, SessionLifecycleError> {
+            Ok(false)
+        }
+
         async fn fork(
             &self,
             _: ForkSessionOptions,
@@ -632,6 +636,10 @@ mod tests {
 
         async fn get(&self, id: &str) -> SessionIndexResult<Option<SessionSummary>> {
             Ok((id == self.summary.id).then(|| self.summary.clone()))
+        }
+
+        async fn remove(&self, _: &str) -> SessionIndexResult<()> {
+            Ok(())
         }
 
         async fn count_active(&self, _: &[String]) -> SessionIndexResult<usize> {

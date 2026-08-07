@@ -393,6 +393,14 @@ impl SessionIndexContract for FileSessionIndex {
         .await
     }
 
+    async fn remove(&self, id: &str) -> SessionIndexResult<()> {
+        self.query_store
+            .0
+            .delete(SESSION_COLLECTION, id)
+            .await
+            .map_err(Into::into)
+    }
+
     // Original: FileSessionIndex.countActive().
     async fn count_active(&self, workspace_ids: &[String]) -> SessionIndexResult<usize> {
         if !self.read_model_enabled() {
