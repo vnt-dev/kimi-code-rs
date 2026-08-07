@@ -187,10 +187,7 @@ impl SessionSwarmService {
         child
             .get(AGENT_PROFILE_SERVICE_ID)?
             .update(ProfileUpdateData {
-                model_alias: Some(subagent_model_alias(
-                    child_profile.as_deref(),
-                    caller_model,
-                )),
+                model_alias: Some(subagent_model_alias(child_profile.as_deref(), caller_model)),
                 ..ProfileUpdateData::default()
             })?;
         Ok(())

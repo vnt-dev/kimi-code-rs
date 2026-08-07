@@ -100,7 +100,10 @@ impl CapabilityService {
         Self {
             entries: IndexMap::from([
                 (CapabilityId::KimiCu, create_kimi_cu_entry(ctx.clone())),
-                (CapabilityId::KimiWebbridge, create_kimi_webbridge_entry(ctx)),
+                (
+                    CapabilityId::KimiWebbridge,
+                    create_kimi_webbridge_entry(ctx),
+                ),
             ]),
             install_progress: Arc::new(Mutex::new(HashMap::new())),
             plugins: Some(plugins),
@@ -173,8 +176,8 @@ impl CapabilityService {
             .iter()
             .filter(|step| step.optional != Some(true))
             .peekable();
-        let required_ok = required.peek().is_some()
-            && required.all(|step| step.state == CapabilityStepState::Ok);
+        let required_ok =
+            required.peek().is_some() && required.all(|step| step.state == CapabilityStepState::Ok);
         let any_ok = detected
             .steps
             .iter()
@@ -238,14 +241,12 @@ impl CapabilityService {
 #[async_trait]
 impl CapabilityServiceContract for CapabilityService {
     async fn list_capabilities(&self) -> CapabilityServiceResult<Vec<CapabilityStatus>> {
-        Ok(
-            futures_util::future::join_all(
-                self.entries
-                    .values()
-                    .map(|entry| self.status_of_safe(entry)),
-            )
-            .await,
+        Ok(futures_util::future::join_all(
+            self.entries
+                .values()
+                .map(|entry| self.status_of_safe(entry)),
         )
+        .await)
     }
 
     async fn get_capability(&self, id: &str) -> CapabilityServiceResult<CapabilityStatus> {
@@ -268,7 +269,10 @@ impl CapabilityServiceContract for CapabilityService {
         }
         {
             let mut progress = self.install_progress.lock().unwrap();
-            if progress.get(&entry.id()).is_some_and(|install| install.running) {
+            if progress
+                .get(&entry.id())
+                .is_some_and(|install| install.running)
+            {
                 return Err(coded_error(
                     CAPABILITY_INSTALL_IN_PROGRESS,
                     format!("Capability \"{}\" is already being installed", entry.id()),
@@ -469,8 +473,7 @@ mod tests {
             plugin_id: plugin_id.map(str::to_owned),
             supported,
             detect: detect.map_err(str::to_owned),
-            install: install
-                .unwrap_or_else(|| Arc::new(|_| Box::pin(async { Ok(()) }))),
+            install: install.unwrap_or_else(|| Arc::new(|_| Box::pin(async { Ok(()) }))),
         })
     }
 
@@ -663,7 +666,13 @@ mod tests {
                 }),
                 ok_install(),
             ),
-            fake_entry(CapabilityId::KimiWebbridge, None, false, Ok(CapabilityDetectResult::default()), ok_install()),
+            fake_entry(
+                CapabilityId::KimiWebbridge,
+                None,
+                false,
+                Ok(CapabilityDetectResult::default()),
+                ok_install(),
+            ),
         ]);
         let list = service.list_capabilities().await.unwrap();
         let cu = list

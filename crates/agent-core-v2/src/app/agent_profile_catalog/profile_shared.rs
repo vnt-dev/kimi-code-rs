@@ -66,10 +66,7 @@ pub fn subagent_type_not_allowed_message(name: &str, allowlist: &[String]) -> St
 // No source equivalent: profiles can pin a `model` (agent-file frontmatter).
 // A pinned model wins over the caller's current model when binding a
 // subagent; profiles without one keep the inherit-from-caller behavior.
-pub fn subagent_model_alias(
-    profile: Option<&AgentProfile>,
-    caller_model: String,
-) -> String {
+pub fn subagent_model_alias(profile: Option<&AgentProfile>, caller_model: String) -> String {
     profile
         .and_then(|profile| profile.model.clone())
         .unwrap_or(caller_model)

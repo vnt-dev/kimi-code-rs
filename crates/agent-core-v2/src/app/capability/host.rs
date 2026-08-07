@@ -25,7 +25,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
     _base::errors::errors::ExpectedError,
-    os::interface::host_process::{HostProcess, HostProcessOptions, HostProcessServiceHandle, SharedProcessReader},
+    os::interface::host_process::{
+        HostProcess, HostProcessOptions, HostProcessServiceHandle, SharedProcessReader,
+    },
 };
 
 pub const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -66,16 +68,18 @@ pub async fn run_command(
         }
     };
     let result = match timeout {
-        Some(timeout) => match tokio::time::timeout(timeout, collect_process_output(&*proc)).await {
-            Ok(output) => output,
-            Err(_) => {
-                let _ = proc.kill(None).await;
-                Err(Box::new(ExpectedError::new(format!(
-                    "command timed out after {}ms: {command}",
-                    timeout.as_millis()
-                ))) as Box<dyn Error + Send + Sync>)
+        Some(timeout) => {
+            match tokio::time::timeout(timeout, collect_process_output(&*proc)).await {
+                Ok(output) => output,
+                Err(_) => {
+                    let _ = proc.kill(None).await;
+                    Err(Box::new(ExpectedError::new(format!(
+                        "command timed out after {}ms: {command}",
+                        timeout.as_millis()
+                    ))) as Box<dyn Error + Send + Sync>)
+                }
             }
-        },
+        }
         None => collect_process_output(&*proc).await,
     };
     proc.dispose();
@@ -91,11 +95,9 @@ async fn collect_process_output(
 ) -> Result<(String, String, i32), Box<dyn Error + Send + Sync>> {
     let stdout = proc.stdout();
     let stderr = proc.stderr();
-    let (stdout, stderr, code) = tokio::join!(
-        collect(stdout),
-        collect(stderr),
-        async { proc.wait().await.unwrap_or(-1) }
-    );
+    let (stdout, stderr, code) = tokio::join!(collect(stdout), collect(stderr), async {
+        proc.wait().await.unwrap_or(-1)
+    });
     Ok((stdout?, stderr?, code))
 }
 
@@ -279,7 +281,7 @@ mod tests {
 
     fn data_reader(bytes: &[u8]) -> SharedProcessReader {
         Arc::new(AsyncMutex::new(
-            Box::new(std::io::Cursor::new(bytes.to_vec())) as Box<dyn AsyncRead + Send + Unpin>
+            Box::new(std::io::Cursor::new(bytes.to_vec())) as Box<dyn AsyncRead + Send + Unpin>,
         ))
     }
 
@@ -363,7 +365,9 @@ mod tests {
     #[tokio::test]
     async fn collects_output_and_exit_code() {
         let proc = scripted_proc(7, b"out", b"err");
-        let result = run_command(&host(Some(proc)), "cmd", &[], None).await.unwrap();
+        let result = run_command(&host(Some(proc)), "cmd", &[], None)
+            .await
+            .unwrap();
         assert_eq!(
             result,
             CommandResult {
@@ -376,7 +380,9 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_failure_resolves_code_minus_one() {
-        let result = run_command(&host(None), "missing", &[], None).await.unwrap();
+        let result = run_command(&host(None), "missing", &[], None)
+            .await
+            .unwrap();
         assert_eq!(result.code, -1);
         assert_eq!(result.stdout, "");
         assert!(result.stderr.contains("ENOENT"));
@@ -478,11 +484,8 @@ mod tests {
     #[tokio::test]
     async fn download_aborts_a_response_whose_byte_stream_goes_quiet() {
         let root = temp_root("download").await;
-        let fetch: Arc<dyn FetchLike> = ScriptedFetch::respond(
-            200,
-            Some(100),
-            Some(chunk_stream(vec![&[1, 2, 3]], true)),
-        );
+        let fetch: Arc<dyn FetchLike> =
+            ScriptedFetch::respond(200, Some(100), Some(chunk_stream(vec![&[1, 2, 3]], true)));
         let error = download_to_file(
             "https://cdn.example.test/blob",
             &root.join("blob"),
@@ -537,7 +540,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(received, 11);
-        assert_eq!(tokio::fs::read_to_string(&dest).await.unwrap(), "hello world");
+        assert_eq!(
+            tokio::fs::read_to_string(&dest).await.unwrap(),
+            "hello world"
+        );
         rm_force(&root).await.unwrap();
     }
 
@@ -549,7 +555,10 @@ mod tests {
         let fetch: Arc<dyn FetchLike> = ScriptedFetch::respond(
             200,
             Some(100),
-            Some(chunk_stream(vec![&[0_u8; 40], &[0_u8; 40], &[0_u8; 20]], false)),
+            Some(chunk_stream(
+                vec![&[0_u8; 40], &[0_u8; 40], &[0_u8; 20]],
+                false,
+            )),
         );
         let received = download_to_file(
             "https://cdn.example.test/blob",

@@ -296,8 +296,13 @@ impl PluginServiceContract for PluginService {
     ) -> PluginServiceResult<()> {
         {
             let mut operations = self.install_operations.lock().unwrap();
-            if operations.values().any(|operation| !operation.is_finished()) {
-                return Err(message_error("Another plugin installation is already in progress"));
+            if operations
+                .values()
+                .any(|operation| !operation.is_finished())
+            {
+                return Err(message_error(
+                    "Another plugin installation is already in progress",
+                ));
             }
             // A newly accepted operation supersedes an already-observed or
             // abandoned terminal snapshot and keeps this registry bounded.
@@ -311,10 +316,7 @@ impl PluginServiceContract for PluginService {
             let operations = Arc::clone(&self.install_operations);
             let progress_operation_id = operation_id.clone();
             let progress: PluginInstallProgressCallback = Arc::new(move |update| {
-                if let Some(operation) = operations
-                    .lock()
-                    .unwrap()
-                    .get_mut(&progress_operation_id)
+                if let Some(operation) = operations.lock().unwrap().get_mut(&progress_operation_id)
                 {
                     operation.phase = update.phase;
                     operation.downloaded_bytes = update.downloaded_bytes;
@@ -329,7 +331,9 @@ impl PluginServiceContract for PluginService {
                 match result {
                     Ok(Ok(_)) => operation.phase = PluginInstallPhase::Complete,
                     Ok(Err(error)) => operation.error = Some(error.to_string()),
-                    Err(_) => operation.error = Some("Plugin installation task panicked".to_owned()),
+                    Err(_) => {
+                        operation.error = Some("Plugin installation task panicked".to_owned())
+                    }
                 }
             }
         });
@@ -704,7 +708,10 @@ mod tests {
         Arc::clone(&service)
             .install_plugin_in_background(
                 InstallPluginInput {
-                    source: home.join("missing-plugin.zip").to_string_lossy().into_owned(),
+                    source: home
+                        .join("missing-plugin.zip")
+                        .to_string_lossy()
+                        .into_owned(),
                 },
                 "op-1".to_owned(),
             )

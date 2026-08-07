@@ -16,8 +16,8 @@ pub use contract::{
     CapabilityServiceHandle, CapabilityServiceResult,
 };
 pub use errors::{
-    CAPABILITY_ERRORS, CAPABILITY_INSTALL_IN_PROGRESS, CAPABILITY_NOT_FOUND, CAPABILITY_UNSUPPORTED,
-    ensure_capability_errors_registered,
+    CAPABILITY_ERRORS, CAPABILITY_INSTALL_IN_PROGRESS, CAPABILITY_NOT_FOUND,
+    CAPABILITY_UNSUPPORTED, ensure_capability_errors_registered,
 };
 pub use host::{
     CommandResult, DOWNLOAD_IDLE_TIMEOUT, FetchBodyStream, FetchLike, FetchResponse, ReqwestFetch,

@@ -512,10 +512,7 @@ impl AgentTool {
         target
             .get(AGENT_PROFILE_SERVICE_ID)?
             .update(ProfileUpdateData {
-                model_alias: Some(subagent_model_alias(
-                    child_profile.as_deref(),
-                    caller_model,
-                )),
+                model_alias: Some(subagent_model_alias(child_profile.as_deref(), caller_model)),
                 ..ProfileUpdateData::default()
             })?;
         Ok(())
@@ -870,7 +867,10 @@ fn build_profile_descriptions(
                 return if effective_tools.is_empty() {
                     format!("{header}\n  Tools: none{model_line}")
                 } else {
-                    format!("{header}\n  Tools: {}{model_line}", effective_tools.join(", "))
+                    format!(
+                        "{header}\n  Tools: {}{model_line}",
+                        effective_tools.join(", ")
+                    )
                 };
             }
             match active_tools {
@@ -1180,7 +1180,8 @@ mod tests {
         });
         let descriptions = build_profile_descriptions(&[pinned], &[], |_, _, _| true);
         assert!(
-            descriptions.contains("- pinned: Pinned model agent\n  Tools: all\n  Model: fast-model"),
+            descriptions
+                .contains("- pinned: Pinned model agent\n  Tools: all\n  Model: fast-model"),
             "{descriptions}"
         );
     }

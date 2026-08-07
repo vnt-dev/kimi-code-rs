@@ -14,9 +14,9 @@ use kimi_code_agent_core_v2::{
         desktop_client::{
             DesktopAuthStatus, DesktopContextUsage, DesktopDeviceCode, DesktopInteraction,
             DesktopManagedUsage, DesktopManagedUserInfo, DesktopMessagePage, DesktopModel,
-            DesktopPrepareSessionRequest,
-            DesktopPreparedSession, DesktopProvider, DesktopSaveProviderInput, DesktopSkill,
-            DesktopSkillContent, DesktopWorkspace, KimiCodeDesktopClient,
+            DesktopPrepareSessionRequest, DesktopPreparedSession, DesktopProvider,
+            DesktopSaveProviderInput, DesktopSkill, DesktopSkillContent, DesktopWorkspace,
+            KimiCodeDesktopClient,
         },
         file::FileMeta,
         plugin::{

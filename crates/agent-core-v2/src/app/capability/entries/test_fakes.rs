@@ -26,8 +26,8 @@ use crate::{
             EnabledPluginSessionStart, GetPluginInfoInput, InstallPluginInput, PluginCommandDef,
             PluginInfo, PluginInstallOperation, PluginMcpServerInfo, PluginMcpTransport,
             PluginServiceContract, PluginServiceHandle, PluginServiceResult, PluginSource,
-            PluginState, PluginSummary, ReloadSummary, RemovePluginInput, SetPluginEnabledInput,
-            SetPluginMcpServerEnabledInput, PluginUpdateStatus,
+            PluginState, PluginSummary, PluginUpdateStatus, ReloadSummary, RemovePluginInput,
+            SetPluginEnabledInput, SetPluginMcpServerEnabledInput,
         },
         skill_catalog::SkillRoot,
     },
@@ -80,7 +80,7 @@ impl SpawnScript {
 
 pub fn data_reader(bytes: &[u8]) -> SharedProcessReader {
     Arc::new(AsyncMutex::new(
-        Box::new(std::io::Cursor::new(bytes.to_vec())) as Box<dyn AsyncRead + Send + Unpin>
+        Box::new(std::io::Cursor::new(bytes.to_vec())) as Box<dyn AsyncRead + Send + Unpin>,
     ))
 }
 
@@ -103,7 +103,7 @@ impl HostProcess for FakeHostProcess {
 
     fn stdin(&self) -> SharedProcessWriter {
         Arc::new(AsyncMutex::new(
-            Box::new(tokio::io::sink()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
+            Box::new(tokio::io::sink()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>
         ))
     }
 
@@ -164,7 +164,10 @@ impl HostProcessService for ScriptedHostProcessService {
     ) -> Result<Arc<dyn HostProcess>, HostProcessError> {
         let key = format!("{} {}", command, args.join(" "));
         self.calls.lock().unwrap().push(key.clone());
-        let hit = self.scripts.iter().find(|script| key.contains(script.contains));
+        let hit = self
+            .scripts
+            .iter()
+            .find(|script| key.contains(script.contains));
         let (code, stdout, stderr, hang) = match hit {
             Some(script) => (script.code, script.stdout, script.stderr, script.hang),
             None => (0, "", "", false),
@@ -356,7 +359,10 @@ impl PluginServiceContract for FakePluginService {
 
     async fn get_plugin_info(&self, input: GetPluginInfoInput) -> PluginServiceResult<PluginInfo> {
         let installed = self.installed.lock().unwrap();
-        let existing = installed.iter().find(|plugin| plugin.id == input.id).cloned();
+        let existing = installed
+            .iter()
+            .find(|plugin| plugin.id == input.id)
+            .cloned();
         let name = if input.id == "kimi-cu-win" {
             "win"
         } else {

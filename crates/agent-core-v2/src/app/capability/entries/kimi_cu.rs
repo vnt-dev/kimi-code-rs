@@ -76,8 +76,7 @@ const PERMISSIONS_TIMEOUT: Duration = Duration::from_secs(15);
 const DETECT_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const WINDOWS_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 const DEFAULT_WINDOWS_SYSTEM_ROOT: &str = "C:\\Windows";
-const WINDOWS_DOCTOR_SCRIPT: &str =
-    "$candidates = @($env:KIMI_CU_WINDOWS_EXE); \
+const WINDOWS_DOCTOR_SCRIPT: &str = "$candidates = @($env:KIMI_CU_WINDOWS_EXE); \
 if ($env:KIMI_CU_WINDOWS_HOME) { $candidates += (Join-Path $env:KIMI_CU_WINDOWS_HOME 'kimi-cu.exe') }; \
 if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'KimiCU\\kimi-cu.exe') }; \
 if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'KimiCU\\kimi-cu.exe') }; \
@@ -388,7 +387,10 @@ impl MacKimiCuEntry {
     // Original: removeLegacyMcpRegistration() — compare-and-swap the user
     // config through a same-directory temp file so a concurrent edit is
     // detected instead of clobbered.
-    async fn remove_legacy_mcp_registration(&self, legacy: Option<&LegacyMcpFile>) -> io::Result<bool> {
+    async fn remove_legacy_mcp_registration(
+        &self,
+        legacy: Option<&LegacyMcpFile>,
+    ) -> io::Result<bool> {
         let Some(legacy) = legacy else {
             return Ok(false);
         };
@@ -449,9 +451,8 @@ impl MacKimiCuEntry {
 
         let version = read_app_bundle_version(&self.info_plist).await;
         let app_exists = path_exists(&self.app_bin).await;
-        let app_usable = app_exists
-            && is_executable(&self.app_bin).await
-            && path_exists(&self.info_plist).await;
+        let app_usable =
+            app_exists && is_executable(&self.app_bin).await && path_exists(&self.info_plist).await;
         steps.push(CapabilityStep {
             id: "app".to_owned(),
             state: if app_usable {
@@ -645,7 +646,8 @@ impl MacKimiCuEntry {
             )));
         }
         self.stop_old_processes().await;
-        self.move_app_into_place(&unzip_dir.join(APP_BUNDLE)).await?;
+        self.move_app_into_place(&unzip_dir.join(APP_BUNDLE))
+            .await?;
         run_command(
             &self.ctx.host_process,
             "xattr",
@@ -844,7 +846,11 @@ impl WindowsKimiCuEntry {
                 step: CapabilityStep {
                     id: "runtime".to_owned(),
                     state: CapabilityStepState::Failed,
-                    detail: Some(trim_or_fallback(&result.stderr, &result.stdout, result.code)),
+                    detail: Some(trim_or_fallback(
+                        &result.stderr,
+                        &result.stdout,
+                        result.code,
+                    )),
                     optional: None,
                 },
                 version: None,
@@ -1016,12 +1022,7 @@ mod tests {
     //!
     //! Original: `packages/agent-core-v2/test/app/capability/kimiCu.test.ts`.
 
-    use std::{
-        collections::VecDeque,
-        path::PathBuf,
-        sync::Mutex,
-        time::Duration,
-    };
+    use std::{collections::VecDeque, path::PathBuf, sync::Mutex, time::Duration};
 
     use serde_json::json;
 
@@ -1164,8 +1165,14 @@ mod tests {
                 version: Some("0.2.14".to_owned()),
             })
         );
-        assert_eq!(parse_windows_doctor_output("mcp=false\nhelper=embedded"), None);
-        assert_eq!(parse_windows_doctor_output("mcp=true\nhelper=external"), None);
+        assert_eq!(
+            parse_windows_doctor_output("mcp=false\nhelper=embedded"),
+            None
+        );
+        assert_eq!(
+            parse_windows_doctor_output("mcp=true\nhelper=external"),
+            None
+        );
     }
 
     #[test]
@@ -1207,7 +1214,10 @@ mod tests {
             read_app_bundle_version(&plist).await.as_deref(),
             Some("0.4.18")
         );
-        assert_eq!(read_app_bundle_version(&root.join("nope.plist")).await, None);
+        assert_eq!(
+            read_app_bundle_version(&root.join("nope.plist")).await,
+            None
+        );
         rm_force(&root).await.unwrap();
     }
 
@@ -1245,9 +1255,10 @@ mod tests {
         let plugins = FakePluginService::new(vec![
             FakePlugin::new("kimi-cu-win", true, PluginState::Ok).version("0.2.14"),
         ]);
-        let (host, calls) = scripted_host(vec![SpawnScript::new("-Command", 0).stdout(
-            "version=0.2.14\r\nmcp=true\r\nhelper=embedded\r\nagent=running\r\n",
-        )]);
+        let (host, calls) =
+            scripted_host(vec![SpawnScript::new("-Command", 0).stdout(
+                "version=0.2.14\r\nmcp=true\r\nhelper=embedded\r\nagent=running\r\n",
+            )]);
         let entry = create_kimi_cu_entry(CapabilityEntryContext {
             platform: "win32".to_owned(),
             arch: "x64".to_owned(),
@@ -1388,9 +1399,10 @@ mod tests {
     async fn does_not_reinstall_a_healthy_windows_runtime_when_only_the_plugin_is_missing() {
         let root = temp_root("kimi-cu-entry").await;
         let plugins = FakePluginService::new(vec![]);
-        let (host, calls) = scripted_host(vec![SpawnScript::new("-Command", 0).stdout(
-            "version=0.2.14\nmcp=true\nhelper=embedded\nagent=running\n",
-        )]);
+        let (host, calls) = scripted_host(vec![
+            SpawnScript::new("-Command", 0)
+                .stdout("version=0.2.14\nmcp=true\nhelper=embedded\nagent=running\n"),
+        ]);
         let fetch: Arc<dyn FetchLike> = Arc::new(FailingFetch {
             message: "download should be skipped",
         });
@@ -1455,7 +1467,11 @@ mod tests {
         );
         let calls = calls.lock().unwrap().clone();
         assert!(calls.iter().any(|call| call.ends_with(" xpc-ping")));
-        assert!(!calls.iter().any(|call| call.contains("request-permissions")));
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.contains("request-permissions"))
+        );
         rm_force(&root).await.unwrap();
     }
 
@@ -1497,7 +1513,10 @@ mod tests {
             ..make_ctx(&root, plugins.handle(), host)
         });
         let error = entry.install(noop_reporter()).await.unwrap_err();
-        assert!(error.to_string().contains("only supported on macOS"), "{error}");
+        assert!(
+            error.to_string().contains("only supported on macOS"),
+            "{error}"
+        );
         assert!(plugins.installs.lock().unwrap().is_empty());
         rm_force(&root).await.unwrap();
     }
@@ -1601,7 +1620,10 @@ mod tests {
             migrated["mcpServers"]["custom"],
             json!({ "command": "custom-mcp", "args": [] })
         );
-        assert_eq!(step_names(&reports.lock().unwrap()), vec!["plugin", "mcp-config"]);
+        assert_eq!(
+            step_names(&reports.lock().unwrap()),
+            vec!["plugin", "mcp-config"]
+        );
         rm_force(&root).await.unwrap();
     }
 
@@ -1662,10 +1684,8 @@ mod tests {
 
         entry.install(report).await.unwrap();
 
-        let current: serde_json::Value = serde_json::from_str(
-            &tokio::fs::read_to_string(&config_path).await.unwrap(),
-        )
-        .unwrap();
+        let current: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&config_path).await.unwrap()).unwrap();
         assert_eq!(current, concurrent);
         assert_eq!(step_names(&reports.lock().unwrap()), vec!["plugin"]);
         rm_force(&root).await.unwrap();
@@ -1711,10 +1731,8 @@ mod tests {
 
         entry.install(noop_reporter()).await.unwrap();
 
-        let current: serde_json::Value = serde_json::from_str(
-            &tokio::fs::read_to_string(&config_path).await.unwrap(),
-        )
-        .unwrap();
+        let current: serde_json::Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&config_path).await.unwrap()).unwrap();
         assert_eq!(current, custom);
         rm_force(&root).await.unwrap();
     }
@@ -1848,7 +1866,9 @@ mod tests {
                 if let Some(parent) = self.app_bin.parent() {
                     tokio::fs::create_dir_all(parent).await.unwrap();
                 }
-                tokio::fs::write(&self.app_bin, "#!/bin/sh\n").await.unwrap();
+                tokio::fs::write(&self.app_bin, "#!/bin/sh\n")
+                    .await
+                    .unwrap();
                 make_executable(&self.app_bin).await;
             }
             Ok(proc)
@@ -1876,10 +1896,7 @@ mod tests {
             SpawnScript::new("xpc-ping", 0)
                 .stdout("permissionStatus: accessibility=true screenRecording=true"),
         ]);
-        let host = HostProcessServiceHandle(Arc::new(DittoMaterializingSpawn {
-            inner,
-            app_bin,
-        }));
+        let host = HostProcessServiceHandle(Arc::new(DittoMaterializingSpawn { inner, app_bin }));
         let fetch: Arc<dyn FetchLike> = Arc::new(BytesFetch {
             bytes: vec![1, 2, 3],
         });

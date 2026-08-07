@@ -254,7 +254,8 @@ impl KimiWebbridgeEntry {
                 id: "standalone-skill-migration".to_owned(),
                 state: CapabilityStepState::Ok,
                 detail: Some(
-                    backup_path.unwrap_or_else(|| self.standalone_skill_backup_dir.display().to_string()),
+                    backup_path
+                        .unwrap_or_else(|| self.standalone_skill_backup_dir.display().to_string()),
                 ),
                 optional: Some(true),
             });
@@ -262,7 +263,11 @@ impl KimiWebbridgeEntry {
 
         steps.push(CapabilityStep {
             id: "extension".to_owned(),
-            state: if daemon.as_ref().and_then(|daemon| daemon.extension_connected) == Some(true) {
+            state: if daemon
+                .as_ref()
+                .and_then(|daemon| daemon.extension_connected)
+                == Some(true)
+            {
                 CapabilityStepState::Ok
             } else {
                 CapabilityStepState::Missing
@@ -527,10 +532,7 @@ mod tests {
     use serde_json::json;
 
     use crate::{
-        app::{
-            capability::entries::test_fakes::*,
-            plugin::PluginState,
-        },
+        app::{capability::entries::test_fakes::*, plugin::PluginState},
         os::interface::host_process::HostProcessServiceHandle,
     };
 
@@ -650,8 +652,12 @@ mod tests {
         let root = temp_root("kimi-webbridge-entry").await;
         let from = root.join("staging").join("kimi-webbridge");
         let to = root.join("bin").join("kimi-webbridge");
-        tokio::fs::create_dir_all(from.parent().unwrap()).await.unwrap();
-        tokio::fs::create_dir_all(to.parent().unwrap()).await.unwrap();
+        tokio::fs::create_dir_all(from.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(to.parent().unwrap())
+            .await
+            .unwrap();
         tokio::fs::write(&from, "new").await.unwrap();
         tokio::fs::write(&to, "old-running").await.unwrap();
 
@@ -729,9 +735,14 @@ mod tests {
         let kimi_home = root.join("kimi-home");
         let user_home = root.join("user-home");
         let kimi_skill = kimi_home.join("skills").join("kimi-webbridge");
-        let agents_skill = user_home.join(".agents").join("skills").join("kimi-webbridge");
+        let agents_skill = user_home
+            .join(".agents")
+            .join("skills")
+            .join("kimi-webbridge");
         tokio::fs::create_dir_all(&kimi_skill).await.unwrap();
-        tokio::fs::write(kimi_skill.join("SKILL.md"), "old").await.unwrap();
+        tokio::fs::write(kimi_skill.join("SKILL.md"), "old")
+            .await
+            .unwrap();
         tokio::fs::create_dir_all(&agents_skill).await.unwrap();
         tokio::fs::write(agents_skill.join("SKILL.md"), "old")
             .await
@@ -890,7 +901,10 @@ mod tests {
             plugins.installs.lock().unwrap().as_slice(),
             ["https://code.kimi.com/kimi-code/plugins/official/kimi-webbridge.zip"]
         );
-        assert_eq!(tokio::fs::read_to_string(&bin_path).await.unwrap(), "latest-bin");
+        assert_eq!(
+            tokio::fs::read_to_string(&bin_path).await.unwrap(),
+            "latest-bin"
+        );
         rm_force(&root).await.unwrap();
     }
 
