@@ -70,7 +70,7 @@ use crate::{
             PluginInstallOperation, PluginSummary, PluginUpdateStatus, ReloadSummary,
             RemovePluginInput, SetPluginEnabledInput, SetPluginMcpServerEnabledInput,
         },
-        session_index::SessionSummary,
+        session_index::{SESSION_INDEX_SERVICE_ID, SessionListQuery, SessionSummary},
         session_lifecycle::{
             CreateSessionOptions, ForkSessionOptions, SESSION_LIFECYCLE_SERVICE_ID,
         },
@@ -953,6 +953,25 @@ impl KimiCodeDesktopClient {
             .map_err(|error| error.to_string())
     }
 
+    pub async fn list_archived_sessions(&self) -> Result<Vec<SessionSummary>, String> {
+        let index = self
+            .app
+            .get(SESSION_INDEX_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let page = index
+            .list(SessionListQuery {
+                include_archived: Some(true),
+                ..SessionListQuery::default()
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(page
+            .items
+            .into_iter()
+            .filter(|session| session.archived)
+            .collect())
+    }
+
     pub async fn fork_session(&self, session_id: &str) -> Result<String, String> {
         let session_id = session_id.trim();
         if session_id.is_empty() {
@@ -1327,6 +1346,32 @@ impl KimiCodeDesktopClient {
             .archive(session_id)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    pub async fn restore_session(&self, session_id: &str) -> Result<SessionSummary, String> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Err("A session id is required.".to_owned());
+        }
+        let sessions = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        if sessions
+            .restore(session_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            return Err(format!("Session `{session_id}` was not found."));
+        }
+        self.app
+            .get(SESSION_INDEX_SERVICE_ID)
+            .map_err(|error| error.to_string())?
+            .get(session_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("Session `{session_id}` was not found after restoring it."))
     }
 
     pub async fn prepare_session(
@@ -2477,6 +2522,48 @@ mod tests {
                 .and_then(toml::Value::as_table)
                 .is_some_and(|models| models.contains_key("kimi-code/second"))
         );
+
+        drop(client);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn archived_sessions_can_be_listed_and_restored() {
+        let root = std::env::temp_dir().join(format!(
+            "kimi-desktop-archived-sessions-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let home = root.join("home");
+        let work_dir = root.join("workspace");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let client = KimiCodeDesktopClient::new(&home, "test").unwrap();
+        client
+            .configure_models(&[managed_model("first")])
+            .await
+            .unwrap();
+
+        let prepared = client
+            .prepare_session(DesktopPrepareSessionRequest {
+                session_id: None,
+                work_dir: work_dir.to_string_lossy().into_owned(),
+                model: Some("kimi-code/first".into()),
+                thinking: Some("high".into()),
+                permission: Some(PermissionMode::Yolo),
+            })
+            .await
+            .unwrap();
+        client.archive_session(&prepared.session_id).await.unwrap();
+
+        let archived = client.list_archived_sessions().await.unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].id, prepared.session_id);
+        assert!(archived[0].archived);
+
+        let restored = client.restore_session(&prepared.session_id).await.unwrap();
+        assert_eq!(restored.id, prepared.session_id);
+        assert!(!restored.archived);
+        assert!(client.list_archived_sessions().await.unwrap().is_empty());
 
         drop(client);
         let _ = std::fs::remove_dir_all(root);

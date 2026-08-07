@@ -40,6 +40,10 @@ pub enum DesktopStateChange {
         #[serde(rename = "sessionId")]
         session_id: String,
     },
+    SessionRestored {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
 }
 
 #[derive(Default)]

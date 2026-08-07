@@ -401,6 +401,12 @@ pub(crate) async fn dispatch_rpc(
                     .map_err(RpcError::transport)?,
             )
         }
+        "list_archived_sessions" => encode(
+            client
+                .list_archived_sessions()
+                .await
+                .map_err(RpcError::transport)?,
+        ),
         "fork_session" => {
             let args: SessionArgs = decode(args)?;
             let session_id = client
@@ -422,6 +428,17 @@ pub(crate) async fn dispatch_rpc(
                 session_id: args.session_id,
             });
             Ok(Value::Null)
+        }
+        "restore_session" => {
+            let args: SessionArgs = decode(args)?;
+            let session = client
+                .restore_session(&args.session_id)
+                .await
+                .map_err(RpcError::transport)?;
+            events.desktop_state_changed(DesktopStateChange::SessionRestored {
+                session_id: session.id.clone(),
+            });
+            encode(session)
         }
         "prepare_session" => {
             let args: PrepareSessionArgs = decode(args)?;

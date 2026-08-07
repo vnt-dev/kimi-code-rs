@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { Copy, ExternalLink, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
+import { Archive, Copy, ExternalLink, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
 
 import type { ColorScheme } from "./appearance";
 import AccountSettings from "./AccountSettings";
+import ArchivedSessionsSettings from "./ArchivedSessionsSettings";
 import SettingsSelect from "./components/SettingsSelect";
 import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
 import PluginSettings from "./PluginSettings";
@@ -12,7 +13,7 @@ import ProviderSettings from "./ProviderSettings";
 import { invoke, isDesktop, openExternalUrl } from "./transport";
 import type { AccountUsage, AuthStatus, ManagedUserInfo } from "./types";
 
-type SettingsTab = "general" | "account" | "providers" | "plugins" | "web" | "about";
+type SettingsTab = "general" | "account" | "providers" | "plugins" | "web" | "archived" | "about";
 type WebServerListenScope = "local" | "global";
 
 interface WebServerStatus {
@@ -398,6 +399,15 @@ export default function SettingsDialog({
               </button>
             )}
             <button
+              className={`settings-tab ${activeTab === "archived" ? "active" : ""}`}
+              type="button"
+              aria-current={activeTab === "archived" ? "page" : undefined}
+              onClick={() => setActiveTab("archived")}
+            >
+              <Archive size={15} />
+              {t("settings.tabArchived")}
+            </button>
+            <button
               className={`settings-tab ${activeTab === "about" ? "active" : ""}`}
               type="button"
               aria-current={activeTab === "about" ? "page" : undefined}
@@ -516,6 +526,8 @@ export default function SettingsDialog({
               <ProviderSettings onChanged={onProvidersChanged} />
             ) : activeTab === "plugins" ? (
               <PluginSettings onChanged={onPluginsChanged} />
+            ) : activeTab === "archived" ? (
+              <ArchivedSessionsSettings />
             ) : activeTab === "web" ? (
               <section
                 className="settings-section settings-web"

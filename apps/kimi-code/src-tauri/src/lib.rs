@@ -323,6 +323,11 @@ async fn list_workspace_sessions(
 }
 
 #[tauri::command]
+async fn list_archived_sessions(state: State<'_, AppState>) -> Result<Vec<SessionSummary>, String> {
+    state.client.list_archived_sessions().await
+}
+
+#[tauri::command]
 async fn fork_session(state: State<'_, AppState>, session_id: String) -> Result<String, String> {
     let session_id = state.client.fork_session(&session_id).await?;
     state
@@ -340,6 +345,20 @@ async fn archive_session(state: State<'_, AppState>, session_id: String) -> Resu
         .web_server
         .desktop_state_changed(DesktopStateChange::SessionArchived { session_id });
     Ok(())
+}
+
+#[tauri::command]
+async fn restore_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<SessionSummary, String> {
+    let session = state.client.restore_session(&session_id).await?;
+    state
+        .web_server
+        .desktop_state_changed(DesktopStateChange::SessionRestored {
+            session_id: session.id.clone(),
+        });
+    Ok(session)
 }
 
 #[tauri::command]
@@ -730,8 +749,10 @@ pub fn run() {
             create_or_touch_workspace,
             remove_workspace,
             list_workspace_sessions,
+            list_archived_sessions,
             fork_session,
             archive_session,
+            restore_session,
             prepare_session,
             conversation_context_usage,
             list_conversation_messages,

@@ -305,12 +305,20 @@ export function listWorkspaceSessions(
   return invoke<SessionSummary[]>("list_workspace_sessions", { workspaceId });
 }
 
+export function listArchivedSessions(): Promise<SessionSummary[]> {
+  return invoke<SessionSummary[]>("list_archived_sessions");
+}
+
 export function forkSession(sessionId: string): Promise<string> {
   return invoke<string>("fork_session", { sessionId });
 }
 
 export function archiveSession(sessionId: string): Promise<void> {
   return invoke<void>("archive_session", { sessionId });
+}
+
+export function restoreSession(sessionId: string): Promise<SessionSummary> {
+  return invoke<SessionSummary>("restore_session", { sessionId });
 }
 
 export function listSkills(sessionId: string): Promise<SkillDescriptor[]> {
