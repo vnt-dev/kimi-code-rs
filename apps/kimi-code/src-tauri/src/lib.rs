@@ -51,6 +51,20 @@ const TRAY_SHOW_MENU_ID: &str = "tray-show";
 #[cfg(desktop)]
 const TRAY_QUIT_MENU_ID: &str = "tray-quit";
 
+/// Returns localized tray menu labels based on the OS UI language:
+/// Chinese for Chinese systems, English for everything else.
+#[cfg(desktop)]
+fn tray_menu_labels() -> (&'static str, &'static str) {
+    let is_chinese = sys_locale::get_locale()
+        .map(|locale| locale.to_lowercase().starts_with("zh"))
+        .unwrap_or(false);
+    if is_chinese {
+        ("显示 Kimi Code", "退出")
+    } else {
+        ("Show Kimi Code", "Quit")
+    }
+}
+
 #[cfg(desktop)]
 fn show_main_window(app: &AppHandle) {
     if let Some(main_window) = app.get_webview_window("main") {
@@ -579,10 +593,11 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             if let Some(icon) = app.default_window_icon() {
+                let (tray_show_label, tray_quit_label) = tray_menu_labels();
                 let tray_menu = MenuBuilder::new(app)
-                    .text(TRAY_SHOW_MENU_ID, "Show Kimi Code")
+                    .text(TRAY_SHOW_MENU_ID, tray_show_label)
                     .separator()
-                    .text(TRAY_QUIT_MENU_ID, "Quit")
+                    .text(TRAY_QUIT_MENU_ID, tray_quit_label)
                     .build()?;
 
                 TrayIconBuilder::with_id("kimi-code")
