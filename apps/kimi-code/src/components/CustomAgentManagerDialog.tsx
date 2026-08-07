@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  ArrowLeft,
   Bot,
   Check,
   FileCode2,
@@ -62,6 +63,7 @@ export function CustomAgentManagerDialog({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [mobilePane, setMobilePane] = useState<"list" | "editor">("list");
 
   const dirty = Boolean(draft && draft.content !== draft.originalContent);
   const scopedAgents = useMemo(
@@ -153,6 +155,7 @@ export function CustomAgentManagerDialog({
   const selectScope = (scope: CustomAgentScope): void => {
     if (scope === activeScope || !confirmDiscard()) return;
     setActiveScope(scope);
+    setMobilePane("list");
     setNotice(undefined);
     setError(undefined);
     const first = agents.find((agent) => agent.scope === scope);
@@ -172,7 +175,11 @@ export function CustomAgentManagerDialog({
 
   const selectAgent = (agent: CustomAgentDescriptor): void => {
     const key = customAgentKey(agent);
-    if (key === selectedKey || !confirmDiscard()) return;
+    if (key === selectedKey) {
+      setMobilePane("editor");
+      return;
+    }
+    if (!confirmDiscard()) return;
     setSelectedKey(key);
     setDraft({
       scope: agent.scope,
@@ -183,6 +190,7 @@ export function CustomAgentManagerDialog({
     setNotice(undefined);
     setError(undefined);
     setConfirmDelete(false);
+    setMobilePane("editor");
   };
 
   const createAgent = (): void => {
@@ -197,6 +205,7 @@ export function CustomAgentManagerDialog({
     setNotice(undefined);
     setError(undefined);
     setConfirmDelete(false);
+    setMobilePane("editor");
     window.setTimeout(() => editorRef.current?.focus(), 0);
   };
 
@@ -239,6 +248,7 @@ export function CustomAgentManagerDialog({
       setConfirmDelete(false);
       setSelectedKey(undefined);
       setDraft(undefined);
+      setMobilePane("list");
       setNotice(t("agents.deleted"));
       await loadAgents(undefined, activeScope);
     } catch (nextError) {
@@ -251,6 +261,25 @@ export function CustomAgentManagerDialog({
   const refreshAgents = (): void => {
     if (!confirmDiscard()) return;
     void loadAgents(selectedKey, activeScope);
+  };
+
+  const showAgentList = (): void => {
+    if (!confirmDiscard()) return;
+    if (!draft?.relativePath) {
+      setSelectedKey(undefined);
+      setDraft(undefined);
+    } else if (selectedAgent) {
+      setDraft({
+        scope: selectedAgent.scope,
+        relativePath: selectedAgent.relativePath,
+        content: selectedAgent.content,
+        originalContent: selectedAgent.content,
+      });
+    }
+    setError(undefined);
+    setNotice(undefined);
+    setConfirmDelete(false);
+    setMobilePane("list");
   };
 
   const handleEditorKeyDown = (
@@ -332,7 +361,7 @@ export function CustomAgentManagerDialog({
           </button>
         </div>
 
-        <div className="agent-manager-body">
+        <div className={`agent-manager-body ${mobilePane === "editor" ? "mobile-editor-open" : ""}`}>
           <aside className="agent-manager-list-pane">
             <div className="agent-manager-list-heading">
               <div>
@@ -387,7 +416,15 @@ export function CustomAgentManagerDialog({
             {draft ? (
               <>
                 <div className="agent-manager-editor-heading">
-                  <div>
+                  <button
+                    className="agent-manager-mobile-back"
+                    type="button"
+                    aria-label={t("agents.backToList")}
+                    onClick={showAgentList}
+                  >
+                    <ArrowLeft size={18} />
+                  </button>
+                  <div className="agent-manager-editor-meta">
                     <span>{draft.relativePath ? selectedAgent?.name ?? draft.relativePath : t("agents.untitled")}</span>
                     <small>{draft.relativePath ? selectedAgent?.path : t("agents.newHint")}</small>
                   </div>

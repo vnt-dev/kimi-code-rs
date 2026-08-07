@@ -367,14 +367,18 @@
   border-bottom: 0.5px solid var(--line);
 }
 
-.agent-manager-editor-heading > div:first-child {
+.agent-manager-mobile-back {
+  display: none;
+}
+
+.agent-manager-editor-meta {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 3px;
 }
 
-.agent-manager-editor-heading > div:first-child span {
+.agent-manager-editor-meta > span {
   font-family: "DM Mono", monospace;
   font-size: 12px;
   font-weight: 500;
@@ -601,17 +605,36 @@
   gap: 8px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   .agent-manager-backdrop {
     padding: 0;
   }
 
   .agent-manager-dialog {
     width: 100vw;
-    height: 100vh;
+    height: 100dvh;
     min-height: 0;
     border: 0;
     border-radius: 0;
+  }
+
+  .agent-manager-header {
+    min-height: calc(58px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 12px 0 14px;
+  }
+
+  .agent-manager-title {
+    gap: 9px;
+  }
+
+  .agent-manager-title-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .agent-manager-close {
+    width: 44px;
+    height: 44px;
   }
 
   .agent-manager-title p,
@@ -619,24 +642,150 @@
     display: none;
   }
 
+  .agent-manager-scope-tabs {
+    min-height: 46px;
+    padding: 0 14px;
+    overflow-x: auto;
+    gap: 20px;
+    scrollbar-width: none;
+  }
+
+  .agent-manager-scope-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .agent-manager-scope-tabs button {
+    min-height: 46px;
+    flex: 0 0 auto;
+  }
+
   .agent-manager-body {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(150px, 30vh) minmax(0, 1fr);
+    position: relative;
+    display: block;
   }
 
   .agent-manager-list-pane {
+    height: 100%;
+    padding: 12px 10px max(12px, env(safe-area-inset-bottom));
     border-right: 0;
-    border-bottom: 0.5px solid var(--line);
+  }
+
+  .agent-manager-body:not(.mobile-editor-open) .agent-manager-editor-pane,
+  .agent-manager-body.mobile-editor-open .agent-manager-list-pane {
+    display: none;
+  }
+
+  .agent-manager-list-heading {
+    min-height: 48px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .agent-manager-list-heading button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .agent-manager-list-item {
+    min-height: 60px;
+    padding: 9px 10px;
+  }
+
+  .agent-manager-new {
+    min-height: 44px;
+  }
+
+  .agent-manager-editor-pane {
+    height: 100%;
   }
 
   .agent-manager-editor-heading {
-    padding-right: 12px;
-    padding-left: 12px;
+    min-height: 56px;
+    padding: 8px 12px 8px 8px;
+    justify-content: flex-start;
+  }
+
+  .agent-manager-mobile-back {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    flex: 0 0 auto;
+    place-items: center;
+    border: 0;
+    border-radius: 9px;
+    color: var(--muted);
+    background: transparent;
+  }
+
+  .agent-manager-mobile-back:active {
+    color: var(--text);
+    background: var(--hover);
+  }
+
+  .agent-manager-editor-meta {
+    flex: 1;
+  }
+
+  .agent-manager-editor-heading small {
+    max-width: calc(100vw - 150px);
+  }
+
+  .agent-manager-message {
+    margin: 8px 10px 0;
   }
 
   .agent-manager-editor {
     width: calc(100% - 20px);
-    margin-right: 10px;
-    margin-left: 10px;
+    margin: 8px 10px 0;
+    padding: 13px 14px;
+    border-radius: 9px;
+    font-size: 16px;
+    line-height: 1.55;
+  }
+
+  .agent-manager-editor-footer {
+    min-height: 28px;
+    padding: 0 12px;
+    justify-content: flex-end;
+  }
+
+  .agent-manager-editor-footer > span:first-child {
+    display: none;
+  }
+
+  .agent-manager-actions {
+    min-height: calc(58px + env(safe-area-inset-bottom));
+    padding: 8px 10px max(8px, env(safe-area-inset-bottom));
+  }
+
+  .agent-manager-actions button,
+  .agent-manager-editor-empty button,
+  .agent-manager-confirm button {
+    min-height: 44px;
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .agent-manager-editor-empty {
+    padding: 24px;
+  }
+
+  .agent-manager-confirm-backdrop {
+    padding: 16px;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+
+  .agent-manager-confirm {
+    width: 100%;
+  }
+
+  .agent-manager-confirm > div,
+  .agent-manager-confirm button {
+    width: 100%;
+  }
+
+  .agent-manager-confirm > div {
+    flex-direction: column-reverse;
   }
 }
