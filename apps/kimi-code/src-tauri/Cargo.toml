@@ -2,7 +2,7 @@
 name = "kimi-code-desktop"
 version = "0.2.6"
 description = "Kimi Code desktop agent client"
-authors = ["Moonshot AI"]
+authors = ["vnt-dev"]
 edition = "2024"
 license = "MIT"
 

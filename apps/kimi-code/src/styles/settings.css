@@ -375,6 +375,55 @@ html[data-color-scheme="light"] .settings-dialog {
   gap: 8px;
 }
 
+.settings-community-card {
+  display: flex;
+  margin: 4px 0 12px;
+  padding: 14px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0.5px solid var(--line);
+  border-radius: 10px;
+  background: var(--sd-surface);
+}
+
+.settings-community-card > div {
+  min-width: 0;
+}
+
+.settings-community-card strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-community-card p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-repository-link {
+  display: inline-flex;
+  min-height: 32px;
+  padding: 0 10px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border: 0.5px solid var(--line);
+  border-radius: 7px;
+  color: var(--accent);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.settings-repository-link:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
 .settings-version-number {
   color: var(--muted);
   font-size: 13px;
@@ -1105,6 +1154,16 @@ html[data-color-scheme="light"] .settings-dialog {
   .settings-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .settings-community-card {
+    flex-direction: column;
+  }
+
+  .settings-repository-link {
+    width: 100%;
+    min-height: 40px;
+    justify-content: center;
   }
 
   .settings-archived {

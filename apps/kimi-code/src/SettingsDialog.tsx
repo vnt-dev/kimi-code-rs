@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { Archive, Copy, ExternalLink, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
+import { Archive, Copy, ExternalLink, Github, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
 
 import type { ColorScheme } from "./appearance";
 import AccountSettings from "./AccountSettings";
@@ -637,6 +637,26 @@ export default function SettingsDialog({
                 aria-labelledby="about-heading"
               >
                 <h3 id="about-heading">Kimi Code</h3>
+                <div className="settings-community-card">
+                  <div>
+                    <strong>{t("settings.communityEdition")}</strong>
+                    <p>{t("settings.communityDescription")}</p>
+                  </div>
+                  <button
+                    className="settings-repository-link"
+                    type="button"
+                    aria-label={t("settings.openRepository")}
+                    onClick={() =>
+                      void openExternalUrl(
+                        "https://github.com/vnt-dev/kimi-code-rs",
+                      )
+                    }
+                  >
+                    <Github size={15} />
+                    <span>github.com/vnt-dev/kimi-code-rs</span>
+                    <ExternalLink size={13} />
+                  </button>
+                </div>
                 <div className="settings-row">
                   <div className="settings-version">
                     <span className="settings-row-label">

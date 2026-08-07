@@ -32,6 +32,10 @@ const zh = {
   "settings.notificationsDesktopOnly": "仅桌面客户端支持系统通知",
   "settings.notificationsPermissionDenied": "未获得系统通知权限，请在系统设置中允许 Kimi Code 发送通知。",
   "settings.version": "版本",
+  "settings.communityEdition": "社区版",
+  "settings.communityDescription":
+    "这是由社区维护的 Kimi Code Rust 实现",
+  "settings.openRepository": "打开 Kimi Code RS GitHub 仓库",
   "settings.checkUpdate": "检查更新",
   "settings.installUpdate": "下载并安装",
   "settings.updateDesktopOnly": "请在桌面客户端中检查更新",
@@ -751,6 +755,10 @@ const en: Record<TranslationKey, string> = {
   "settings.notificationsDesktopOnly": "System notifications are available in the desktop app only",
   "settings.notificationsPermissionDenied": "Notification permission was not granted. Allow Kimi Code notifications in system settings.",
   "settings.version": "Version",
+  "settings.communityEdition": "Community edition",
+  "settings.communityDescription":
+    "A community-maintained Rust implementation of Kimi Code",
+  "settings.openRepository": "Open the Kimi Code RS GitHub repository",
   "settings.checkUpdate": "Check for updates",
   "settings.installUpdate": "Download and install",
   "settings.updateDesktopOnly": "Check for updates in the desktop app",
