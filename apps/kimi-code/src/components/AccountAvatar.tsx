@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { CircleUserRound } from "lucide-react";
 
-import type { ManagedUserInfo } from "../types";
+import type { AccountProfile } from "../types";
 
 export function AccountAvatar({
   profile,
   size,
 }: {
-  profile?: ManagedUserInfo;
+  profile?: AccountProfile;
   size: number;
 }) {
   const [failedUrl, setFailedUrl] = useState<string>();

@@ -7,11 +7,11 @@ import SettingsDialog from "../SettingsDialog";
 import { CustomAgentManagerDialog } from "./CustomAgentManagerDialog";
 import { isDesktop } from "../transport";
 import type {
+  AccountProfile,
   AccountUsage,
   AuthStatus,
   DeviceCode,
   GoalSnapshot,
-  ManagedUserInfo,
 } from "../types";
 import {
   DirectoryPickerDialog,
@@ -40,7 +40,7 @@ interface AppOverlaysProps {
   agentManagerWorkspace?: { id: string; name: string };
   appVersion?: string;
   auth: AuthStatus;
-  accountProfile?: ManagedUserInfo;
+  accountProfile?: AccountProfile;
   accountUsage?: AccountUsage;
   accountUsageBusy: boolean;
   accountUsageError?: string;

@@ -7,7 +7,7 @@ import {
   ManagedUsageProgress,
 } from "./components/AccountUsagePopover";
 import { t } from "./i18n";
-import type { AccountUsage, AuthStatus, ManagedUserInfo } from "./types";
+import type { AccountProfile, AccountUsage, AuthStatus } from "./types";
 
 export default function AccountSettings({
   auth,
@@ -20,7 +20,7 @@ export default function AccountSettings({
   onSignOut,
 }: {
   auth: AuthStatus;
-  profile?: ManagedUserInfo;
+  profile?: AccountProfile;
   usage?: AccountUsage;
   usageBusy: boolean;
   usageError?: string;

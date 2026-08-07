@@ -11,7 +11,7 @@ import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
 import PluginSettings from "./PluginSettings";
 import ProviderSettings from "./ProviderSettings";
 import { invoke, isDesktop, openExternalUrl } from "./transport";
-import type { AccountUsage, AuthStatus, ManagedUserInfo } from "./types";
+import type { AccountProfile, AccountUsage, AuthStatus } from "./types";
 
 type SettingsTab = "general" | "account" | "providers" | "plugins" | "web" | "archived" | "about";
 type WebServerListenScope = "local" | "global";
@@ -69,7 +69,7 @@ export default function SettingsDialog({
   language: Language;
   notificationsEnabled: boolean;
   auth: AuthStatus;
-  accountProfile?: ManagedUserInfo;
+  accountProfile?: AccountProfile;
   accountUsage?: AccountUsage;
   accountUsageBusy: boolean;
   accountUsageError?: string;

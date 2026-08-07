@@ -11,6 +11,7 @@ import {
   getSkillContent,
   listSkills,
 } from "../agentRpc";
+import { clearCachedAccountProfiles } from "../accountProfileCache";
 import {
   completedTurnMessageId,
   type RenderMessage,
@@ -36,12 +37,12 @@ import { parseSkillPromptDisplay } from "../prompt/skills";
 import type { PromptDraftUpdater } from "../promptDrafts";
 import { invoke } from "../transport";
 import type {
+  AccountProfile,
   AccountUsage,
   AuthStatus,
   CompactionEvent,
   Conversation,
   DeviceCode,
-  ManagedUserInfo,
   Model,
   SkillContent,
   SkillDescriptor,
@@ -68,13 +69,13 @@ interface ConversationResourceOptions {
   composerAddOpen: boolean;
   historyRequests: RefObject<Record<string, number>>;
   inFlightTurnsRef: RefObject<Record<string, InFlightTurn>>;
-  loadAccountProfile: () => Promise<void>;
+  loadAccountProfile: (provider?: string) => Promise<void>;
   promptAttachments: PromptAttachment[];
   promptSkills: SkillDescriptor[];
   refreshModels: () => Promise<void>;
   resetPrompt: (value?: string, conversationId?: string) => void;
   selectedModel?: Model;
-  setAccountProfile: Setter<ManagedUserInfo | undefined>;
+  setAccountProfile: Setter<AccountProfile | undefined>;
   setAccountUsage: Setter<AccountUsage | undefined>;
   setAccountUsageBusy: Setter<boolean>;
   setAccountUsageError: Setter<string | undefined>;
@@ -176,6 +177,9 @@ export function useConversationResources({
     setLoginOpen(true);
     setLoginBusy(true);
     setDeviceCode(undefined);
+    accountProfileRequest.current += 1;
+    setAccountProfile(undefined);
+    clearCachedAccountProfiles();
     try {
       const status = await invoke<AuthStatus>("login");
       setAuth(status);
@@ -183,7 +187,7 @@ export function useConversationResources({
         setLoginOpen(false);
         showNotice(t("notice.loginSuccess"));
         void refreshModels();
-        void loadAccountProfile();
+        void loadAccountProfile(status.provider);
       }
     } catch (error) {
       showNotice(conciseError(error));
@@ -202,6 +206,7 @@ export function useConversationResources({
       setAccountUsageError(undefined);
       accountProfileRequest.current += 1;
       setAccountProfile(undefined);
+      clearCachedAccountProfiles();
       setProfileOpen(false);
       showNotice(t("notice.logoutSuccess"));
     } catch (error) {

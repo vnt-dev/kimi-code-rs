@@ -7,7 +7,7 @@ import {
 
 import { resolveAccountMenuVisibility } from "../accountMenu";
 import { localeTag, t } from "../i18n";
-import type { AccountUsage, ManagedUsageRow, ManagedUserInfo } from "../types";
+import type { AccountProfile, AccountUsage, ManagedUsageRow } from "../types";
 import { AccountAvatar } from "./AccountAvatar";
 
 export function AccountUsagePopover({
@@ -21,7 +21,7 @@ export function AccountUsagePopover({
   onOpenSettings,
   onSignOut,
 }: {
-  profile?: ManagedUserInfo;
+  profile?: AccountProfile;
   loggedIn: boolean;
   usage?: AccountUsage;
   busy: boolean;

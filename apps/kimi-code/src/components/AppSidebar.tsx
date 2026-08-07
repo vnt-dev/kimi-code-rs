@@ -21,12 +21,12 @@ import { isTurnRunning, type InFlightTurn } from "../chat/liveTurns";
 import { conversationStatus } from "../conversationStatus";
 import { t } from "../i18n";
 import type {
+  AccountProfile,
   AccountUsage,
   AgentInteraction,
   AuthStatus,
   Conversation,
   DesktopState,
-  ManagedUserInfo,
   Project,
 } from "../types";
 import { AccountAvatar } from "./AccountAvatar";
@@ -41,7 +41,7 @@ interface AppSidebarProps {
   interactions: Record<string, AgentInteraction[]>;
   unreadCompletedConversations: Record<string, true>;
   auth: AuthStatus;
-  accountProfile?: ManagedUserInfo;
+  accountProfile?: AccountProfile;
   accountUsage?: AccountUsage;
   accountUsageBusy: boolean;
   accountUsageError?: string;

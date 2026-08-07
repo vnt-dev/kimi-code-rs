@@ -245,6 +245,16 @@ export interface ManagedUserInfo {
   lastLoginTime?: string;
 }
 
+export type AccountProfile = Pick<
+  ManagedUserInfo,
+  | "userId"
+  | "nickname"
+  | "userLevel"
+  | "userLevelName"
+  | "avatar"
+  | "username"
+>;
+
 export interface DeviceCode {
   userCode: string;
   verificationUri: string;

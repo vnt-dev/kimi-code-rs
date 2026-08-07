@@ -28,6 +28,12 @@ import {
 } from "./agentRpc";
 import { subscribeToAppEvents } from "./app/appEventSubscriptions";
 import {
+  accountProfileFromUserInfo,
+  clearCachedAccountProfiles,
+  readCachedAccountProfile,
+  writeCachedAccountProfile,
+} from "./accountProfileCache";
+import {
   BACKGROUND_TASK_LIST_LIMIT,
   BACKGROUND_TASK_OUTPUT_TAIL,
   LIVE_TURN_HANDOFF_MS,
@@ -169,6 +175,7 @@ import {
   webCredentialRequired
 } from "./transport";
 import type {
+  AccountProfile,
   AccountUsage,
   AgentInteraction,
   AgentUsageStatus,
@@ -248,7 +255,7 @@ export default function App() {
   const [accountUsage, setAccountUsage] = useState<AccountUsage>();
   const [accountUsageBusy, setAccountUsageBusy] = useState(false);
   const [accountUsageError, setAccountUsageError] = useState<string>();
-  const [accountProfile, setAccountProfile] = useState<ManagedUserInfo>();
+  const [accountProfile, setAccountProfile] = useState<AccountProfile>();
   const [modelsBusy, setModelsBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
@@ -1013,12 +1020,18 @@ export default function App() {
     }
   };
 
-  const loadAccountProfile = async (): Promise<void> => {
+  const loadAccountProfile = async (
+    provider = auth.provider,
+  ): Promise<void> => {
     const request = accountProfileRequest.current + 1;
     accountProfileRequest.current = request;
     try {
-      const profile = await invoke<ManagedUserInfo>("account_profile");
-      if (request === accountProfileRequest.current) setAccountProfile(profile);
+      const userInfo = await invoke<ManagedUserInfo>("account_profile");
+      if (request === accountProfileRequest.current) {
+        const profile = accountProfileFromUserInfo(userInfo);
+        setAccountProfile(profile);
+        writeCachedAccountProfile(provider, profile);
+      }
     } catch {
       // Profile display is best-effort; keep the previous value on failure.
     }
@@ -1088,21 +1101,26 @@ export default function App() {
       .catch(() => {
         // Vite's browser preview has no Tauri bridge.
       });
-    void loadModels().then(() => {
-      if (!active) return;
-      void invoke<AuthStatus>("auth_status")
-        .then((status) => {
-          if (!active) return;
-          setAuth(status);
-          if (status.loggedIn) {
-            void refreshModels();
-            void loadAccountProfile();
-          }
-        })
-        .catch(() => {
-          // Vite's browser preview has no Tauri bridge; the actual desktop app does.
-        });
-    });
+    const modelsLoaded = loadModels();
+    void invoke<AuthStatus>("auth_status")
+      .then((status) => {
+        if (!active) return;
+        setAuth(status);
+        if (status.loggedIn) {
+          setAccountProfile(readCachedAccountProfile(status.provider));
+          void loadAccountProfile(status.provider);
+          void modelsLoaded.then(() => {
+            if (active) void refreshModels();
+          });
+        } else {
+          accountProfileRequest.current += 1;
+          setAccountProfile(undefined);
+          clearCachedAccountProfiles();
+        }
+      })
+      .catch(() => {
+        // Vite's browser preview has no Tauri bridge; the actual desktop app does.
+      });
     return () => {
       active = false;
     };
