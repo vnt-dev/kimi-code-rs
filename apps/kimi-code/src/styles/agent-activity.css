@@ -1024,6 +1024,25 @@
   color: #c78383;
 }
 
+.exit-plan-mode-result {
+  padding: 9px 10px;
+  border-radius: 6px;
+  background: #0d1117;
+}
+
+.exit-plan-mode-result-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.exit-plan-mode-result-heading > span {
+  color: #62626d;
+  font-size: 12px;
+  font-weight: 550;
+}
+
 .history-media {
   display: block;
   width: auto;

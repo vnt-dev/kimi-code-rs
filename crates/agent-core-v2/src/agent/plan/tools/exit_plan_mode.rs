@@ -301,7 +301,7 @@ async fn execute_exit_plan_mode(
             has_feedback: None,
         });
         return ExecutableToolResult::success(format!(
-            "Exited plan mode. {}",
+            "Exited plan mode.\n\n{}",
             format_auto_approved_plan_for_output(&plan_content, plan_path.as_deref())
         ));
     }
@@ -312,7 +312,7 @@ async fn execute_exit_plan_mode(
         has_feedback: None,
     });
     ExecutableToolResult::success(format!(
-        "Exited plan mode. {}",
+        "Exited plan mode.\n\n{}",
         format_plan_for_output(&plan_content, plan_path.as_deref())
     ))
 }
@@ -357,14 +357,14 @@ fn normalize_option_label(label: &str) -> String {
 fn format_auto_approved_plan_for_output(plan: &str, path: Option<&str>) -> String {
     let saved_to = path.map_or_else(String::new, |path| format!("Plan saved to: {path}\n\n"));
     format!(
-        "Plan mode deactivated. All tools are now available.\nNote: this plan was auto-approved without user review — the user has NOT explicitly approved it. Follow the user's original instructions on whether to proceed with execution; if they asked you to stop, wait, or only summarize after planning, do not start executing.\n{saved_to}## Plan (auto-approved, not user-reviewed):\n{plan}"
+        "Plan mode deactivated. All tools are now available.\n\n> Note: this plan was auto-approved without user review — the user has NOT explicitly approved it. Follow the user's original instructions on whether to proceed with execution; if they asked you to stop, wait, or only summarize after planning, do not start executing.\n\n{saved_to}## Plan (auto-approved, not user-reviewed):\n\n{plan}"
     )
 }
 
 fn format_plan_for_output(plan: &str, path: Option<&str>) -> String {
     let saved_to = path.map_or_else(String::new, |path| format!("Plan saved to: {path}\n\n"));
     format!(
-        "Plan mode deactivated. All tools are now available.\n{saved_to}## Approved Plan:\n{plan}"
+        "Plan mode deactivated. All tools are now available.\n\n{saved_to}## Approved Plan:\n\n{plan}"
     )
 }
 
@@ -480,6 +480,7 @@ mod tests {
     fn output_format_distinguishes_reviewed_and_auto_approved_plans() {
         let approved = format_plan_for_output("1. Change it", Some("/plans/p.md"));
         assert!(approved.contains("## Approved Plan:"));
+        assert!(approved.contains("## Approved Plan:\n\n1. Change it"));
         assert!(approved.contains("Plan saved to: /plans/p.md"));
         let automatic = format_auto_approved_plan_for_output("1. Change it", None);
         assert!(automatic.contains("auto-approved without user review"));

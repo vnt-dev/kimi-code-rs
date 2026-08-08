@@ -1897,6 +1897,19 @@ export function ToolResultView({
       </section>
     );
   }
+  if (name === "ExitPlanMode" && !isError && typeof output === "string") {
+    return (
+      <section className="tool-detail-section">
+        <div className="exit-plan-mode-result-heading">
+          <span>{t("tool.result")}</span>
+          <AgentToolCopyButton text={output} />
+        </div>
+        <div className="exit-plan-mode-result markdown-body">
+          <MarkdownMessage content={output} />
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="tool-detail-section">
       <span>{t("tool.result")}</span>
