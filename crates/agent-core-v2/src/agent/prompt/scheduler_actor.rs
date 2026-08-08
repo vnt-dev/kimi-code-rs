@@ -190,10 +190,16 @@ struct EnqueueAck {
 }
 
 type SteerReply = oneshot::Sender<PromptServiceResult<Vec<PromptHandle>>>;
+type ReservedSteer = (
+    String,
+    Vec<Arc<PromptRecord>>,
+    ContextMessage,
+    Vec<ContentPart>,
+);
 
 enum SchedulerCommand {
     Enqueue {
-        input: PromptInput,
+        input: Box<PromptInput>,
         reply: oneshot::Sender<PromptServiceResult<EnqueueAck>>,
     },
     Steer {
@@ -213,7 +219,7 @@ enum SchedulerCommand {
 enum LaunchOutcome {
     Started(TurnHandle),
     Blocked {
-        message: ContextMessage,
+        message: Box<ContextMessage>,
         captions: Vec<String>,
     },
     Failed,
@@ -254,8 +260,11 @@ impl SchedulerClient {
     pub(super) async fn enqueue(&self, input: PromptInput) -> PromptServiceResult<PromptHandle> {
         ensure_running(&self.runtime)?;
         let (reply, response) = oneshot::channel();
-        self.send(SchedulerCommand::Enqueue { input, reply })
-            .await?;
+        self.send(SchedulerCommand::Enqueue {
+            input: Box::new(input),
+            reply,
+        })
+        .await?;
         let ack = await_reply(&self.runtime, response).await??;
         let handle = prompt_handle(Arc::clone(&ack.record));
 
@@ -399,7 +408,7 @@ struct ControllerState {
 
 enum RunnerState {
     Initializing,
-    Dormant(SchedulerActor),
+    Dormant(Box<SchedulerActor>),
     Running {
         generation: u64,
     },
@@ -414,7 +423,7 @@ impl SchedulerController {
     fn install(&self, actor: SchedulerActor) {
         let mut state = self.state.lock().unwrap();
         debug_assert!(matches!(state.runner, RunnerState::Initializing));
-        state.runner = RunnerState::Dormant(actor);
+        state.runner = RunnerState::Dormant(Box::new(actor));
     }
 
     fn ensure_runner(self: &Arc<Self>) {
@@ -483,7 +492,11 @@ impl SchedulerController {
 
     /// Atomically either parks the Actor or hands ownership back to the current
     /// task when a sender requested a restart during the parking handshake.
-    fn finish_parking(&self, generation: u64, actor: SchedulerActor) -> Result<(), SchedulerActor> {
+    fn finish_parking(
+        &self,
+        generation: u64,
+        actor: SchedulerActor,
+    ) -> Result<(), Box<SchedulerActor>> {
         let mut state = self.state.lock().unwrap();
         match &state.runner {
             RunnerState::Parking {
@@ -491,17 +504,17 @@ impl SchedulerController {
                 restart_requested,
             } if *current == generation && *restart_requested => {
                 state.runner = RunnerState::Running { generation };
-                Err(actor)
+                Err(Box::new(actor))
             }
             RunnerState::Parking {
                 generation: current,
                 restart_requested: false,
             } if *current == generation => {
-                state.runner = RunnerState::Dormant(actor);
+                state.runner = RunnerState::Dormant(Box::new(actor));
                 Ok(())
             }
             RunnerState::Closed => Ok(()),
-            _ => Err(actor),
+            _ => Err(Box::new(actor)),
         }
     }
 
@@ -643,7 +656,7 @@ impl SchedulerActor {
 
                     match controller.finish_parking(generation, self) {
                         Ok(()) => return,
-                        Err(actor) => self = actor,
+                        Err(actor) => self = *actor,
                     }
                 }
                 else => {
@@ -661,7 +674,7 @@ impl SchedulerActor {
     fn handle_command(&mut self, command: SchedulerCommand) {
         match command {
             SchedulerCommand::Enqueue { input, reply } => {
-                let result = self.make_record(input).map(|record| {
+                let result = self.make_record(*input).map(|record| {
                     self.runtime.event_bus.publish_typed(PromptSubmittedEvent {
                         user_message: record.user_message.clone(),
                         status: PromptSubmittedStatus::Queued,
@@ -1002,15 +1015,7 @@ impl SchedulerActor {
         }
     }
 
-    fn reserve_steer(
-        &mut self,
-        prompt_ids: Vec<String>,
-    ) -> PromptServiceResult<(
-        String,
-        Vec<Arc<PromptRecord>>,
-        ContextMessage,
-        Vec<ContentPart>,
-    )> {
+    fn reserve_steer(&mut self, prompt_ids: Vec<String>) -> PromptServiceResult<ReservedSteer> {
         if prompt_ids.is_empty() {
             return Err(coded(REQUEST_INVALID, "prompt_ids must not be empty"));
         }
@@ -1272,7 +1277,7 @@ async fn launch_job(runtime: Arc<SchedulerRuntime>, record: Arc<PromptRecord>) -
     }
     if hook.block {
         return LaunchOutcome::Blocked {
-            message: hook.prompt_message,
+            message: Box::new(hook.prompt_message),
             captions,
         };
     }
@@ -2168,11 +2173,12 @@ mod tests {
         );
 
         loop_service.materialize_last_request();
-        let events = steered_events.lock().unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fields["promptIds"], serde_json::json!(["child"]));
-        assert_eq!(events[0].fields["userMessages"][0]["promptId"], "child");
-        drop(events);
+        {
+            let events = steered_events.lock().unwrap();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].fields["promptIds"], serde_json::json!(["child"]));
+            assert_eq!(events[0].fields["userMessages"][0]["promptId"], "child");
+        }
 
         loop_service.complete(1);
         assert_eq!(
