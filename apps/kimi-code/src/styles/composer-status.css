@@ -642,6 +642,10 @@
 }
 
 .background-task-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  align-items: center;
+  column-gap: 8px;
   min-width: 0;
   overflow: hidden;
   border: 1px solid transparent;
@@ -664,7 +668,7 @@
   min-width: 0;
   min-height: 42px;
   padding: 7px 8px;
-  grid-template-columns: 16px minmax(0, 1fr) 14px;
+  grid-template-columns: 16px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   border: 0;
@@ -672,6 +676,46 @@
   background: transparent;
   text-align: left;
   cursor: pointer;
+}
+
+.background-task-item.running {
+  grid-template-columns: minmax(0, 1fr) 24px 14px;
+}
+
+.background-task-stop {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.background-task-stop:hover:not(:disabled) {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.background-task-stop:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: 1px;
+}
+
+.background-task-stop:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.background-task-stop .spinner {
+  width: 11px;
+  height: 11px;
+  border-width: 1.5px;
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+  border-top-color: var(--danger);
 }
 
 .background-task-summary:focus-visible {
@@ -734,6 +778,8 @@
 }
 
 .background-task-chevron {
+  position: relative;
+  left: -6px;
   color: var(--subtle);
   transition: transform 150ms ease;
 }
@@ -743,6 +789,7 @@
 }
 
 .background-task-detail {
+  grid-column: 1 / -1;
   display: grid;
   min-width: 0;
   padding: 0 8px 9px 32px;

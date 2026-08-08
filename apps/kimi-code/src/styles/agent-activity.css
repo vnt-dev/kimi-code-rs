@@ -102,8 +102,10 @@
 
 .live-tool-card .tool-card-summary small {
   margin-left: auto;
+  flex: 0 0 auto;
   color: #666671;
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .live-tool-card.running .tool-card-summary small,
@@ -973,8 +975,10 @@
 
 .history-tool-card .tool-card-summary small {
   margin-left: auto;
+  flex: 0 0 auto;
   color: #666671;
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .history-tool-card.completed .tool-card-summary small {

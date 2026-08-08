@@ -265,6 +265,12 @@ export function createAgentClient(scope: AgentScope) {
     getTasks(options: { activeOnly?: boolean; limit?: number } = {}) {
       return callAgentRpc<AgentTaskInfo[]>(scope, "getTasks", options);
     },
+    stopTask(taskId: string, reason?: string) {
+      return callAgentRpc<void>(scope, "stopTask", {
+        taskId,
+        ...(reason ? { reason } : {}),
+      });
+    },
     startBtw() {
       return callAgentRpc<string>(scope, "startBtw");
     },

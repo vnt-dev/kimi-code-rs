@@ -866,6 +866,17 @@ export default function App() {
     [loadBackgroundTaskOutput],
   );
 
+  const stopBackgroundTask = useCallback(
+    async (
+      scope: { sessionId: string; agentId: string },
+      taskId: string,
+    ): Promise<void> => {
+      await createAgentClient(scope).stopTask(taskId);
+      await refreshBackgroundTasks(scope);
+    },
+    [refreshBackgroundTasks],
+  );
+
   const refreshAgentState = async (scope: {
     sessionId: string;
     agentId: string;
@@ -2835,6 +2846,7 @@ export default function App() {
               handleSubmit={handleSubmit}
               loadAvailableSkills={loadAvailableSkills}
               loadBackgroundTaskOutput={loadBackgroundTaskOutput}
+              stopBackgroundTask={stopBackgroundTask}
               openSkillDetail={openSkillDetail}
               closeMcpStatus={closeMcpStatus}
               resolveApproval={resolveApproval}

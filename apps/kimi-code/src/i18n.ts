@@ -590,6 +590,8 @@ const zh = {
   "tasks.output": "输出",
   "tasks.loadingOutput": "正在读取输出…",
   "tasks.noOutput": "暂无输出",
+  "tasks.stop": "停止任务",
+  "tasks.stopTask": "停止任务：{task}",
 
   "compaction.completed": "上下文已压缩",
   "compaction.cancelled": "上下文压缩已取消",
@@ -1318,6 +1320,8 @@ const en: Record<TranslationKey, string> = {
   "tasks.output": "Output",
   "tasks.loadingOutput": "Loading output…",
   "tasks.noOutput": "No output",
+  "tasks.stop": "Stop task",
+  "tasks.stopTask": "Stop task: {task}",
 
   "compaction.completed": "Context compacted",
   "compaction.cancelled": "Context compaction cancelled",

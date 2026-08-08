@@ -131,6 +131,10 @@ interface ComposerDockProps {
     taskId: string,
     tail?: number,
   ) => Promise<void>;
+  stopBackgroundTask: (
+    scope: { sessionId: string; agentId: string },
+    taskId: string,
+  ) => Promise<void>;
   openSkillDetail: (skill: SkillDetailTarget) => Promise<void>;
   closeMcpStatus: () => void;
   resolveApproval: (
@@ -222,6 +226,7 @@ export function ComposerDock({
   handleSubmit,
   loadAvailableSkills,
   loadBackgroundTaskOutput,
+  stopBackgroundTask,
   openSkillDetail,
   closeMcpStatus,
   resolveApproval,
@@ -303,6 +308,11 @@ export function ComposerDock({
                               taskId,
                               BACKGROUND_TASK_DETAIL_TAIL,
                             )
+                          : Promise.resolve()
+                      }
+                      onStopTask={(taskId) =>
+                        activeAgentScope
+                          ? stopBackgroundTask(activeAgentScope, taskId)
                           : Promise.resolve()
                       }
                     />

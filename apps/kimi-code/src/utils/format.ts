@@ -1,11 +1,26 @@
-import { localeTag } from "../i18n";
 import type { TokenUsage } from "../types";
 
-export function formatTime(timestamp: string | number): string {
-  return new Intl.DateTimeFormat(localeTag(), {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
+function twoDigits(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+export function formatTime(
+  timestamp: string | number,
+  now = new Date(),
+): string {
+  const date = new Date(timestamp);
+  const time = `${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+
+  if (isToday) return time;
+
+  const monthAndDay = `${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())}`;
+  return date.getFullYear() === now.getFullYear()
+    ? `${monthAndDay} ${time}`
+    : `${date.getFullYear()}-${monthAndDay} ${time}`;
 }
 
 export function formatContext(value: number): string {

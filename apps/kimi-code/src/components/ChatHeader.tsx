@@ -499,11 +499,16 @@ function backgroundTaskElapsed(task: AgentTaskInfo): string {
 export function BackgroundTaskProgress({
   tasks,
   onLoadOutput,
+  onStopTask,
 }: {
   tasks: readonly BackgroundTaskView[];
   onLoadOutput: (taskId: string) => Promise<void>;
+  onStopTask: (taskId: string) => Promise<void>;
 }) {
   const [expandedTaskId, setExpandedTaskId] = useState<string>();
+  const [stoppingTaskIds, setStoppingTaskIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const running = tasks.filter((task) => task.status === "running").length;
   const failed = tasks.filter((task) =>
     ["failed", "timed_out", "lost"].includes(task.status),
@@ -517,6 +522,32 @@ export function BackgroundTaskProgress({
     }
     setExpandedTaskId(task.taskId);
     void onLoadOutput(task.taskId);
+  };
+
+  useEffect(() => {
+    setStoppingTaskIds((current) => {
+      const next = new Set(
+        [...current].filter((taskId) =>
+          tasks.some(
+            (task) => task.taskId === taskId && task.status === "running",
+          ),
+        ),
+      );
+      return next.size === current.size ? current : next;
+    });
+  }, [tasks]);
+
+  const stopTask = async (taskId: string): Promise<void> => {
+    setStoppingTaskIds((current) => new Set(current).add(taskId));
+    try {
+      await onStopTask(taskId);
+    } catch {
+      setStoppingTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(taskId);
+        return next;
+      });
+    }
   };
 
   return (
@@ -544,6 +575,7 @@ export function BackgroundTaskProgress({
           {tasks.map((task) => {
             const expanded = expandedTaskId === task.taskId;
             const elapsed = backgroundTaskElapsed(task);
+            const stopping = stoppingTaskIds.has(task.taskId);
             return (
               <li
                 className={`background-task-item ${task.status} ${
@@ -578,12 +610,33 @@ export function BackgroundTaskProgress({
                       {elapsed ? ` · ${elapsed}` : ""}
                     </small>
                   </span>
-                  <ChevronRight
-                    className="background-task-chevron"
-                    size={13}
-                    aria-hidden="true"
-                  />
                 </button>
+                {task.status === "running" && (
+                  <button
+                    className="background-task-stop"
+                    type="button"
+                    title={t("tasks.stop")}
+                    aria-label={t("tasks.stopTask", {
+                      task: task.description || task.command || task.taskId,
+                    })}
+                    disabled={stopping}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void stopTask(task.taskId);
+                    }}
+                  >
+                    {stopping ? (
+                      <span className="spinner" />
+                    ) : (
+                      <Square size={11} />
+                    )}
+                  </button>
+                )}
+                <ChevronRight
+                  className="background-task-chevron"
+                  size={13}
+                  aria-hidden="true"
+                />
                 {expanded && (
                   <div className="background-task-detail">
                     <span>{t("tasks.command")}</span>
