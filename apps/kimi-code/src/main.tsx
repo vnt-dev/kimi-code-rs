@@ -9,6 +9,16 @@ applyColorScheme(loadColorScheme());
 
 if (isDesktop()) {
   document.addEventListener("contextmenu", (event) => event.preventDefault());
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      const isReload =
+        event.key === "F5" ||
+        ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r");
+      if (isReload) event.preventDefault();
+    },
+    true,
+  );
 }
 
 createRoot(document.getElementById("root")!).render(
