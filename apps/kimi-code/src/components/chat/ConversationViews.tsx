@@ -52,6 +52,7 @@ import {
   structuredValue,
   type PluginCommandDisplay,
 } from "../../chat/messages";
+import { toolInputSummary } from "../../chat/toolInputSummary";
 import { t } from "../../i18n";
 import type { PluginCommandDetail } from "../../pluginCommandMessage";
 import { SkillPromptDisplayContent } from "../../prompt/SkillPromptDisplay";
@@ -622,6 +623,7 @@ export function LiveToolBlock({
     (tool.argumentsText
       ? parseStructuredValue(tool.argumentsText)
       : undefined);
+  const summary = toolInputSummary(input);
   const displayedSubagents = subagentRunsWithSwarmItems(subagents, input);
   return (
     <div className={`live-tool-card ${tool.status}`}>
@@ -633,7 +635,12 @@ export function LiveToolBlock({
       >
         <ToolStatusIcon status={tool.status} />
         <Wrench size={13} />
-        <span>{tool.name ?? t("tool.preparing")}</span>
+        <span className="tool-card-name">{tool.name ?? t("tool.preparing")}</span>
+        {summary && (
+          <span className="tool-card-preview" title={summary}>
+            {summary}
+          </span>
+        )}
         <small>{liveToolStatusLabel(tool.status)}</small>
       </button>
       {displayedSubagents.length > 0 && (
@@ -1891,6 +1898,7 @@ function HistoryToolCard({
       ? "error"
       : "completed"
     : "incomplete";
+  const summary = toolInputSummary(tool.input);
   const historicalSubagents =
     tool.tool_name === "AgentSwarm"
       ? parseAgentSwarmResult(result?.output, tool.tool_call_id, tool.input)
@@ -1911,7 +1919,12 @@ function HistoryToolCard({
       >
         <ToolStatusIcon status={status} />
         <Wrench size={13} />
-        <span>{tool.tool_name}</span>
+        <span className="tool-card-name">{tool.tool_name}</span>
+        {summary && (
+          <span className="tool-card-preview" title={summary}>
+            {summary}
+          </span>
+        )}
         <small>
           {result ? (result.is_error ? t("status.failed") : t("status.completed")) : t("status.incomplete")}
         </small>

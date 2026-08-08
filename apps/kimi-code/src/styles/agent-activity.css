@@ -53,6 +53,19 @@
   text-align: left;
 }
 
+.tool-card-name {
+  flex: 0 0 auto;
+}
+
+.tool-card-preview {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tool-status-icon {
   display: inline-grid;
   width: 14px;
