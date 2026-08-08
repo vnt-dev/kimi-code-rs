@@ -559,7 +559,7 @@ impl AgentRpcServiceContract for AgentRpcService {
     }
 
     async fn clear_context(&self, _payload: EmptyPayload) -> AgentRpcResult<()> {
-        self.prompt_service.clear()?;
+        self.prompt_service.clear().await?;
         Ok(())
     }
 

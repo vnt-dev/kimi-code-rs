@@ -140,11 +140,11 @@ pub trait AgentPromptServiceContract: Disposable + Send + Sync {
     async fn enqueue(&self, input: PromptInput) -> PromptServiceResult<PromptHandle>;
     fn list(&self) -> PromptQueueSnapshot;
     async fn steer(&self, prompt_ids: &[String]) -> PromptServiceResult<Vec<PromptHandle>>;
-    fn abort(&self, prompt_id: &str, reason: Option<Arc<dyn Error + Send + Sync>>) -> bool;
+    async fn abort(&self, prompt_id: &str, reason: Option<Arc<dyn Error + Send + Sync>>) -> bool;
     async fn inject(&self, message: ContextMessage) -> PromptServiceResult<Option<TurnHandle>>;
     async fn retry(&self) -> PromptServiceResult<Option<TurnHandle>>;
     fn undo(&self, count: f64) -> PromptServiceResult<usize>;
-    fn clear(&self) -> PromptServiceResult<()>;
+    async fn clear(&self) -> PromptServiceResult<()>;
     async fn shutdown(&self) {}
     fn hooks(&self) -> &AgentPromptHooks;
 }

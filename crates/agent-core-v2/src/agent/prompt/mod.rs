@@ -4,6 +4,7 @@
 
 pub mod contract;
 pub mod errors;
+mod scheduler_actor;
 pub mod service;
 pub mod step_requests;
 
