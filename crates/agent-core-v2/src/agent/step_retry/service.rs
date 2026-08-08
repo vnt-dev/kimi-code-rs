@@ -37,6 +37,11 @@ use crate::{
     },
     hooks::HookRegisterOptions,
     kosong::contract::errors::{ChatProviderError, is_retryable_generate_error},
+    session::question::{
+        QuestionAnswer, QuestionItem, QuestionOption, QuestionPresentation, QuestionRequest,
+        QuestionRequestOptions, QuestionResult, SESSION_QUESTION_SERVICE_ID,
+        SessionQuestionServiceHandle,
+    },
 };
 
 use crate::agent::loop_::{LOOP_CONTROL_SECTION, LoopControl};
@@ -68,6 +73,7 @@ struct RetryState {
 pub struct AgentStepRetryService {
     config: ConfigServiceHandle,
     event_bus: EventBusHandle,
+    question: SessionQuestionServiceHandle,
     state: Mutex<RetryState>,
     disposables: DisposableStore,
 }
@@ -77,10 +83,12 @@ impl AgentStepRetryService {
         config: ConfigServiceHandle,
         event_bus: EventBusHandle,
         loop_service: AgentLoopServiceHandle,
+        question: SessionQuestionServiceHandle,
     ) -> Result<Arc<Self>, crate::hooks::HookRegistrationError> {
         let service = Arc::new(Self {
             config,
             event_bus,
+            question,
             state: Mutex::new(RetryState::default()),
             disposables: DisposableStore::new(),
         });
@@ -159,17 +167,42 @@ impl AgentStepRetryService {
         };
         let max_attempts = self.max_attempts();
         if failed_attempt >= max_attempts {
-            self.reset_attempts();
-            return Ok(Some(false));
+            // Once the automatic budget is exhausted, every further failure
+            // requires a fresh confirmation. Keep the counter on approval so
+            // a failed user-approved attempt does not restart silent retries.
+            let error_message = underlying_error(&context.error)
+                .unwrap_or(&context.error)
+                .to_string();
+            if !self
+                .confirm_retry(context, step, failed_attempt, &error_message)
+                .await
+            {
+                self.reset_attempts();
+                if let Some(reason) = context.signal.reason() {
+                    return Err(LoopValue::Error(reason));
+                }
+                return Ok(Some(false));
+            }
         }
         let error = underlying_error(&context.error).unwrap_or(&context.error);
-        let delay_ms = read_retry_after_ms(error).unwrap_or_else(|| {
-            retry_backoff_delays(max_attempts as usize)
-                .get((failed_attempt - 1) as usize)
-                .copied()
-                .unwrap_or(0.0)
-        });
-        self.publish_retry(context, step, failed_attempt, max_attempts, delay_ms, error)?;
+        let delay_ms = if failed_attempt >= max_attempts {
+            0.0
+        } else {
+            read_retry_after_ms(error).unwrap_or_else(|| {
+                retry_backoff_delays(max_attempts as usize)
+                    .get((failed_attempt - 1) as usize)
+                    .copied()
+                    .unwrap_or(0.0)
+            })
+        };
+        self.publish_retry(
+            context,
+            step,
+            failed_attempt,
+            max_attempts.max(failed_attempt + 1),
+            delay_ms,
+            error,
+        )?;
         if sleep_for_retry(delay_ms, Some(&context.signal))
             .await
             .is_err()
@@ -190,6 +223,26 @@ impl AgentStepRetryService {
             }),
         );
         Ok(Some(true))
+    }
+
+    async fn confirm_retry(
+        &self,
+        context: &LoopErrorContext,
+        step: u64,
+        failed_attempt: u64,
+        error_message: &str,
+    ) -> bool {
+        let result = self
+            .question
+            .request(
+                retry_confirmation_request(context, step, failed_attempt, error_message),
+                Some(QuestionRequestOptions {
+                    signal: Some(context.signal.clone()),
+                    agent_id: None,
+                }),
+            )
+            .await;
+        retry_was_confirmed(result)
     }
 
     fn publish_retry(
@@ -284,7 +337,9 @@ pub fn register_agent_step_retry_service() {
                 (*accessor.get(AGENT_LOOP_SERVICE_ID)?).clone();
             let config: ConfigServiceHandle = (*accessor.get(CONFIG_SERVICE_ID)?).clone();
             let event_bus: EventBusHandle = (*accessor.get(EVENT_BUS_SERVICE_ID)?).clone();
-            let service = AgentStepRetryService::new(config, event_bus, loop_service)
+            let question: SessionQuestionServiceHandle =
+                (*accessor.get(SESSION_QUESTION_SERVICE_ID)?).clone();
+            let service = AgentStepRetryService::new(config, event_bus, loop_service, question)
                 .map_err(|error| DiError::Factory(error.to_string()))?;
             Ok(AgentStepRetryServiceHandle(service))
         })
@@ -292,4 +347,83 @@ pub fn register_agent_step_retry_service() {
         InstantiationType::Eager,
         "stepRetry",
     );
+}
+
+const RETRY_CONFIRMATION_QUESTION: &str = "The retry failed again. Continue?";
+const RETRY_CONFIRMATION_LABEL: &str = "Retry";
+
+fn retry_confirmation_request(
+    context: &LoopErrorContext,
+    step: u64,
+    failed_attempt: u64,
+    error_message: &str,
+) -> QuestionRequest {
+    let step_id = context.step_id.as_deref().unwrap_or("unknown");
+    QuestionRequest {
+        id: Some(format!(
+            "step-retry:{}:{step}:{step_id}:{failed_attempt}",
+            context.turn_id
+        )),
+        turn_id: u64::try_from(context.turn_id).ok(),
+        tool_call_id: None,
+        presentation: Some(QuestionPresentation::RetryConfirmation),
+        questions: vec![QuestionItem {
+            question: RETRY_CONFIRMATION_QUESTION.into(),
+            header: Some("Model request failed".into()),
+            body: Some(format!(
+                "The automatic retry limit was reached after {failed_attempt} attempts. Last error: {error_message}"
+            )),
+            options: vec![
+                QuestionOption {
+                    label: RETRY_CONFIRMATION_LABEL.into(),
+                    description: Some(
+                        "Continue this turn and try the same model request again.".into(),
+                    ),
+                },
+                QuestionOption {
+                    label: "Stop".into(),
+                    description: Some("Stop retrying and end this turn as failed.".into()),
+                },
+            ],
+            multi_select: Some(false),
+            other_label: None,
+            other_description: None,
+        }],
+    }
+}
+
+fn retry_was_confirmed(result: Option<QuestionResult>) -> bool {
+    let answers = match result {
+        Some(QuestionResult::Answers(answers)) => answers,
+        Some(QuestionResult::Response(response)) => response.answers,
+        None => return false,
+    };
+    answers.values().any(
+        |answer| matches!(answer, QuestionAnswer::Text(label) if label == RETRY_CONFIRMATION_LABEL),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::session::question::{QuestionAnswerMethod, QuestionResponse};
+
+    #[test]
+    fn only_the_retry_answer_confirms_an_extra_attempt() {
+        let result = |label: &str| {
+            Some(QuestionResult::Response(QuestionResponse {
+                answers: HashMap::from([(
+                    RETRY_CONFIRMATION_QUESTION.into(),
+                    QuestionAnswer::Text(label.into()),
+                )]),
+                method: Some(QuestionAnswerMethod::Enter),
+            }))
+        };
+
+        assert!(retry_was_confirmed(result(RETRY_CONFIRMATION_LABEL)));
+        assert!(!retry_was_confirmed(result("Stop")));
+        assert!(!retry_was_confirmed(None));
+    }
 }

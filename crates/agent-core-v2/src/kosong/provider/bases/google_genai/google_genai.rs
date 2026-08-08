@@ -27,6 +27,7 @@ use crate::kosong::contract::usage::TokenUsage;
 use crate::kosong::provider::bases::google_genai::google_genai_transport::{
     GoogleAdcProvider, GoogleGenAiClient, GoogleGenAiHttpResponse, ReqwestGoogleGenAiClient,
 };
+use crate::kosong::provider::bases::http_client::default_provider_http_client;
 use crate::kosong::provider::bases::merge_user_messages::{
     ConsecutiveUserMessageMergePolicy, merge_consecutive_user_messages,
 };
@@ -969,7 +970,9 @@ impl GoogleGenAiChatProvider {
         .filter(|api_key| !api_key.is_empty());
         let vertex_ai = options.vertex_ai.unwrap_or(false);
         let base_url = options.base_url.filter(|base_url| !base_url.is_empty());
-        let http_client = options.http_client.unwrap_or_default();
+        let http_client = options
+            .http_client
+            .unwrap_or_else(default_provider_http_client);
         let cached_client = if vertex_ai {
             None
         } else {

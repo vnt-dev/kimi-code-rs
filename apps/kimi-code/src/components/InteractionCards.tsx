@@ -9,6 +9,10 @@ import {
 } from "lucide-react";
 
 import { t } from "../i18n";
+import {
+  isRetryConfirmationPayload,
+  retryConfirmationResponse,
+} from "../retryConfirmation";
 import type {
   AgentInteraction,
   ApprovalPayload,
@@ -21,6 +25,57 @@ import { MarkdownMessage } from "./chat/MarkdownMessage";
 export function isPlanReviewInteraction(interaction: AgentInteraction): boolean {
   const payload = interaction.payload as Partial<ApprovalPayload>;
   return payload.display?.kind === "plan_review";
+}
+
+export function isRetryConfirmationInteraction(
+  interaction: AgentInteraction,
+): boolean {
+  return isRetryConfirmationPayload(interaction.payload);
+}
+
+export function RetryConfirmationCard({
+  busy,
+  onCancel,
+  onContinue,
+}: {
+  busy: boolean;
+  onCancel: () => void;
+  onContinue: (response: QuestionResponse) => void;
+}) {
+  return (
+    <section
+      className="interaction-card retry-confirmation-card"
+      aria-live="polite"
+    >
+      <div className="interaction-card-heading">
+        <span className="interaction-card-icon">
+          <RefreshCw size={18} />
+        </span>
+        <div>
+          <strong>{t("retryConfirmation.message")}</strong>
+        </div>
+      </div>
+      <div className="interaction-card-actions">
+        <button
+          type="button"
+          className="interaction-secondary"
+          disabled={busy}
+          onClick={onCancel}
+        >
+          {t("common.cancel")}
+        </button>
+        <button
+          type="button"
+          className="interaction-primary"
+          disabled={busy}
+          onClick={() => onContinue(retryConfirmationResponse())}
+        >
+          {busy ? <span className="spinner light" /> : <RefreshCw size={14} />}
+          {t("retryConfirmation.continue")}
+        </button>
+      </div>
+    </section>
+  );
 }
 
 export function QuestionCard({

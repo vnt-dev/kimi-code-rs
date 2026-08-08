@@ -31,6 +31,7 @@ use crate::kosong::provider::bases::anthropic::anthropic_profile::{
 use crate::kosong::provider::bases::anthropic::anthropic_transport::{
     AnthropicClient, AnthropicHttpResponse, ReqwestAnthropicClient,
 };
+use crate::kosong::provider::bases::http_client::default_provider_http_client;
 use crate::kosong::provider::bases::merge_user_messages::{
     ConsecutiveUserMessageMergePolicy, merge_consecutive_user_messages,
 };
@@ -1206,7 +1207,9 @@ impl AnthropicChatProvider {
         let base_url = options
             .base_url
             .unwrap_or_else(|| "https://api.anthropic.com".to_owned());
-        let http_client = options.http_client.unwrap_or_default();
+        let http_client = options
+            .http_client
+            .unwrap_or_else(default_provider_http_client);
         let cached_client = api_key.as_ref().map(|api_key| {
             Arc::new(ReqwestAnthropicClient::new(
                 http_client.clone(),

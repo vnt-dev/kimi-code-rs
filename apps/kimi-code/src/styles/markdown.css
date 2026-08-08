@@ -213,6 +213,13 @@
   color: #8279bd;
 }
 
+.assistant-retry-status {
+  margin-top: 3px;
+  color: #777180;
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+}
+
 .assistant-thinking-dots {
   display: inline-flex;
   align-items: center;

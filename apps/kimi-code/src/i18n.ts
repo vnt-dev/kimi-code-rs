@@ -609,6 +609,8 @@ const zh = {
   "question.otherPlaceholder": "输入其他答案",
   "question.skip": "跳过",
   "question.submit": "提交回答",
+  "retryConfirmation.message": "重试之后仍失败，是否继续",
+  "retryConfirmation.continue": "继续",
 
   "approval.title": "需要你的批准",
   "approval.toolRequest": "{tool} 请求执行操作",
@@ -654,6 +656,7 @@ const zh = {
   "folderPicker.select": "选择当前目录",
 
   "assistant.thinking": "正在思考",
+  "assistant.retrying": "正在进行第 {attempt} 次重试",
   "assistant.elapsed": "用时 {duration}",
   "filesChanged.title": "已编辑 {count} 个文件",
   "undo.tooltip": "撤回上一条消息（不会还原代码改动）",
@@ -1334,6 +1337,8 @@ const en: Record<TranslationKey, string> = {
   "question.otherPlaceholder": "Enter another answer",
   "question.skip": "Skip",
   "question.submit": "Submit answers",
+  "retryConfirmation.message": "The retry failed again. Continue?",
+  "retryConfirmation.continue": "Continue",
 
   "approval.title": "Approval required",
   "approval.toolRequest": "{tool} wants to run an action",
@@ -1379,6 +1384,7 @@ const en: Record<TranslationKey, string> = {
   "folderPicker.select": "Select this folder",
 
   "assistant.thinking": "Thinking",
+  "assistant.retrying": "Retrying · attempt {attempt}",
   "assistant.elapsed": "Took {duration}",
   "filesChanged.title": "Edited {count} files",
   "undo.tooltip": "Undo the last message (code changes will not be reverted)",

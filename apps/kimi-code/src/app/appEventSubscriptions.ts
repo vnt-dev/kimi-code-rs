@@ -26,6 +26,7 @@ import type { SideChatState } from "../components/sidebars/ChatSidebars";
 import { mergeDesktopInventory } from "../desktopInventory";
 import { t } from "../i18n";
 import { isSameLiveUserMessage } from "../liveUserMessage";
+import { isRetryConfirmationPayload } from "../retryConfirmation";
 import { loadDesktopState } from "../store";
 import {
   isSubagentEvent,
@@ -782,7 +783,9 @@ export function subscribeToAppEvents({
           notifyConversation({
             sessionId: event.payload.sessionId,
             kind: attention.kind,
-            content: attention.content,
+            content: isRetryConfirmationPayload(interaction.payload)
+              ? t("retryConfirmation.message")
+              : attention.content,
           });
         }
         setInteractions((current) => ({

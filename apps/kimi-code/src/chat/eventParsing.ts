@@ -8,6 +8,7 @@ const CHAT_EVENT_TYPES = new Set([
   "turn.step.started",
   "turn.step.completed",
   "turn.step.interrupted",
+  "turn.step.retrying",
   "assistant.delta",
   "assistant.content",
   "thinking.delta",

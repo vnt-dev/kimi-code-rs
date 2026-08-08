@@ -97,6 +97,12 @@ pub enum QuestionResult {
     Response(QuestionResponse),
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionPresentation {
+    RetryConfirmation,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionRequest {
@@ -106,6 +112,8 @@ pub struct QuestionRequest {
     pub turn_id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<QuestionPresentation>,
     pub questions: Vec<QuestionItem>,
 }
 
@@ -125,6 +133,8 @@ pub const SESSION_QUESTION_SERVICE_ID: ServiceIdentifier<SessionQuestionServiceH
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -132,6 +142,27 @@ mod tests {
         assert_eq!(
             SESSION_QUESTION_SERVICE_ID.to_string(),
             "sessionQuestionService"
+        );
+    }
+
+    #[test]
+    fn retry_confirmation_presentation_uses_its_wire_discriminator() {
+        let request = QuestionRequest {
+            id: Some("retry-1".into()),
+            turn_id: Some(7),
+            tool_call_id: None,
+            presentation: Some(QuestionPresentation::RetryConfirmation),
+            questions: Vec::new(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "id": "retry-1",
+                "turnId": 7,
+                "presentation": "retry_confirmation",
+                "questions": []
+            })
         );
     }
 }

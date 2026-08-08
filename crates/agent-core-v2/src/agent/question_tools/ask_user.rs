@@ -358,6 +358,7 @@ async fn execute_question(
                 id: None,
                 turn_id: Some(turn_id),
                 tool_call_id: Some(tool_call_id),
+                presentation: None,
                 questions: args
                     .questions
                     .into_iter()

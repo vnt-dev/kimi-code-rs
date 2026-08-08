@@ -1,8 +1,9 @@
 import type { AgentPromptSubmitStatus } from "../agentRpc";
 import { projectLiveUserMessage } from "../liveUserMessage";
 import { parseSkillPromptDisplay } from "../prompt/skills";
-import type { PluginCommandDisplay } from "./messages";
 import { conciseError } from "../utils/errors";
+import type { PluginCommandDisplay } from "./messages";
+import { clearRetryStatus, normalizeRetryAttempt } from "./retryStatus";
 import type {
   AgentChatEvent,
   AgentContentPart,
@@ -53,6 +54,10 @@ export interface LiveStep {
   interruption?: string;
 }
 
+export interface LiveRetryState {
+  attempt: number;
+}
+
 export interface InFlightTurn {
   promptId?: string;
   userMessageId?: string;
@@ -65,6 +70,7 @@ export interface InFlightTurn {
   status: LiveTurnStatus;
   durationMs?: number;
   steps: LiveStep[];
+  retry?: LiveRetryState;
   fileChanges?: readonly TurnFileChange[];
   error?: string;
   historyBoundaryId?: string;
@@ -369,6 +375,7 @@ export function reduceAgentChatEvent(
       return {
         ...next,
         status: event.reason,
+        retry: undefined,
         durationMs:
           event.durationMs ??
           Math.max(0, Date.now() - Date.parse(next.createdAt)),
@@ -428,7 +435,7 @@ export function reduceAgentChatEvent(
             }
           : step,
       );
-      return { ...next, steps };
+      return { ...next, steps, retry: undefined };
     }
     case "turn.step.interrupted": {
       const steps = next.steps.map((step) =>
@@ -440,32 +447,52 @@ export function reduceAgentChatEvent(
             }
           : step,
       );
-      return { ...next, steps };
+      return { ...next, steps, retry: undefined };
     }
+    case "turn.step.retrying":
+      return {
+        ...next,
+        status: "running",
+        retry: {
+          attempt: normalizeRetryAttempt(event.failedAttempt),
+        },
+      };
     case "assistant.delta":
-      return appendLiveContent(next, "text", event.delta);
+      return appendLiveContent(clearRetryStatus(next), "text", event.delta);
     case "assistant.content":
-      return withCurrentStep(next, (step) => ({
+      return withCurrentStep(clearRetryStatus(next), (step) => ({
         ...step,
         blocks: [...step.blocks, { kind: "content", content: event.content }],
       }));
     case "thinking.delta":
-      return appendLiveContent(next, "thinking", event.delta);
+      return appendLiveContent(
+        clearRetryStatus(next),
+        "thinking",
+        event.delta,
+      );
     case "tool.call.delta":
-      return updateLiveTool(next, event.toolCallId, (tool) => ({
-        ...tool,
-        name: event.name ?? tool.name,
-        argumentsText: tool.argumentsText + (event.argumentsPart ?? ""),
-      }));
+      return updateLiveTool(
+        clearRetryStatus(next),
+        event.toolCallId,
+        (tool) => ({
+          ...tool,
+          name: event.name ?? tool.name,
+          argumentsText: tool.argumentsText + (event.argumentsPart ?? ""),
+        }),
+      );
     case "tool.call.started":
-      return updateLiveTool(next, event.toolCallId, (tool) => ({
-        ...tool,
-        name: event.name,
-        input: event.args,
-        description: event.description,
-        display: event.display,
-        status: "running",
-      }));
+      return updateLiveTool(
+        clearRetryStatus(next),
+        event.toolCallId,
+        (tool) => ({
+          ...tool,
+          name: event.name,
+          input: event.args,
+          description: event.description,
+          display: event.display,
+          status: "running",
+        }),
+      );
     case "tool.progress":
       return updateLiveTool(next, event.toolCallId, (tool) => ({
         ...tool,

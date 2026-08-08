@@ -361,6 +361,19 @@ export type AgentChatEvent =
       reason: string;
       message?: string;
     }
+  | {
+      type: "turn.step.retrying";
+      turnId: number;
+      step: number;
+      stepId?: string;
+      failedAttempt: number;
+      nextAttempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      errorName?: string;
+      errorMessage?: string;
+      statusCode?: number;
+    }
   | { type: "assistant.delta"; turnId: number; delta: string }
   | {
       type: "assistant.content";
@@ -468,6 +481,7 @@ export interface QuestionPayload {
   id?: string;
   turnId?: number;
   toolCallId?: string;
+  presentation?: "retry_confirmation";
   questions: QuestionItem[];
 }
 

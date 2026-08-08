@@ -61,7 +61,9 @@ import {
   ApprovalCard,
   PlanReviewCard,
   QuestionCard,
+  RetryConfirmationCard,
   isPlanReviewInteraction,
+  isRetryConfirmationInteraction,
 } from "./InteractionCards";
 import { RemixSparklingLineIcon } from "./RemixSparklingLineIcon";
 import { McpStatusPopover } from "./McpStatusPopover";
@@ -242,14 +244,27 @@ export function ComposerDock({
   return (
             <div className="composer-dock">
               {activeQuestion && (
-                <QuestionCard
-                  key={activeQuestion.id}
-                  interaction={activeQuestion}
-                  busy={resolvingInteraction === activeQuestion.id}
-                  onRespond={(response) =>
-                    void respondToInteraction(activeQuestion, response)
-                  }
-                />
+                isRetryConfirmationInteraction(activeQuestion) ? (
+                  <RetryConfirmationCard
+                    key={activeQuestion.id}
+                    busy={resolvingInteraction === activeQuestion.id}
+                    onCancel={() =>
+                      void respondToInteraction(activeQuestion, null)
+                    }
+                    onContinue={(response) =>
+                      void respondToInteraction(activeQuestion, response)
+                    }
+                  />
+                ) : (
+                  <QuestionCard
+                    key={activeQuestion.id}
+                    interaction={activeQuestion}
+                    busy={resolvingInteraction === activeQuestion.id}
+                    onRespond={(response) =>
+                      void respondToInteraction(activeQuestion, response)
+                    }
+                  />
+                )
               )}
               {activeApproval && isPlanReviewInteraction(activeApproval) ? (
                 <PlanReviewCard

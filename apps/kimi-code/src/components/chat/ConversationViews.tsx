@@ -43,6 +43,7 @@ import {
   type QueuedPrompt,
   type RemoteQueuedPrompt,
 } from "../../chat/liveTurns";
+import { isVisibleRetryStep } from "../../chat/retryStatus";
 import {
   mediaSourceUrl,
   messagePluginCommand,
@@ -164,6 +165,9 @@ export function LiveTurnView({
   onPluginCommandOpen: (command: PluginCommandDetail) => void;
 }) {
   const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
+  const visibleSteps = turn.steps.filter((step) =>
+    isVisibleRetryStep(step, turn.steeredPrompts),
+  );
   const streaming = isTurnRunning(turn);
 
   return (
@@ -200,7 +204,7 @@ export function LiveTurnView({
       </article>
       <article className={`message assistant-message live-turn ${turn.status}`}>
         <div className="assistant-body">
-          {turn.steps.map((step) => {
+          {visibleSteps.map((step) => {
             const stepKey = liveStepKey(step.step, step.stepId);
             const steeredPrompts = turn.steeredPrompts.filter(
               (item) => item.anchorStepKey === stepKey,
@@ -302,6 +306,7 @@ export function LiveTurnView({
           <AssistantResponseStatus
             running={isTurnRunning(turn)}
             durationMs={turn.durationMs}
+            retryAttempt={turn.retry?.attempt}
           />
         </div>
       </article>
@@ -504,27 +509,35 @@ export function QueuedPromptList({
 export function AssistantResponseStatus({
   running,
   durationMs,
+  retryAttempt,
 }: {
   running: boolean;
   durationMs?: number;
+  retryAttempt?: number;
 }) {
   if (!running && durationMs === undefined) return null;
   return (
-    <div
-      className={`assistant-response-status ${running ? "thinking" : "elapsed"}`}
-      aria-live="polite"
-    >
-      {running ? (
-        <>
-          <span>{t("assistant.thinking")}</span>
-          <span className="assistant-thinking-dots" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-          </span>
-        </>
-      ) : (
-        <span>{t("assistant.elapsed", { duration: formatElapsedDuration(durationMs ?? 0) })}</span>
+    <div className="assistant-response-status-group" aria-live="polite">
+      <div
+        className={`assistant-response-status ${running ? "thinking" : "elapsed"}`}
+      >
+        {running ? (
+          <>
+            <span>{t("assistant.thinking")}</span>
+            <span className="assistant-thinking-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+          </>
+        ) : (
+          <span>{t("assistant.elapsed", { duration: formatElapsedDuration(durationMs ?? 0) })}</span>
+        )}
+      </div>
+      {running && retryAttempt !== undefined && (
+        <div className="assistant-retry-status">
+          {t("assistant.retrying", { attempt: retryAttempt })}
+        </div>
       )}
     </div>
   );

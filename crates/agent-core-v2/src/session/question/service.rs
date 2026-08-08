@@ -195,6 +195,7 @@ mod tests {
             id: Some(id.into()),
             turn_id: None,
             tool_call_id: Some(format!("tc-{id}")),
+            presentation: None,
             questions: vec![QuestionItem {
                 question: "Pick one".into(),
                 header: None,

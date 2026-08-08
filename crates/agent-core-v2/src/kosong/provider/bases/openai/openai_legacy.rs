@@ -18,6 +18,7 @@ use crate::kosong::contract::provider::{
 };
 use crate::kosong::contract::tool::Tool;
 use crate::kosong::contract::usage::TokenUsage;
+use crate::kosong::provider::bases::http_client::default_provider_http_client;
 use crate::kosong::provider::bases::openai::chat_completions_stream::{
     BufferedChatCompletionToolCall, ChatCompletionStreamToolCallDelta,
     convert_chat_completion_stream_tool_call,
@@ -983,7 +984,9 @@ impl OpenAiLegacyChatProvider {
                 .tool_message_conversion
                 .unwrap_or(ToolMessageConversion::Parts),
             hooks: options.hooks,
-            http_client: options.http_client.unwrap_or_default(),
+            http_client: options
+                .http_client
+                .unwrap_or_else(default_provider_http_client),
         }
     }
 }

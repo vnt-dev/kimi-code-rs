@@ -23,6 +23,7 @@ use crate::kosong::contract::provider::{
 };
 use crate::kosong::contract::tool::Tool;
 use crate::kosong::contract::usage::TokenUsage;
+use crate::kosong::provider::bases::http_client::default_provider_http_client;
 use crate::kosong::provider::bases::openai::openai_common::{
     NormalizedFinishReason, OPENAI_REASONING_CAPABILITY, OPENAI_VISION_TOOL_CAPABILITY,
     OPENAI_VISION_TOOL_PREFIXES, TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_PROMPT,
@@ -1189,7 +1190,9 @@ impl OpenAiResponsesChatProvider {
         let base_url = options
             .base_url
             .unwrap_or_else(|| "https://api.openai.com/v1".to_owned());
-        let http_client = options.http_client.unwrap_or_default();
+        let http_client = options
+            .http_client
+            .unwrap_or_else(default_provider_http_client);
         let cached_client = api_key.as_ref().map(|api_key| {
             Arc::new(ReqwestOpenAiResponsesClient::new(
                 http_client.clone(),

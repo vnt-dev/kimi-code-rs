@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod google_genai;
+pub mod http_client;
 pub mod merge_user_messages;
 pub mod openai;
 pub mod request_auth;
