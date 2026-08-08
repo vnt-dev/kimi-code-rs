@@ -12,12 +12,14 @@ import {
   ChevronRight,
   Code2,
   Copy,
+  CornerDownRight,
   FileCode2,
   FileDiff,
   MoreHorizontal,
   MessageSquareText,
   Square,
   TerminalSquare,
+  Trash2,
   Undo2,
   Wrench,
   X,
@@ -354,7 +356,7 @@ export function LiveSteeredPromptView({
       <div className="user-bubble">
         <SkillPromptDisplayContent
           text={message.text}
-          skills={message.skills.map((skill) => skill.name)}
+          skills={message.skills}
           onSkillOpen={onSkillOpen}
         />
         <PromptAttachmentContent attachments={message.attachments} />
@@ -365,132 +367,134 @@ export function LiveSteeredPromptView({
 
 export function QueuedPromptList({
   prompts,
+  remotePrompts,
   canSteer,
   onRemove,
   onSteer,
   onSkillOpen,
 }: {
   prompts: readonly QueuedPrompt[];
+  remotePrompts: readonly RemoteQueuedPrompt[];
   canSteer: boolean;
   onRemove: (queuedPromptId: string) => void;
   onSteer: (queuedPromptId: string) => void;
   onSkillOpen: (name: string) => void;
 }) {
+  const count = prompts.length + remotePrompts.length;
   return (
     <section className="queued-prompt-stack" aria-label={t("queue.ariaLabel")}>
       <header>
         <span>
           <MessageSquareText size={13} />
-          {t("queue.title", { count: prompts.length })}
+          {t("queue.title", { count })}
         </span>
         <small>{t("queue.hint")}</small>
       </header>
-      {prompts.map((prompt, index) => (
-        <article className="queued-prompt" key={prompt.id}>
-          <div className="queued-prompt-content">
-            {prompt.text || prompt.skills.length > 0 ? (
-              <div>
-                <SkillPromptDisplayContent
-                  text={prompt.text}
-                  skills={prompt.skills.map((skill) => skill.name)}
-                  onSkillOpen={onSkillOpen}
-                />
-              </div>
-            ) : (
-              <span className="queued-prompt-placeholder">
-                {t("queue.attachmentsOnly", { count: prompt.attachments.length })}
-              </span>
-            )}
-            <PromptAttachmentContent attachments={prompt.attachments} />
-          </div>
-          <footer>
-            <span className={index === 0 ? "next" : ""}>
-              {index === 0 ? t("queue.next") : `#${index + 1}`}
-            </span>
-            <div>
+      <div className="queued-prompt-list">
+        {prompts.map((prompt) => (
+          <article
+            className={`queued-prompt ${prompt.executionState ?? "pending"}`}
+            key={prompt.id}
+          >
+            <CornerDownRight className="queued-prompt-leading" size={15} />
+            <div className="queued-prompt-content">
+              {prompt.text || prompt.skills.length > 0 ? (
+                <div>
+                  <SkillPromptDisplayContent
+                    text={prompt.text}
+                    skills={prompt.skills.map((skill) => skill.name)}
+                    onSkillOpen={onSkillOpen}
+                  />
+                </div>
+              ) : (
+                <span className="queued-prompt-placeholder">
+                  {t("queue.attachmentsOnly", {
+                    count: prompt.attachments.length,
+                  })}
+                </span>
+              )}
+              <PromptAttachmentContent attachments={prompt.attachments} />
+            </div>
+            <div className="queued-prompt-actions">
+              {prompt.executionState ? (
+                <span className="queued-prompt-state" aria-live="polite">
+                  {prompt.executionState === "submitting" && (
+                    <span className="spinner" />
+                  )}
+                  {prompt.executionState === "submitting"
+                    ? t("queue.submitting")
+                    : t("queue.waitingExecution")}
+                </span>
+              ) : (
+                <button
+                  className="queued-prompt-steer"
+                  type="button"
+                  disabled={
+                    !canSteer ||
+                    prompt.skills.length > 0 ||
+                    prompt.goalMode
+                  }
+                  title={
+                    prompt.goalMode
+                      ? t("queue.goalPending")
+                      : prompt.skills.length > 0
+                        ? t("queue.skillPending")
+                        : canSteer
+                          ? t("queue.steer")
+                          : t("queue.steerPending")
+                  }
+                  aria-label={t("queue.steerAria")}
+                  onClick={() => onSteer(prompt.id)}
+                >
+                  <CornerDownRight size={13} />
+                  {t("queue.steer")}
+                </button>
+              )}
               <button
+                className="queued-prompt-remove"
                 type="button"
-                disabled={
-                  !canSteer ||
-                  prompt.steering ||
-                  prompt.skills.length > 0 ||
-                  prompt.goalMode
-                }
-                title={
-                  prompt.goalMode
-                    ? t("queue.goalPending")
-                    : prompt.skills.length > 0
-                    ? t("queue.skillPending")
-                    : canSteer
-                      ? t("queue.steer")
-                      : t("queue.steerPending")
-                }
-                aria-label={t("queue.steerAria")}
-                onClick={() => onSteer(prompt.id)}
-              >
-                {prompt.steering ? <span className="spinner" /> : <ArrowUp size={13} />}
-                {t("queue.steer")}
-              </button>
-              <button
-                type="button"
-                disabled={prompt.steering}
+                disabled={prompt.executionState !== undefined}
                 title={t("queue.withdraw")}
                 aria-label={t("queue.withdrawAria")}
                 onClick={() => onRemove(prompt.id)}
               >
-                <X size={13} />
-                {t("queue.withdraw")}
+                <Trash2 size={14} />
               </button>
             </div>
-          </footer>
-        </article>
-      ))}
-    </section>
-  );
-}
-
-export function RemoteQueuedPromptList({
-  prompts,
-  onSkillOpen,
-}: {
-  prompts: readonly RemoteQueuedPrompt[];
-  onSkillOpen: (name: string) => void;
-}) {
-  return (
-    <section className="queued-prompt-stack" aria-label={t("queue.remoteAriaLabel")}>
-      <header>
-        <span>
-          <MessageSquareText size={13} />
-          {t("queue.remoteTitle", { count: prompts.length })}
-        </span>
-        <small>{t("queue.remoteHint")}</small>
-      </header>
-      {prompts.map((prompt, index) => (
-        <article className="queued-prompt" key={prompt.promptId}>
-          <div className="queued-prompt-content">
-            {prompt.text || prompt.skills.length > 0 ? (
-              <div>
-                <SkillPromptDisplayContent
-                  text={prompt.text}
-                  skills={prompt.skills}
-                  onSkillOpen={onSkillOpen}
-                />
-              </div>
-            ) : (
-              <span className="queued-prompt-placeholder">
-                {t("queue.attachmentsOnly", { count: prompt.attachments.length })}
+          </article>
+        ))}
+        {remotePrompts.map((prompt) => (
+          <article
+            className="queued-prompt waiting remote"
+            key={prompt.promptId}
+          >
+            <CornerDownRight className="queued-prompt-leading" size={15} />
+            <div className="queued-prompt-content">
+              {prompt.text || prompt.skills.length > 0 ? (
+                <div>
+                  <SkillPromptDisplayContent
+                    text={prompt.text}
+                    skills={prompt.skills}
+                    onSkillOpen={onSkillOpen}
+                  />
+                </div>
+              ) : (
+                <span className="queued-prompt-placeholder">
+                  {t("queue.attachmentsOnly", {
+                    count: prompt.attachments.length,
+                  })}
+                </span>
+              )}
+              <PromptAttachmentContent attachments={prompt.attachments} />
+            </div>
+            <div className="queued-prompt-actions">
+              <span className="queued-prompt-state">
+                {t("queue.waitingExecution")}
               </span>
-            )}
-            <PromptAttachmentContent attachments={prompt.attachments} />
-          </div>
-          <footer>
-            <span className={index === 0 ? "next" : ""}>
-              {index === 0 ? t("queue.next") : `#${index + 1}`}
-            </span>
-            <small>{formatTime(prompt.createdAt)}</small>
-          </footer>
-        </article>
-      ))}
+            </div>
+          </article>
+        ))}
+      </div>
     </section>
   );
 }

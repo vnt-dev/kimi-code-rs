@@ -1965,6 +1965,10 @@ pub struct PromptSteeredEvent {
     pub active_prompt_id: String,
     pub prompt_ids: Vec<String>,
     pub content: Vec<MessageContent>,
+    /// Messages are ordered like `prompt_ids` and let clients materialize the
+    /// user bubbles without racing a separate `prompt.submitted` projection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_messages: Vec<LiveUserMessage>,
     pub steered_at: IsoDateTime,
 }
 

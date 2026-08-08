@@ -270,6 +270,8 @@ pub struct PromptSkillSelection {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_id: Option<String>,
     pub input: Vec<PromptInputPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_tools: Option<Vec<String>>,
@@ -303,7 +305,10 @@ pub struct CancelShellCommandPayload {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SteerPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_id: Option<String>,
     pub input: Vec<PromptInputPart>,
 }
 
@@ -905,6 +910,7 @@ mod tests {
         );
 
         let steer = serde_json::from_value::<SteerPayload>(json!({
+            "promptId": "queued-local-1",
             "input": [
                 {"type": "text", "text": "do this now"},
                 {
@@ -917,6 +923,7 @@ mod tests {
             ]
         }))
         .unwrap();
+        assert_eq!(steer.prompt_id.as_deref(), Some("queued-local-1"));
         assert!(matches!(
             &steer.input[1],
             PromptInputPart::File(PromptFilePart::File {
@@ -964,6 +971,7 @@ mod tests {
     #[test]
     fn prompt_payload_accepts_structured_skill_selections() {
         let payload = PromptPayload {
+            prompt_id: None,
             input: vec![
                 ContentPart::Text {
                     text: "review this".into(),

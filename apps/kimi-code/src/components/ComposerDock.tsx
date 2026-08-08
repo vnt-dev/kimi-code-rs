@@ -25,6 +25,7 @@ import {
   type Dispatch,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
   type SetStateAction,
 } from "react";
@@ -67,6 +68,7 @@ import { McpStatusPopover } from "./McpStatusPopover";
 import type { SkillDetailTarget } from "./sidebars/ChatSidebars";
 
 interface ComposerDockProps {
+  queuedMessages?: ReactNode;
   activeAgentScope?: { sessionId: string; agentId: string };
   activeAgentUsage?: AgentUsageStatus;
   activeApproval?: AgentInteraction;
@@ -161,6 +163,7 @@ interface ComposerDockProps {
 }
 
 export function ComposerDock({
+  queuedMessages,
   activeAgentScope,
   activeAgentUsage,
   activeApproval,
@@ -371,6 +374,7 @@ export function ComposerDock({
                   </section>
                 </div>
               )}
+              {queuedMessages}
               <form className="composer" onSubmit={handleSubmit}>
                 {mcpStatusOpen && (
                   <McpStatusPopover

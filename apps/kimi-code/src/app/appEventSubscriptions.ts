@@ -10,6 +10,7 @@ import {
   reduceQueuedSubagentChatEvents,
   type GoalModeChangedEvent,
   type InFlightTurn,
+  type QueuedPrompt,
   type QueuedAgentChatEvent,
   type RemoteQueuedPrompt,
   type SubagentLiveTurns,
@@ -70,6 +71,7 @@ interface AppEventSubscriptions {
   desktopInventoryRequest: RefObject<number>;
   historyRequests: RefObject<Record<string, number>>;
   inFlightTurnsRef: RefObject<Record<string, InFlightTurn>>;
+  queuedPromptsRef: RefObject<Record<string, QueuedPrompt[]>>;
   queuedAgentChatEvents: RefObject<QueuedAgentChatEvent[]>;
   sideChatAgentId: RefObject<string | undefined>;
   sideChatAgentIds: RefObject<Set<string>>;
@@ -95,6 +97,7 @@ interface AppEventSubscriptions {
   setInteractions: Setter<Record<string, AgentInteraction[]>>;
   setLoginOpen: Setter<boolean>;
   setPlans: Setter<Record<string, PlanData | null>>;
+  setQueuedPrompts: Setter<Record<string, QueuedPrompt[]>>;
   setRemoteQueuedPrompts: Setter<Record<string, RemoteQueuedPrompt[]>>;
   setSessionTodos: Setter<Record<string, TodoItem[]>>;
   setSideChat: Setter<SideChatState | undefined>;
@@ -117,6 +120,7 @@ export function subscribeToAppEvents({
   desktopInventoryRequest,
   historyRequests,
   inFlightTurnsRef,
+  queuedPromptsRef,
   queuedAgentChatEvents,
   sideChatAgentId,
   sideChatAgentIds,
@@ -136,6 +140,7 @@ export function subscribeToAppEvents({
   setInteractions,
   setLoginOpen,
   setPlans,
+  setQueuedPrompts,
   setRemoteQueuedPrompts,
   setSessionTodos,
   setSideChat,
@@ -150,6 +155,21 @@ export function subscribeToAppEvents({
 }: AppEventSubscriptions): () => void {
     const notifiedCompletions = new Set<string>();
     const notifiedInteractions = new Set<string>();
+    const removeLocalQueuedPrompts = (
+      sessionId: string,
+      promptIds: readonly string[],
+    ): void => {
+      if (promptIds.length === 0) return;
+      const removed = new Set(promptIds);
+      setQueuedPrompts((current) => {
+        const queued = current[sessionId] ?? [];
+        const remaining = queued.filter((item) => !removed.has(item.id));
+        if (remaining.length === queued.length) return current;
+        const next = { ...current, [sessionId]: remaining };
+        queuedPromptsRef.current = next;
+        return next;
+      });
+    };
     const refreshDesktopInventory = async (): Promise<void> => {
       const request = desktopInventoryRequest.current + 1;
       desktopInventoryRequest.current = request;
@@ -329,10 +349,13 @@ export function subscribeToAppEvents({
         if (submitted && isMainAgentEvent && !isSideChatAgent) {
           const projected = inFlightTurnFromUserMessage(submitted);
           const existing = inFlightTurnsRef.current[payload.sessionId];
+          const isLocalQueued = (
+            queuedPromptsRef.current[payload.sessionId] ?? []
+          ).some((item) => item.id === submitted.promptId);
           if (
-            !existing ||
-            isSameLiveUserMessage(existing, submitted) ||
-            (existing.status === "queued" && !existing.promptId)
+            existing &&
+            (isSameLiveUserMessage(existing, submitted) ||
+              (existing.status === "queued" && !existing.promptId))
           ) {
             setInFlightTurns((current) => {
               const active = current[payload.sessionId];
@@ -359,7 +382,7 @@ export function subscribeToAppEvents({
               inFlightTurnsRef.current = next;
               return next;
             });
-          } else {
+          } else if (!isLocalQueued) {
             setRemoteQueuedPrompts((current) => {
               const queued = current[payload.sessionId] ?? [];
               if (queued.some((item) => item.promptId === submitted.promptId)) {
@@ -389,6 +412,7 @@ export function subscribeToAppEvents({
           typeof payload.event.promptId === "string"
         ) {
           const promptId = payload.event.promptId;
+          removeLocalQueuedPrompts(payload.sessionId, [promptId]);
           setRemoteQueuedPrompts((current) => ({
             ...current,
             [payload.sessionId]: (current[payload.sessionId] ?? []).filter(
@@ -398,6 +422,22 @@ export function subscribeToAppEvents({
         }
         if (isAgentChatEvent(payload.event)) {
           const chatEvent = payload.event;
+          if (
+            isMainAgentEvent &&
+            chatEvent.type === "prompt.steered"
+          ) {
+            removeLocalQueuedPrompts(
+              payload.sessionId,
+              chatEvent.promptIds,
+            );
+            const materialized = new Set(chatEvent.promptIds);
+            setRemoteQueuedPrompts((current) => ({
+              ...current,
+              [payload.sessionId]: (
+                current[payload.sessionId] ?? []
+              ).filter((item) => !materialized.has(item.promptId)),
+            }));
+          }
           if (
             isMainAgentEvent &&
             chatEvent.type === "turn.ended" &&
@@ -436,6 +476,7 @@ export function subscribeToAppEvents({
             chatEvent.userMessage
           ) {
             const promptId = chatEvent.userMessage.promptId;
+            removeLocalQueuedPrompts(payload.sessionId, [promptId]);
             setRemoteQueuedPrompts((current) => ({
               ...current,
               [payload.sessionId]: (current[payload.sessionId] ?? []).filter(

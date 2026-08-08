@@ -384,6 +384,7 @@ sk-abcdefghijkl
     #[test]
     fn payload_and_content_parts_preserve_source_projection_order() {
         let payload = PromptPayload {
+            prompt_id: None,
             input: vec![
                 ContentPart::Think {
                     think: "private reasoning".into(),

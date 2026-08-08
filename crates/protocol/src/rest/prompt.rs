@@ -3,6 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::fmt;
 
+use crate::events::LiveUserMessage;
 use crate::message::MessageContent;
 use crate::time::IsoDateTime;
 use crate::validation::{non_empty, optional_non_empty};
@@ -258,6 +259,8 @@ pub struct PromptSteeredEventPayload {
     pub active_prompt_id: String,
     pub prompt_ids: Vec<String>,
     pub content: Vec<MessageContent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_messages: Vec<LiveUserMessage>,
     pub steered_at: String,
 }
 

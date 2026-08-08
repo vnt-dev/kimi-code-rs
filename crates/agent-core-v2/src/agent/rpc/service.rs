@@ -303,7 +303,7 @@ impl AgentRpcServiceContract for AgentRpcService {
         let handle = self
             .prompt_service
             .enqueue(PromptInput {
-                id: None,
+                id: payload.prompt_id,
                 message: user_message_with_attachments(content, resolved.attachments, Some(origin)),
             })
             .await?;
@@ -362,7 +362,7 @@ impl AgentRpcServiceContract for AgentRpcService {
         let queued = self
             .prompt_service
             .enqueue(PromptInput {
-                id: None,
+                id: payload.prompt_id,
                 message: user_message_with_attachments(
                     resolved.content,
                     resolved.attachments,

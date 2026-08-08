@@ -118,6 +118,7 @@ export interface McpServerInfo {
 }
 
 export interface AgentPromptOptions {
+  promptId?: string;
   skills?: readonly AgentPromptSkill[];
 }
 
@@ -142,6 +143,7 @@ export function createAgentClient(scope: AgentScope) {
       options: AgentPromptOptions = {},
     ) {
       return callAgentRpc<AgentPromptSubmitResult>(scope, "prompt", {
+        ...(options.promptId ? { promptId: options.promptId } : {}),
         input:
           typeof input === "string"
             ? [{ type: "text", text: input }]
@@ -151,8 +153,9 @@ export function createAgentClient(scope: AgentScope) {
           : {}),
       });
     },
-    steer(input: string | readonly AgentPromptPart[]) {
+    steer(input: string | readonly AgentPromptPart[], promptId?: string) {
       return callAgentRpc<AgentPromptSubmitResult>(scope, "steer", {
+        ...(promptId ? { promptId } : {}),
         input:
           typeof input === "string"
             ? [{ type: "text", text: input }]

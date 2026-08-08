@@ -432,17 +432,24 @@ button.plugin-command-message:focus-visible {
 
 .queued-prompt-stack {
   display: grid;
-  margin: -4px 0 34px;
-  gap: 9px;
+  width: min(850px, 100%);
+  margin: 0 auto 8px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.16);
+  overflow: hidden;
 }
 
 .queued-prompt-stack > header {
   display: flex;
-  padding: 0 3px;
+  min-height: 30px;
+  padding: 6px 13px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: #777782;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+  color: var(--muted);
   font-size: 11px;
 }
 
@@ -450,34 +457,50 @@ button.plugin-command-message:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #9993bf;
+  color: var(--muted);
   font-weight: 570;
 }
 
 .queued-prompt-stack > header small {
-  color: #5e5e68;
+  color: var(--subtle);
   font-size: 11px;
+}
+
+.queued-prompt-list {
+  max-height: 190px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .queued-prompt {
   display: grid;
-  width: min(620px, 85%);
-  margin-left: auto;
-  padding: 10px 12px 8px;
-  gap: 8px;
-  border: 1px dashed rgba(139, 124, 246, 0.22);
-  border-radius: 12px 4px 12px 12px;
-  background:
-    linear-gradient(135deg, rgba(139, 124, 246, 0.055), transparent),
-    rgba(49, 51, 56, 0.72);
+  min-height: 43px;
+  padding: 7px 10px 7px 13px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  background: transparent;
   animation: message-in 160ms ease-out both;
+}
+
+.queued-prompt + .queued-prompt {
+  border-top: 1px solid color-mix(in srgb, var(--line) 52%, transparent);
+}
+
+.queued-prompt.waiting {
+  background: color-mix(in srgb, var(--accent-soft) 35%, transparent);
+}
+
+.queued-prompt-leading {
+  color: var(--subtle);
 }
 
 .queued-prompt-content {
   min-width: 0;
-  color: #bdbdc6;
-  font-size: 11.5px;
-  line-height: 1.65;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -487,42 +510,19 @@ button.plugin-command-message:focus-visible {
 }
 
 .queued-prompt .structured-content {
-  margin-top: 8px;
+  margin-top: 5px;
 }
 
 .queued-prompt .history-media {
-  max-width: min(360px, 100%);
-  max-height: 220px;
+  max-width: min(260px, 100%);
+  max-height: 90px;
 }
 
-.queued-prompt > footer {
-  display: flex;
-  min-height: 24px;
-  padding-top: 7px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.045);
-}
-
-.queued-prompt > footer > span {
-  padding: 2px 6px;
-  border-radius: 999px;
-  color: #666671;
-  background: rgba(255, 255, 255, 0.035);
-  font-family: "DM Mono", monospace;
-  font-size: 11px;
-}
-
-.queued-prompt > footer > span.next {
-  color: #a59ae7;
-  background: rgba(139, 124, 246, 0.1);
-}
-
-.queued-prompt > footer > div {
+.queued-prompt-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: flex-end;
+  gap: 3px;
 }
 
 .queued-prompt button {
@@ -539,12 +539,35 @@ button.plugin-command-message:focus-visible {
   font-size: 11px;
 }
 
+.queued-prompt-state {
+  display: inline-flex;
+  min-width: 66px;
+  padding: 0 5px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.queued-prompt-state .spinner {
+  width: 11px;
+  height: 11px;
+}
+
+.queued-prompt-remove {
+  width: 28px;
+  padding: 0 !important;
+  justify-content: center;
+}
+
 .queued-prompt button:hover:not(:disabled) {
   color: #b9b4d5;
   background: rgba(139, 124, 246, 0.08);
 }
 
-.queued-prompt button:last-child:hover:not(:disabled) {
+.queued-prompt-remove:hover:not(:disabled) {
   color: #d08a8a;
   background: rgba(212, 120, 120, 0.08);
 }
@@ -552,11 +575,6 @@ button.plugin-command-message:focus-visible {
 .queued-prompt button:disabled {
   opacity: 0.4;
   cursor: default;
-}
-
-.queued-prompt button .spinner {
-  width: 11px;
-  height: 11px;
 }
 
 .assistant-message {

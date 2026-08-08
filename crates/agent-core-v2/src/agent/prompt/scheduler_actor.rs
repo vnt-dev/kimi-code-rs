@@ -563,9 +563,16 @@ struct SteerOperation {
     id: u64,
     active_id: String,
     selected: Vec<Arc<PromptRecord>>,
-    content: Vec<ContentPart>,
     cancellation: CancellationToken,
     reply: SteerReply,
+}
+
+#[derive(Clone)]
+struct SteerMaterializedEvent {
+    active_prompt_id: String,
+    prompt_ids: Vec<String>,
+    content: Vec<ContentPart>,
+    user_messages: Vec<LiveUserMessage>,
 }
 
 struct SchedulerActor {
@@ -728,6 +735,15 @@ impl SchedulerActor {
             .id
             .or_else(|| input.message.id.clone())
             .unwrap_or_else(new_message_id);
+        // RPC clients may supply an id to correlate their local queue row with
+        // lifecycle events.  Reject a live collision instead of letting two
+        // records respond to the same abort/steer command.
+        if self.contains_prompt_id(&id) {
+            return Err(coded(
+                REQUEST_INVALID,
+                format!("prompt id '{id}' is already in use"),
+            ));
+        }
         let mut message = input.message;
         message.id = Some(id.clone());
         let created_at = now();
@@ -751,6 +767,39 @@ impl SchedulerActor {
             completion: Deferred::new(),
             cancellation: self.runtime.shutdown.child_token(),
         }))
+    }
+
+    fn contains_prompt_id(&self, prompt_id: &str) -> bool {
+        self.state
+            .active
+            .as_ref()
+            .is_some_and(|(record, _)| record.snapshot().id == prompt_id)
+            || self
+                .state
+                .launching
+                .as_ref()
+                .is_some_and(|record| record.snapshot().id == prompt_id)
+            || self
+                .state
+                .pending
+                .iter()
+                .any(|record| record.snapshot().id == prompt_id)
+            || self
+                .state
+                .steered
+                .values()
+                .flatten()
+                .any(|record| record.snapshot().id == prompt_id)
+            || self
+                .state
+                .steer_in_flight
+                .as_ref()
+                .is_some_and(|operation| {
+                    operation
+                        .selected
+                        .iter()
+                        .any(|record| record.snapshot().id == prompt_id)
+                })
     }
 
     fn drive(&mut self) {
@@ -877,12 +926,21 @@ impl SchedulerActor {
             });
         }
         for child in children {
+            let child_id = child.snapshot().id;
             if child.set_terminal_state(prompt_state) {
                 child.completion.resolve(PromptCompletion {
-                    prompt_id: child.snapshot().id,
+                    prompt_id: child_id.clone(),
                     result: Some(result.clone()),
                     state: completion_state,
                 });
+                // Steered prompts have their own public lifecycle.  Publishing
+                // their terminal event prevents clients that missed the
+                // materialization event from retaining a phantom queue item.
+                if completion_state == PromptCompletionState::Cancelled {
+                    publish_aborted(&self.runtime, &child_id);
+                } else {
+                    publish_completed(&self.runtime, &child_id, reason);
+                }
             }
         }
         if completion_state == PromptCompletionState::Cancelled {
@@ -906,16 +964,26 @@ impl SchedulerActor {
                     let runtime = Arc::clone(&self.runtime);
                     let events = self.events.clone();
                     let controller = self.controller.clone();
+                    let materialized_event = SteerMaterializedEvent {
+                        active_prompt_id: active_id.clone(),
+                        prompt_ids: selected.iter().map(|record| record.snapshot().id).collect(),
+                        content: content.clone(),
+                        user_messages: selected
+                            .iter()
+                            .map(|record| record.user_message.clone())
+                            .collect(),
+                    };
                     self.state.steer_in_flight = Some(SteerOperation {
                         id,
                         active_id,
                         selected,
-                        content,
                         cancellation,
                         reply: request.reply,
                     });
                     self.runtime.tasks.spawn(async move {
-                        let outcome = steer_job(runtime, message, worker_cancellation).await;
+                        let outcome =
+                            steer_job(runtime, message, materialized_event, worker_cancellation)
+                                .await;
                         send_scheduler_event(
                             &events,
                             &controller,
@@ -1043,30 +1111,6 @@ impl SchedulerActor {
                     .entry(operation.active_id.clone())
                     .or_default()
                     .extend(operation.selected.iter().cloned());
-                self.runtime.event_bus.publish(DomainEvent::new(
-                    "prompt.steered",
-                    Map::from_iter([
-                        (
-                            "activePromptId".into(),
-                            Value::String(operation.active_id.clone()),
-                        ),
-                        (
-                            "promptIds".into(),
-                            Value::Array(
-                                operation
-                                    .selected
-                                    .iter()
-                                    .map(|record| Value::String(record.snapshot().id))
-                                    .collect(),
-                            ),
-                        ),
-                        (
-                            "content".into(),
-                            serde_json::to_value(&operation.content).unwrap_or(Value::Null),
-                        ),
-                        ("steeredAt".into(), Value::String(now())),
-                    ]),
-                ));
                 let handles = operation.selected.into_iter().map(prompt_handle).collect();
                 let _ = operation.reply.send(Ok(handles));
             }
@@ -1267,10 +1311,12 @@ async fn launch_job(runtime: Arc<SchedulerRuntime>, record: Arc<PromptRecord>) -
 async fn steer_job(
     runtime: Arc<SchedulerRuntime>,
     message: ContextMessage,
+    materialized_event: SteerMaterializedEvent,
     cancellation: CancellationToken,
 ) -> SteerJobOutcome {
     let (message, captions) = extract_message(&message);
     let wire = runtime.wire.clone();
+    let event_bus = runtime.event_bus.clone();
     let request = SteerStepRequest::new(
         message,
         captions,
@@ -1284,6 +1330,34 @@ async fn steer_job(
             if let Ok(operation) = crate::agent::loop_::steer_turn(seed) {
                 let _ = wire.dispatch([operation]);
             }
+            // Assignment only means that the active turn accepted this step.
+            // The queue-to-conversation transition belongs here: immediately
+            // before the request is appended to context and can affect the
+            // next model invocation.  Publishing earlier races with the
+            // assistant output that is still being streamed.
+            event_bus.publish(DomainEvent::new(
+                "prompt.steered",
+                Map::from_iter([
+                    (
+                        "activePromptId".into(),
+                        Value::String(materialized_event.active_prompt_id.clone()),
+                    ),
+                    (
+                        "promptIds".into(),
+                        serde_json::to_value(&materialized_event.prompt_ids).unwrap_or(Value::Null),
+                    ),
+                    (
+                        "content".into(),
+                        serde_json::to_value(&materialized_event.content).unwrap_or(Value::Null),
+                    ),
+                    (
+                        "userMessages".into(),
+                        serde_json::to_value(&materialized_event.user_messages)
+                            .unwrap_or(Value::Null),
+                    ),
+                    ("steeredAt".into(), Value::String(now())),
+                ]),
+            ));
         }),
         Arc::new(|| {}),
         Some(StepRequestAdmission::ActiveTurnOnly),
@@ -1754,6 +1828,7 @@ mod tests {
         hooks: AgentLoopHooks,
         next_id: AtomicI64,
         active: Mutex<Option<Arc<FakeTurn>>>,
+        requests: Mutex<Vec<Arc<dyn StepRequest>>>,
     }
 
     impl FakeLoop {
@@ -1762,6 +1837,7 @@ mod tests {
                 hooks: AgentLoopHooks::default(),
                 next_id: AtomicI64::new(1),
                 active: Mutex::new(None),
+                requests: Mutex::new(Vec::new()),
             })
         }
 
@@ -1772,6 +1848,15 @@ mod tests {
                 steps: 1,
                 truncated: false,
             });
+        }
+
+        fn materialize_last_request(&self) {
+            self.requests
+                .lock()
+                .unwrap()
+                .last()
+                .expect("a queued request should exist")
+                .on_will_materialize();
         }
     }
 
@@ -1794,6 +1879,7 @@ mod tests {
                 turn
             };
             let turn_handle = TurnHandle(turn.clone());
+            self.requests.lock().unwrap().push(request);
             let step = StepHandle(Arc::new(FakeStep {
                 id: format!("step-{}", turn.id),
                 turn_id: turn.id,
@@ -2064,12 +2150,29 @@ mod tests {
     #[tokio::test]
     async fn steered_child_settles_with_its_parent_turn() {
         let (runtime, scheduler, loop_service, _) = scheduler_fixture();
+        let steered_events = Arc::new(Mutex::new(Vec::new()));
+        let captured_events = Arc::clone(&steered_events);
+        let _subscription = runtime.event_bus.subscribe_type(
+            "prompt.steered",
+            Arc::new(move |event| captured_events.lock().unwrap().push(event.clone())),
+        );
         let parent = scheduler.enqueue(prompt("parent")).await.unwrap();
         let child = scheduler.enqueue(prompt("child")).await.unwrap();
 
         let steered = scheduler.steer(&["child".into()]).await.unwrap();
         assert_eq!(steered[0].snapshot().state, PromptState::Steered);
         assert_eq!(child.snapshot().state, PromptState::Steered);
+        assert!(
+            steered_events.lock().unwrap().is_empty(),
+            "assignment must not move a prompt into the conversation"
+        );
+
+        loop_service.materialize_last_request();
+        let events = steered_events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].fields["promptIds"], serde_json::json!(["child"]));
+        assert_eq!(events[0].fields["userMessages"][0]["promptId"], "child");
+        drop(events);
 
         loop_service.complete(1);
         assert_eq!(

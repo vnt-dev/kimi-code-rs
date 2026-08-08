@@ -100,7 +100,6 @@ import {
   HistoryTurnView,
   LiveTurnView,
   QueuedPromptList,
-  RemoteQueuedPromptList,
   Welcome,
 } from "./components/chat/ConversationViews";
 import {
@@ -315,6 +314,7 @@ export default function App() {
     Record<string, InFlightTurn>
   >({});
   const inFlightTurnsRef = useRef(inFlightTurns);
+  const queuedPromptsRef = useRef(queuedPrompts);
   const desktopRef = useRef(desktop);
   const notificationsEnabledRef = useRef(notificationsEnabled);
   const [activeAgentScope, setActiveAgentScope] = useState<{
@@ -438,6 +438,9 @@ export default function App() {
   useEffect(() => {
     inFlightTurnsRef.current = inFlightTurns;
   }, [inFlightTurns]);
+  useEffect(() => {
+    queuedPromptsRef.current = queuedPrompts;
+  }, [queuedPrompts]);
   const visibleHistoryMessages = useMemo(
     () =>
       (activeHistory
@@ -1327,6 +1330,7 @@ export default function App() {
         desktopInventoryRequest,
         historyRequests,
         inFlightTurnsRef,
+        queuedPromptsRef,
         queuedAgentChatEvents,
         sideChatAgentId,
         sideChatAgentIds,
@@ -1346,6 +1350,7 @@ export default function App() {
         setInteractions,
         setLoginOpen,
         setPlans,
+        setQueuedPrompts,
         setRemoteQueuedPrompts,
         setSessionTodos,
         setSideChat,
@@ -1712,6 +1717,7 @@ export default function App() {
     queuedAttachments?: readonly PromptAttachment[],
     queuedSkills?: readonly SkillDescriptor[],
     queuedGoalMode?: boolean,
+    queuedPromptId?: string,
   ): Promise<void> => {
     const text = (override ?? prompt).trim();
     const attachments = [
@@ -1833,15 +1839,17 @@ export default function App() {
       delete next[conversationId];
       return next;
     });
-    setInFlightTurns((current) => ({
-      ...current,
-      [conversationId]: newInFlightTurn(
-        text,
-        attachments,
-        activeHistory?.items.at(-1)?.id,
-        skills.map((skill) => skill.name),
-      ),
-    }));
+    if (!queuedPromptId) {
+      setInFlightTurns((current) => ({
+        ...current,
+        [conversationId]: newInFlightTurn(
+          text,
+          attachments,
+          activeHistory?.items.at(-1)?.id,
+          skills.map((skill) => skill.name),
+        ),
+      }));
+    }
     updateDesktop((current) => ({
       ...current,
       projects: current.projects.map((project) =>
@@ -1871,8 +1879,22 @@ export default function App() {
     try {
       const client = createAgentClient(activeAgentScope);
       const submitted = await client.prompt(input, {
+        promptId: queuedPromptId,
         skills: skills.map((skill) => ({ name: skill.name })),
       });
+      if (queuedPromptId) {
+        // `prompt.submitted` only means the server owns the message.  Keep the
+        // local row visible until `turn.started` proves that execution began.
+        setQueuedPrompts((current) => ({
+          ...current,
+          [conversationId]: (current[conversationId] ?? []).map((item) =>
+            item.id === queuedPromptId
+              ? { ...item, executionState: "waiting" }
+              : item,
+          ),
+        }));
+        return;
+      }
       setInFlightTurns((current) => {
         const turn = current[conversationId];
         if (!turn) return current;
@@ -1902,6 +1924,18 @@ export default function App() {
       });
     } catch (error) {
       const message = conciseError(error);
+      if (queuedPromptId) {
+        setQueuedPrompts((current) => ({
+          ...current,
+          [conversationId]: (current[conversationId] ?? []).map((item) =>
+            item.id === queuedPromptId
+              ? { ...item, executionState: undefined }
+              : item,
+          ),
+        }));
+        showNotice(message);
+        return;
+      }
       setInFlightTurns((current) => {
         const turn = current[conversationId];
         if (!turn) return current;
@@ -1926,7 +1960,7 @@ export default function App() {
     setQueuedPrompts((current) => ({
       ...current,
       [conversationId]: (current[conversationId] ?? []).filter(
-        (item) => item.id !== queuedPromptId || item.steering,
+        (item) => item.id !== queuedPromptId || item.executionState,
       ),
     }));
   };
@@ -1939,7 +1973,7 @@ export default function App() {
     );
     if (
       !queued ||
-      queued.steering ||
+      queued.executionState ||
       queued.skills.length > 0 ||
       queued.goalMode
     ) {
@@ -1949,79 +1983,36 @@ export default function App() {
     setQueuedPrompts((current) => ({
       ...current,
       [conversationId]: (current[conversationId] ?? []).map((item) =>
-        item.id === queuedPromptId ? { ...item, steering: true } : item,
+        item.id === queuedPromptId
+          ? { ...item, executionState: "submitting" }
+          : item,
       ),
     }));
 
     try {
-      const submitted = await createAgentClient(activeAgentScope).steer(
+      await createAgentClient(activeAgentScope).steer(
         buildAgentPromptInput(
           buildSkillPromptText(queued.text, queued.skills),
           queued.attachments,
         ),
+        queued.id,
       );
-      if (submitted.status === "steered") {
-        setInFlightTurns((current) => {
-          const turn = current[conversationId];
-          if (!turn) return current;
-          const placement = turn.steeredPrompts.find(
-            (item) => item.promptId === submitted.promptId,
-          );
-          return {
-            ...current,
-            [conversationId]: {
-              ...turn,
-              steeredPrompts: placement
-                ? turn.steeredPrompts.map((item) =>
-                    item.promptId === submitted.promptId
-                      ? {
-                          ...item,
-                          message: { ...queued, steering: false },
-                        }
-                      : item,
-                  )
-                : [
-                    ...turn.steeredPrompts,
-                    {
-                      promptId: submitted.promptId,
-                      message: { ...queued, steering: false },
-                    },
-                  ],
-            },
-          };
-        });
-      } else {
-        const turn = newInFlightTurn(
-          buildSkillPromptText(queued.text, queued.skills),
-          queued.attachments,
-          activeHistory?.items.at(-1)?.id,
-        );
-        setInFlightTurns((current) => ({
-          ...current,
-          [conversationId]: {
-            ...turn,
-            promptId: submitted.promptId,
-            turnId: submitted.turnId,
-            status: liveTurnStatusFromSubmit(submitted.status),
-          },
-        }));
-      }
       setQueuedPrompts((current) => ({
         ...current,
-        [conversationId]: (current[conversationId] ?? []).filter(
-          (item) => item.id !== queuedPromptId,
+        [conversationId]: (current[conversationId] ?? []).map(
+          (item) =>
+            item.id === queuedPromptId
+              ? { ...item, executionState: "waiting" }
+              : item,
         ),
       }));
-      showNotice(
-        submitted.status === "steered"
-          ? t("notice.steeredNow")
-          : t("notice.steeredNext"),
-      );
     } catch (error) {
       setQueuedPrompts((current) => ({
         ...current,
         [conversationId]: (current[conversationId] ?? []).map((item) =>
-          item.id === queuedPromptId ? { ...item, steering: false } : item,
+          item.id === queuedPromptId
+            ? { ...item, executionState: undefined }
+            : item,
         ),
       }));
       showNotice(conciseError(error));
@@ -2066,6 +2057,7 @@ export default function App() {
     if (
       !conversationId ||
       !queued ||
+      queued.executionState !== undefined ||
       activeTurn !== undefined ||
       activeAgentScope?.sessionId !== conversationId ||
       isHistoryLoading ||
@@ -2079,8 +2071,11 @@ export default function App() {
     drainingQueuedPrompts.current.add(queued.id);
     setQueuedPrompts((current) => ({
       ...current,
-      [conversationId]: (current[conversationId] ?? []).filter(
-        (item) => item.id !== queued.id,
+      [conversationId]: (current[conversationId] ?? []).map(
+        (item) =>
+          item.id === queued.id
+            ? { ...item, executionState: "submitting" }
+            : item,
       ),
     }));
     void sendPrompt(
@@ -2088,6 +2083,7 @@ export default function App() {
       queued.attachments,
       queued.skills,
       queued.goalMode,
+      queued.id,
     ).finally(() => {
       drainingQueuedPrompts.current.delete(queued.id);
     });
@@ -2095,6 +2091,7 @@ export default function App() {
     activeAgentScope?.sessionId,
     activeConversation?.id,
     activeQueuedPrompts[0]?.id,
+    activeQueuedPrompts[0]?.executionState,
     activeTurn,
     hasBlockingInteraction,
     isHistoryLoading,
@@ -2755,27 +2752,6 @@ export default function App() {
                       onPluginCommandOpen={openPluginCommandDetail}
                     />
                   )}
-                  {activeQueuedPrompts.length > 0 && (
-                    <QueuedPromptList
-                      prompts={activeQueuedPrompts}
-                      canSteer={isStreaming}
-                      onRemove={removeQueuedPrompt}
-                      onSteer={(queuedPromptId) =>
-                        void steerQueuedPrompt(queuedPromptId)
-                      }
-                      onSkillOpen={(name) =>
-                        void openSkillDetail({ name })
-                      }
-                    />
-                  )}
-                  {activeRemoteQueuedPrompts.length > 0 && (
-                    <RemoteQueuedPromptList
-                      prompts={activeRemoteQueuedPrompts}
-                      onSkillOpen={(name) =>
-                        void openSkillDetail({ name })
-                      }
-                    />
-                  )}
                   {activeCompaction &&
                     (activeCompaction.phase !== "completed" ||
                       !compactionHistoryReady[activeConversation.id]) && (
@@ -2786,6 +2762,23 @@ export default function App() {
             </div>
 
             <ComposerDock
+              queuedMessages={
+                activeQueuedPrompts.length > 0 ||
+                activeRemoteQueuedPrompts.length > 0 ? (
+                  <QueuedPromptList
+                    prompts={activeQueuedPrompts}
+                    remotePrompts={activeRemoteQueuedPrompts}
+                    canSteer={isStreaming}
+                    onRemove={removeQueuedPrompt}
+                    onSteer={(queuedPromptId) =>
+                      void steerQueuedPrompt(queuedPromptId)
+                    }
+                    onSkillOpen={(name) =>
+                      void openSkillDetail({ name })
+                    }
+                  />
+                ) : undefined
+              }
               activeAgentScope={activeAgentScope}
               activeAgentUsage={activeAgentUsage}
               activeApproval={activeApproval}

@@ -99,7 +99,7 @@ export interface QueuedPrompt {
   skills: readonly SkillDescriptor[];
   createdAt: string;
   goalMode?: boolean;
-  steering?: boolean;
+  executionState?: "submitting" | "waiting";
 }
 
 export interface RemoteQueuedPrompt {
@@ -118,9 +118,16 @@ export interface GoalModeChangedEvent {
 
 export interface LiveSteeredPrompt {
   promptId: string;
-  message?: QueuedPrompt;
+  message?: SteeredPromptMessage;
   anchorStepKey?: string;
   afterBlockIndex?: number;
+}
+
+export interface SteeredPromptMessage {
+  text: string;
+  attachments: readonly PromptAttachment[];
+  skills: readonly string[];
+  createdAt: string;
 }
 
 
@@ -157,6 +164,18 @@ export function inFlightTurnFromUserMessage(message: LiveUserMessage): InFlightT
     createdAt: message.createdAt,
     pluginCommand: projected.pluginCommand,
     pluginCommandContent: projected.pluginCommandContent,
+  };
+}
+
+function steeredPromptMessageFromUserMessage(
+  message: LiveUserMessage,
+): SteeredPromptMessage {
+  const projected = inFlightTurnFromUserMessage(message);
+  return {
+    text: projected.prompt,
+    attachments: projected.attachments,
+    skills: projected.skills,
+    createdAt: projected.createdAt,
   };
 }
 
@@ -290,7 +309,6 @@ export function reduceAgentChatEvent(
   event: AgentChatEvent,
 ): InFlightTurn {
   if (event.type === "prompt.steered") {
-    const known = new Set(turn.steeredPrompts.map((item) => item.promptId));
     const currentStep = turn.steps.at(-1);
     const placement = currentStep
       ? {
@@ -298,15 +316,28 @@ export function reduceAgentChatEvent(
           afterBlockIndex: currentStep.blocks.length - 1,
         }
       : {};
-    const additions = event.promptIds
-      .filter((promptId) => !known.has(promptId))
-      .map((promptId) => ({ promptId, ...placement }));
-    return additions.length > 0
-      ? {
-          ...turn,
-          steeredPrompts: [...turn.steeredPrompts, ...additions],
-        }
-      : turn;
+    const messages = new Map(
+      (event.userMessages ?? []).map((message) => [
+        message.promptId,
+        steeredPromptMessageFromUserMessage(message),
+      ]),
+    );
+    const nextPrompts = [...turn.steeredPrompts];
+    let changed = false;
+    for (const promptId of event.promptIds) {
+      const message = messages.get(promptId);
+      const index = nextPrompts.findIndex(
+        (item) => item.promptId === promptId,
+      );
+      if (index < 0) {
+        nextPrompts.push({ promptId, message, ...placement });
+        changed = true;
+      } else if (message && !nextPrompts[index].message) {
+        nextPrompts[index] = { ...nextPrompts[index], message };
+        changed = true;
+      }
+    }
+    return changed ? { ...turn, steeredPrompts: nextPrompts } : turn;
   }
   if (turn.turnId !== undefined && turn.turnId !== event.turnId) return turn;
   const next =
