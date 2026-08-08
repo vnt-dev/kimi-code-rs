@@ -53,6 +53,7 @@ import {
   type PluginCommandDisplay,
 } from "../../chat/messages";
 import { toolInputSummary } from "../../chat/toolInputSummary";
+import { parseStreamingToolInput } from "../../chat/streamingToolInput";
 import { t } from "../../i18n";
 import type { PluginCommandDetail } from "../../pluginCommandMessage";
 import { SkillPromptDisplayContent } from "../../prompt/SkillPromptDisplay";
@@ -623,6 +624,10 @@ export function LiveToolBlock({
     (tool.argumentsText
       ? parseStructuredValue(tool.argumentsText)
       : undefined);
+  const streamingInput =
+    tool.input === undefined && tool.argumentsText
+      ? parseStreamingToolInput(tool.argumentsText)
+      : undefined;
   const summary = toolInputSummary(input);
   const displayedSubagents = subagentRunsWithSwarmItems(subagents, input);
   return (
@@ -657,7 +662,11 @@ export function LiveToolBlock({
           {input !== undefined && (
             <section className="tool-detail-section">
               <span>{t("tool.params")}</span>
-              <ToolInputView name={tool.name} input={input} />
+              <ToolInputView
+                name={tool.name}
+                input={input}
+                streamingInput={streamingInput}
+              />
             </section>
           )}
           {updateLog && <pre className="live-tool-update-log">{updateLog}</pre>}
@@ -1522,19 +1531,16 @@ export function PromptAttachmentContent({
 
 function editToolInput(
   input: unknown,
-): { path?: string; oldString: string; newString: string } | undefined {
+): { path?: string; oldString?: string; newString?: string } | undefined {
   if (!input || typeof input !== "object") return undefined;
   const record = input as Record<string, unknown>;
-  if (
-    typeof record.old_string !== "string" ||
-    typeof record.new_string !== "string"
-  ) {
-    return undefined;
-  }
+  const oldString = typeof record.old_string === "string" ? record.old_string : undefined;
+  const newString = typeof record.new_string === "string" ? record.new_string : undefined;
+  if (oldString === undefined && newString === undefined) return undefined;
   return {
     path: typeof record.path === "string" ? record.path : undefined,
-    oldString: record.old_string,
-    newString: record.new_string,
+    oldString,
+    newString,
   };
 }
 
@@ -1559,8 +1565,11 @@ function EditDiffLine({
 function EditToolDiff({ input }: { input: unknown }) {
   const edit = editToolInput(input);
   if (!edit) return null;
-  const removed = edit.oldString.replace(/\r?\n$/, "").split(/\r?\n/);
-  const added = edit.newString.replace(/\r?\n$/, "").split(/\r?\n/);
+  const removed = edit.oldString?.replace(/\r?\n$/, "").split(/\r?\n/);
+  const added =
+    edit.newString === ""
+      ? undefined
+      : edit.newString?.replace(/\r?\n$/, "").split(/\r?\n/);
   return (
     <div className="edit-diff">
       {edit.path && (
@@ -1570,7 +1579,7 @@ function EditToolDiff({ input }: { input: unknown }) {
         </div>
       )}
       <div className="edit-diff-body">
-        {removed.map((line, index) => (
+        {removed?.map((line, index) => (
           <EditDiffLine
             kind="removed"
             lineno={index + 1}
@@ -1578,7 +1587,7 @@ function EditToolDiff({ input }: { input: unknown }) {
             key={`removed-${index}`}
           />
         ))}
-        {added.map((line, index) => (
+        {added?.map((line, index) => (
           <EditDiffLine
             kind="added"
             lineno={index + 1}
@@ -1834,15 +1843,19 @@ function AgentToolResult({
 export function ToolInputView({
   name,
   input,
+  streamingInput,
 }: {
   name: string | undefined;
   input: unknown;
+  streamingInput?: Record<string, string>;
 }) {
-  if (name === "Edit" && editToolInput(input)) {
-    return <EditToolDiff input={input} />;
+  if (name === "Edit") {
+    const editInput = editToolInput(input) ? input : streamingInput;
+    if (editToolInput(editInput)) return <EditToolDiff input={editInput} />;
   }
-  if (name === "Write" && writeToolInput(input)) {
-    return <WriteToolContent input={input} />;
+  if (name === "Write") {
+    const writeInput = writeToolInput(input) ? input : streamingInput;
+    if (writeToolInput(writeInput)) return <WriteToolContent input={writeInput} />;
   }
   if (name === "Agent" && agentToolInput(input)) {
     return <AgentToolContent input={input} />;
