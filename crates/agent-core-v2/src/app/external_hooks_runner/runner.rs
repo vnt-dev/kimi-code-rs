@@ -136,7 +136,7 @@ pub fn block_decision(event: &str, results: &[HookResult]) -> Option<HookBlockDe
     let reason = block
         .reason
         .as_deref()
-        .map(trim_ecmascript)
+        .map(str::trim)
         .filter(|reason| !reason.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| format!("Blocked by {event} hook"));
@@ -193,10 +193,6 @@ fn camel_to_snake(value: &str) -> String {
         }
     }
     output
-}
-
-fn trim_ecmascript(value: &str) -> &str {
-    value.trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}')
 }
 
 #[cfg(test)]
@@ -306,7 +302,7 @@ mod tests {
                 ],
             )
             .unwrap(),
-            HookBlockDecision::new("denied")
+            HookBlockDecision::new("\u{feff} denied")
         );
         assert_eq!(
             block_decision("Stop", &[result(HookAction::Block, Some("  "))])

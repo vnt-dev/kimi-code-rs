@@ -32,7 +32,6 @@ use crate::{
         context_memory::{
             AGENT_CONTEXT_MEMORY_SERVICE_ID, AgentContextMemoryServiceContract,
             AgentContextMemoryServiceHandle, ContextMessage, PromptOrigin,
-            vacuous_content::trim_ecmascript_whitespace,
         },
         loop_::{AGENT_LOOP_SERVICE_ID, AgentLoopServiceHandle, BeforeStepContext},
         system_reminder::{
@@ -191,7 +190,7 @@ impl AgentContextInjectorService {
             };
             match content {
                 ContextInjectionContent::Text(text) => {
-                    if !trim_ecmascript_whitespace(&text).is_empty() {
+                    if !text.trim().is_empty() {
                         self.reminders.append_system_reminder(&text, origin)?;
                     }
                 }

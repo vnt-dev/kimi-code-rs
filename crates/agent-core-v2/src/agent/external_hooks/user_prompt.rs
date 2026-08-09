@@ -51,13 +51,13 @@ pub fn render_user_prompt_hook_block_result(
     let message = block
         .message
         .as_deref()
-        .map(trim_ecmascript)
+        .map(str::trim)
         .filter(|message| !message.is_empty())
         .or_else(|| {
             block
                 .reason
                 .as_deref()
-                .map(trim_ecmascript)
+                .map(str::trim)
                 .filter(|reason| !reason.is_empty())
         })
         .unwrap_or("Blocked by UserPromptSubmit hook");
@@ -76,21 +76,15 @@ fn user_prompt_hook_message(result: &HookResult) -> Option<&str> {
     result
         .message
         .as_deref()
-        .map(trim_ecmascript)
+        .map(str::trim)
         .filter(|message| !message.is_empty())
         .or_else(|| {
             result
                 .stdout
                 .as_deref()
-                .map(trim_ecmascript)
+                .map(str::trim)
                 .filter(|stdout| !stdout.is_empty())
         })
-}
-
-// JavaScript String.prototype.trim includes U+FEFF in addition to Unicode
-// White_Space. Keeping it explicit avoids a serialization-visible edge-case.
-fn trim_ecmascript(value: &str) -> &str {
-    value.trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}')
 }
 
 #[cfg(test)]
@@ -130,11 +124,11 @@ mod tests {
 
         let rendered = render_user_prompt_hook_result(Some(&[first, second, blocked])).unwrap();
         assert_eq!(rendered.event, "UserPromptSubmit");
-        assert_eq!(rendered.message, "first\n\nsecond");
+        assert_eq!(rendered.message, "first\n\n\u{feff}second\u{feff}");
         assert_eq!(
             rendered.text,
             "<hook_result hook_event=\"UserPromptSubmit\">\nfirst\n</hook_result>\n\
-<hook_result hook_event=\"UserPromptSubmit\">\nsecond\n</hook_result>"
+<hook_result hook_event=\"UserPromptSubmit\">\n\u{feff}second\u{feff}\n</hook_result>"
         );
     }
 

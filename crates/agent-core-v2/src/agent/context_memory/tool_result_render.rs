@@ -1,7 +1,5 @@
 use crate::kosong::contract::message::ContentPart;
 
-use super::vacuous_content::trim_ecmascript_whitespace;
-
 const TOOL_ERROR_STATUS: &str = "<system>ERROR: Tool execution failed.</system>";
 const TOOL_EMPTY_STATUS: &str = "<system>Tool output is empty.</system>";
 const TOOL_EMPTY_ERROR_STATUS: &str =
@@ -83,14 +81,14 @@ fn text_part(text: &str) -> ContentPart {
 }
 
 fn is_empty_output_text(output: &str) -> bool {
-    let trimmed = trim_ecmascript_whitespace(output);
+    let trimmed = output.trim();
     trimmed.is_empty() || trimmed == TOOL_OUTPUT_EMPTY_TEXT
 }
 
 fn is_empty_equivalent_content_array(output: &[ContentPart]) -> bool {
-    output.iter().all(|part| {
-        matches!(part, ContentPart::Text { text } if trim_ecmascript_whitespace(text).is_empty())
-    })
+    output
+        .iter()
+        .all(|part| matches!(part, ContentPart::Text { text } if text.trim().is_empty()))
 }
 
 #[cfg(test)]
@@ -129,13 +127,13 @@ mod tests {
     }
 
     #[test]
-    fn preserves_javascript_trim_boundary() {
+    fn uses_rust_trim_boundary() {
         let rendered = render_tool_result_for_model(RenderableToolResult {
             output: RenderableToolOutput::Text("\u{0085}"),
             note: None,
             is_error: None,
         });
-        assert_eq!(texts(&rendered), ["\u{0085}"]);
+        assert_eq!(texts(&rendered), [TOOL_EMPTY_STATUS]);
     }
 
     #[test]

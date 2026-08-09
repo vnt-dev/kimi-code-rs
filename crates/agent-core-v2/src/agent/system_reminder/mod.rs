@@ -9,7 +9,6 @@ use crate::{
     agent::context_memory::{
         AGENT_CONTEXT_MEMORY_SERVICE_ID, AgentContextMemoryServiceContract,
         AgentContextMemoryServiceHandle, ContextMemoryServiceError, ContextMessage, PromptOrigin,
-        vacuous_content::trim_ecmascript_whitespace,
     },
     kosong::contract::message::{ContentPart, Message, Role},
 };
@@ -81,10 +80,7 @@ impl AgentSystemReminderServiceContract for AgentSystemReminderService {
             message: Message::new(
                 Role::User,
                 vec![ContentPart::Text {
-                    text: format!(
-                        "<system-reminder>\n{}\n</system-reminder>",
-                        trim_ecmascript_whitespace(content)
-                    ),
+                    text: format!("<system-reminder>\n{}\n</system-reminder>", content.trim()),
                 }],
                 Vec::new(),
             ),
@@ -176,7 +172,7 @@ mod tests {
         assert!(matches!(
             &returned.message.content[..],
             [ContentPart::Text { text }]
-                if text == "<system-reminder>\nremember this\n</system-reminder>"
+                if text == "<system-reminder>\nremember this\u{feff}\n</system-reminder>"
         ));
         assert!(matches!(
             returned.origin,

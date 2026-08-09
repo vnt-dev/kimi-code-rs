@@ -5,13 +5,10 @@ use crate::kosong::contract::{
     tokens::{estimate_tokens, estimate_tokens_for_message, estimate_tokens_for_messages},
 };
 
-use super::{
-    types::{ContextMessage, PluginCommandTrigger, PromptOrigin, SkillActivationTrigger},
-    vacuous_content::{trim_ecmascript_whitespace, trim_end_ecmascript_whitespace},
-};
+use super::types::{ContextMessage, PluginCommandTrigger, PromptOrigin, SkillActivationTrigger};
 
 pub static COMPACTION_SUMMARY_PREFIX: LazyLock<&'static str> =
-    LazyLock::new(|| trim_end_ecmascript_whitespace(include_str!("compaction-summary-prefix.md")));
+    LazyLock::new(|| include_str!("compaction-summary-prefix.md").trim_end());
 pub const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 pub const COMPACT_USER_MESSAGE_HEAD_TOKENS: usize = 2_000;
 pub const COMPACTION_ELISION_VARIANT: &str = "compaction_elision";
@@ -148,7 +145,7 @@ fn normalize_slice_start(index: f64, length: usize) -> usize {
 
 // Original: compactionHandoff.ts, buildCompactionSummaryText().
 pub fn build_compaction_summary_text(summary: &str) -> String {
-    let suffix = trim_ecmascript_whitespace(summary);
+    let suffix = summary.trim();
     format!(
         "{}\n{}",
         *COMPACTION_SUMMARY_PREFIX,

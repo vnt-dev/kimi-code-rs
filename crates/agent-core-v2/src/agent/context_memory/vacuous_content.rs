@@ -4,49 +4,14 @@ use crate::kosong::contract::message::ContentPart;
 //   packages/agent-core-v2/src/agent/contextMemory/vacuousContent.ts
 //   isVacuousContentPart()
 //
-// Rust adaptation:
-//   ECMAScript's String.trim whitespace set is spelled out because Rust's
-//   char::is_whitespace additionally treats U+0085 as whitespace.
 pub fn is_vacuous_content_part(part: &ContentPart) -> bool {
     match part {
-        ContentPart::Text { text } => trim_ecmascript_whitespace(text).is_empty(),
-        ContentPart::Think { think, encrypted } => {
-            encrypted.is_none() && trim_ecmascript_whitespace(think).is_empty()
-        }
+        ContentPart::Text { text } => text.trim().is_empty(),
+        ContentPart::Think { think, encrypted } => encrypted.is_none() && think.trim().is_empty(),
         ContentPart::ImageUrl { .. }
         | ContentPart::AudioUrl { .. }
         | ContentPart::VideoUrl { .. } => false,
     }
-}
-
-pub(crate) fn trim_ecmascript_whitespace(value: &str) -> &str {
-    value.trim_matches(is_ecmascript_whitespace)
-}
-
-pub(crate) fn trim_end_ecmascript_whitespace(value: &str) -> &str {
-    value.trim_end_matches(is_ecmascript_whitespace)
-}
-
-fn is_ecmascript_whitespace(character: char) -> bool {
-    matches!(
-        character,
-        '\u{0009}'
-            | '\u{000A}'
-            | '\u{000B}'
-            | '\u{000C}'
-            | '\u{000D}'
-            | '\u{0020}'
-            | '\u{00A0}'
-            | '\u{1680}'
-            | '\u{2000}'
-            ..='\u{200A}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202F}'
-                | '\u{205F}'
-                | '\u{3000}'
-                | '\u{FEFF}'
-    )
 }
 
 #[cfg(test)]
@@ -55,19 +20,19 @@ mod tests {
     use crate::kosong::contract::message::MediaUrl;
 
     #[test]
-    fn empty_and_ecmascript_whitespace_text_are_vacuous() {
+    fn empty_and_rust_whitespace_text_are_vacuous() {
         assert!(is_vacuous_content_part(&ContentPart::Text {
             text: String::new(),
         }));
         assert!(is_vacuous_content_part(&ContentPart::Text {
-            text: " \t\n\u{00a0}\u{2028}\u{feff}".to_owned(),
+            text: " \t\n\u{00a0}\u{2028}\u{0085}".to_owned(),
         }));
     }
 
     #[test]
-    fn preserves_javascript_trim_boundary_behavior() {
+    fn preserves_non_rust_trim_characters() {
         assert!(!is_vacuous_content_part(&ContentPart::Text {
-            text: "\u{0085}".to_owned(),
+            text: "\u{feff}".to_owned(),
         }));
     }
 
