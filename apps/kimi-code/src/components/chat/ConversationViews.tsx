@@ -44,6 +44,7 @@ import {
   type QueuedPrompt,
   type RemoteQueuedPrompt,
 } from "../../chat/liveTurns";
+import { hasVisibleLiveUserMessage } from "../../chat/liveTurnVisibility";
 import { isVisibleRetryStep } from "../../chat/retryStatus";
 import {
   mediaSourceUrl,
@@ -172,41 +173,44 @@ export function LiveTurnView({
   );
   const streaming = isTurnRunning(turn);
   const cronFire = parseCronFireMessage(turn.prompt);
+  const showUserMessage = hasVisibleLiveUserMessage(turn);
 
   return (
     <section
       className="conversation-turn live-conversation-turn"
       data-conversation-turn-id={outlineId}
     >
-      <article className={`message user-message live-user-message${cronFire ? " cron-fire-message" : ""}`}>
-        <div className="message-meta">
-          <time>{formatTime(turn.createdAt)}</time>
-        </div>
-        <div className={`user-bubble${cronFire ? " cron-fire-bubble" : ""}`}>
-          {cronFire ? (
-            <CronFireMessageContent fire={cronFire} />
-          ) : turn.pluginCommand ? (
-            <PluginCommandDisplayContent
-              command={turn.pluginCommand}
-              onOpen={() =>
-                onPluginCommandOpen({
-                  ...turn.pluginCommand!,
-                  id: turn.userMessageId ?? turn.promptId ?? turn.createdAt,
-                  content: turn.pluginCommandContent ?? "",
-                  createdAt: turn.createdAt,
-                })
-              }
-            />
-          ) : (
-            <SkillPromptDisplayContent
-              text={turn.prompt}
-              skills={turn.skills}
-              onSkillOpen={onSkillOpen}
-            />
-          )}
-          <PromptAttachmentContent attachments={turn.attachments} />
-        </div>
-      </article>
+      {showUserMessage && (
+        <article className={`message user-message live-user-message${cronFire ? " cron-fire-message" : ""}`}>
+          <div className="message-meta">
+            <time>{formatTime(turn.createdAt)}</time>
+          </div>
+          <div className={`user-bubble${cronFire ? " cron-fire-bubble" : ""}`}>
+            {cronFire ? (
+              <CronFireMessageContent fire={cronFire} />
+            ) : turn.pluginCommand ? (
+              <PluginCommandDisplayContent
+                command={turn.pluginCommand}
+                onOpen={() =>
+                  onPluginCommandOpen({
+                    ...turn.pluginCommand!,
+                    id: turn.userMessageId ?? turn.promptId ?? turn.createdAt,
+                    content: turn.pluginCommandContent ?? "",
+                    createdAt: turn.createdAt,
+                  })
+                }
+              />
+            ) : (
+              <SkillPromptDisplayContent
+                text={turn.prompt}
+                skills={turn.skills}
+                onSkillOpen={onSkillOpen}
+              />
+            )}
+            <PromptAttachmentContent attachments={turn.attachments} />
+          </div>
+        </article>
+      )}
       <article className={`message assistant-message live-turn ${turn.status}`}>
         <div className="assistant-body">
           {visibleSteps.map((step) => {
