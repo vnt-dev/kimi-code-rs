@@ -43,8 +43,11 @@ use crate::{
             TurnEndedEvent, TurnStartedEvent, TurnStepCompletedEvent, TurnStepInterruptedEvent,
             TurnStepStartedEvent,
         },
-        permission_mode::AGENT_PERMISSION_MODE_SERVICE_ID,
+        permission_mode::{
+            AGENT_PERMISSION_MODE_SERVICE_ID, config_section::DEFAULT_PERMISSION_MODE_SECTION,
+        },
         permission_policy::PermissionMode,
+        plan::config_section::DEFAULT_PLAN_MODE_SECTION,
         profile::{AGENT_PROFILE_SERVICE_ID, AgentProfileServiceHandle, BindAgentInput},
         rpc::{AGENT_RPC_SERVICE_ID, AgentRpcServiceHandle, EmptyPayload, SetPermissionPayload},
         tool_executor::{ToolCallStartedEvent, ToolProgressEvent, ToolResultEvent},
@@ -58,7 +61,7 @@ use crate::{
         auth::{OAuthToolkitContract, OAuthToolkitService, config_section::SERVICES_SECTION},
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         capability::{CAPABILITY_SERVICE_ID, CapabilityStatus},
-        config::{CONFIG_SERVICE_ID, ConfigServiceHandle, ConfigTarget},
+        config::{CONFIG_SERVICE_ID, ConfigServiceContract, ConfigServiceHandle, ConfigTarget},
         event::event_bus::EVENT_BUS_SERVICE_ID,
         file::{FILE_SERVICE_ID, FileByteStream, FileMeta, FileServiceError, SaveOptions},
         host_folder_browser::{FS_HOST_FOLDER_BROWSER_ID, FsBrowseResponse, FsHomeResponse},
@@ -255,6 +258,28 @@ pub struct DesktopModel {
     pub protocol: String,
     pub support_efforts: Vec<String>,
     pub default_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopAgentSettings {
+    pub default_model: Option<String>,
+    pub default_permission: PermissionMode,
+    pub default_thinking: bool,
+    pub default_plan_mode: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DesktopAgentSettingsPatch {
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub default_permission: Option<PermissionMode>,
+    #[serde(default)]
+    pub default_thinking: Option<bool>,
+    #[serde(default)]
+    pub default_plan_mode: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -839,6 +864,68 @@ impl KimiCodeDesktopClient {
             .await
             .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    pub async fn get_agent_settings(&self) -> Result<DesktopAgentSettings, String> {
+        let config = self
+            .app
+            .get(CONFIG_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        config.ready().await.map_err(|error| error.to_string())?;
+        Ok(agent_settings_from_config(config.0.as_ref()))
+    }
+
+    pub async fn update_agent_settings(
+        &self,
+        patch: DesktopAgentSettingsPatch,
+    ) -> Result<DesktopAgentSettings, String> {
+        if let Some(model) = patch.default_model.as_deref() {
+            let model = model.trim();
+            if model.is_empty() {
+                return Err("A default model is required.".to_owned());
+            }
+            self.set_default_model(model).await?;
+        }
+
+        let _guard = self.config_gate.lock().await;
+        let config = self
+            .app
+            .get(CONFIG_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        config.ready().await.map_err(|error| error.to_string())?;
+
+        if let Some(permission) = patch.default_permission {
+            config
+                .replace(
+                    DEFAULT_PERMISSION_MODE_SECTION,
+                    Some(serde_json::to_value(permission).map_err(|error| error.to_string())?),
+                    ConfigTarget::User,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        if let Some(enabled) = patch.default_thinking {
+            config
+                .set(
+                    THINKING_SECTION,
+                    Some(serde_json::json!({ "enabled": enabled })),
+                    ConfigTarget::User,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        if let Some(enabled) = patch.default_plan_mode {
+            config
+                .replace(
+                    DEFAULT_PLAN_MODE_SECTION,
+                    Some(Value::Bool(enabled)),
+                    ConfigTarget::User,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+
+        Ok(agent_settings_from_config(config.0.as_ref()))
     }
 
     pub async fn upload_file(
@@ -2321,6 +2408,30 @@ fn attach_desktop_agent_events(
     Ok(())
 }
 
+fn agent_settings_from_config(config: &dyn ConfigServiceContract) -> DesktopAgentSettings {
+    let default_model = config
+        .get(DEFAULT_MODEL_SECTION)
+        .and_then(|value| value.as_str().map(str::to_owned));
+    let default_permission = config
+        .get(DEFAULT_PERMISSION_MODE_SECTION)
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or(PermissionMode::Manual);
+    let default_thinking = config
+        .get(THINKING_SECTION)
+        .and_then(|value| value.get("enabled").and_then(Value::as_bool))
+        .unwrap_or(true);
+    let default_plan_mode = config
+        .get(DEFAULT_PLAN_MODE_SECTION)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    DesktopAgentSettings {
+        default_model,
+        default_permission,
+        default_thinking,
+        default_plan_mode,
+    }
+}
+
 fn map_desktop_interactions(interactions: Vec<Interaction>) -> Vec<DesktopInteraction> {
     interactions
         .into_iter()
@@ -2346,9 +2457,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        DesktopChatEvent, DesktopChatRequest, DesktopPrepareSessionRequest,
-        DesktopProviderModelInput, DesktopSaveProviderInput, KimiCodeDesktopClient,
-        ManagedKimiCodeModelInfo, context_usage_from_size, map_desktop_model,
+        DesktopAgentSettingsPatch, DesktopChatEvent, DesktopChatRequest,
+        DesktopPrepareSessionRequest, DesktopProviderModelInput, DesktopSaveProviderInput,
+        KimiCodeDesktopClient, ManagedKimiCodeModelInfo, context_usage_from_size,
+        map_desktop_model,
     };
     use crate::{
         agent::{
@@ -2388,6 +2500,62 @@ mod tests {
         assert!(model.is_default);
         assert!(model.supports_reasoning);
         assert!(model.supports_tools);
+    }
+
+    #[tokio::test]
+    async fn agent_settings_defaults_and_updates_are_persisted() {
+        let root = std::env::temp_dir().join(format!(
+            "kimi-desktop-agent-settings-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let client = KimiCodeDesktopClient::new(&home, "test").unwrap();
+
+        let defaults = client.get_agent_settings().await.unwrap();
+        assert_eq!(defaults.default_model, None);
+        assert_eq!(defaults.default_permission, PermissionMode::Manual);
+        assert!(defaults.default_thinking);
+        assert!(!defaults.default_plan_mode);
+
+        let updated = client
+            .update_agent_settings(DesktopAgentSettingsPatch {
+                default_permission: Some(PermissionMode::Yolo),
+                default_thinking: Some(false),
+                default_plan_mode: Some(true),
+                ..DesktopAgentSettingsPatch::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(updated.default_permission, PermissionMode::Yolo);
+        assert!(!updated.default_thinking);
+        assert!(updated.default_plan_mode);
+
+        let persisted = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        let persisted = toml::from_str::<toml::Value>(&persisted).unwrap();
+        assert_eq!(
+            persisted
+                .get("default_permission_mode")
+                .and_then(toml::Value::as_str),
+            Some("yolo")
+        );
+        assert_eq!(
+            persisted
+                .get("default_plan_mode")
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            persisted
+                .get("thinking")
+                .and_then(toml::Value::as_table)
+                .and_then(|thinking| thinking.get("enabled"))
+                .and_then(toml::Value::as_bool),
+            Some(false)
+        );
+
+        drop(client);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { Archive, Copy, ExternalLink, Github, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
+import { Archive, Bot, Copy, ExternalLink, Github, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
 
 import type { ColorScheme } from "./appearance";
 import AccountSettings from "./AccountSettings";
+import AgentSettings from "./AgentSettings";
 import ArchivedSessionsSettings from "./ArchivedSessionsSettings";
 import SettingsSelect from "./components/SettingsSelect";
 import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
@@ -13,7 +14,7 @@ import ProviderSettings from "./ProviderSettings";
 import { invoke, isDesktop, openExternalUrl } from "./transport";
 import type { AccountProfile, AccountUsage, AuthStatus } from "./types";
 
-type SettingsTab = "general" | "account" | "providers" | "plugins" | "web" | "archived" | "about";
+type SettingsTab = "general" | "agent" | "account" | "providers" | "plugins" | "web" | "archived" | "about";
 type WebServerListenScope = "local" | "global";
 
 interface WebServerStatus {
@@ -361,6 +362,15 @@ export default function SettingsDialog({
               {t("settings.tabGeneral")}
             </button>
             <button
+              className={`settings-tab ${activeTab === "agent" ? "active" : ""}`}
+              type="button"
+              aria-current={activeTab === "agent" ? "page" : undefined}
+              onClick={() => setActiveTab("agent")}
+            >
+              <Bot size={15} />
+              {t("settings.tabAgent")}
+            </button>
+            <button
               className={`settings-tab ${activeTab === "account" ? "active" : ""}`}
               type="button"
               aria-current={activeTab === "account" ? "page" : undefined}
@@ -511,6 +521,8 @@ export default function SettingsDialog({
                   </div>
                 </section>
               </>
+            ) : activeTab === "agent" ? (
+              <AgentSettings />
             ) : activeTab === "account" ? (
               <AccountSettings
                 auth={auth}

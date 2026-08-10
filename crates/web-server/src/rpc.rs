@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use kimi_code_agent_core_v2::app::desktop_client::{
-    DesktopDeleteCustomAgentInput, DesktopPrepareSessionRequest, DesktopSaveCustomAgentInput,
-    DesktopSaveProviderInput, KimiCodeDesktopClient,
+    DesktopAgentSettingsPatch, DesktopDeleteCustomAgentInput, DesktopPrepareSessionRequest,
+    DesktopSaveCustomAgentInput, DesktopSaveProviderInput, KimiCodeDesktopClient,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -79,6 +79,11 @@ struct DeleteCustomAgentArgs {
 #[derive(Deserialize)]
 struct ModelArgs {
     model: String,
+}
+
+#[derive(Deserialize)]
+struct AgentSettingsArgs {
+    patch: DesktopAgentSettingsPatch,
 }
 
 #[derive(Deserialize)]
@@ -369,6 +374,21 @@ pub(crate) async fn dispatch_rpc(
                 .await
                 .map_err(RpcError::transport)?;
             Ok(Value::Null)
+        }
+        "get_agent_settings" => encode(
+            client
+                .get_agent_settings()
+                .await
+                .map_err(RpcError::transport)?,
+        ),
+        "update_agent_settings" => {
+            let args: AgentSettingsArgs = decode(args)?;
+            encode(
+                client
+                    .update_agent_settings(args.patch)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
         }
         "list_workspaces" => encode(
             client

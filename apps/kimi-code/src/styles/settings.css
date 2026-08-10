@@ -628,6 +628,119 @@ html[data-color-scheme="light"] .settings-dialog {
   gap: 8px;
 }
 
+.settings-agent {
+  padding: 2px 0 24px;
+}
+
+.settings-agent-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-agent-heading > span {
+  color: var(--subtle);
+  font-size: 11.5px;
+}
+
+.settings-agent-card {
+  overflow: visible;
+  border: 0.5px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--sd-surface);
+}
+
+.settings-agent-card > .settings-row {
+  min-height: 58px;
+  padding: 9px 13px;
+  border-top: 0.5px solid var(--line);
+}
+
+.settings-agent-card > .settings-row:first-child {
+  border-top: 0;
+}
+
+.settings-agent-card .settings-row > div:first-child {
+  min-width: 0;
+}
+
+.settings-agent-select {
+  max-width: min(290px, 52%);
+  flex: 0 0 auto;
+}
+
+.settings-agent-select .settings-select-trigger {
+  max-width: 100%;
+}
+
+.settings-agent-select .settings-select-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-agent-select .settings-select-menu {
+  width: max-content;
+  min-width: 100%;
+  max-width: min(390px, calc(100vw - 48px));
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.settings-agent-empty-value {
+  max-width: 52%;
+  overflow: hidden;
+  color: var(--subtle);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-agent-error,
+.settings-agent-state {
+  display: flex;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  align-items: center;
+  gap: 8px;
+  border: 0.5px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  background: var(--sd-surface);
+  font-size: 12px;
+}
+
+.settings-agent-state {
+  margin: 18px 0;
+}
+
+.settings-agent-error,
+.settings-agent-state.error {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--line));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, var(--sd-surface));
+}
+
+.settings-agent-state > span:not(.spinner) {
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-agent-state button {
+  display: inline-flex;
+  min-height: 28px;
+  padding: 0 9px;
+  align-items: center;
+  gap: 5px;
+  border: 0.5px solid currentColor;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+
 .settings-archived {
   padding: 8px 0 24px;
 }
@@ -1154,6 +1267,21 @@ html[data-color-scheme="light"] .settings-dialog {
   .settings-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .settings-agent-card > .settings-row {
+    min-height: 78px;
+  }
+
+  .settings-agent-select,
+  .settings-agent-empty-value {
+    width: 100%;
+    max-width: none;
+  }
+
+  .settings-agent-select .settings-select-trigger {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .settings-community-card {

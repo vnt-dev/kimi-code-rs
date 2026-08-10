@@ -12,11 +12,11 @@ use kimi_code_agent_core_v2::{
         bootstrap::resolve_kimi_home,
         capability::CapabilityStatus,
         desktop_client::{
-            DesktopAuthStatus, DesktopContextUsage, DesktopCustomAgent,
-            DesktopDeleteCustomAgentInput, DesktopDeviceCode, DesktopInteraction,
-            DesktopManagedUsage, DesktopManagedUserInfo, DesktopMessagePage, DesktopModel,
-            DesktopPrepareSessionRequest, DesktopPreparedSession, DesktopProvider,
-            DesktopSaveCustomAgentInput, DesktopSaveProviderInput, DesktopSkill,
+            DesktopAgentSettings, DesktopAgentSettingsPatch, DesktopAuthStatus,
+            DesktopContextUsage, DesktopCustomAgent, DesktopDeleteCustomAgentInput,
+            DesktopDeviceCode, DesktopInteraction, DesktopManagedUsage, DesktopManagedUserInfo,
+            DesktopMessagePage, DesktopModel, DesktopPrepareSessionRequest, DesktopPreparedSession,
+            DesktopProvider, DesktopSaveCustomAgentInput, DesktopSaveProviderInput, DesktopSkill,
             DesktopSkillContent, DesktopWorkspace, KimiCodeDesktopClient,
         },
         file::FileMeta,
@@ -280,6 +280,19 @@ async fn upload_file(
 #[tauri::command]
 async fn set_default_model(state: State<'_, AppState>, model: String) -> Result<(), String> {
     state.client.set_default_model(&model).await
+}
+
+#[tauri::command]
+async fn get_agent_settings(state: State<'_, AppState>) -> Result<DesktopAgentSettings, String> {
+    state.client.get_agent_settings().await
+}
+
+#[tauri::command]
+async fn update_agent_settings(
+    state: State<'_, AppState>,
+    patch: DesktopAgentSettingsPatch,
+) -> Result<DesktopAgentSettings, String> {
+    state.client.update_agent_settings(patch).await
 }
 
 #[tauri::command]
@@ -765,6 +778,8 @@ pub fn run() {
             delete_custom_agent,
             upload_file,
             set_default_model,
+            get_agent_settings,
+            update_agent_settings,
             list_workspaces,
             create_or_touch_workspace,
             remove_workspace,

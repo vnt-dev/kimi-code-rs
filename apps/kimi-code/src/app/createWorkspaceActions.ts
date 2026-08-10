@@ -353,9 +353,6 @@ export function createWorkspaceActions({
     try {
       const scope = await prepareSession({
         workDir: project.path,
-        model: model.id,
-        thinking: effort,
-        permission: permissionMode,
       });
       const conversation = {
         ...conversationFromSession(scope.sessionId),
