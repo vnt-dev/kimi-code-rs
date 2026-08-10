@@ -5,6 +5,7 @@ import type { Language } from "../i18n";
 import { t } from "../i18n";
 import SettingsDialog from "../SettingsDialog";
 import { CustomAgentManagerDialog } from "./CustomAgentManagerDialog";
+import { CronTaskManagerDialog } from "./CronTaskManagerDialog";
 import { isDesktop } from "../transport";
 import type {
   AccountProfile,
@@ -38,6 +39,8 @@ interface AppOverlaysProps {
   settingsOpen: boolean;
   agentManagerOpen: boolean;
   agentManagerWorkspace?: { id: string; name: string };
+  cronManagerOpen: boolean;
+  cronManagerSession?: { id: string };
   appVersion?: string;
   auth: AuthStatus;
   accountProfile?: AccountProfile;
@@ -68,6 +71,8 @@ interface AppOverlaysProps {
   onPluginsChanged: () => void;
   onCloseSettings: () => void;
   onCloseAgentManager: () => void;
+  onCloseCronManager: () => void;
+  onCronTaskCountChange: (sessionId: string, count: number) => void;
   onDismissNotice: () => void;
 }
 
@@ -86,6 +91,8 @@ export function AppOverlays({
   settingsOpen,
   agentManagerOpen,
   agentManagerWorkspace,
+  cronManagerOpen,
+  cronManagerSession,
   appVersion,
   auth,
   accountProfile,
@@ -116,6 +123,8 @@ export function AppOverlays({
   onPluginsChanged,
   onCloseSettings,
   onCloseAgentManager,
+  onCloseCronManager,
+  onCronTaskCountChange,
   onDismissNotice,
 }: AppOverlaysProps) {
   return (
@@ -194,6 +203,14 @@ export function AppOverlays({
           workspaceId={agentManagerWorkspace.id}
           projectName={agentManagerWorkspace.name}
           onClose={onCloseAgentManager}
+        />
+      )}
+
+      {cronManagerOpen && cronManagerSession && (
+        <CronTaskManagerDialog
+          sessionId={cronManagerSession.id}
+          onCountChange={(count) => onCronTaskCountChange(cronManagerSession.id, count)}
+          onClose={onCloseCronManager}
         />
       )}
 

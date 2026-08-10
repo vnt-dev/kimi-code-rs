@@ -1,5 +1,6 @@
 import {
   Bot,
+  CalendarClock,
   Folder,
   Menu,
   SquarePen
@@ -167,6 +168,7 @@ import {
 import {
   type SessionSubagentRuns
 } from "./subagentEvents";
+import { cronTaskBadge, type CronTaskDescriptor } from "./cronTasks";
 import {
   getAppVersion,
   invoke,
@@ -244,6 +246,8 @@ export default function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [agentManagerOpen, setAgentManagerOpen] = useState(false);
+  const [cronManagerOpen, setCronManagerOpen] = useState(false);
+  const [cronTaskCounts, setCronTaskCounts] = useState<Record<string, number>>({});
   const [colorScheme, setColorScheme] =
     useState<ColorScheme>(loadColorScheme);
   const [language, setLanguageState] = useState<Language>(loadLanguage);
@@ -344,6 +348,7 @@ export default function App() {
   const queuedAgentChatEvents = useRef<QueuedAgentChatEvent[]>([]);
   const agentChatEventFrame = useRef<number | undefined>(undefined);
   const drainingQueuedPrompts = useRef(new Set<string>());
+  const cronTurnRunningRef = useRef<Record<string, boolean>>({});
   const sideChatInstance = useRef(0);
   const sideChatAgentId = useRef<string | undefined>(undefined);
   const sideChatAgentIds = useRef(new Set<string>());
@@ -434,6 +439,19 @@ export default function App() {
   const activeHistory = activeConversation
     ? historyByConversation[activeConversation.id]
     : undefined;
+  const activeCronTaskCount = activeConversation
+    ? cronTaskCounts[activeConversation.id] ?? 0
+    : 0;
+  const updateCronTaskCount = useCallback((sessionId: string, count: number): void => {
+    setCronTaskCounts((current) => ({ ...current, [sessionId]: count }));
+  }, []);
+  const refreshCronTaskCount = useCallback(
+    async (sessionId: string): Promise<void> => {
+      const tasks = await invoke<CronTaskDescriptor[]>("list_cron_tasks", { sessionId });
+      updateCronTaskCount(sessionId, tasks.length);
+    },
+    [updateCronTaskCount],
+  );
 
   useEffect(() => {
     inFlightTurnsRef.current = inFlightTurns;
@@ -1246,6 +1264,7 @@ export default function App() {
     setGoalEditBusy(false);
     setUndoMessageTarget(undefined);
     setUndoMessageBusy(false);
+    setCronManagerOpen(false);
   }, [activeConversation?.id, closeMcpStatus, closeSideChat]);
 
   useEffect(() => {
@@ -1327,6 +1346,36 @@ export default function App() {
     activeAgentScope?.sessionId,
     activeRunningTaskKey,
     refreshBackgroundTasks,
+  ]);
+
+  useEffect(() => {
+    const sessionId = activeAgentScope?.sessionId;
+    if (!sessionId) return;
+    void refreshCronTaskCount(sessionId).catch(() => {
+      // A later turn completion or opening the manager will retry.
+    });
+  }, [activeAgentScope?.sessionId, refreshCronTaskCount]);
+
+  useEffect(() => {
+    const sessionId = activeConversation?.id;
+    if (!sessionId) return;
+    const wasRunning = Boolean(cronTurnRunningRef.current[sessionId]);
+    const running = isTurnRunning(activeTurn);
+    cronTurnRunningRef.current[sessionId] = running;
+    if (
+      wasRunning &&
+      !running &&
+      activeAgentScope?.sessionId === sessionId
+    ) {
+      void refreshCronTaskCount(sessionId).catch(() => {
+        // Opening the manager remains an explicit retry path.
+      });
+    }
+  }, [
+    activeAgentScope?.sessionId,
+    activeConversation?.id,
+    activeTurn?.status,
+    refreshCronTaskCount,
   ]);
 
   useEffect(
@@ -2668,6 +2717,21 @@ export default function App() {
               </div>
               <div className="header-actions">
                 <button
+                  className="icon-button cron-manager-trigger"
+                  type="button"
+                  title={t("cron.open")}
+                  aria-label={t("cron.open")}
+                  disabled={!activeAgentScope}
+                  onClick={() => setCronManagerOpen(true)}
+                >
+                  <CalendarClock size={17} />
+                  {activeCronTaskCount > 0 && (
+                    <span className="cron-manager-badge" aria-hidden="true">
+                      {cronTaskBadge(activeCronTaskCount)}
+                    </span>
+                  )}
+                </button>
+                <button
                   className="icon-button"
                   type="button"
                   title={t("agents.open")}
@@ -2921,6 +2985,8 @@ export default function App() {
         settingsOpen={settingsOpen}
         agentManagerOpen={agentManagerOpen}
         agentManagerWorkspace={activeProject ? { id: activeProject.id, name: activeProject.name } : undefined}
+        cronManagerOpen={cronManagerOpen}
+        cronManagerSession={activeConversation ? { id: activeConversation.id } : undefined}
         appVersion={appVersion}
         auth={auth}
         accountProfile={accountProfile}
@@ -2968,6 +3034,8 @@ export default function App() {
         onPluginsChanged={() => setPluginCommandRevision((value) => value + 1)}
         onCloseSettings={closeSettings}
         onCloseAgentManager={() => setAgentManagerOpen(false)}
+        onCloseCronManager={() => setCronManagerOpen(false)}
+        onCronTaskCountChange={updateCronTaskCount}
         onDismissNotice={() => setNotice(undefined)}
       />
 

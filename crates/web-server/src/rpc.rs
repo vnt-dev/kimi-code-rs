@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use kimi_code_agent_core_v2::app::desktop_client::{
-    DesktopAgentSettingsPatch, DesktopDeleteCustomAgentInput, DesktopPrepareSessionRequest,
-    DesktopSaveCustomAgentInput, DesktopSaveProviderInput, KimiCodeDesktopClient,
+    DesktopAgentSettingsPatch, DesktopCreateCronTaskInput, DesktopDeleteCronTaskInput,
+    DesktopDeleteCustomAgentInput, DesktopPrepareSessionRequest, DesktopSaveCustomAgentInput,
+    DesktopSaveProviderInput, KimiCodeDesktopClient,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -74,6 +75,16 @@ struct SaveCustomAgentArgs {
 #[derive(Deserialize)]
 struct DeleteCustomAgentArgs {
     input: DesktopDeleteCustomAgentInput,
+}
+
+#[derive(Deserialize)]
+struct CreateCronTaskArgs {
+    input: DesktopCreateCronTaskInput,
+}
+
+#[derive(Deserialize)]
+struct DeleteCronTaskArgs {
+    input: DesktopDeleteCronTaskInput,
 }
 
 #[derive(Deserialize)]
@@ -354,6 +365,32 @@ pub(crate) async fn dispatch_rpc(
             let args: DeleteCustomAgentArgs = decode(args)?;
             client
                 .delete_custom_agent(args.input)
+                .await
+                .map_err(RpcError::transport)?;
+            Ok(Value::Null)
+        }
+        "list_cron_tasks" => {
+            let args: SessionArgs = decode(args)?;
+            encode(
+                client
+                    .list_cron_tasks(&args.session_id)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "create_cron_task" => {
+            let args: CreateCronTaskArgs = decode(args)?;
+            encode(
+                client
+                    .create_cron_task(args.input)
+                    .await
+                    .map_err(RpcError::transport)?,
+            )
+        }
+        "delete_cron_task" => {
+            let args: DeleteCronTaskArgs = decode(args)?;
+            client
+                .delete_cron_task(args.input)
                 .await
                 .map_err(RpcError::transport)?;
             Ok(Value::Null)

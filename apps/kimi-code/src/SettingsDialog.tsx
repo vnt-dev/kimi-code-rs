@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { Archive, Bot, Copy, ExternalLink, Github, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
+import { Archive, Bot, Check, Copy, ExternalLink, Github, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
 
 import type { ColorScheme } from "./appearance";
 import AccountSettings from "./AccountSettings";
@@ -633,13 +633,14 @@ export default function SettingsDialog({
                     {t("settings.webOpen")}
                   </button>
                   <button
-                    className="settings-update-button"
+                    className="settings-update-button settings-copy-button"
                     type="button"
+                    title={webCopied ? t("common.copied") : t("settings.webCopy")}
+                    aria-label={webCopied ? t("common.copied") : t("settings.webCopy")}
                     disabled={!webStatus?.accessUrl}
                     onClick={() => void copyProtectedWebUrl()}
                   >
-                    <Copy size={14} />
-                    {webCopied ? t("common.copied") : t("settings.webCopy")}
+                    {webCopied ? <Check size={14} /> : <Copy size={14} />}
                   </button>
                 </div>
               </section>

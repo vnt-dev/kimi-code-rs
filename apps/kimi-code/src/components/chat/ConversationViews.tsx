@@ -5,6 +5,7 @@ import {
   useState,
 } from "react";
 import {
+  AlarmClock,
   ArrowUp,
   Bot,
   Check,
@@ -55,6 +56,7 @@ import {
 } from "../../chat/messages";
 import { toolInputSummary } from "../../chat/toolInputSummary";
 import { parseStreamingToolInput } from "../../chat/streamingToolInput";
+import { parseCronFireMessage, type CronFireMessage } from "../../cronFire";
 import { t } from "../../i18n";
 import type { PluginCommandDetail } from "../../pluginCommandMessage";
 import { SkillPromptDisplayContent } from "../../prompt/SkillPromptDisplay";
@@ -169,18 +171,21 @@ export function LiveTurnView({
     isVisibleRetryStep(step, turn.steeredPrompts),
   );
   const streaming = isTurnRunning(turn);
+  const cronFire = parseCronFireMessage(turn.prompt);
 
   return (
     <section
       className="conversation-turn live-conversation-turn"
       data-conversation-turn-id={outlineId}
     >
-      <article className="message user-message live-user-message">
+      <article className={`message user-message live-user-message${cronFire ? " cron-fire-message" : ""}`}>
         <div className="message-meta">
           <time>{formatTime(turn.createdAt)}</time>
         </div>
-        <div className="user-bubble">
-          {turn.pluginCommand ? (
+        <div className={`user-bubble${cronFire ? " cron-fire-bubble" : ""}`}>
+          {cronFire ? (
+            <CronFireMessageContent fire={cronFire} />
+          ) : turn.pluginCommand ? (
             <PluginCommandDisplayContent
               command={turn.pluginCommand}
               onOpen={() =>
@@ -343,6 +348,34 @@ function PluginCommandDisplayContent({
     </button>
   ) : (
     <div className="plugin-command-message">{content}</div>
+  );
+}
+
+function CronFireMessageContent({ fire }: { fire: CronFireMessage }) {
+  return (
+    <div className="cron-fire-content">
+      <div className="cron-fire-summary">
+        <span className="cron-fire-icon" aria-hidden="true">
+          <AlarmClock size={18} />
+        </span>
+        <div>
+          <strong>{t("cron.fireTitle")}</strong>
+          <span>
+            {fire.recurring ? t("cron.recurring") : t("cron.once")}
+            <code>{fire.cron}</code>
+          </span>
+        </div>
+      </div>
+      <p>{fire.prompt}</p>
+      {(fire.coalescedCount > 1 || fire.stale) && (
+        <div className="cron-fire-flags">
+          {fire.coalescedCount > 1 && (
+            <span>{t("cron.fireCoalesced", { count: fire.coalescedCount })}</span>
+          )}
+          {fire.stale && <span>{t("cron.fireFinal")}</span>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1248,13 +1281,17 @@ export const HistoryTurnView = memo(function HistoryTurnView({
             )}
             {finalResponse && (
               <div className="message-actions">
-                <button onClick={() => onCopy(finalResponse)}>
+                <button
+                  type="button"
+                  title={copiedMessageId === finalResponse.id ? t("common.copied") : t("common.copy")}
+                  aria-label={copiedMessageId === finalResponse.id ? t("common.copied") : t("common.copy")}
+                  onClick={() => onCopy(finalResponse)}
+                >
                   {copiedMessageId === finalResponse.id ? (
                     <Check size={14} />
                   ) : (
                     <Copy size={14} />
                   )}
-                  {copiedMessageId === finalResponse.id ? t("common.copied") : t("common.copy")}
                 </button>
               </div>
             )}
@@ -1362,13 +1399,16 @@ function UserMessageView({
   const text = messageText(message);
   const pluginCommand = messagePluginCommand(message);
   const structured = messageStructuredContent(message);
+  const cronFire = parseCronFireMessage(text);
   return (
-    <article className="message user-message">
+    <article className={`message user-message${cronFire ? " cron-fire-message" : ""}`}>
       <div className="message-meta">
         <time>{formatTime(message.created_at)}</time>
       </div>
-      <div className="user-bubble">
-        {pluginCommand ? (
+      <div className={`user-bubble${cronFire ? " cron-fire-bubble" : ""}`}>
+        {cronFire ? (
+          <CronFireMessageContent fire={cronFire} />
+        ) : pluginCommand ? (
           <PluginCommandDisplayContent
             command={pluginCommand}
             onOpen={() =>
@@ -1668,6 +1708,8 @@ function AgentToolCopyButton({ text }: { text: string }) {
     <button
       type="button"
       className="agent-tool-copy"
+      title={copied ? t("common.copied") : t("common.copy")}
+      aria-label={copied ? t("common.copied") : t("common.copy")}
       onClick={() => {
         void navigator.clipboard.writeText(text).then(() => {
           setCopied(true);
@@ -1676,7 +1718,6 @@ function AgentToolCopyButton({ text }: { text: string }) {
       }}
     >
       {copied ? <Check size={12} /> : <Copy size={12} />}
-      {copied ? t("common.copied") : t("common.copy")}
     </button>
   );
 }

@@ -24,8 +24,8 @@ use crate::{
 
 const CRON_CREATE_DESCRIPTION: &str = include_str!("cron-create.md");
 pub const MAX_CRON_JOBS_PER_SESSION: usize = 50;
-const MAX_PROMPT_BYTES: usize = 8 * 1024;
-const ONE_SHOT_MAX_FUTURE_MS: f64 = 350.0 * 24.0 * 60.0 * 60.0 * 1_000.0;
+pub const MAX_CRON_PROMPT_BYTES: usize = 8 * 1024;
+pub const ONE_SHOT_MAX_FUTURE_MS: f64 = 350.0 * 24.0 * 60.0 * 60.0 * 1_000.0;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CronCreateInput {
@@ -158,9 +158,9 @@ impl ExecutableTool for CronCreateTool {
             return ToolExecution::Error(ExecutableToolResult::error(cap_error()));
         }
         let byte_len = args.prompt.len();
-        if byte_len > MAX_PROMPT_BYTES {
+        if byte_len > MAX_CRON_PROMPT_BYTES {
             return ToolExecution::Error(ExecutableToolResult::error(format!(
-                "Prompt exceeds {MAX_PROMPT_BYTES} bytes (got {byte_len})."
+                "Prompt exceeds {MAX_CRON_PROMPT_BYTES} bytes (got {byte_len})."
             )));
         }
         if !args.recurring

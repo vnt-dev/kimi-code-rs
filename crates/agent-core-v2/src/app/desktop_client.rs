@@ -62,6 +62,10 @@ use crate::{
         bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
         capability::{CAPABILITY_SERVICE_ID, CapabilityStatus},
         config::{CONFIG_SERVICE_ID, ConfigServiceContract, ConfigServiceHandle, ConfigTarget},
+        cron::{
+            CRON_ID_REGEX, CronTask, CronTaskInit, compute_next_cron_run, cron_to_human,
+            format_local_iso_with_offset, has_fire_within_years, parse_cron_expression,
+        },
         event::event_bus::EVENT_BUS_SERVICE_ID,
         file::{FILE_SERVICE_ID, FileByteStream, FileMeta, FileServiceError, SaveOptions},
         host_folder_browser::{FS_HOST_FOLDER_BROWSER_ID, FsBrowseResponse, FsHomeResponse},
@@ -98,6 +102,10 @@ use crate::{
     session::{
         agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID, ensure_main_agent},
         agent_profile_catalog::SESSION_AGENT_PROFILE_CATALOG_ID,
+        cron::{
+            MAX_CRON_JOBS_PER_SESSION, MAX_CRON_PROMPT_BYTES, ONE_SHOT_MAX_FUTURE_MS,
+            SESSION_CRON_SERVICE_ID, SessionCronServiceHandle,
+        },
         interaction::{Interaction, InteractionKind, SESSION_INTERACTION_SERVICE_ID},
         session_context::SESSION_CONTEXT_ID,
         skill_catalog::SESSION_SKILL_CATALOG_ID,
@@ -396,6 +404,36 @@ pub struct DesktopDeleteCustomAgentInput {
     pub workspace_id: String,
     pub scope: DesktopCustomAgentScope,
     pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopCronTask {
+    pub id: String,
+    pub cron: String,
+    pub prompt: String,
+    pub created_at: f64,
+    pub recurring: bool,
+    pub last_fired_at: Option<f64>,
+    pub human_schedule: String,
+    pub next_fire_at: Option<String>,
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DesktopCreateCronTaskInput {
+    pub session_id: String,
+    pub cron: String,
+    pub prompt: String,
+    pub recurring: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DesktopDeleteCronTaskInput {
+    pub session_id: String,
+    pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1267,6 +1305,104 @@ impl KimiCodeDesktopClient {
             .await?;
         delete_managed_agent_file(&root, &input.relative_path).await?;
         self.reload_active_agent_catalogs().await
+    }
+
+    pub async fn list_cron_tasks(&self, session_id: &str) -> Result<Vec<DesktopCronTask>, String> {
+        let cron = self.session_cron_service(session_id)?;
+        Ok(cron
+            .list()
+            .into_iter()
+            .map(|task| map_desktop_cron_task(&cron, task))
+            .collect())
+    }
+
+    pub async fn create_cron_task(
+        &self,
+        input: DesktopCreateCronTaskInput,
+    ) -> Result<DesktopCronTask, String> {
+        let cron = self.session_cron_service(&input.session_id)?;
+        if cron.is_disabled() {
+            return Err("Cron scheduling is disabled (KIMI_DISABLE_CRON=1).".into());
+        }
+        if input.prompt.is_empty() {
+            return Err("A non-empty prompt is required.".into());
+        }
+        let prompt_bytes = input.prompt.len();
+        if prompt_bytes > MAX_CRON_PROMPT_BYTES {
+            return Err(format!(
+                "Prompt exceeds {MAX_CRON_PROMPT_BYTES} bytes (got {prompt_bytes})."
+            ));
+        }
+        if cron.list().len() >= MAX_CRON_JOBS_PER_SESSION {
+            return Err(format!(
+                "Cron job cap reached (max {MAX_CRON_JOBS_PER_SESSION} per session)."
+            ));
+        }
+
+        let normalized_cron = input.cron.split_whitespace().collect::<Vec<_>>().join(" ");
+        let parsed = parse_cron_expression(&normalized_cron)
+            .map_err(|error| format!("Invalid cron expression: {error}"))?;
+        let now = cron.now();
+        if !has_fire_within_years(&parsed, 5.0, now) {
+            return Err(format!(
+                "Cron expression {normalized_cron:?} has no fire within 5 years; refusing to schedule."
+            ));
+        }
+        if !input.recurring
+            && let Some(first_fire) = compute_next_cron_run(&parsed, now)
+            && first_fire - now > ONE_SHOT_MAX_FUTURE_MS
+        {
+            return Err(format!(
+                "One-shot cron {normalized_cron:?} would not fire until {} (more than a year out).",
+                format_local_iso_with_offset(first_fire)
+            ));
+        }
+
+        let task = cron
+            .add_task(CronTaskInit {
+                cron: normalized_cron,
+                prompt: input.prompt,
+                recurring: Some(input.recurring),
+                last_fired_at: None,
+                tags: None,
+            })
+            .map_err(|error| error.to_string())?;
+        cron.emit_scheduled(&task, None);
+        Ok(map_desktop_cron_task(&cron, task))
+    }
+
+    pub async fn delete_cron_task(&self, input: DesktopDeleteCronTaskInput) -> Result<(), String> {
+        let id = input.id.trim();
+        if !CRON_ID_REGEX.is_match(id) {
+            return Err("The cron task id must be a valid ULID.".into());
+        }
+        let cron = self.session_cron_service(&input.session_id)?;
+        let removed = cron
+            .remove_tasks(&[id.to_owned()])
+            .map_err(|error| error.to_string())?;
+        if removed.is_empty() {
+            return Err(format!("No cron job with id {id}."));
+        }
+        cron.emit_deleted(id, None);
+        Ok(())
+    }
+
+    fn session_cron_service(&self, session_id: &str) -> Result<SessionCronServiceHandle, String> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Err("A session id is required.".into());
+        }
+        let sessions = self
+            .app
+            .get(SESSION_LIFECYCLE_SERVICE_ID)
+            .map_err(|error| error.to_string())?;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| "the session is not active; prepare it first".to_owned())?;
+        session
+            .get(SESSION_CRON_SERVICE_ID)
+            .map(|service| (*service).clone())
+            .map_err(|error| error.to_string())
     }
 
     async fn custom_agent_root(
@@ -2289,6 +2425,29 @@ fn map_desktop_workspace(workspace: Workspace) -> DesktopWorkspace {
     }
 }
 
+fn map_desktop_cron_task(cron: &SessionCronServiceHandle, task: CronTask) -> DesktopCronTask {
+    let stale = cron.is_stale(&task);
+    let (human_schedule, next_fire_at) = match parse_cron_expression(&task.cron) {
+        Ok(parsed) => (
+            cron_to_human(&parsed),
+            cron.get_next_fire_for_task(&task.id)
+                .map(format_local_iso_with_offset),
+        ),
+        Err(_) => (task.cron.clone(), None),
+    };
+    DesktopCronTask {
+        id: task.id,
+        cron: task.cron,
+        prompt: task.prompt,
+        created_at: task.created_at,
+        recurring: task.recurring != Some(false),
+        last_fired_at: task.last_fired_at,
+        human_schedule,
+        next_fire_at,
+        stale,
+    }
+}
+
 fn map_desktop_custom_agent(
     scope: DesktopCustomAgentScope,
     file: ManagedAgentFile,
@@ -2458,9 +2617,9 @@ mod tests {
 
     use super::{
         DesktopAgentSettingsPatch, DesktopChatEvent, DesktopChatRequest,
-        DesktopPrepareSessionRequest, DesktopProviderModelInput, DesktopSaveProviderInput,
-        KimiCodeDesktopClient, ManagedKimiCodeModelInfo, context_usage_from_size,
-        map_desktop_model,
+        DesktopCreateCronTaskInput, DesktopDeleteCronTaskInput, DesktopPrepareSessionRequest,
+        DesktopProviderModelInput, DesktopSaveProviderInput, KimiCodeDesktopClient,
+        ManagedKimiCodeModelInfo, context_usage_from_size, map_desktop_model,
     };
     use crate::{
         agent::{
@@ -2674,6 +2833,78 @@ mod tests {
             display_name: Some(id.into()),
             protocol: None,
         }
+    }
+
+    #[tokio::test]
+    async fn desktop_cron_api_creates_lists_and_deletes_session_tasks() {
+        let root =
+            std::env::temp_dir().join(format!("kimi-desktop-cron-tasks-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        let work_dir = root.join("workspace");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let client = KimiCodeDesktopClient::new(&home, "test").unwrap();
+        client
+            .configure_models(&[managed_model("first")])
+            .await
+            .unwrap();
+        let prepared = client
+            .prepare_session(DesktopPrepareSessionRequest {
+                session_id: None,
+                work_dir: work_dir.to_string_lossy().into_owned(),
+                model: Some("kimi-code/first".into()),
+                thinking: Some("high".into()),
+                permission: Some(PermissionMode::Yolo),
+            })
+            .await
+            .unwrap();
+
+        let created = client
+            .create_cron_task(DesktopCreateCronTaskInput {
+                session_id: prepared.session_id.clone(),
+                cron: "  */15   * * * *  ".into(),
+                prompt: "Check the build".into(),
+                recurring: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.cron, "*/15 * * * *");
+        assert_eq!(created.human_schedule, "every 15 minutes");
+        assert!(created.next_fire_at.is_some());
+
+        let tasks = client.list_cron_tasks(&prepared.session_id).await.unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, created.id);
+        assert_eq!(tasks[0].prompt, "Check the build");
+
+        client
+            .delete_cron_task(DesktopDeleteCronTaskInput {
+                session_id: prepared.session_id.clone(),
+                id: created.id,
+            })
+            .await
+            .unwrap();
+        assert!(
+            client
+                .list_cron_tasks(&prepared.session_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            client
+                .create_cron_task(DesktopCreateCronTaskInput {
+                    session_id: prepared.session_id,
+                    cron: "not cron".into(),
+                    prompt: "x".into(),
+                    recurring: true,
+                })
+                .await
+                .is_err()
+        );
+
+        drop(client);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

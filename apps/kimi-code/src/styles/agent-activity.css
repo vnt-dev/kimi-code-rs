@@ -716,17 +716,18 @@
 }
 
 .agent-tool-copy {
-  display: flex;
-  padding: 3px 6px;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
   flex: none;
   border: 0;
   border-radius: 4px;
   color: var(--muted);
   background: transparent;
   cursor: pointer;
-  font-size: 12px;
 }
 
 .agent-tool-copy:hover {

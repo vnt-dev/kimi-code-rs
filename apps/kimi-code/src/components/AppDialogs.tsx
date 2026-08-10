@@ -4,6 +4,7 @@ import {
   ArrowUp,
   Check,
   ChevronRight,
+  Copy,
   ExternalLink,
   Folder,
   FolderMinus,
@@ -488,11 +489,19 @@ export function LoginDialog({
         </p>
         {code ? (
           <>
-            <button className="device-code" onClick={() => void copyCode()}>
+            <div className="device-code">
               <span>{t("login.deviceCode")}</span>
               <strong>{code.userCode}</strong>
-              <small>{copied ? t("common.copied") : t("login.clickToCopy")}</small>
-            </button>
+              <button
+                className="device-code-copy"
+                type="button"
+                title={copied ? t("common.copied") : t("common.copy")}
+                aria-label={copied ? t("common.copied") : t("common.copy")}
+                onClick={() => void copyCode()}
+              >
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+              </button>
+            </div>
             <button
               className="dialog-primary"
               onClick={() =>

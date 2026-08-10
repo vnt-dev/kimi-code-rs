@@ -13,10 +13,11 @@ use kimi_code_agent_core_v2::{
         capability::CapabilityStatus,
         desktop_client::{
             DesktopAgentSettings, DesktopAgentSettingsPatch, DesktopAuthStatus,
-            DesktopContextUsage, DesktopCustomAgent, DesktopDeleteCustomAgentInput,
-            DesktopDeviceCode, DesktopInteraction, DesktopManagedUsage, DesktopManagedUserInfo,
-            DesktopMessagePage, DesktopModel, DesktopPrepareSessionRequest, DesktopPreparedSession,
-            DesktopProvider, DesktopSaveCustomAgentInput, DesktopSaveProviderInput, DesktopSkill,
+            DesktopContextUsage, DesktopCreateCronTaskInput, DesktopCronTask, DesktopCustomAgent,
+            DesktopDeleteCronTaskInput, DesktopDeleteCustomAgentInput, DesktopDeviceCode,
+            DesktopInteraction, DesktopManagedUsage, DesktopManagedUserInfo, DesktopMessagePage,
+            DesktopModel, DesktopPrepareSessionRequest, DesktopPreparedSession, DesktopProvider,
+            DesktopSaveCustomAgentInput, DesktopSaveProviderInput, DesktopSkill,
             DesktopSkillContent, DesktopWorkspace, KimiCodeDesktopClient,
         },
         file::FileMeta,
@@ -262,6 +263,30 @@ async fn delete_custom_agent(
     input: DesktopDeleteCustomAgentInput,
 ) -> Result<(), String> {
     state.client.delete_custom_agent(input).await
+}
+
+#[tauri::command]
+async fn list_cron_tasks(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<DesktopCronTask>, String> {
+    state.client.list_cron_tasks(&session_id).await
+}
+
+#[tauri::command]
+async fn create_cron_task(
+    state: State<'_, AppState>,
+    input: DesktopCreateCronTaskInput,
+) -> Result<DesktopCronTask, String> {
+    state.client.create_cron_task(input).await
+}
+
+#[tauri::command]
+async fn delete_cron_task(
+    state: State<'_, AppState>,
+    input: DesktopDeleteCronTaskInput,
+) -> Result<(), String> {
+    state.client.delete_cron_task(input).await
 }
 
 #[tauri::command]
@@ -776,6 +801,9 @@ pub fn run() {
             list_custom_agents,
             save_custom_agent,
             delete_custom_agent,
+            list_cron_tasks,
+            create_cron_task,
+            delete_cron_task,
             upload_file,
             set_default_model,
             get_agent_settings,

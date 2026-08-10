@@ -291,6 +291,100 @@
   white-space: pre-wrap;
 }
 
+.user-bubble.cron-fire-bubble {
+  width: min(430px, 85%);
+  max-width: min(430px, 85%);
+  padding: 0;
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  color: var(--text);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 52%),
+    var(--surface-2);
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.cron-fire-content {
+  display: grid;
+}
+
+.cron-fire-summary {
+  display: flex;
+  padding: 12px 14px 10px;
+  align-items: center;
+  gap: 10px;
+}
+
+.cron-fire-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.cron-fire-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.cron-fire-summary strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.cron-fire-summary > div > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cron-fire-summary code {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text) 70%, var(--muted));
+  font-family: "DM Mono", monospace;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-fire-content > p {
+  margin: 0;
+  padding: 11px 14px 13px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.cron-fire-flags {
+  display: flex;
+  margin-top: -4px;
+  padding: 0 14px 12px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cron-fire-flags span {
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  font-size: 10.5px;
+}
+
 .user-message-actions {
   display: flex;
   min-height: 24px;
