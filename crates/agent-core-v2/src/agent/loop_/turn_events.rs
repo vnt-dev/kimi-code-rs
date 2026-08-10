@@ -182,7 +182,7 @@ pub fn turn_prompt_text(input: &[ContentPart]) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 pub fn is_displayable_prompt_origin(origin: &PromptOrigin) -> bool {
-    matches!(origin, PromptOrigin::User)
+    matches!(origin, PromptOrigin::User | PromptOrigin::CronJob { .. })
         || matches!(
             origin,
             PromptOrigin::SkillActivation {
@@ -200,7 +200,7 @@ mod tests {
     use super::*;
     use crate::{agent::context_memory::MessageContent, kosong::contract::message::MediaUrl};
     #[test]
-    fn extracts_only_nonempty_text_and_limits_prompt_visibility_to_user_origins() {
+    fn extracts_text_and_exposes_only_user_facing_prompt_origins() {
         assert_eq!(
             turn_prompt_text(&[
                 ContentPart::Think {
@@ -220,6 +220,13 @@ mod tests {
         );
         assert_eq!(turn_prompt_text(&[]), None);
         assert!(is_displayable_prompt_origin(&PromptOrigin::User));
+        assert!(is_displayable_prompt_origin(&PromptOrigin::CronJob {
+            job_id: "job-1".into(),
+            cron: "5 * * * *".into(),
+            recurring: true,
+            coalesced_count: 1,
+            stale: false,
+        }));
         assert!(!is_displayable_prompt_origin(
             &PromptOrigin::SystemTrigger {
                 name: "goal".into()

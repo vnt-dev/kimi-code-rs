@@ -66,7 +66,7 @@
   border-radius: 5px;
   color: #c6bfff;
   background: #393b40;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 0.88em;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -89,7 +89,7 @@
   border-bottom: 1px solid var(--line);
   color: #64646e;
   background: #26282e;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
@@ -103,7 +103,7 @@
   padding: 14px;
   color: #c6c6ce;
   background: transparent;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.7;
   white-space: pre;
@@ -201,7 +201,7 @@
   align-items: center;
   gap: 5px;
   color: #5f5f69;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
@@ -216,7 +216,7 @@
 .assistant-retry-status {
   margin-top: 3px;
   color: #777180;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
@@ -301,7 +301,7 @@
   display: inline-flex;
   flex: 0 0 auto;
   gap: 6px;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -329,7 +329,7 @@
 }
 
 .file-change-status {
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-weight: 600;
   text-align: center;
 }
@@ -355,8 +355,8 @@
 
 .message-actions button {
   display: inline-flex;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   align-items: center;
   justify-content: center;

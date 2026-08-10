@@ -149,7 +149,7 @@
 
 .subagent-panel-summary strong {
   color: #aaa5b7;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
 }
@@ -348,7 +348,7 @@
 .subagent-row-copy small {
   overflow: hidden;
   color: #5f5f69;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -544,7 +544,7 @@
   border-radius: 4px;
   color: #686572;
   background: rgba(255, 255, 255, 0.025);
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
@@ -575,7 +575,7 @@
   border-radius: 6px;
   color: #a9a9b1;
   background: #1e1f22;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -608,7 +608,7 @@
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface-deep);
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.6;
 }
@@ -717,8 +717,8 @@
 
 .agent-tool-copy {
   display: inline-flex;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   align-items: center;
   justify-content: center;
@@ -821,7 +821,7 @@
 
 .agent-swarm-section > header > small {
   color: var(--subtle);
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
 }
@@ -844,7 +844,7 @@
   flex-direction: column;
   gap: 5px;
   color: var(--muted);
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -885,7 +885,7 @@
   display: block;
   margin-bottom: 4px;
   color: var(--accent);
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   overflow-wrap: anywhere;
 }
@@ -914,7 +914,7 @@
 .live-tool-progress strong {
   margin-left: auto;
   color: #9e92e9;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -998,7 +998,7 @@
   border-top: 1px solid var(--line);
   color: #a9a9b1;
   background: #26282e;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.6;
   white-space: pre-wrap;

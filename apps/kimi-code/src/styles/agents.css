@@ -284,7 +284,7 @@
 }
 
 .agent-manager-agent-copy strong {
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11.5px;
   font-weight: 500;
 }
@@ -379,7 +379,7 @@
 }
 
 .agent-manager-editor-meta > span {
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 500;
 }
@@ -387,7 +387,7 @@
 .agent-manager-editor-heading small {
   overflow: hidden;
   color: var(--subtle);
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 9.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -446,7 +446,7 @@
   outline: none;
   color: var(--text);
   background: color-mix(in srgb, var(--control) 70%, var(--dialog-surface));
-  font-family: "DM Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.65;
   tab-size: 2;

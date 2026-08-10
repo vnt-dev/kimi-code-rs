@@ -301,7 +301,7 @@
 
 .plan-review-content code {
   color: #c7bdf5;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
 }
 
 .plan-review-path {
@@ -309,7 +309,7 @@
   margin-top: 7px;
   overflow: hidden;
   color: #66616f;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -599,7 +599,7 @@
   border-radius: 6px;
   color: #77747a !important;
   background: rgba(255, 255, 255, 0.025);
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-weight: 450 !important;
   letter-spacing: 0 !important;
   text-transform: none !important;
@@ -629,7 +629,7 @@
   padding: 10px;
   overflow: auto;
   color: #d8d4c9;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;

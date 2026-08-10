@@ -497,7 +497,7 @@
 
 .todo-popover-heading span {
   color: #706c78;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
@@ -625,7 +625,7 @@
 
 .background-task-popover-heading span {
   color: var(--muted);
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -773,7 +773,7 @@
 
 .background-task-copy small {
   color: var(--muted);
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -810,7 +810,7 @@
   border-radius: 7px;
   color: var(--text);
   background: var(--surface-deep);
-  font-family: "DM Mono", "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;

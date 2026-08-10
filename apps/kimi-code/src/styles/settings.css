@@ -457,8 +457,8 @@ html[data-color-scheme="light"] .settings-dialog {
 }
 
 .settings-update-button.settings-copy-button {
-  width: 30px;
-  min-height: 30px;
+  width: 26px;
+  min-height: 26px;
   padding: 0;
 }
 
@@ -903,7 +903,7 @@ html[data-color-scheme="light"] .settings-dialog {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 

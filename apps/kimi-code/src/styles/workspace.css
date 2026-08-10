@@ -99,7 +99,7 @@
 
 .plugin-command-detail-args > span {
   min-width: 0;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -467,7 +467,7 @@
   align-items: center;
   gap: 5px;
   color: #5f5f69;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 

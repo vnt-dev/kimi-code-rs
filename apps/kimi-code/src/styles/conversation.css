@@ -60,7 +60,7 @@
 .eyebrow {
   margin: 0;
   color: #746ba7;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.18em;
@@ -259,7 +259,7 @@
 
 .message-meta time {
   color: #50505a;
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 400;
 }
@@ -352,7 +352,7 @@
 .cron-fire-summary code {
   overflow: hidden;
   color: color-mix(in srgb, var(--text) 70%, var(--muted));
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -501,7 +501,7 @@ button.plugin-command-message:focus-visible {
   align-items: center;
   gap: 6px;
   color: var(--accent);
-  font-family: "DM Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.5;
