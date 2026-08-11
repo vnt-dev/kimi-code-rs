@@ -1221,6 +1221,252 @@ html[data-color-scheme="light"] .settings-dialog {
   color: var(--danger, #cf7777);
 }
 
+.settings-usage {
+  position: relative;
+  padding: 16px 0 24px;
+}
+
+.settings-usage-summary {
+  display: grid;
+  min-height: 76px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  overflow: hidden;
+  border: 0.5px solid var(--line);
+  border-radius: 16px;
+}
+
+.settings-usage-metric {
+  display: flex;
+  min-width: 0;
+  padding: 13px 10px 11px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  text-align: center;
+}
+
+.settings-usage-metric + .settings-usage-metric {
+  border-left: 0.5px solid var(--line);
+}
+
+.settings-usage-metric strong {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-usage-metric span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.settings-usage-activity-header {
+  display: flex;
+  margin-top: 34px;
+  margin-bottom: 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-usage-activity-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.settings-usage-modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.settings-usage-modes button {
+  padding: 2px 0;
+  border: 0;
+  color: var(--subtle);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.settings-usage-modes button:hover {
+  color: var(--muted);
+}
+
+.settings-usage-modes button.active {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.settings-usage-modes button:focus-visible {
+  border-radius: 3px;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.settings-usage-heatmap-scroll {
+  max-width: 100%;
+  padding-bottom: 3px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.settings-usage-heatmap {
+  display: block;
+  width: 100%;
+  min-width: 739px;
+  height: auto;
+}
+
+.settings-usage-cell {
+  fill: var(--sd-surface);
+  animation: settings-usage-cell-in 260ms ease-out both;
+  transition:
+    fill 180ms ease,
+    filter 180ms ease;
+}
+
+.settings-usage-cell.level-1 {
+  fill: color-mix(in srgb, var(--accent) 25%, var(--sd-surface));
+}
+
+.settings-usage-cell.level-2 {
+  fill: color-mix(in srgb, var(--accent) 45%, var(--sd-surface));
+}
+
+.settings-usage-cell.level-3 {
+  fill: color-mix(in srgb, var(--accent) 70%, var(--sd-surface));
+}
+
+.settings-usage-cell.level-4 {
+  fill: var(--accent);
+}
+
+.settings-usage-cell:hover {
+  fill: color-mix(in srgb, var(--accent) 88%, #0757c8);
+  filter: drop-shadow(
+    0 0 3px color-mix(in srgb, var(--accent) 72%, transparent)
+  );
+}
+
+.settings-usage-week-cell.column-hovered:not(.level-0) {
+  fill: color-mix(in srgb, var(--accent) 88%, #0757c8);
+  filter: drop-shadow(
+    0 0 3px color-mix(in srgb, var(--accent) 72%, transparent)
+  );
+}
+
+.settings-usage-week-hitbox {
+  fill: transparent;
+  cursor: default;
+}
+
+.settings-usage-month {
+  fill: var(--subtle);
+  font-size: 10px;
+}
+
+.settings-usage-tooltip {
+  position: fixed;
+  z-index: 120;
+  max-width: 260px;
+  padding: 6px 9px;
+  border: 0.5px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 5px));
+  white-space: nowrap;
+}
+
+.settings-usage-state {
+  display: flex;
+  min-height: 260px;
+  padding: 28px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.settings-usage-state strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.settings-usage-state button,
+.settings-usage-inline-error button {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 0.5px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--sd-surface);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.settings-usage-inline-error {
+  display: flex;
+  margin-top: 12px;
+  padding: 8px 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0.5px solid color-mix(in srgb, var(--danger) 40%, var(--line));
+  border-radius: 8px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  font-size: 12px;
+}
+
+.settings-usage-inline-error span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-usage-refreshing {
+  display: inline-flex;
+  margin-top: 8px;
+  align-items: center;
+  gap: 5px;
+  color: var(--subtle);
+  font-size: 11px;
+}
+
+.settings-usage .spinning {
+  animation: settings-update-spin 800ms linear infinite;
+}
+
+@keyframes settings-usage-cell-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+    transform-origin: center;
+  }
+}
+
 @media (max-width: 760px) {
   .sidebar:not(.collapsed) {
     box-shadow: var(--mobile-sidebar-shadow);
@@ -1268,6 +1514,28 @@ html[data-color-scheme="light"] .settings-dialog {
 
   .settings-dialog-content {
     padding: 8px 20px 20px;
+  }
+
+  .settings-usage-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-usage-metric {
+    min-height: 64px;
+    border-top: 0.5px solid var(--line);
+    border-left: 0.5px solid var(--line);
+  }
+
+  .settings-usage-metric:nth-child(-n + 2) {
+    border-top: 0;
+  }
+
+  .settings-usage-metric:nth-child(odd) {
+    border-left: 0;
+  }
+
+  .settings-usage-activity-header {
+    margin-top: 26px;
   }
 
   .settings-row {
@@ -1344,5 +1612,12 @@ html[data-color-scheme="light"] .settings-dialog {
 
   .settings-archived-confirm {
     padding: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-usage-cell,
+  .settings-usage .spinning {
+    animation: none;
   }
 }

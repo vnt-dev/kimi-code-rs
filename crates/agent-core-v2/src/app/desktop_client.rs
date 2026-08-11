@@ -27,6 +27,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 use tokio::sync::Mutex as AsyncMutex;
 
+pub use super::usage_statistics::{DesktopDailyTokenUsage, DesktopUsageStatistics};
+
 use crate::{
     _base::{
         di::{
@@ -120,6 +122,7 @@ pub struct KimiCodeDesktopClient {
     app: Scope,
     models_configured: AtomicBool,
     config_gate: AsyncMutex<()>,
+    usage_statistics_gate: AsyncMutex<()>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -599,7 +602,13 @@ impl KimiCodeDesktopClient {
             app,
             models_configured: AtomicBool::new(false),
             config_gate: AsyncMutex::new(()),
+            usage_statistics_gate: AsyncMutex::new(()),
         })
+    }
+
+    pub async fn usage_statistics(&self) -> Result<DesktopUsageStatistics, String> {
+        let _guard = self.usage_statistics_gate.lock().await;
+        super::usage_statistics::collect_usage_statistics(self.home_dir.clone()).await
     }
 
     pub async fn auth_status(&self) -> Result<DesktopAuthStatus, String> {

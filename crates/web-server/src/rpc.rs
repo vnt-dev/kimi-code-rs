@@ -192,6 +192,12 @@ pub(crate) async fn dispatch_rpc(
         }
         "auth_status" => encode(client.auth_status().await.map_err(RpcError::transport)?),
         "account_usage" => encode(client.managed_usage().await.map_err(RpcError::transport)?),
+        "get_usage_statistics" => encode(
+            client
+                .usage_statistics()
+                .await
+                .map_err(RpcError::transport)?,
+        ),
         "account_profile" => encode(
             client
                 .managed_user_info()

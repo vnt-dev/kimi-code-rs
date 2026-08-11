@@ -2568,6 +2568,7 @@ dependencies = [
  "kimi-code-minidb",
  "kimi-code-oauth",
  "kimi-code-protocol",
+ "kimi-code-transcript",
  "libc",
  "notify",
  "percent-encoding",

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { Archive, Bot, Check, Copy, ExternalLink, Github, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
+import { Activity, Archive, Bot, Check, Copy, ExternalLink, Github, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
 
 import type { ColorScheme } from "./appearance";
 import AccountSettings from "./AccountSettings";
@@ -13,8 +13,10 @@ import PluginSettings from "./PluginSettings";
 import ProviderSettings from "./ProviderSettings";
 import { invoke, isDesktop, openExternalUrl } from "./transport";
 import type { AccountProfile, AccountUsage, AuthStatus } from "./types";
+import UsageStatisticsSettings from "./UsageStatisticsSettings";
+import type { UsageStatistics } from "./usageStatistics";
 
-type SettingsTab = "general" | "agent" | "account" | "providers" | "plugins" | "web" | "archived" | "about";
+type SettingsTab = "general" | "agent" | "account" | "usage" | "providers" | "plugins" | "web" | "archived" | "about";
 type WebServerListenScope = "local" | "global";
 
 interface WebServerStatus {
@@ -102,6 +104,10 @@ export default function SettingsDialog({
   const [webError, setWebError] = useState<string>();
   const [webCopied, setWebCopied] = useState(false);
   const [notificationBusy, setNotificationBusy] = useState(false);
+  const [usageStatistics, setUsageStatistics] = useState<UsageStatistics>();
+  const [usageStatisticsBusy, setUsageStatisticsBusy] = useState(false);
+  const [usageStatisticsError, setUsageStatisticsError] = useState<string>();
+  const usageStatisticsBusyRef = useRef(false);
   const updateToastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -163,6 +169,29 @@ export default function SettingsDialog({
       active = false;
     };
   }, [open]);
+
+  const refreshUsageStatistics = useCallback(async (): Promise<void> => {
+    if (usageStatisticsBusyRef.current) return;
+    usageStatisticsBusyRef.current = true;
+    setUsageStatisticsBusy(true);
+    setUsageStatisticsError(undefined);
+    try {
+      setUsageStatistics(
+        await invoke<UsageStatistics>("get_usage_statistics"),
+      );
+    } catch (error) {
+      setUsageStatisticsError(errorMessage(error));
+    } finally {
+      usageStatisticsBusyRef.current = false;
+      setUsageStatisticsBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open && activeTab === "usage") {
+      void refreshUsageStatistics();
+    }
+  }, [activeTab, open, refreshUsageStatistics]);
 
   useEffect(() => {
     if (!open) return;
@@ -388,6 +417,15 @@ export default function SettingsDialog({
               {t("settings.tabAccount")}
             </button>
             <button
+              className={`settings-tab ${activeTab === "usage" ? "active" : ""}`}
+              type="button"
+              aria-current={activeTab === "usage" ? "page" : undefined}
+              onClick={() => setActiveTab("usage")}
+            >
+              <Activity size={15} />
+              {t("settings.tabUsage")}
+            </button>
+            <button
               className={`settings-tab ${activeTab === "providers" ? "active" : ""}`}
               type="button"
               aria-current={activeTab === "providers" ? "page" : undefined}
@@ -541,6 +579,14 @@ export default function SettingsDialog({
                 onRefreshUsage={onRefreshAccountUsage}
                 onLogin={onLogin}
                 onSignOut={onSignOut}
+              />
+            ) : activeTab === "usage" ? (
+              <UsageStatisticsSettings
+                statistics={usageStatistics}
+                busy={usageStatisticsBusy}
+                error={usageStatisticsError}
+                language={language}
+                onRetry={() => void refreshUsageStatistics()}
               />
             ) : activeTab === "providers" ? (
               <ProviderSettings onChanged={onProvidersChanged} />
