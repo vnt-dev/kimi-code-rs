@@ -30,6 +30,14 @@ use super::{
 };
 
 const MAX_SKILL_SCAN_DEPTH: usize = 8;
+const NON_SKILL_MARKDOWN_FILES: &[&str] = &[
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+];
 
 type WarnCallback<'a> = dyn Fn(&str, Option<LogPayload>) + Send + Sync + 'a;
 
@@ -151,6 +159,9 @@ impl FileSkillWalker<'_> {
                 }
 
                 for entry in &entries {
+                    if is_non_skill_markdown_file(entry) {
+                        continue;
+                    }
                     let Some(skill_name) = entry.strip_suffix(".md") else {
                         continue;
                     };
@@ -292,6 +303,12 @@ fn has_sub_skill_enabled(skill: &SkillDefinition) -> bool {
     direct || nested
 }
 
+fn is_non_skill_markdown_file(entry: &str) -> bool {
+    NON_SKILL_MARKDOWN_FILES
+        .iter()
+        .any(|name| entry.eq_ignore_ascii_case(name))
+}
+
 async fn read_directory_names(path: &Path) -> Option<Vec<String>> {
     let mut directory = tokio::fs::read_dir(path).await.ok()?;
     let mut entries = Vec::new();
@@ -420,6 +437,52 @@ mod tests {
             .unwrap();
         assert_eq!(child.metadata.is_sub_skill, Some(true));
         assert_eq!(result.scanned_roots, [normalized_path(&directory)]);
+
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn excludes_repository_docs_from_plugin_flat_skills() {
+        let directory = temp_dir();
+        write_skill(
+            &directory.join("SKILL.md"),
+            "name: plugin-root\ndescription: Plugin root",
+            "plugin body",
+        )
+        .await;
+        for entry in [
+            "ReadMe.md",
+            "changelog.md",
+            "LICENSE.md",
+            "Contributing.md",
+            "SECURITY.md",
+            "Code_of_Conduct.md",
+        ] {
+            tokio::fs::write(directory.join(entry), format!("# {entry}"))
+                .await
+                .unwrap();
+        }
+        tokio::fs::write(directory.join("flat.md"), "flat body")
+            .await
+            .unwrap();
+
+        let plugin = SkillRoot {
+            plugin: Some(SkillPluginContext {
+                id: "plugin-a".into(),
+                instructions: None,
+            }),
+            ..root(&directory)
+        };
+        let result = discover_file_skills(&[plugin], None).await;
+
+        assert_eq!(
+            result
+                .skills
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            ["flat", "plugin-root"]
+        );
 
         tokio::fs::remove_dir_all(directory).await.unwrap();
     }

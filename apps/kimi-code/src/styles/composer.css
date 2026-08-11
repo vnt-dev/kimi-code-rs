@@ -767,6 +767,10 @@
   max-width: 183px;
 }
 
+.effort-select .toolbar-select-menu {
+  width: 320px;
+}
+
 .permission-select .toolbar-select-trigger {
   max-width: 164px;
 }
@@ -785,11 +789,6 @@
   .effort-select .toolbar-select-trigger > svg:last-child,
   .permission-select .toolbar-select-trigger > svg:last-child {
     display: none;
-  }
-
-  .permission-select .toolbar-select-menu {
-    right: 0;
-    left: auto;
   }
 }
 

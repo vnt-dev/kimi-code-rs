@@ -32,6 +32,10 @@ import {
 import { BACKGROUND_TASK_DETAIL_TAIL } from "../app/appUtils";
 import type { PromptDraftUpdater } from "../promptDrafts";
 import type { SlashMenuItem } from "../plugins";
+import {
+  skillDisplayName,
+  sortSkillsForAddMenu,
+} from "../skillDisplayName";
 import { thinkingLevelDescription } from "../modelControls";
 import { MAX_PROMPT_ATTACHMENTS } from "../prompt/attachments";
 import type { PromptAttachment } from "../chat/liveTurns";
@@ -826,7 +830,7 @@ export function ComposerDock({
                                 {t("skills.empty")}
                               </div>
                             ) : (
-                              availableSkills.map((skill) => {
+                              sortSkillsForAddMenu(availableSkills).map((skill) => {
                                 const selected = promptSkills.some(
                                   (item) => item.name === skill.name,
                                 );
@@ -843,7 +847,7 @@ export function ComposerDock({
                                   >
                                     <Package size={15} />
                                     <span>
-                                      <strong>{skill.name}</strong>
+                                      <strong>{skillDisplayName(skill.name)}</strong>
                                       <small>{skill.description}</small>
                                     </span>
                                     {selected && <Check size={14} />}
