@@ -1,8 +1,69 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mergeDesktopInventory } from "../src/desktopInventory.ts";
-import type { DesktopState } from "../src/types.ts";
+import {
+  initialDesktopState,
+  mergeDesktopInventory,
+} from "../src/desktopInventory.ts";
+import type { DesktopState, Project, Workspace } from "../src/types.ts";
+
+test("initial desktop state opens and expands only the latest workspace", () => {
+  const projects: Project[] = [
+    {
+      id: "workspace-1",
+      name: "one",
+      path: "/one",
+      accent: "one",
+      expanded: true,
+      conversations: [
+        { id: "session-1", title: "one", createdAt: 1, updatedAt: 100 },
+      ],
+    },
+    {
+      id: "workspace-2",
+      name: "two",
+      path: "/two",
+      accent: "two",
+      expanded: true,
+      conversations: [
+        { id: "session-2", title: "latest", createdAt: 2, updatedAt: 20 },
+        { id: "session-3", title: "older", createdAt: 3, updatedAt: 10 },
+      ],
+    },
+  ];
+  const workspaces: Workspace[] = [
+    {
+      id: "workspace-1",
+      root: "/one",
+      name: "one",
+      createdAt: 1,
+      lastOpenedAt: 10,
+    },
+    {
+      id: "workspace-2",
+      root: "/two",
+      name: "two",
+      createdAt: 2,
+      lastOpenedAt: 20,
+    },
+  ];
+
+  const state = initialDesktopState(projects, workspaces);
+  assert.equal(state.activeProjectId, "workspace-2");
+  assert.equal(state.activeConversationId, "session-2");
+  assert.deepEqual(
+    state.projects.map((project) => project.expanded),
+    [false, true],
+  );
+});
+
+test("initial desktop state handles an empty inventory", () => {
+  assert.deepEqual(initialDesktopState([], []), {
+    projects: [],
+    activeProjectId: undefined,
+    activeConversationId: undefined,
+  });
+});
 
 test("desktop inventory refresh adds remote workspaces and sessions without changing selection", () => {
   const current: DesktopState = {

@@ -1,4 +1,28 @@
-import type { DesktopState } from "./types.ts";
+import type { DesktopState, Project, Workspace } from "./types.ts";
+
+export function initialDesktopState(
+  projects: readonly Project[],
+  workspaces: readonly Workspace[],
+): DesktopState {
+  const latestWorkspace = workspaces.reduce<Workspace | undefined>(
+    (latest, workspace) =>
+      !latest || workspace.lastOpenedAt > latest.lastOpenedAt
+        ? workspace
+        : latest,
+    undefined,
+  );
+  const project =
+    projects.find((candidate) => candidate.id === latestWorkspace?.id) ??
+    projects[0];
+  return {
+    projects: projects.map((candidate) => ({
+      ...candidate,
+      expanded: candidate.id === project?.id,
+    })),
+    activeProjectId: project?.id,
+    activeConversationId: project?.conversations[0]?.id,
+  };
+}
 
 export function mergeDesktopInventory(
   current: DesktopState,

@@ -18,6 +18,7 @@ import {
 } from "react";
 import {
   createAgentClient,
+  createOrTouchWorkspace,
   forkSession,
   getSharedGoalMode,
   listWorkspaceSessions,
@@ -374,6 +375,12 @@ export default function App() {
   activeConversationIdRef.current = activeConversation?.id;
   desktopRef.current = desktop;
   notificationsEnabledRef.current = notificationsEnabled;
+  useEffect(() => {
+    if (!activeProject) return;
+    void createOrTouchWorkspace(activeProject.path).catch(() => {
+      // Remembering the active workspace is best-effort and must not block navigation.
+    });
+  }, [activeProject?.id, activeProject?.path]);
   const activePromptDraft = promptDraftFor(
     promptDrafts,
     activeConversation?.id,

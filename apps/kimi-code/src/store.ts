@@ -1,4 +1,5 @@
 import { listWorkspaces, listWorkspaceSessions } from "./agentRpc";
+import { initialDesktopState } from "./desktopInventory";
 import { t } from "./i18n";
 import type {
   Conversation,
@@ -44,12 +45,7 @@ export async function loadDesktopState(): Promise<DesktopState> {
   const projects = workspaces.map((workspace, index) =>
     toProject(workspace, sessionLists[index], index),
   );
-  const project = projects[0];
-  return {
-    projects,
-    activeProjectId: project?.id,
-    activeConversationId: project?.conversations[0]?.id,
-  };
+  return initialDesktopState(projects, workspaces);
 }
 
 export function projectFromWorkspace(
