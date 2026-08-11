@@ -162,8 +162,8 @@ mod tests {
     struct Turn;
 
     impl TurnHandleContract for Turn {
-        fn id(&self) -> i64 {
-            1
+        fn id(&self) -> crate::agent::TurnId {
+            crate::agent::TurnId::new(1)
         }
         fn state(&self) -> Option<TurnState> {
             Some(TurnState::Queued)

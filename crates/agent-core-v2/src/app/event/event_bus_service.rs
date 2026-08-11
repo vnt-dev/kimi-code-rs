@@ -38,7 +38,7 @@ enum ReplayPhase {
     #[default]
     Idle,
     Pending,
-    Active(i64),
+    Active(crate::agent::TurnId),
 }
 
 #[derive(Default)]
@@ -245,11 +245,12 @@ fn replay_position(events: &[SequencedDomainEvent]) -> (ReplayPhase, Option<Stri
     (phase, pending_prompt_id)
 }
 
-fn event_turn_id(event: &DomainEvent) -> Option<i64> {
+fn event_turn_id(event: &DomainEvent) -> Option<crate::agent::TurnId> {
     event
         .fields
         .get("turnId")
         .and_then(serde_json::Value::as_i64)
+        .map(crate::agent::TurnId::new)
 }
 
 fn event_prompt_id(event: &DomainEvent) -> Option<&str> {
@@ -426,10 +427,10 @@ mod tests {
         assert_eq!(*seen.lock().unwrap(), [1, 2]);
     }
 
-    fn turn_event(event_type: &str, turn_id: i64) -> DomainEvent {
+    fn turn_event(event_type: &str, turn_id: crate::agent::TurnId) -> DomainEvent {
         DomainEvent::new(
             event_type,
-            Map::from_iter([("turnId".into(), Value::from(turn_id))]),
+            Map::from_iter([("turnId".into(), Value::from(turn_id.get()))]),
         )
     }
 
@@ -440,7 +441,7 @@ mod tests {
             "prompt.submitted",
             Map::from_iter([("promptId".into(), Value::String("p1".into()))]),
         ));
-        bus.publish(turn_event("turn.started", 1));
+        bus.publish(turn_event("turn.started", crate::agent::TurnId::new(1)));
         bus.publish(DomainEvent::new(
             "assistant.delta",
             Map::from_iter([
@@ -466,7 +467,10 @@ mod tests {
             ["prompt.submitted", "turn.started", "assistant.delta"]
         );
 
-        bus.publish(turn_event("turn.step.started", 1));
+        bus.publish(turn_event(
+            "turn.step.started",
+            crate::agent::TurnId::new(1),
+        ));
         assert_eq!(*ordinary.lock().unwrap(), ["turn.step.started"]);
         assert_eq!(
             *replayed.lock().unwrap(),
@@ -478,7 +482,7 @@ mod tests {
             ]
         );
 
-        bus.publish(turn_event("turn.ended", 1));
+        bus.publish(turn_event("turn.ended", crate::agent::TurnId::new(1)));
         let after_end = Arc::new(Mutex::new(Vec::new()));
         let after_end_sink = Arc::clone(&after_end);
         let _after_end = bus.subscribe_with_replay(Arc::new(move |event| {
@@ -489,7 +493,7 @@ mod tests {
         }));
         assert!(after_end.lock().unwrap().is_empty());
 
-        bus.publish(turn_event("turn.started", 2));
+        bus.publish(turn_event("turn.started", crate::agent::TurnId::new(2)));
         let next_turn = Arc::new(Mutex::new(Vec::new()));
         let next_turn_sink = Arc::clone(&next_turn);
         let _next_turn = bus.subscribe_with_replay(Arc::new(move |event| {
@@ -551,7 +555,7 @@ mod tests {
     #[test]
     fn replay_handoff_queues_reentrant_publications_without_duplicates() {
         let bus = Arc::new(EventBusService::new());
-        bus.publish(turn_event("turn.started", 7));
+        bus.publish(turn_event("turn.started", crate::agent::TurnId::new(7)));
         bus.publish(DomainEvent::new(
             "assistant.delta",
             Map::from_iter([("delta".into(), Value::String("before".into()))]),
@@ -583,7 +587,7 @@ mod tests {
     #[test]
     fn concurrent_replay_handoff_delivers_every_event_once() {
         let bus = Arc::new(EventBusService::new());
-        bus.publish(turn_event("turn.started", 9));
+        bus.publish(turn_event("turn.started", crate::agent::TurnId::new(9)));
         let barrier = Arc::new(Barrier::new(2));
         let publisher_bus = Arc::clone(&bus);
         let publisher_barrier = Arc::clone(&barrier);

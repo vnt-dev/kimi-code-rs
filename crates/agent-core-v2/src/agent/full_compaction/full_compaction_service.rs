@@ -144,7 +144,7 @@ struct CompactionAttemptResult {
 
 struct ActiveCompaction {
     task: FullCompactionTask,
-    origin_turn_id: Option<i64>,
+    origin_turn_id: Option<crate::agent::TurnId>,
     blocked_by_turn: AtomicBool,
     settlement: Mutex<Option<oneshot::Sender<Result<CompactionResult, FullCompactionError>>>>,
 }
@@ -164,7 +164,7 @@ struct CompactionState {
     observed_max_context_tokens_by_model: HashMap<String, u64>,
     last_compacted_token_count: Option<f64>,
     consecutive_overflow_compactions: u64,
-    active_turn_id: Option<i64>,
+    active_turn_id: Option<crate::agent::TurnId>,
 }
 
 pub struct AgentFullCompactionService {
@@ -501,7 +501,7 @@ impl AgentFullCompactionService {
         &self,
         trigger: CompactionSource,
         token_count: f64,
-        origin_turn_id: Option<i64>,
+        origin_turn_id: Option<crate::agent::TurnId>,
     ) -> Arc<ActiveCompaction> {
         let abort_controller = AbortController::new();
         let trace = Arc::new(Mutex::new(None));
@@ -640,7 +640,7 @@ impl AgentFullCompactionService {
     async fn before_step(
         &self,
         signal: AbortSignal,
-        turn_id: Option<i64>,
+        turn_id: Option<crate::agent::TurnId>,
     ) -> Result<(), FullCompactionError> {
         self.state.lock().unwrap().active_turn_id = turn_id;
         self.check_auto_compaction(true)?;
@@ -709,7 +709,7 @@ impl AgentFullCompactionService {
     async fn block(
         &self,
         signal: Option<AbortSignal>,
-        turn_id: Option<i64>,
+        turn_id: Option<crate::agent::TurnId>,
     ) -> Result<(), FullCompactionError> {
         let Some(active) = self.state.lock().unwrap().compacting.clone() else {
             return Ok(());
@@ -717,7 +717,7 @@ impl AgentFullCompactionService {
         active.blocked_by_turn.store(true, Ordering::Release);
         let mut fields = Map::new();
         if let Some(turn_id) = turn_id {
-            fields.insert("turnId".into(), Value::from(turn_id));
+            fields.insert("turnId".into(), Value::from(turn_id.get()));
         }
         self.event_bus
             .publish(DomainEvent::new("compaction.blocked", fields));
@@ -917,7 +917,7 @@ impl AgentFullCompactionService {
                         messages: Some(messages),
                         max_output_size,
                         source: Some(AgentLlmRequestSource::Operation {
-                            turn_id: active.origin_turn_id.map(|value| value as f64),
+                            turn_id: active.origin_turn_id,
                             request_kind: Some("full_compaction".into()),
                             log_fields: Some(Map::from_iter([(
                                 "droppedCount".into(),
@@ -1132,7 +1132,9 @@ impl AgentFullCompactionService {
         insert_value(
             &mut properties,
             "turn_id",
-            active.origin_turn_id.map(Value::from),
+            active
+                .origin_turn_id
+                .map(|turn_id| Value::from(turn_id.get())),
         );
         insert_json(&mut properties, "source", data.source);
         insert_value(
@@ -1217,7 +1219,9 @@ impl AgentFullCompactionService {
         insert_value(
             &mut properties,
             "turn_id",
-            active.origin_turn_id.map(Value::from),
+            active
+                .origin_turn_id
+                .map(|turn_id| Value::from(turn_id.get())),
         );
         insert_json(&mut properties, "source", data.source);
         insert_value(

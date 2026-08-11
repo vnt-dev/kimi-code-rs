@@ -123,7 +123,7 @@ pub type ForegroundTaskStartCallback = Arc<dyn Fn(String) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct ExecutableToolContext {
-    pub turn_id: u64,
+    pub turn_id: crate::agent::TurnId,
     pub tool_call_id: String,
     pub trace: Option<LlmRequestTrace>,
     pub metadata: Option<serde_json::Value>,
@@ -530,7 +530,7 @@ mod tests {
         let updates_for_callback = Arc::clone(&updates);
         let result = execution
             .execute(ExecutableToolContext {
-                turn_id: 7,
+                turn_id: crate::agent::TurnId::new(7),
                 tool_call_id: "call-1".into(),
                 trace: None,
                 metadata: None,

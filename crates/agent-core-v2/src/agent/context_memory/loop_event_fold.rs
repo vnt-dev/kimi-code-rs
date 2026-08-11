@@ -42,17 +42,25 @@ pub enum LoopRecordedEvent {
     #[serde(rename = "step.begin", rename_all = "camelCase")]
     StepBegin {
         uuid: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        turn_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            with = "crate::agent::ids::turn_id::string_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        turn_id: Option<crate::agent::TurnId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<f64>,
     },
     #[serde(rename = "step.end", rename_all = "camelCase")]
     StepEnd {
         uuid: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        turn_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            with = "crate::agent::ids::turn_id::string_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        turn_id: Option<crate::agent::TurnId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         finish_reason: Option<String>,
@@ -83,8 +91,12 @@ pub enum LoopRecordedEvent {
         part: ContentPart,
         #[serde(skip_serializing_if = "Option::is_none")]
         uuid: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        turn_id: Option<String>,
+        #[serde(
+            default,
+            with = "crate::agent::ids::turn_id::string_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        turn_id: Option<crate::agent::TurnId>,
         #[serde(skip_serializing_if = "Option::is_none")]
         step: Option<f64>,
     },
@@ -99,8 +111,12 @@ pub enum LoopRecordedEvent {
         extras: Option<Map<String, Value>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         uuid: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        turn_id: Option<String>,
+        #[serde(
+            default,
+            with = "crate::agent::ids::turn_id::string_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        turn_id: Option<crate::agent::TurnId>,
         #[serde(skip_serializing_if = "Option::is_none")]
         step: Option<f64>,
     },
@@ -343,7 +359,7 @@ mod tests {
                 args: Some(serde_json::json!({ "q": "moon" })),
                 extras: None,
                 uuid: None,
-                turn_id: Some("1".into()),
+                turn_id: Some(crate::agent::TurnId::new(1)),
                 step: Some(2.0),
             })
             .unwrap(),

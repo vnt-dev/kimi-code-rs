@@ -148,7 +148,7 @@ impl SessionInteractionService {
     }
 
     // Original: cancelPendingForTurn().
-    pub async fn cancel_pending_for_turn(&self, turn_id: f64) {
+    pub async fn cancel_pending_for_turn(&self, turn_id: crate::agent::TurnId) {
         let cancelled = {
             let mut state = self.state.lock().await;
             let ids = state
@@ -287,7 +287,7 @@ mod tests {
                         payload: serde_json::Value::Null,
                         origin: Some(InteractionOrigin {
                             agent_id: None,
-                            turn_id: Some(3.0),
+                            turn_id: Some(crate::agent::TurnId::new(3)),
                         }),
                     })
                     .await
@@ -295,7 +295,9 @@ mod tests {
         };
         tokio::task::yield_now().await;
         assert_eq!(service.list_pending(None).await.len(), 1);
-        service.cancel_pending_for_turn(3.0).await;
+        service
+            .cancel_pending_for_turn(crate::agent::TurnId::new(3))
+            .await;
         assert_eq!(
             wait.await.unwrap(),
             serde_json::json!({"cancelled": true, "reason": "turn_ended"})

@@ -37,7 +37,7 @@ pub enum UsageServiceError {
 
 #[derive(Default)]
 struct CurrentTurnState {
-    turn_id: Option<f64>,
+    turn_id: Option<crate::agent::TurnId>,
     usage: Option<TokenUsage>,
 }
 
@@ -255,7 +255,7 @@ mod tests {
         }
     }
 
-    fn turn(turn_id: f64) -> AgentLlmRequestSource {
+    fn turn(turn_id: crate::agent::TurnId) -> AgentLlmRequestSource {
         AgentLlmRequestSource::Turn {
             turn_id,
             step: None,
@@ -295,14 +295,26 @@ mod tests {
         service.record("a".into(), usage(1.0), None).unwrap();
         assert_eq!(service.status().current_turn, None);
         service
-            .record("a".into(), usage(2.0), Some(turn(7.0)))
+            .record(
+                "a".into(),
+                usage(2.0),
+                Some(turn(crate::agent::TurnId::new(7))),
+            )
             .unwrap();
         service
-            .record("b".into(), usage(3.0), Some(turn(7.0)))
+            .record(
+                "b".into(),
+                usage(3.0),
+                Some(turn(crate::agent::TurnId::new(7))),
+            )
             .unwrap();
         assert_eq!(service.status().current_turn, Some(usage(5.0)));
         service
-            .record("a".into(), usage(4.0), Some(turn(8.0)))
+            .record(
+                "a".into(),
+                usage(4.0),
+                Some(turn(crate::agent::TurnId::new(8))),
+            )
             .unwrap();
 
         let status = service.status();
@@ -328,10 +340,14 @@ mod tests {
     fn operation_source_is_session_scoped_and_does_not_change_current_turn() {
         let (_, _, _, service) = setup();
         service
-            .record("a".into(), usage(1.0), Some(turn(1.0)))
+            .record(
+                "a".into(),
+                usage(1.0),
+                Some(turn(crate::agent::TurnId::new(1))),
+            )
             .unwrap();
         let operation = AgentLlmRequestSource::Operation {
-            turn_id: Some(1.0),
+            turn_id: Some(crate::agent::TurnId::new(1)),
             request_kind: Some("compaction".into()),
             log_fields: None,
         };

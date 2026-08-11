@@ -2,14 +2,15 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/loop/turnOps.ts`.
 
-use std::sync::LazyLock;
+use std::{collections::BTreeSet, sync::LazyLock};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    _base::errors::serialize::KimiErrorPayload,
     agent::{
         context_memory::{ContextAppendLoopEventPayload, LoopRecordedEvent, PromptOrigin},
-        loop_::TurnSeed,
+        loop_::{TurnEndReason, TurnSeed},
     },
     kosong::contract::message::ContentPart,
     wire::{
@@ -18,10 +19,21 @@ use crate::{
     },
 };
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnModelState {
-    pub next_turn_id: i64,
+    pub next_turn_id: crate::agent::TurnId,
+    pub cancelled_turn_ids: Vec<crate::agent::TurnId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_ended: Option<LastEndedTurn>,
+}
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastEndedTurn {
+    pub turn_id: crate::agent::TurnId,
+    pub reason: TurnEndReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<f64>,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct TurnInputPayload {
@@ -32,13 +44,43 @@ pub struct TurnInputPayload {
 #[serde(rename_all = "camelCase")]
 pub struct CancelTurnPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<f64>,
+    pub turn_id: Option<crate::agent::TurnId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<CancelTurnTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<CancelTurnReason>,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CancelTurnTarget {
+    Active,
+    Queued,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancelTurnReason {
+    UserCancelled,
+    Aborted,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndTurnPayload {
+    pub turn_id: crate::agent::TurnId,
+    pub reason: TurnEndReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<KimiErrorPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<f64>,
 }
 
 pub static TURN_MODEL: LazyLock<ModelDef<TurnModelState>> = LazyLock::new(|| {
     define_model(
         "turn",
-        || TurnModelState { next_turn_id: 0 },
+        || TurnModelState {
+            next_turn_id: crate::agent::TurnId::new(0),
+            cancelled_turn_ids: Vec::new(),
+            last_ended: None,
+        },
         ModelOptions {
             blobs: None,
             reducers: vec![ModelCrossReducer::typed(
@@ -54,9 +96,8 @@ pub static PROMPT_TURN: LazyLock<DefinedOp<TurnModelState, TurnInputPayload>> =
             .define_op(
                 "turn.prompt",
                 DefineOpOptions::new(|state: TurnModelState, _: &TurnInputPayload| {
-                    TurnModelState {
-                        next_turn_id: state.next_turn_id + 1,
-                    }
+                    let next_turn_id = state.next_turn_id + 1;
+                    advance_turn_clock(state, next_turn_id, None)
                 }),
             )
             .expect("turn.prompt must have one global definition")
@@ -75,10 +116,36 @@ pub static CANCEL_TURN: LazyLock<DefinedOp<TurnModelState, CancelTurnPayload>> =
         TURN_MODEL
             .define_op(
                 "turn.cancel",
-                DefineOpOptions::new(|state: TurnModelState, _: &CancelTurnPayload| state),
+                DefineOpOptions::new(|state: TurnModelState, payload: &CancelTurnPayload| {
+                    let (Some(turn_id), Some(_)) = (payload.turn_id, payload.target) else {
+                        return state;
+                    };
+                    if turn_id < state.next_turn_id {
+                        return state;
+                    }
+                    let next_turn_id = state.next_turn_id;
+                    let mut cancelled_turn_ids = state.cancelled_turn_ids.clone();
+                    cancelled_turn_ids.push(turn_id);
+                    advance_turn_clock(state, next_turn_id, Some(cancelled_turn_ids))
+                }),
             )
             .expect("turn.cancel must have one global definition")
     });
+pub static END_TURN: LazyLock<DefinedOp<TurnModelState, EndTurnPayload>> = LazyLock::new(|| {
+    TURN_MODEL
+        .define_op(
+            "turn.ended",
+            DefineOpOptions::new(|mut state: TurnModelState, payload: &EndTurnPayload| {
+                state.last_ended = Some(LastEndedTurn {
+                    turn_id: payload.turn_id,
+                    reason: payload.reason,
+                    duration_ms: payload.duration_ms,
+                });
+                state
+            }),
+        )
+        .expect("turn.ended must have one global definition")
+});
 
 /// Registers the turn model, its cross-model reducer, and persisted operations.
 ///
@@ -90,48 +157,53 @@ pub(crate) fn ensure_turn_wire_registered() {
     LazyLock::force(&PROMPT_TURN);
     LazyLock::force(&STEER_TURN);
     LazyLock::force(&CANCEL_TURN);
+    LazyLock::force(&END_TURN);
 }
 
 fn observe_restored_turn_id(
-    state: TurnModelState,
+    mut state: TurnModelState,
     payload: &ContextAppendLoopEventPayload,
 ) -> TurnModelState {
     let Some(turn_id) = event_turn_id(&payload.event) else {
         return state;
     };
-    let Some(turn_id) = javascript_parse_int(turn_id) else {
-        return state;
-    };
     if turn_id >= state.next_turn_id {
-        TurnModelState {
-            next_turn_id: turn_id + 1,
-        }
-    } else {
-        state
+        let next_turn_id = turn_id + 1;
+        state = advance_turn_clock(state, next_turn_id, None);
     }
+    if state
+        .last_ended
+        .as_ref()
+        .is_some_and(|ended| turn_id > ended.turn_id)
+    {
+        state.last_ended = None;
+    }
+    state
 }
-fn event_turn_id(event: &LoopRecordedEvent) -> Option<&str> {
+fn advance_turn_clock(
+    mut state: TurnModelState,
+    mut next_turn_id: crate::agent::TurnId,
+    cancelled_turn_ids: Option<Vec<crate::agent::TurnId>>,
+) -> TurnModelState {
+    let mut pending_cancellations = cancelled_turn_ids
+        .unwrap_or_else(|| std::mem::take(&mut state.cancelled_turn_ids))
+        .into_iter()
+        .filter(|turn_id| *turn_id >= next_turn_id)
+        .collect::<BTreeSet<_>>();
+    while pending_cancellations.remove(&next_turn_id) {
+        next_turn_id = next_turn_id + 1;
+    }
+    state.next_turn_id = next_turn_id;
+    state.cancelled_turn_ids = pending_cancellations.into_iter().collect();
+    state
+}
+fn event_turn_id(event: &LoopRecordedEvent) -> Option<crate::agent::TurnId> {
     match event {
         LoopRecordedEvent::StepBegin { turn_id, .. }
         | LoopRecordedEvent::StepEnd { turn_id, .. }
         | LoopRecordedEvent::ContentPart { turn_id, .. }
-        | LoopRecordedEvent::ToolCall { turn_id, .. } => turn_id.as_deref(),
+        | LoopRecordedEvent::ToolCall { turn_id, .. } => *turn_id,
         LoopRecordedEvent::ToolResult { .. } => None,
-    }
-}
-fn javascript_parse_int(value: &str) -> Option<i64> {
-    let value = value.trim_start();
-    let end = value
-        .char_indices()
-        .take_while(|(index, character)| {
-            *index == 0 && (*character == '+' || *character == '-') || character.is_ascii_digit()
-        })
-        .last()
-        .map_or(0, |(index, character)| index + character.len_utf8());
-    if end == 0 || matches!(value.as_bytes().first(), Some(b'+') | Some(b'-')) && end == 1 {
-        None
-    } else {
-        value[..end].parse().ok()
     }
 }
 pub fn prompt_turn(seed: TurnSeed) -> Result<Op, serde_json::Error> {
@@ -146,8 +218,11 @@ pub fn steer_turn(seed: TurnSeed) -> Result<Op, serde_json::Error> {
         origin: seed.origin,
     })
 }
-pub fn cancel_turn(turn_id: Option<f64>) -> Result<Op, serde_json::Error> {
-    CANCEL_TURN.create(CancelTurnPayload { turn_id })
+pub fn cancel_turn(payload: CancelTurnPayload) -> Result<Op, serde_json::Error> {
+    CANCEL_TURN.create(payload)
+}
+pub fn end_turn(payload: EndTurnPayload) -> Result<Op, serde_json::Error> {
+    END_TURN.create(payload)
 }
 
 #[cfg(test)]
@@ -160,7 +235,7 @@ mod tests {
     fn registration_covers_every_persisted_turn_operation() {
         ensure_turn_wire_registered();
 
-        for op_type in ["turn.prompt", "turn.steer", "turn.cancel"] {
+        for op_type in ["turn.prompt", "turn.steer", "turn.cancel", "turn.ended"] {
             assert!(
                 registered_op(op_type).is_some(),
                 "{op_type} must be registered before wire restore"
@@ -176,17 +251,22 @@ mod tests {
 
     #[test]
     fn prompt_increments_and_replayed_events_advance_without_tool_results() {
-        let state = TurnModelState { next_turn_id: 2 };
+        let state = TurnModelState {
+            next_turn_id: crate::agent::TurnId::new(2),
+            cancelled_turn_ids: Vec::new(),
+            last_ended: None,
+        };
         let event = ContextAppendLoopEventPayload {
             event: LoopRecordedEvent::StepBegin {
                 uuid: "x".into(),
-                turn_id: Some("3.8".into()),
+                turn_id: Some(crate::agent::TurnId::new(3)),
                 step: None,
             },
         };
-        assert_eq!(observe_restored_turn_id(state, &event).next_turn_id, 4);
-        assert_eq!(javascript_parse_int(" -12x"), Some(-12));
-        assert_eq!(javascript_parse_int("x"), None);
+        assert_eq!(
+            observe_restored_turn_id(state, &event).next_turn_id,
+            crate::agent::TurnId::new(4)
+        );
         assert_eq!(
             PROMPT_TURN
                 .create(TurnInputPayload {
@@ -198,8 +278,67 @@ mod tests {
             "turn.prompt"
         );
         assert_eq!(
-            cancel_turn(Some(2.0)).unwrap().payload_value,
-            serde_json::json!({"turnId": 2.0})
+            cancel_turn(CancelTurnPayload {
+                turn_id: Some(crate::agent::TurnId::new(2)),
+                target: Some(CancelTurnTarget::Queued),
+                reason: Some(CancelTurnReason::UserCancelled),
+            })
+            .unwrap()
+            .payload_value,
+            serde_json::json!({
+                "turnId": 2,
+                "target": "queued",
+                "reason": "user_cancelled"
+            })
         );
+    }
+
+    #[test]
+    fn legacy_cancel_payload_accepts_float_and_prefixed_turn_ids() {
+        for (value, expected) in [
+            (serde_json::json!(2.9), 2),
+            (serde_json::json!("t100"), 100),
+        ] {
+            let payload: CancelTurnPayload =
+                serde_json::from_value(serde_json::json!({"turnId": value})).unwrap();
+            assert_eq!(payload.turn_id, Some(crate::agent::TurnId::new(expected)));
+        }
+    }
+
+    #[test]
+    fn legacy_turn_ended_record_is_restorable_without_rewriting_history() {
+        ensure_turn_wire_registered();
+        let descriptor = registered_op("turn.ended").expect("compatibility op must be registered");
+        let op = Op::from_wire(
+            descriptor,
+            serde_json::json!({
+                "turnId": 0,
+                "reason": "completed",
+                "durationMs": 24620
+            }),
+        )
+        .expect("historical turn.ended payload must remain readable");
+
+        let state = Box::new(TurnModelState {
+            next_turn_id: crate::agent::TurnId::new(0),
+            cancelled_turn_ids: Vec::new(),
+            last_ended: None,
+        });
+        let restored = op
+            .descriptor
+            .apply(state, op.payload())
+            .expect("compatibility op must apply")
+            .downcast::<TurnModelState>()
+            .expect("compatibility op must retain turn model state");
+        assert_eq!(restored.next_turn_id, crate::agent::TurnId::new(0));
+        assert_eq!(
+            restored.last_ended,
+            Some(LastEndedTurn {
+                turn_id: crate::agent::TurnId::new(0),
+                reason: TurnEndReason::Completed,
+                duration_ms: Some(24620.0),
+            })
+        );
+        assert_eq!(op.descriptor.persist(), None);
     }
 }

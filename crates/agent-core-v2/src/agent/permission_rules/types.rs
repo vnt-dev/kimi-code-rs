@@ -38,7 +38,7 @@ pub struct PermissionRule {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionApprovalResultRecord {
-    pub turn_id: f64,
+    pub turn_id: crate::agent::TurnId,
     pub tool_call_id: String,
     pub tool_name: String,
     pub action: String,

@@ -72,7 +72,7 @@ pub enum ActivityEndingReason {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityTurnState {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub origin: PromptOrigin,
     pub phase: TurnPhase,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,7 +91,7 @@ pub struct ActivityTurnState {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityLastTurnState {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub reason: TurnEndReason,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,

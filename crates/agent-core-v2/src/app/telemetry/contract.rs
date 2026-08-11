@@ -46,7 +46,7 @@ pub struct TelemetryServiceOptions {
     pub context: TelemetryProperties,
     pub session_id: Option<String>,
     pub agent_id: Option<String>,
-    pub turn_id: Option<String>,
+    pub turn_id: Option<crate::agent::TurnId>,
 }
 
 #[async_trait]

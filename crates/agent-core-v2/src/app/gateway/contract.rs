@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::{error::Error, ops::Deref, sync::Arc};
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct TurnIdResponse {
-    pub turn_id: u64,
+    pub turn_id: crate::agent::TurnId,
 }
 pub type GatewayResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 #[async_trait]
@@ -64,7 +64,10 @@ mod tests {
         assert_eq!(REST_GATEWAY_SERVICE_ID.to_string(), "restGateway");
         assert_eq!(WS_GATEWAY_SERVICE_ID.to_string(), "wsGateway");
         assert_eq!(
-            serde_json::to_value(TurnIdResponse { turn_id: 3 }).unwrap(),
+            serde_json::to_value(TurnIdResponse {
+                turn_id: crate::agent::TurnId::new(3)
+            })
+            .unwrap(),
             serde_json::json!({"turn_id":3})
         );
     }

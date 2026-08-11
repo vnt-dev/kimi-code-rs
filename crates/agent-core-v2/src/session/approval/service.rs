@@ -193,7 +193,7 @@ mod tests {
             id: id.map(str::to_owned),
             session_id: Some("session-1".into()),
             agent_id: Some("agent-1".into()),
-            turn_id: Some(2.5),
+            turn_id: Some(crate::agent::TurnId::new(2)),
             tool_call_id: Some("call-1".into()),
             tool_name: "Bash".into(),
             action: "run command".into(),
@@ -229,7 +229,7 @@ mod tests {
             approvals.interaction().list_pending(None).await[0]
                 .origin
                 .turn_id,
-            Some(2.5)
+            Some(crate::agent::TurnId::new(2))
         );
         let response = ApprovalResponse {
             decision: ApprovalDecision::Approved,

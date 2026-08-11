@@ -14,7 +14,7 @@ use crate::{
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallStartedEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub tool_call_id: String,
     pub name: String,
     pub args: Value,
@@ -36,7 +36,7 @@ impl DomainEventPayload for ToolCallStartedEvent {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolProgressEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub tool_call_id: String,
     pub update: ToolUpdate,
 }
@@ -53,7 +53,7 @@ impl DomainEventPayload for ToolProgressEvent {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolResultEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub tool_call_id: String,
     pub output: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn lifecycle_event_payloads_preserve_source_field_names_and_optional_values() {
         let started = ToolCallStartedEvent {
-            turn_id: 4,
+            turn_id: crate::agent::TurnId::new(4),
             tool_call_id: "call-1".into(),
             name: "Read".into(),
             args: json!({"path": "src/lib.rs"}),
@@ -99,7 +99,7 @@ mod tests {
         );
 
         let progress = ToolProgressEvent {
-            turn_id: 4,
+            turn_id: crate::agent::TurnId::new(4),
             tool_call_id: "call-1".into(),
             update: ToolUpdate {
                 kind: ToolUpdateKind::Progress,
@@ -120,7 +120,7 @@ mod tests {
         );
 
         let result = ToolResultEvent {
-            turn_id: 4,
+            turn_id: crate::agent::TurnId::new(4),
             tool_call_id: "call-1".into(),
             output: json!("done"),
             is_error: Some(false),

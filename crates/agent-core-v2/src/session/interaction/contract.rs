@@ -22,7 +22,7 @@ pub struct InteractionOrigin {
     // TypeScript `number` values are IEEE-754 doubles. Agent turn ids are
     // normally integral, but the interaction protocol itself does not impose
     // that narrower constraint.
-    pub turn_id: Option<f64>,
+    pub turn_id: Option<crate::agent::TurnId>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

@@ -165,25 +165,25 @@ struct PendingContinuation {
     id: u64,
     receipt: crate::agent::loop_::EnqueueReceipt,
     goal_id: String,
-    turn_id: Option<i64>,
+    turn_id: Option<crate::agent::TurnId>,
 }
 
 #[derive(Default)]
 struct RuntimeState {
-    live_turn_id: Option<i64>,
-    goal_driven_turns: HashMap<i64, String>,
-    counted_goal_turns: HashSet<i64>,
-    goal_starter_turns: HashSet<i64>,
-    goal_outcome_tool_result_turns: HashMap<i64, String>,
-    goal_outcome_continuation_turns: HashSet<i64>,
-    budget_grace_turns: HashSet<i64>,
-    pending_continuation_goals: HashMap<i64, String>,
-    goal_turn_targets: HashMap<i64, String>,
-    exhausted_turn_budget_goals: HashMap<i64, String>,
+    live_turn_id: Option<crate::agent::TurnId>,
+    goal_driven_turns: HashMap<crate::agent::TurnId, String>,
+    counted_goal_turns: HashSet<crate::agent::TurnId>,
+    goal_starter_turns: HashSet<crate::agent::TurnId>,
+    goal_outcome_tool_result_turns: HashMap<crate::agent::TurnId, String>,
+    goal_outcome_continuation_turns: HashSet<crate::agent::TurnId>,
+    budget_grace_turns: HashSet<crate::agent::TurnId>,
+    pending_continuation_goals: HashMap<crate::agent::TurnId, String>,
+    goal_turn_targets: HashMap<crate::agent::TurnId, String>,
+    exhausted_turn_budget_goals: HashMap<crate::agent::TurnId, String>,
     wall_clock_deadline: Option<DisposableHandle>,
     live_wall_clock_started_at: Option<f64>,
     pending_continuation: Option<PendingContinuation>,
-    resume_continuation: Option<(i64, String)>,
+    resume_continuation: Option<(crate::agent::TurnId, String)>,
     next_pending_id: u64,
 }
 
@@ -570,7 +570,11 @@ impl AgentGoalService {
         Ok(Some(snapshot))
     }
 
-    fn handle_turn_launched(&self, turn_id: i64, origin: &PromptOrigin) -> GoalServiceResult<()> {
+    fn handle_turn_launched(
+        &self,
+        turn_id: crate::agent::TurnId,
+        origin: &PromptOrigin,
+    ) -> GoalServiceResult<()> {
         {
             let mut runtime = self.state.lock().unwrap();
             runtime.live_turn_id = Some(turn_id);
@@ -672,7 +676,7 @@ impl AgentGoalService {
         let Some(AgentLlmRequestSource::Turn { turn_id, .. }) = &context.source else {
             return Ok(());
         };
-        let turn_id = *turn_id as i64;
+        let turn_id = *turn_id;
         let goal_id = self
             .state
             .lock()
@@ -860,7 +864,10 @@ impl AgentGoalService {
         Ok(())
     }
 
-    fn clear_turn_tracking(&self, turn_id: i64) -> (Option<String>, Option<String>, bool) {
+    fn clear_turn_tracking(
+        &self,
+        turn_id: crate::agent::TurnId,
+    ) -> (Option<String>, Option<String>, bool) {
         let mut runtime = self.state.lock().unwrap();
         if runtime
             .pending_continuation
@@ -1065,7 +1072,7 @@ impl AgentGoalService {
         self.goal_state().as_ref().map(|state| &state.goal_id) != Some(&goal_id)
     }
 
-    fn goal_turn_target(&self, turn_id: i64) -> Option<String> {
+    fn goal_turn_target(&self, turn_id: crate::agent::TurnId) -> Option<String> {
         let runtime = self.state.lock().unwrap();
         runtime
             .goal_turn_targets
@@ -1379,14 +1386,18 @@ impl AgentGoalServiceContract for AgentGoalService {
         })
     }
 
-    fn is_goal_tool_target(&self, turn_id: f64, goal_id: &str) -> GoalServiceResult<bool> {
+    fn is_goal_tool_target(
+        &self,
+        turn_id: crate::agent::TurnId,
+        goal_id: &str,
+    ) -> GoalServiceResult<bool> {
         self.assert_supported_agent()?;
         Ok(self
             .state
             .lock()
             .unwrap()
             .goal_turn_targets
-            .get(&(turn_id as i64))
+            .get(&turn_id)
             .is_some_and(|target| target == goal_id))
     }
 
@@ -2024,7 +2035,7 @@ mod tests {
             }
         }
 
-        fn cancel(&self, _: Option<i64>, _: Option<LoopValue>) -> bool {
+        fn cancel(&self, _: Option<crate::agent::TurnId>, _: Option<LoopValue>) -> bool {
             true
         }
 

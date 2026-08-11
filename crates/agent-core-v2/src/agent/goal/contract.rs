@@ -58,7 +58,11 @@ pub type GoalServiceResult<T> = Result<T, GoalServiceError>;
 #[async_trait]
 pub trait AgentGoalServiceContract: Disposable + Send + Sync {
     fn get_goal(&self) -> GoalServiceResult<GoalToolResult>;
-    fn is_goal_tool_target(&self, turn_id: f64, goal_id: &str) -> GoalServiceResult<bool>;
+    fn is_goal_tool_target(
+        &self,
+        turn_id: crate::agent::TurnId,
+        goal_id: &str,
+    ) -> GoalServiceResult<bool>;
     async fn create_goal(
         &self,
         input: CreateGoalInput,

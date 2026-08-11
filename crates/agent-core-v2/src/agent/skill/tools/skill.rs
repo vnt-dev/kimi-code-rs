@@ -505,7 +505,7 @@ mod tests {
 
     fn execution_context() -> ExecutableToolContext {
         ExecutableToolContext {
-            turn_id: 0,
+            turn_id: crate::agent::TurnId::new(0),
             tool_call_id: "call_skill".into(),
             trace: None,
             metadata: None,

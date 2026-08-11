@@ -79,7 +79,7 @@ struct State {
     call_key_by_call_id: HashMap<String, String>,
     consecutive_key: Option<String>,
     consecutive_count: u64,
-    active_turn_id: Option<i64>,
+    active_turn_id: Option<crate::agent::TurnId>,
     active_step: u64,
 }
 
@@ -88,7 +88,7 @@ struct DedupTelemetryInput<'a> {
     name: &'a str,
     args: &'a serde_json::Value,
     dup_type: ToolCallDupType,
-    turn_id: Option<i64>,
+    turn_id: Option<crate::agent::TurnId>,
     step: u64,
     trace: Option<&'a LlmRequestTrace>,
 }
@@ -206,7 +206,7 @@ impl AgentToolDedupeService {
         Ok(())
     }
 
-    fn begin_step(&self, turn_id: i64, step: u64) {
+    fn begin_step(&self, turn_id: crate::agent::TurnId, step: u64) {
         let mut state = self.state.lock().unwrap();
         if state.active_turn_id != Some(turn_id) {
             state.active_turn_id = Some(turn_id);
@@ -302,7 +302,7 @@ impl AgentToolDedupeService {
         self.executor
             .record_dup_type(input.call_id.into(), input.dup_type);
         let _ = self.telemetry.track_event(&ToolCallDedupDetectedEvent {
-            turn_id: input.turn_id.and_then(|id| u64::try_from(id).ok()),
+            turn_id: input.turn_id,
             step_no: input.step,
             tool_call_id: input.call_id.into(),
             tool_name: input.name.into(),
@@ -385,7 +385,7 @@ impl AgentToolDedupeService {
         };
         if streak >= 2 {
             let _ = self.telemetry.track_event(&ToolCallRepeatEvent {
-                turn_id: turn_id.and_then(|id| u64::try_from(id).ok()),
+                turn_id,
                 tool_name: tool_name.into(),
                 repeat_count: streak,
                 action,
@@ -521,7 +521,7 @@ mod tests {
         fn status(&self) -> AgentLoopStatus {
             panic!("not used")
         }
-        fn cancel(&self, _: Option<i64>, _: Option<LoopValue>) -> bool {
+        fn cancel(&self, _: Option<crate::agent::TurnId>, _: Option<LoopValue>) -> bool {
             false
         }
         async fn settled(&self) {}
@@ -622,7 +622,7 @@ mod tests {
             AgentToolExecutorServiceHandle(Arc::clone(&executor)),
         )
         .unwrap();
-        dedupe.begin_step(1, 1);
+        dedupe.begin_step(crate::agent::TurnId::new(1), 1);
         let calls = ["original", "duplicate"]
             .into_iter()
             .map(|id| ToolCall {
@@ -641,7 +641,7 @@ mod tests {
                     calls,
                     ToolExecutorExecuteOptions {
                         signal: AbortController::new().signal(),
-                        turn_id: 1,
+                        turn_id: crate::agent::TurnId::new(1),
                         trace: None,
                         on_tool_call: None,
                     },

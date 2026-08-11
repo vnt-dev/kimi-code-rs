@@ -299,7 +299,7 @@ impl LoopErrorHandler for StepRetryHandler {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RetryEvent {
-    turn_id: i64,
+    turn_id: crate::agent::TurnId,
     step: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     step_id: Option<String>,
@@ -364,7 +364,7 @@ fn retry_confirmation_request(
             "step-retry:{}:{step}:{step_id}:{failed_attempt}",
             context.turn_id
         )),
-        turn_id: u64::try_from(context.turn_id).ok(),
+        turn_id: Some(context.turn_id),
         tool_call_id: None,
         presentation: Some(QuestionPresentation::RetryConfirmation),
         questions: vec![QuestionItem {

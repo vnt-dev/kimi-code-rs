@@ -497,7 +497,7 @@ mod tests {
         assert!(execution.matches_rule("bash-*"));
         let result = execution
             .execute(ExecutableToolContext {
-                turn_id: 1,
+                turn_id: crate::agent::TurnId::new(1),
                 tool_call_id: "c".into(),
                 trace: None,
                 metadata: None,

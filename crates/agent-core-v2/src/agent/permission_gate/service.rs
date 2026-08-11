@@ -275,7 +275,7 @@ impl AgentPermissionGate {
             id: None,
             session_id: Some(self.session.session_id.clone()),
             agent_id: Some(self.scope.agent_id.clone()),
-            turn_id: Some(context.turn_id as f64),
+            turn_id: Some(context.turn_id),
             tool_call_id: Some(context.tool_call.id.clone()),
             tool_name: name.clone(),
             action: action.clone(),
@@ -353,7 +353,7 @@ impl AgentPermissionGate {
         }
         self.rules
             .record_approval_result(PermissionApprovalResultRecord {
-                turn_id: context.turn_id as f64,
+                turn_id: context.turn_id,
                 tool_call_id: context.tool_call.id.clone(),
                 tool_name: name.clone(),
                 action,
@@ -558,8 +558,8 @@ fn display_kind(display: &ToolInputDisplay) -> String {
         .unwrap_or_else(|| "generic".into())
 }
 
-fn turn_id(value: i64) -> u64 {
-    u64::try_from(value).unwrap_or_default()
+fn turn_id(value: crate::agent::TurnId) -> crate::agent::TurnId {
+    value
 }
 
 fn telemetry_mode(mode: PermissionMode) -> TelemetryPermissionMode {
@@ -816,7 +816,7 @@ mod tests {
         });
         ResolvedToolExecutionHookContext::new(
             crate::agent::tool_executor::ToolExecutionHookContext {
-                turn_id: 1,
+                turn_id: crate::agent::TurnId::new(1),
                 signal,
                 trace: None,
                 tool_call: ToolCall {

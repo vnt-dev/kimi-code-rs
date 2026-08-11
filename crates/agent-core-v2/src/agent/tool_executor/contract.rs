@@ -32,7 +32,7 @@ pub type ToolCallStartedHandler = Arc<dyn Fn(ToolCallStartedPayload) + Send + Sy
 #[derive(Clone)]
 pub struct ToolExecutorExecuteOptions {
     pub signal: AbortSignal,
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub trace: Option<LlmRequestTrace>,
     pub on_tool_call: Option<ToolCallStartedHandler>,
 }

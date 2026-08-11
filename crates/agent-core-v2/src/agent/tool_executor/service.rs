@@ -646,9 +646,7 @@ impl ExecutorRunner {
         duration_ms: u64,
         options: &ToolExecutorExecuteOptions,
     ) {
-        let Ok(turn_id) = u64::try_from(options.turn_id) else {
-            return;
-        };
+        let turn_id = options.turn_id;
         let outcome = match tool_telemetry_outcome(result) {
             super::ToolTelemetryOutcome::Success => ToolCallOutcome::Success,
             super::ToolTelemetryOutcome::Error => ToolCallOutcome::Error,
@@ -832,7 +830,7 @@ mod tests {
             }],
             ToolExecutorExecuteOptions {
                 signal: AbortController::new().signal(),
-                turn_id: 3,
+                turn_id: crate::agent::TurnId::new(3),
                 trace: None,
                 on_tool_call: None,
             },
@@ -890,7 +888,7 @@ mod tests {
             }],
             ToolExecutorExecuteOptions {
                 signal: AbortController::new().signal(),
-                turn_id: 4,
+                turn_id: crate::agent::TurnId::new(4),
                 trace: None,
                 on_tool_call: None,
             },

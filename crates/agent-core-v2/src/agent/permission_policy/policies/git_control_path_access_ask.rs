@@ -110,7 +110,7 @@ mod tests {
         execution.accesses = Some(ToolAccess::read_file(path));
         ResolvedToolExecutionHookContext::new(
             ToolExecutionHookContext {
-                turn_id: 1,
+                turn_id: crate::agent::TurnId::new(1),
                 signal: AbortController::new().signal(),
                 trace: None,
                 tool_call: ToolCall {

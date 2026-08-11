@@ -11,7 +11,7 @@ pub type AgentLlmRequestLogFields = Map<String, Value>;
 pub enum AgentLlmRequestSource {
     Turn {
         #[serde(rename = "turnId")]
-        turn_id: f64,
+        turn_id: crate::agent::TurnId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<f64>,
         #[serde(rename = "logFields", default, skip_serializing_if = "Option::is_none")]
@@ -19,7 +19,7 @@ pub enum AgentLlmRequestSource {
     },
     Operation {
         #[serde(rename = "turnId", default, skip_serializing_if = "Option::is_none")]
-        turn_id: Option<f64>,
+        turn_id: Option<crate::agent::TurnId>,
         #[serde(
             rename = "requestKind",
             default,
@@ -32,7 +32,7 @@ pub enum AgentLlmRequestSource {
 }
 
 impl AgentLlmRequestSource {
-    pub fn turn_id(&self) -> Option<f64> {
+    pub fn turn_id(&self) -> Option<crate::agent::TurnId> {
         match self {
             Self::Turn { turn_id, .. } => Some(*turn_id),
             Self::Operation { turn_id, .. } => *turn_id,
@@ -53,19 +53,19 @@ mod tests {
     #[test]
     fn discriminated_union_preserves_camel_case_fields_and_optional_values() {
         let turn = AgentLlmRequestSource::Turn {
-            turn_id: 7.0,
+            turn_id: crate::agent::TurnId::new(7),
             step: Some(2.0),
             log_fields: Some(Map::from_iter([("projection".into(), json!("strict"))])),
         };
         assert_eq!(
             serde_json::to_value(&turn).unwrap(),
             json!({
-                "type": "turn", "turnId": 7.0, "step": 2.0,
+                "type": "turn", "turnId": 7, "step": 2.0,
                 "logFields": {"projection": "strict"}
             })
         );
         assert!(turn.is_turn());
-        assert_eq!(turn.turn_id(), Some(7.0));
+        assert_eq!(turn.turn_id(), Some(crate::agent::TurnId::new(7)));
 
         let operation = AgentLlmRequestSource::Operation {
             turn_id: None,

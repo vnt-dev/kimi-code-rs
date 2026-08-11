@@ -521,7 +521,7 @@ mod tests {
         ));
         let result = execution
             .execute(ExecutableToolContext {
-                turn_id: 1,
+                turn_id: crate::agent::TurnId::new(1),
                 tool_call_id: "call-1".into(),
                 trace: None,
                 metadata: None,

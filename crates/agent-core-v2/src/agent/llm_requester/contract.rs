@@ -56,7 +56,10 @@ pub struct PreparedTurnRequestConfig {
 
 #[async_trait]
 pub trait AgentLlmRequesterServiceContract: Send + Sync {
-    fn prepare_turn_config(&self, turn_id: i64) -> Option<PreparedTurnRequestConfig>;
+    fn prepare_turn_config(
+        &self,
+        turn_id: crate::agent::TurnId,
+    ) -> Option<PreparedTurnRequestConfig>;
     async fn request(
         &self,
         overrides: Option<AgentLlmRequestOverrides>,

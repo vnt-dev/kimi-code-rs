@@ -37,7 +37,7 @@ pub enum TurnEndReason {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartedEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub origin: PromptOrigin,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
@@ -47,7 +47,7 @@ pub struct TurnStartedEvent {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnEndedEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub reason: TurnEndReason,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<KimiErrorPayload>,
@@ -69,13 +69,13 @@ pub struct TurnFileChange {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnFilesChangedEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub files: Vec<TurnFileChange>,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStepStartedEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub step: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_id: Option<String>,
@@ -83,7 +83,7 @@ pub struct TurnStepStartedEvent {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStepCompletedEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub step: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_id: Option<String>,
@@ -111,7 +111,7 @@ pub struct TurnStepCompletedEvent {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStepInterruptedEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub step: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_id: Option<String>,
@@ -122,25 +122,25 @@ pub struct TurnStepInterruptedEvent {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantDeltaEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub delta: String,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantContentEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub content: ContentPart,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThinkingDeltaEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub delta: String,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallDeltaEvent {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub tool_call_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn turn_started_keeps_prompt_text_and_structured_user_message() {
         let event = TurnStartedEvent {
-            turn_id: 42,
+            turn_id: crate::agent::TurnId::new(42),
             origin: PromptOrigin::User,
             prompt: Some("hello".into()),
             user_message: Some(LiveUserMessage {
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn turn_file_changes_use_frontend_wire_names() {
         let event = TurnFilesChangedEvent {
-            turn_id: 7,
+            turn_id: crate::agent::TurnId::new(7),
             files: vec![TurnFileChange {
                 path: "src/lib.rs".into(),
                 change: FsChangeAction::Modified,

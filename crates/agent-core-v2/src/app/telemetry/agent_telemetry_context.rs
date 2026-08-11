@@ -32,7 +32,7 @@ pub struct AgentTelemetryContext {
     pub mode: AgentTelemetryMode,
     pub provider_type: Option<String>,
     pub protocol: Option<String>,
-    pub turn_id: Option<u64>,
+    pub turn_id: Option<crate::agent::TurnId>,
     pub trace_id: Option<String>,
 }
 
@@ -57,7 +57,7 @@ impl AgentTelemetryContext {
         extend_optional_string(&mut properties, "provider_type", &self.provider_type);
         extend_optional_string(&mut properties, "protocol", &self.protocol);
         if let Some(turn_id) = self.turn_id {
-            properties.insert("turn_id".into(), Some(Value::from(turn_id)));
+            properties.insert("turn_id".into(), Some(Value::from(turn_id.get())));
         }
         extend_optional_string(&mut properties, "trace_id", &self.trace_id);
         properties
@@ -80,7 +80,7 @@ pub struct AgentTelemetryContextPatch {
     pub mode: Option<AgentTelemetryMode>,
     pub provider_type: Option<Option<String>>,
     pub protocol: Option<Option<String>>,
-    pub turn_id: Option<Option<u64>>,
+    pub turn_id: Option<Option<crate::agent::TurnId>>,
     pub trace_id: Option<Option<String>>,
 }
 

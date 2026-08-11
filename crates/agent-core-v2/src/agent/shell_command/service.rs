@@ -316,7 +316,7 @@ impl AgentShellCommandService {
             .execute(ExecutableToolContext {
                 // The source uses -1 as a sentinel. Rust's execution contract
                 // uses u64, so MAX is the lossless sentinel adaptation.
-                turn_id: u64::MAX,
+                turn_id: crate::agent::TurnId::MAX,
                 tool_call_id: "shell-command".into(),
                 trace: None,
                 metadata: None,

@@ -346,7 +346,7 @@ async fn execute_in_background(
 async fn execute_question(
     services: QuestionExecutionServices,
     args: AskUserQuestionInput,
-    turn_id: u64,
+    turn_id: crate::agent::TurnId,
     tool_call_id: String,
     signal: AbortSignal,
     trace: Option<LlmRequestTrace>,

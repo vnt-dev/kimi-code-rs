@@ -1735,7 +1735,7 @@ mod tests {
 
     struct FakeStep {
         id: String,
-        turn_id: i64,
+        turn_id: crate::agent::TurnId,
         controller: AbortController,
     }
 
@@ -1744,7 +1744,7 @@ mod tests {
             &self.id
         }
 
-        fn turn_id(&self) -> i64 {
+        fn turn_id(&self) -> crate::agent::TurnId {
             self.turn_id
         }
 
@@ -1766,14 +1766,14 @@ mod tests {
     }
 
     struct FakeTurn {
-        id: i64,
+        id: crate::agent::TurnId,
         state: Mutex<TurnState>,
         controller: AbortController,
         result: Deferred<LoopRunResult>,
     }
 
     impl FakeTurn {
-        fn new(id: i64) -> Self {
+        fn new(id: crate::agent::TurnId) -> Self {
             Self {
                 id,
                 state: Mutex::new(TurnState::Running),
@@ -1793,7 +1793,7 @@ mod tests {
     }
 
     impl TurnHandleContract for FakeTurn {
-        fn id(&self) -> i64 {
+        fn id(&self) -> crate::agent::TurnId {
             self.id
         }
 
@@ -1846,7 +1846,7 @@ mod tests {
             })
         }
 
-        fn complete(&self, turn_id: i64) {
+        fn complete(&self, turn_id: crate::agent::TurnId) {
             let turn = self.active.lock().unwrap().clone().unwrap();
             assert_eq!(turn.id, turn_id);
             turn.settle(LoopRunResult::Completed {
@@ -1879,7 +1879,9 @@ mod tests {
                     .clone()
                     .expect("steer tests require an active turn")
             } else {
-                let turn = Arc::new(FakeTurn::new(self.next_id.fetch_add(1, Ordering::SeqCst)));
+                let turn = Arc::new(FakeTurn::new(crate::agent::TurnId::new(
+                    self.next_id.fetch_add(1, Ordering::SeqCst),
+                )));
                 *self.active.lock().unwrap() = Some(Arc::clone(&turn));
                 turn
             };
@@ -1925,7 +1927,7 @@ mod tests {
             }
         }
 
-        fn cancel(&self, turn_id: Option<i64>, reason: Option<LoopValue>) -> bool {
+        fn cancel(&self, turn_id: Option<crate::agent::TurnId>, reason: Option<LoopValue>) -> bool {
             self.active
                 .lock()
                 .unwrap()
@@ -2054,7 +2056,7 @@ mod tests {
 
         let first = scheduler.enqueue(prompt("first-run")).await.unwrap();
         assert_eq!(first.snapshot().state, PromptState::Running);
-        loop_service.complete(1);
+        loop_service.complete(crate::agent::TurnId::new(1));
         assert_eq!(
             first.completion().await.state,
             PromptCompletionState::Completed
@@ -2066,7 +2068,7 @@ mod tests {
         let second = scheduler.enqueue(prompt("second-run")).await.unwrap();
         assert_eq!(second.snapshot().state, PromptState::Running);
         assert_eq!(scheduler.list().active.unwrap().id, "second-run");
-        loop_service.complete(2);
+        loop_service.complete(crate::agent::TurnId::new(2));
         assert_eq!(
             second.completion().await.state,
             PromptCompletionState::Completed
@@ -2116,7 +2118,7 @@ mod tests {
         assert_eq!(second.snapshot().state, PromptState::Pending);
         assert_eq!(scheduler.list().pending[0].id, "second");
 
-        loop_service.complete(1);
+        loop_service.complete(crate::agent::TurnId::new(1));
         wait_for_active(&scheduler, "second").await;
         assert_eq!(second.snapshot().state, PromptState::Running);
         assert_eq!(
@@ -2180,7 +2182,7 @@ mod tests {
             assert_eq!(events[0].fields["userMessages"][0]["promptId"], "child");
         }
 
-        loop_service.complete(1);
+        loop_service.complete(crate::agent::TurnId::new(1));
         assert_eq!(
             parent.completion().await.state,
             PromptCompletionState::Completed

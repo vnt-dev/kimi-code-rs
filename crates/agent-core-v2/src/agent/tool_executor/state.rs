@@ -15,7 +15,7 @@ struct State {
     unavailable_tool_describer: Option<UnavailableToolDescriber>,
     tool_call_guard: Option<ToolCallGuard>,
     tool_call_dup_types: std::collections::HashMap<String, ToolCallDupType>,
-    dup_type_turn_id: Option<i64>,
+    dup_type_turn_id: Option<crate::agent::TurnId>,
 }
 
 /// Shared mutable state for one agent-scoped executor service.
@@ -39,7 +39,7 @@ impl ToolExecutorState {
     }
 
     /// Original: the `execute()` turn-boundary reset before preflight.
-    pub fn begin_turn(&self, turn_id: i64) {
+    pub fn begin_turn(&self, turn_id: crate::agent::TurnId) {
         let mut state = self.inner.lock().unwrap();
         if state.dup_type_turn_id != Some(turn_id) {
             state.dup_type_turn_id = Some(turn_id);
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn duplicate_types_are_consumed_and_reset_on_a_new_turn() {
         let state = ToolExecutorState::new();
-        state.begin_turn(2);
+        state.begin_turn(crate::agent::TurnId::new(2));
         state.record_dup_type("call-a".into(), ToolCallDupType::SameStep);
         assert_eq!(
             state.take_dup_type("call-a"),
@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(state.take_dup_type("call-a"), None);
 
         state.record_dup_type("call-b".into(), ToolCallDupType::CrossStep);
-        state.begin_turn(3);
+        state.begin_turn(crate::agent::TurnId::new(3));
         assert_eq!(state.take_dup_type("call-b"), None);
     }
 

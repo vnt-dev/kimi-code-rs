@@ -105,7 +105,7 @@ struct LlmRequestRecordInput<'a> {
 
 #[derive(Default)]
 struct TurnConfigCache {
-    configs: Arc<Mutex<HashMap<i64, TurnRequestConfig>>>,
+    configs: Arc<Mutex<HashMap<crate::agent::TurnId, TurnRequestConfig>>>,
 }
 
 impl TurnConfigCache {
@@ -115,11 +115,11 @@ impl TurnConfigCache {
         }
     }
 
-    fn get(&self, id: i64) -> Option<TurnRequestConfig> {
+    fn get(&self, id: crate::agent::TurnId) -> Option<TurnRequestConfig> {
         self.configs.lock().unwrap().get(&id).cloned()
     }
 
-    fn insert(&self, id: i64, config: TurnRequestConfig) {
+    fn insert(&self, id: crate::agent::TurnId, config: TurnRequestConfig) {
         let mut configs = self.configs.lock().unwrap();
         configs.retain(|key, _| *key >= id);
         configs.insert(id, config);
@@ -171,8 +171,8 @@ pub struct AgentLlmRequesterService {
     config: ConfigServiceHandle,
     wire: WireServiceHandle,
     turn_configs: TurnConfigCache,
-    media_degraded_turns: Arc<Mutex<HashSet<i64>>>,
-    media_stripped_turns: Arc<Mutex<HashMap<i64, MediaStripSnapshot>>>,
+    media_degraded_turns: Arc<Mutex<HashSet<crate::agent::TurnId>>>,
+    media_stripped_turns: Arc<Mutex<HashMap<crate::agent::TurnId, MediaStripSnapshot>>>,
 }
 
 impl AgentLlmRequesterService {
@@ -208,7 +208,10 @@ impl AgentLlmRequesterService {
         }
     }
 
-    fn turn_config(&self, id: i64) -> Result<TurnRequestConfig, AgentLlmRequestError> {
+    fn turn_config(
+        &self,
+        id: crate::agent::TurnId,
+    ) -> Result<TurnRequestConfig, AgentLlmRequestError> {
         if let Some(config) = self.turn_configs.get(id) {
             return Ok(config);
         }
@@ -646,7 +649,10 @@ impl AgentLlmRequesterService {
 
 #[async_trait]
 impl AgentLlmRequesterServiceContract for AgentLlmRequesterService {
-    fn prepare_turn_config(&self, turn_id: i64) -> Option<PreparedTurnRequestConfig> {
+    fn prepare_turn_config(
+        &self,
+        turn_id: crate::agent::TurnId,
+    ) -> Option<PreparedTurnRequestConfig> {
         if !self.profile.has_provider() {
             return None;
         }
@@ -712,9 +718,9 @@ impl AgentLlmRequesterService {
     }
 }
 
-fn source_turn_id(source: Option<&AgentLlmRequestSource>) -> Option<i64> {
+fn source_turn_id(source: Option<&AgentLlmRequestSource>) -> Option<crate::agent::TurnId> {
     match source {
-        Some(AgentLlmRequestSource::Turn { turn_id, .. }) => Some(*turn_id as i64),
+        Some(AgentLlmRequestSource::Turn { turn_id, .. }) => Some(*turn_id),
         _ => None,
     }
 }
@@ -1038,7 +1044,7 @@ mod tests {
         let service_cache = TurnConfigCache::default();
         let task_cache = service_cache.clone_for_task();
         service_cache.insert(
-            7,
+            crate::agent::TurnId::new(7),
             (
                 ProfileModelContext {
                     model_alias: "frozen-model".into(),
@@ -1055,7 +1061,9 @@ mod tests {
             ),
         );
 
-        let config = task_cache.get(7).expect("task clone must see turn config");
+        let config = task_cache
+            .get(crate::agent::TurnId::new(7))
+            .expect("task clone must see turn config");
         assert_eq!(config.0.model_alias, "frozen-model");
         assert_eq!(config.0.thinking_level.as_str(), "high");
         assert_eq!(config.2, "frozen system prompt");
@@ -1064,7 +1072,7 @@ mod tests {
     #[test]
     fn request_fields_match_typescript_source_mapping() {
         let turn = AgentLlmRequestSource::Turn {
-            turn_id: 7.0,
+            turn_id: crate::agent::TurnId::new(7),
             step: Some(2.0),
             log_fields: Some(Map::from_iter([(
                 "attempt".into(),
@@ -1084,7 +1092,7 @@ mod tests {
         assert_eq!(string_field(&degraded, "turnStep").as_deref(), Some("7.2"));
 
         let compaction = AgentLlmRequestSource::Operation {
-            turn_id: Some(7.0),
+            turn_id: Some(crate::agent::TurnId::new(7)),
             request_kind: Some("full_compaction".into()),
             log_fields: Some(Map::from_iter([("droppedCount".into(), Value::from(3))])),
         };

@@ -58,7 +58,7 @@ impl SessionQuestionService {
             kind: InteractionKind::Question,
             payload: question_request_to_value(&request),
             origin: Some(InteractionOrigin {
-                turn_id: request.turn_id.map(|turn_id| turn_id as f64),
+                turn_id: request.turn_id,
                 agent_id,
             }),
         };
@@ -92,7 +92,7 @@ impl SessionQuestionService {
                 kind: InteractionKind::Question,
                 payload: question_request_to_value(&request),
                 origin: Some(InteractionOrigin {
-                    turn_id: request.turn_id.map(|turn_id| turn_id as f64),
+                    turn_id: request.turn_id,
                     agent_id: None,
                 }),
             })

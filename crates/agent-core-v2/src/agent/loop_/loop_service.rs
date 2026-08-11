@@ -92,15 +92,15 @@ use crate::{
 
 use super::{
     AGENT_LOOP_SERVICE_ID, AfterStepContext, AgentLoopHooks, AgentLoopServiceContract,
-    AgentLoopServiceHandle, AgentLoopState, AgentLoopStatus, BeforeStepContext, EnqueueReceipt,
-    LOOP_CONTROL_SECTION, LoopControl, LoopErrorContext, LoopErrorHandler,
-    LoopErrorHandlerRegistrationOptions, LoopRunOptions, LoopRunResult, LoopValue, StepAssignment,
-    StepAssignmentFuture, StepEnqueueOptions, StepHandle, StepHandleContract, StepRequest,
-    StepRequestAdmission, StepRequestBatch, StepRequestQueue, StepRequestState, StepResult,
-    StepResultFuture, StepState, TURN_MODEL, TurnHandle, TurnHandleContract, TurnReadyFuture,
-    TurnResultFuture, TurnSeed, TurnState, cancel_turn, create_max_steps_exceeded_error,
-    ensure_turn_wire_registered, is_displayable_prompt_origin, is_max_steps_exceeded_error,
-    prompt_turn, turn_prompt_text,
+    AgentLoopServiceHandle, AgentLoopState, AgentLoopStatus, BeforeStepContext, CancelTurnPayload,
+    CancelTurnReason, CancelTurnTarget, EndTurnPayload, EnqueueReceipt, LOOP_CONTROL_SECTION,
+    LoopControl, LoopErrorContext, LoopErrorHandler, LoopErrorHandlerRegistrationOptions,
+    LoopRunOptions, LoopRunResult, LoopValue, StepAssignment, StepAssignmentFuture,
+    StepEnqueueOptions, StepHandle, StepHandleContract, StepRequest, StepRequestAdmission,
+    StepRequestBatch, StepRequestQueue, StepRequestState, StepResult, StepResultFuture, StepState,
+    TURN_MODEL, TurnHandle, TurnHandleContract, TurnReadyFuture, TurnResultFuture, TurnSeed,
+    TurnState, cancel_turn, create_max_steps_exceeded_error, end_turn, ensure_turn_wire_registered,
+    is_displayable_prompt_origin, is_max_steps_exceeded_error, prompt_turn, turn_prompt_text,
 };
 
 type AssignmentPromise = Promise<Result<StepAssignment, LoopValue>>;
@@ -147,7 +147,7 @@ struct StepMutable {
 
 struct StepHandleImpl {
     id: String,
-    turn_id: i64,
+    turn_id: crate::agent::TurnId,
     request: Arc<dyn StepRequest>,
     mutable: Mutex<StepMutable>,
     result: Arc<Promise<StepResult>>,
@@ -172,7 +172,7 @@ impl StepHandleContract for StepHandleImpl {
         &self.id
     }
 
-    fn turn_id(&self) -> i64 {
+    fn turn_id(&self) -> crate::agent::TurnId {
         self.turn_id
     }
 
@@ -215,7 +215,7 @@ struct TurnMutable {
 }
 
 struct TurnHandleImpl {
-    id: i64,
+    id: crate::agent::TurnId,
     mutable: Mutex<TurnMutable>,
     controller: AbortController,
     ready: Arc<ReadyPromise>,
@@ -224,7 +224,7 @@ struct TurnHandleImpl {
 }
 
 impl TurnHandleContract for TurnHandleImpl {
-    fn id(&self) -> i64 {
+    fn id(&self) -> crate::agent::TurnId {
         self.id
     }
 
@@ -270,7 +270,7 @@ struct LoopState {
     error_handlers: Vec<Arc<dyn LoopErrorHandler>>,
     pending_turns: VecDeque<Arc<TurnJob>>,
     active_turn_job: Option<Arc<TurnJob>>,
-    next_reserved_turn_id: Option<i64>,
+    next_reserved_turn_id: Option<crate::agent::TurnId>,
     settle_waiters: Vec<oneshot::Sender<()>>,
     active_request_trace: Option<LlmRequestTrace>,
     last_request_trace_id: Option<String>,
@@ -279,7 +279,7 @@ struct LoopState {
 
 #[derive(Default)]
 struct TurnFileTrackingState {
-    active_turn_id: Option<i64>,
+    active_turn_id: Option<crate::agent::TurnId>,
     files: HashMap<String, FsChangeAction>,
 }
 
@@ -353,7 +353,7 @@ impl AgentLoopService {
         service
     }
 
-    async fn begin_turn_file_tracking(&self, turn_id: i64) {
+    async fn begin_turn_file_tracking(&self, turn_id: crate::agent::TurnId) {
         // Drain an older debounce window before opening the turn boundary.
         self.fs_watch.flush_pending().await;
         let mut tracking = self.turn_files.lock().unwrap();
@@ -374,7 +374,10 @@ impl AgentLoopService {
         }
     }
 
-    async fn finish_turn_file_tracking(&self, turn_id: i64) -> Vec<super::TurnFileChange> {
+    async fn finish_turn_file_tracking(
+        &self,
+        turn_id: crate::agent::TurnId,
+    ) -> Vec<super::TurnFileChange> {
         self.fs_watch.flush_pending().await;
         let mut tracking = self.turn_files.lock().unwrap();
         if tracking.active_turn_id != Some(turn_id) {
@@ -394,7 +397,7 @@ impl AgentLoopService {
         files
     }
 
-    async fn publish_turn_file_changes(&self, turn_id: i64) {
+    async fn publish_turn_file_changes(&self, turn_id: crate::agent::TurnId) {
         let files = self.finish_turn_file_tracking(turn_id).await;
         if !files.is_empty() {
             self.event_bus
@@ -402,7 +405,7 @@ impl AgentLoopService {
         }
     }
 
-    async fn publish_turn_file_changes_with_stats(&self, turn_id: i64) {
+    async fn publish_turn_file_changes_with_stats(&self, turn_id: crate::agent::TurnId) {
         let mut files = self.finish_turn_file_tracking(turn_id).await;
         if files.is_empty() {
             return;
@@ -474,7 +477,7 @@ impl AgentLoopService {
         job
     }
 
-    fn reserve_turn_id(&self) -> i64 {
+    fn reserve_turn_id(&self) -> crate::agent::TurnId {
         let model_next = self.wire.get_model(&TURN_MODEL).next_turn_id;
         let mut state = self.state.lock().unwrap();
         let id = model_next.max(state.next_reserved_turn_id.unwrap_or(model_next));
@@ -651,6 +654,13 @@ impl AgentLoopService {
             self.release_active_turn(job, &result);
             self.publish_turn_file_changes(job.turn.0.id()).await;
             let payload = error_payload(&error);
+            let _ = self.wire.dispatch([end_turn(EndTurnPayload {
+                turn_id: job.turn.0.id(),
+                reason: super::TurnEndReason::Failed,
+                error: Some(payload.clone()),
+                duration_ms: None,
+            })
+            .expect("turn completion is serializable")]);
             self.event_bus.publish_typed(super::TurnEndedEvent {
                 turn_id: job.turn.0.id(),
                 reason: super::TurnEndReason::Failed,
@@ -667,7 +677,7 @@ impl AgentLoopService {
         let started_at = Instant::now();
         let turn_id = job.turn.0.id();
         self.telemetry_context.set(AgentTelemetryContextPatch {
-            turn_id: Some(Some(u64::try_from(turn_id).unwrap_or_default())),
+            turn_id: Some(Some(turn_id)),
             ..AgentTelemetryContextPatch::default()
         });
         let telemetry_context = self.telemetry_context.get();
@@ -679,7 +689,7 @@ impl AgentLoopService {
             .prepare_turn_config(turn_id)
             .map(|value| value.thinking_effort.to_string());
         let _ = turn_telemetry.track_event(&TelemetryTurnStartedEvent {
-            turn_id: u64::try_from(turn_id).unwrap_or_default(),
+            turn_id,
             mode: telemetry_context.mode,
             provider_type: telemetry_context.provider_type.clone(),
             protocol: telemetry_context.protocol.clone(),
@@ -714,9 +724,17 @@ impl AgentLoopService {
             _ => None,
         };
         self.publish_turn_file_changes_with_stats(turn_id).await;
+        let end_reason = turn_end_reason(&result);
+        let _ = self.wire.dispatch([end_turn(EndTurnPayload {
+            turn_id,
+            reason: end_reason,
+            error: error.clone(),
+            duration_ms: Some(duration_ms as f64),
+        })
+        .expect("turn completion is serializable")]);
         self.event_bus.publish_typed(super::TurnEndedEvent {
             turn_id,
-            reason: turn_end_reason(&result),
+            reason: end_reason,
             error: error.clone(),
             duration_ms: Some(duration_ms as f64),
         });
@@ -725,7 +743,7 @@ impl AgentLoopService {
         }
         if !matches!(result, LoopRunResult::Completed { .. }) {
             let _ = turn_telemetry.track_event(&TurnInterruptedEvent {
-                turn_id: u64::try_from(turn_id).unwrap_or_default(),
+                turn_id,
                 at_step: result_steps(&result),
                 mode: telemetry_context.mode,
                 interrupt_reason: interrupt_reason_for(&result),
@@ -736,7 +754,7 @@ impl AgentLoopService {
             });
         }
         let _ = turn_telemetry.track_event(&TelemetryTurnEndedEvent {
-            turn_id: u64::try_from(turn_id).unwrap_or_default(),
+            turn_id,
             reason: telemetry_turn_end_reason(&result),
             duration_ms,
             mode: telemetry_context.mode,
@@ -801,7 +819,11 @@ impl AgentLoopService {
         }
     }
 
-    fn cancel_active_turn(&self, turn_id: Option<i64>, cancellation: &LoopValue) -> bool {
+    fn cancel_active_turn(
+        &self,
+        turn_id: Option<crate::agent::TurnId>,
+        cancellation: &LoopValue,
+    ) -> bool {
         let job = self.state.lock().unwrap().active_turn_job.clone();
         let Some(job) = job else {
             return false;
@@ -809,14 +831,17 @@ impl AgentLoopService {
         if turn_id.is_some_and(|turn_id| turn_id != job.turn.0.id()) {
             return false;
         }
-        let _ =
-            self.wire.dispatch([cancel_turn(turn_id.map(|id| id as f64))
-                .expect("turn cancellation is serializable")]);
+        let _ = self.wire.dispatch([cancel_turn(CancelTurnPayload {
+            turn_id: Some(job.turn.0.id()),
+            target: Some(CancelTurnTarget::Active),
+            reason: Some(cancel_reason_for(cancellation)),
+        })
+        .expect("turn cancellation is serializable")]);
         job.controller.abort(Some(abort_from_value(cancellation)));
         true
     }
 
-    fn cancel_queued_turn(&self, turn_id: i64, cancellation: LoopValue) -> bool {
+    fn cancel_queued_turn(&self, turn_id: crate::agent::TurnId, cancellation: LoopValue) -> bool {
         let job = {
             let mut state = self.state.lock().unwrap();
             let Some(index) = state
@@ -831,9 +856,12 @@ impl AgentLoopService {
         if job.turn.0.state() != Some(TurnState::Queued) {
             return false;
         }
-        let _ = self.wire.dispatch([
-            cancel_turn(Some(turn_id as f64)).expect("turn cancellation is serializable")
-        ]);
+        let _ = self.wire.dispatch([cancel_turn(CancelTurnPayload {
+            turn_id: Some(turn_id),
+            target: Some(CancelTurnTarget::Queued),
+            reason: Some(cancel_reason_for(&cancellation)),
+        })
+        .expect("turn cancellation is serializable")]);
         for step in job.steps.lock().unwrap().values() {
             step.cancel(Some(cancellation.clone()));
         }
@@ -1185,7 +1213,7 @@ impl AgentLoopService {
 
     async fn execute_loop_step(
         &self,
-        turn_id: i64,
+        turn_id: crate::agent::TurnId,
         signal: AbortSignal,
         current_step: u64,
         step_uuid: String,
@@ -1219,7 +1247,7 @@ impl AgentLoopService {
         let request = self.llm_requester.start(
             Some(AgentLlmRequestOverrides {
                 source: Some(AgentLlmRequestSource::Turn {
-                    turn_id: turn_id as f64,
+                    turn_id,
                     step: Some(current_step as f64),
                     log_fields: None,
                 }),
@@ -1262,7 +1290,7 @@ impl AgentLoopService {
 
     fn begin_step(
         &self,
-        turn_id: i64,
+        turn_id: crate::agent::TurnId,
         signal: &AbortSignal,
         current_step: u64,
         step_uuid: &str,
@@ -1278,7 +1306,7 @@ impl AgentLoopService {
         self.context
             .append_loop_event(LoopRecordedEvent::StepBegin {
                 uuid: step_uuid.into(),
-                turn_id: Some(turn_id.to_string()),
+                turn_id: Some(turn_id),
                 step: Some(current_step as f64),
             })
             .map_err(loop_error)
@@ -1286,7 +1314,7 @@ impl AgentLoopService {
 
     fn append_response_content(
         &self,
-        turn_id: i64,
+        turn_id: crate::agent::TurnId,
         current_step: u64,
         step_uuid: &str,
         response: &AgentLlmRequestFinish,
@@ -1297,7 +1325,7 @@ impl AgentLoopService {
                     step_uuid: step_uuid.into(),
                     part: part.clone(),
                     uuid: Some(uuid::Uuid::new_v4().to_string()),
-                    turn_id: Some(turn_id.to_string()),
+                    turn_id: Some(turn_id),
                     step: Some(current_step as f64),
                 })
                 .map_err(loop_error)?;
@@ -1307,7 +1335,7 @@ impl AgentLoopService {
 
     async fn execute_step_tools(
         &self,
-        turn_id: i64,
+        turn_id: crate::agent::TurnId,
         signal: AbortSignal,
         current_step: u64,
         step_uuid: &str,
@@ -1341,7 +1369,7 @@ impl AgentLoopService {
                 args: Some(call.args),
                 extras: None,
                 uuid: Some(uuid),
-                turn_id: Some(turn_id.to_string()),
+                turn_id: Some(turn_id),
                 step: Some(current_step as f64),
             });
         });
@@ -1393,7 +1421,7 @@ impl AgentLoopService {
     #[allow(clippy::too_many_arguments)]
     fn finish_step(
         &self,
-        turn_id: i64,
+        turn_id: crate::agent::TurnId,
         signal: &AbortSignal,
         current_step: u64,
         step_uuid: &str,
@@ -1410,7 +1438,7 @@ impl AgentLoopService {
         self.context
             .append_loop_event(LoopRecordedEvent::StepEnd {
                 uuid: step_uuid.into(),
-                turn_id: Some(turn_id.to_string()),
+                turn_id: Some(turn_id),
                 step: Some(current_step as f64),
                 finish_reason: Some(normalized.clone()),
                 usage: Some(response.usage),
@@ -1445,7 +1473,7 @@ impl AgentLoopService {
 
     async fn run_after_step(
         &self,
-        turn_id: i64,
+        turn_id: crate::agent::TurnId,
         signal: AbortSignal,
         current_step: u64,
         usage: TokenUsage,
@@ -1465,7 +1493,7 @@ impl AgentLoopService {
 
     fn emit_step_interrupted(
         &self,
-        turn_id: i64,
+        turn_id: crate::agent::TurnId,
         step: Option<u64>,
         reason: &str,
         message: Option<String>,
@@ -1485,7 +1513,7 @@ impl AgentLoopService {
 
     fn create_stream_part_handler(
         &self,
-        turn_id: i64,
+        turn_id: crate::agent::TurnId,
         on_response_event: Arc<dyn Fn() + Send + Sync>,
     ) -> AgentLlmRequestPartHandler {
         let event_bus = Arc::clone(&self.event_bus);
@@ -1669,7 +1697,7 @@ impl AgentLoopServiceContract for AgentLoopService {
         }
     }
 
-    fn cancel(&self, turn_id: Option<i64>, reason: Option<LoopValue>) -> bool {
+    fn cancel(&self, turn_id: Option<crate::agent::TurnId>, reason: Option<LoopValue>) -> bool {
         let cancellation = reason.unwrap_or_else(user_cancellation_value);
         self.cancel_active_turn(turn_id, &cancellation)
             || turn_id.is_some_and(|id| self.cancel_queued_turn(id, cancellation))
@@ -1786,7 +1814,7 @@ impl Disposable for AgentLoopService {
 }
 
 struct LoopRuntime {
-    turn_id: i64,
+    turn_id: crate::agent::TurnId,
     turn_signal: AbortSignal,
     job: Option<Arc<TurnJob>>,
     steps: u64,
@@ -1831,7 +1859,7 @@ fn combined_signal(first: &AbortSignal, second: &AbortSignal) -> (AbortSignal, V
 
 fn completed_step_handle(
     request: Arc<dyn StepRequest>,
-    turn_id: i64,
+    turn_id: crate::agent::TurnId,
     _signal: AbortSignal,
 ) -> StepHandle {
     let promise = Arc::new(Promise::new());
@@ -1896,6 +1924,14 @@ fn loop_value_is_abort(value: &LoopValue) -> bool {
 
 fn loop_value_is_user_cancel(value: &LoopValue) -> bool {
     matches!(value, LoopValue::Error(error) if is_user_cancellation(error.as_ref()))
+}
+
+fn cancel_reason_for(value: &LoopValue) -> CancelTurnReason {
+    if loop_value_is_user_cancel(value) {
+        CancelTurnReason::UserCancelled
+    } else {
+        CancelTurnReason::Aborted
+    }
 }
 
 fn loop_value_is_max_steps(value: &LoopValue) -> bool {
@@ -2161,7 +2197,7 @@ mod tests {
             )
             .unwrap();
         let mut context = AfterStepContext {
-            turn_id: 1,
+            turn_id: crate::agent::TurnId::new(1),
             step: 1,
             signal: AbortController::new().signal(),
             usage: empty_usage(),

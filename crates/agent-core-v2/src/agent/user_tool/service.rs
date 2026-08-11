@@ -73,7 +73,7 @@ impl ExecutableTool for UserToolExecutable {
                     }),
                     origin: Some(InteractionOrigin {
                         agent_id: None,
-                        turn_id: Some(context.turn_id as f64),
+                        turn_id: Some(context.turn_id),
                     }),
                 };
                 match abortable(interaction.request(request), &context.signal).await {

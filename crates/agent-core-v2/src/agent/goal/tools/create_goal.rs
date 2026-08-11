@@ -86,7 +86,7 @@ pub static CREATE_GOAL_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(
 
 pub trait CreateGoalProvider: Send + Sync {
     fn get_goal(&self) -> GoalToolResult;
-    fn is_goal_tool_target(&self, turn_id: f64, goal_id: &str) -> bool;
+    fn is_goal_tool_target(&self, turn_id: crate::agent::TurnId, goal_id: &str) -> bool;
     fn create_goal(
         &self,
         input: CreateGoalInput,
@@ -98,7 +98,7 @@ impl CreateGoalProvider for AgentGoalServiceHandle {
             .get_goal()
             .expect("goal tools are only resolved for supported agents")
     }
-    fn is_goal_tool_target(&self, turn_id: f64, goal_id: &str) -> bool {
+    fn is_goal_tool_target(&self, turn_id: crate::agent::TurnId, goal_id: &str) -> bool {
         (**self)
             .is_goal_tool_target(turn_id, goal_id)
             .unwrap_or(false)
@@ -169,7 +169,7 @@ impl ExecutableTool for CreateGoalTool {
                     != at_resolution.as_ref().map(|goal| &goal.goal_id)
                     && (current.is_none()
                         || !goal.is_goal_tool_target(
-                            context.turn_id as f64,
+                            context.turn_id,
                             &current.as_ref().unwrap().goal_id,
                         ))
                 {

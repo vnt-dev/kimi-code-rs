@@ -284,7 +284,7 @@ pub enum VideoUploadOutcome {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TurnStartedEvent {
-    pub turn_id: u64,
+    pub turn_id: crate::agent::TurnId,
     pub mode: AgentTelemetryMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
@@ -297,7 +297,7 @@ impl_event_payload!(TurnStartedEvent, "turn_started", Agent);
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TurnInterruptedEvent {
-    pub turn_id: u64,
+    pub turn_id: crate::agent::TurnId,
     pub at_step: u64,
     pub mode: AgentTelemetryMode,
     pub interrupt_reason: TurnInterruptReason,
@@ -314,7 +314,7 @@ impl_event_payload!(TurnInterruptedEvent, "turn_interrupted", Agent);
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TurnEndedEvent {
-    pub turn_id: u64,
+    pub turn_id: crate::agent::TurnId,
     pub reason: TurnEndReason,
     pub duration_ms: u64,
     pub mode: AgentTelemetryMode,
@@ -331,7 +331,7 @@ impl_event_payload!(TurnEndedEvent, "turn_ended", Agent);
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolCallEvent {
-    pub turn_id: u64,
+    pub turn_id: crate::agent::TurnId,
     pub tool_call_id: String,
     pub tool_name: String,
     pub outcome: ToolCallOutcome,
@@ -361,7 +361,7 @@ pub struct ApiErrorEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<u64>,
+    pub turn_id: Option<crate::agent::TurnId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -418,7 +418,7 @@ impl_event_payload!(AfkToggleEvent, "afk_toggle", Agent);
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PermissionPolicyDecisionEvent {
-    pub turn_id: u64,
+    pub turn_id: crate::agent::TurnId,
     pub tool_call_id: String,
     pub policy_name: String,
     pub tool_name: String,
@@ -435,7 +435,7 @@ impl_event_payload!(
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PermissionApprovalResultEvent {
-    pub turn_id: u64,
+    pub turn_id: crate::agent::TurnId,
     pub tool_call_id: String,
     pub policy_name: Option<String>,
     pub tool_name: String,
@@ -479,7 +479,7 @@ impl_event_payload!(PlanEnterResolvedEvent, "plan_enter_resolved", Agent);
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompactionFinishedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<u64>,
+    pub turn_id: Option<crate::agent::TurnId>,
     pub source: CompactionSource,
     pub tokens_before: u64,
     pub tokens_after: u64,
@@ -506,7 +506,7 @@ impl_event_payload!(CompactionFinishedEvent, "compaction_finished", Agent);
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompactionFailedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<u64>,
+    pub turn_id: Option<crate::agent::TurnId>,
     pub source: CompactionSource,
     pub tokens_before: u64,
     pub duration_ms: u64,
@@ -637,7 +637,7 @@ impl_event_payload!(GoalStatusChangedEvent, "goal_status_changed", Agent);
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolCallDedupDetectedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<u64>,
+    pub turn_id: Option<crate::agent::TurnId>,
     pub step_no: u64,
     pub tool_call_id: String,
     pub tool_name: String,
@@ -655,7 +655,7 @@ impl_event_payload!(
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolCallRepeatEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<u64>,
+    pub turn_id: Option<crate::agent::TurnId>,
     pub tool_name: String,
     pub repeat_count: u64,
     pub action: ToolCallRepeatAction,
@@ -849,7 +849,7 @@ mod tests {
 
         service
             .track_event(&TurnStartedEvent {
-                turn_id: 7,
+                turn_id: crate::agent::TurnId::new(7),
                 mode: AgentTelemetryMode::Plan,
                 provider_type: None,
                 protocol: Some("anthropic".into()),

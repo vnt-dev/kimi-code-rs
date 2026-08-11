@@ -316,7 +316,7 @@ pub struct SteerPayload {
 #[serde(rename_all = "camelCase")]
 pub struct CancelPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<i64>,
+    pub turn_id: Option<crate::agent::TurnId>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -596,7 +596,7 @@ pub enum PromptSubmitStatus {
 pub struct PromptSubmitResult {
     pub prompt_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<i64>,
+    pub turn_id: Option<crate::agent::TurnId>,
     pub status: PromptSubmitStatus,
 }
 
@@ -941,7 +941,9 @@ mod tests {
             session_id: "session-1".into(),
             value: WithAgentId {
                 agent_id: "main".into(),
-                value: CancelPayload { turn_id: Some(7) },
+                value: CancelPayload {
+                    turn_id: Some(crate::agent::TurnId::new(7)),
+                },
             },
         };
 
@@ -956,7 +958,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(PromptSubmitResult {
                 prompt_id: "prompt-1".into(),
-                turn_id: Some(7),
+                turn_id: Some(crate::agent::TurnId::new(7)),
                 status: PromptSubmitStatus::Running,
             })
             .unwrap(),

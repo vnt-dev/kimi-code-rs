@@ -447,7 +447,7 @@ mod tests {
 
     fn context() -> ExecutableToolContext {
         ExecutableToolContext {
-            turn_id: 0,
+            turn_id: crate::agent::TurnId::new(0),
             tool_call_id: "call_edit".into(),
             trace: None,
             metadata: None,

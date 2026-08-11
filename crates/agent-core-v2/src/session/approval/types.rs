@@ -15,7 +15,7 @@ pub struct ApprovalRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<f64>,
+    pub turn_id: Option<crate::agent::TurnId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     pub tool_name: String,
@@ -63,7 +63,7 @@ mod tests {
             id: Some("approval-1".into()),
             session_id: Some("session-1".into()),
             agent_id: Some("agent-1".into()),
-            turn_id: Some(2.5),
+            turn_id: Some(crate::agent::TurnId::new(2)),
             tool_call_id: Some("call-1".into()),
             tool_name: "Bash".into(),
             action: "run command".into(),
@@ -76,7 +76,7 @@ mod tests {
         };
         let value = serde_json::to_value(&request).unwrap();
         assert_eq!(value["sessionId"], "session-1");
-        assert_eq!(value["turnId"], 2.5);
+        assert_eq!(value["turnId"], 2);
         assert_eq!(value["toolCallId"], "call-1");
         assert_eq!(value["display"]["kind"], "command");
         assert_eq!(

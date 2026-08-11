@@ -44,7 +44,7 @@ use super::{
 const FULL_COMPACTION_BACKGROUND_ID: &str = "full-compaction";
 
 struct MutableTurn {
-    turn_id: i64,
+    turn_id: crate::agent::TurnId,
     origin: PromptOrigin,
     phase: TurnPhase,
     stream: Option<ActivityStream>,
@@ -58,7 +58,7 @@ struct MutableTurn {
 }
 
 impl MutableTurn {
-    fn new(turn_id: i64, origin: PromptOrigin) -> Self {
+    fn new(turn_id: crate::agent::TurnId, origin: PromptOrigin) -> Self {
         Self {
             turn_id,
             origin,
@@ -348,7 +348,7 @@ impl AgentActivityView {
         }
     }
 
-    fn on_turn_started(&self, turn_id: i64, origin: PromptOrigin) {
+    fn on_turn_started(&self, turn_id: crate::agent::TurnId, origin: PromptOrigin) {
         let mut fold = self.fold.lock().unwrap();
         fold.turn = Some(MutableTurn::new(turn_id, origin));
         fold.last_turn = None;
@@ -356,7 +356,7 @@ impl AgentActivityView {
         self.publish();
     }
 
-    fn on_turn_ended(&self, turn_id: i64, reason: TurnEndReason) {
+    fn on_turn_ended(&self, turn_id: crate::agent::TurnId, reason: TurnEndReason) {
         let mut fold = self.fold.lock().unwrap();
         let at = epoch_millis();
         if fold
@@ -393,7 +393,7 @@ impl AgentActivityView {
         });
     }
 
-    fn on_step_interrupted(&self, turn_id: i64, reason: &str) {
+    fn on_step_interrupted(&self, turn_id: crate::agent::TurnId, reason: &str) {
         let ending_reason = match reason {
             "aborted" => ActivityEndingReason::Aborted,
             "max_steps" => ActivityEndingReason::MaxSteps,
@@ -678,7 +678,9 @@ mod tests {
 
     fn state_with_turn() -> AgentActivityState {
         AgentActivityState {
-            turn: Some(MutableTurn::new(1, PromptOrigin::User).snapshot()),
+            turn: Some(
+                MutableTurn::new(crate::agent::TurnId::new(1), PromptOrigin::User).snapshot(),
+            ),
             ..AgentActivityState::default()
         }
     }
@@ -707,14 +709,17 @@ mod tests {
             true,
             Some(AgentLoopStatus {
                 state: AgentLoopState::Running,
-                active_turn_id: Some(7),
+                active_turn_id: Some(crate::agent::TurnId::new(7)),
                 pending_turn_ids: Vec::new(),
                 has_pending_requests: false,
                 active_trace_id: None,
             }),
         );
         let state = seeded.state();
-        assert_eq!(state.turn.as_ref().unwrap().turn_id, 7);
+        assert_eq!(
+            state.turn.as_ref().unwrap().turn_id,
+            crate::agent::TurnId::new(7)
+        );
         assert_eq!(state.turn.as_ref().unwrap().origin, PromptOrigin::User);
         assert_eq!(
             state
@@ -857,7 +862,7 @@ mod tests {
             json!({"turnId": 99, "reason": "completed"}),
         );
         let last = view.state().last_turn.unwrap();
-        assert_eq!(last.turn_id, 99);
+        assert_eq!(last.turn_id, crate::agent::TurnId::new(99));
         assert_eq!(last.duration_ms, None);
 
         view.dispose().unwrap();

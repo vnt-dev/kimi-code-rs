@@ -222,7 +222,7 @@ mod tests {
     async fn records_only_unique_approved_session_patterns() {
         let (wire, service) = setup();
         let record = PermissionApprovalResultRecord {
-            turn_id: 1.0,
+            turn_id: crate::agent::TurnId::new(1),
             tool_call_id: "call-1".into(),
             tool_name: "Bash".into(),
             action: "run".into(),

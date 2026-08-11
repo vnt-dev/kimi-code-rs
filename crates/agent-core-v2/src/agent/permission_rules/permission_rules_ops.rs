@@ -123,7 +123,7 @@ mod tests {
         pattern: Option<&str>,
     ) -> PermissionApprovalResultRecord {
         PermissionApprovalResultRecord {
-            turn_id: 3.5,
+            turn_id: crate::agent::TurnId::new(3),
             tool_call_id: "call-1".into(),
             tool_name: "Bash".into(),
             action: "run".into(),
@@ -217,9 +217,23 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(record.op_type, "permission.record_approval_result");
-        assert_eq!(record.payload_value["turnId"], 3.5);
+        assert_eq!(record.payload_value["turnId"], 3);
         assert_eq!(record.payload_value["toolCallId"], "call-1");
         assert_eq!(record.payload_value["sessionApprovalRule"], "Bash(git *)");
         assert_eq!(record.payload_value["result"]["decision"], "approved");
+    }
+
+    #[test]
+    fn legacy_approval_payload_accepts_float_turn_id() {
+        let mut value = serde_json::to_value(approval(
+            ApprovalDecision::Approved,
+            Some(ApprovalScope::Session),
+            Some("Bash(git *)"),
+        ))
+        .unwrap();
+        value["turnId"] = serde_json::json!(3.9);
+
+        let record: PermissionApprovalResultRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(record.turn_id, crate::agent::TurnId::new(3));
     }
 }

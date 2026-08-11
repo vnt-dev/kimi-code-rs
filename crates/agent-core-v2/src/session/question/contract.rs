@@ -109,7 +109,7 @@ pub struct QuestionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<u64>,
+    pub turn_id: Option<crate::agent::TurnId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -149,7 +149,7 @@ mod tests {
     fn retry_confirmation_presentation_uses_its_wire_discriminator() {
         let request = QuestionRequest {
             id: Some("retry-1".into()),
-            turn_id: Some(7),
+            turn_id: Some(crate::agent::TurnId::new(7)),
             tool_call_id: None,
             presentation: Some(QuestionPresentation::RetryConfirmation),
             questions: Vec::new(),

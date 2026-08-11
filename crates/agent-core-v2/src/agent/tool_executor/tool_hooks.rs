@@ -21,7 +21,7 @@ use crate::{
 /// well as successfully resolved executable tools.
 #[derive(Clone)]
 pub struct ToolExecutionHookContext {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub signal: AbortSignal,
     pub trace: Option<LlmRequestTrace>,
     pub tool_call: ToolCall,
@@ -154,7 +154,7 @@ mod tests {
 
     fn hook_context() -> ToolExecutionHookContext {
         ToolExecutionHookContext {
-            turn_id: 7,
+            turn_id: crate::agent::TurnId::new(7),
             signal: AbortController::new().signal(),
             trace: Some(LlmRequestTrace::new(Some("trace-7".into()))),
             tool_call: ToolCall {
@@ -196,7 +196,7 @@ mod tests {
             result: ExecutableToolResult::success("done"),
             stop_turn: Some(true),
         };
-        assert_eq!(did_execute.context.turn_id, 7);
+        assert_eq!(did_execute.context.turn_id, crate::agent::TurnId::new(7));
         assert_eq!(did_execute.stop_turn, Some(true));
         assert!(!did_execute.context.signal.aborted());
     }

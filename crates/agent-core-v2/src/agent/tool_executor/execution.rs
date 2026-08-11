@@ -20,7 +20,7 @@ pub struct RunSingleExecutionInput<'a> {
     pub tool_name: &'a str,
     pub tool_call_id: String,
     pub execution: &'a RunnableToolExecution,
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub trace: Option<LlmRequestTrace>,
     pub metadata: Option<Value>,
     pub signal: AbortSignal,
@@ -43,11 +43,6 @@ pub async fn run_single_execution(input: RunSingleExecutionInput<'_>) -> ToolRes
             aborted_tool_output(tool_name, &signal),
         ));
     }
-    let Ok(turn_id) = u64::try_from(turn_id) else {
-        return ToolResult::from(crate::tool::ExecutableToolResult::error(format!(
-            "Tool \"{tool_name}\" failed: invalid negative turn ID"
-        )));
-    };
     let signal_for_fallback = signal.clone();
     let name_for_fallback = tool_name.to_owned();
     let raw = race_with_abort_grace(
@@ -112,7 +107,7 @@ mod tests {
             tool_name: "Read",
             tool_call_id: "call-1".into(),
             execution: &execution,
-            turn_id: 2,
+            turn_id: crate::agent::TurnId::new(2),
             trace: None,
             metadata: None,
             signal: AbortController::new().signal(),
@@ -155,7 +150,7 @@ mod tests {
             tool_name: "Read",
             tool_call_id: "call-1".into(),
             execution: &execution,
-            turn_id: 2,
+            turn_id: crate::agent::TurnId::new(2),
             trace: None,
             metadata: None,
             signal: AbortController::new().signal(),

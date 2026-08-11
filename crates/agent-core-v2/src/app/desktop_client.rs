@@ -3382,7 +3382,7 @@ mod tests {
     #[test]
     fn serializes_realtime_events_as_a_discriminated_event_union() {
         let event = DesktopChatEvent::AssistantDelta(AssistantDeltaEvent {
-            turn_id: 7,
+            turn_id: crate::agent::TurnId::new(7),
             delta: "hello".into(),
         });
 

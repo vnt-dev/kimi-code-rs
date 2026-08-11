@@ -389,7 +389,7 @@ impl AgentLifecycleService {
             .map_err(|error| LifecycleError::new(error.to_string()))?;
         let interaction = self.inner.interaction.0.clone();
         let disposable = events.subscribe_typed::<TurnEndedEvent>(Arc::new(move |event| {
-            let turn_id = event.turn_id as f64;
+            let turn_id = event.turn_id;
             let interaction = interaction.clone();
             tokio::spawn(async move {
                 interaction.cancel_pending_for_turn(turn_id).await;

@@ -69,14 +69,14 @@ impl From<Value> for LoopValue {
 
 #[derive(Clone)]
 pub struct BeforeStepContext {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub step: u64,
     pub signal: AbortSignal,
 }
 
 #[derive(Clone)]
 pub struct AfterStepContext {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub step: u64,
     pub signal: AbortSignal,
     pub usage: TokenUsage,
@@ -94,7 +94,7 @@ pub type LoopOnStarted = Arc<dyn Fn(u64) + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct LoopRunOptions {
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub signal: Option<AbortSignal>,
     pub on_started: Option<LoopOnStarted>,
 }
@@ -130,7 +130,7 @@ pub type TurnResultFuture = Shared<BoxFuture<'static, LoopRunResult>>;
 
 pub trait StepHandleContract: Send + Sync {
     fn id(&self) -> &str;
-    fn turn_id(&self) -> i64;
+    fn turn_id(&self) -> crate::agent::TurnId;
     fn state(&self) -> StepState;
     fn signal(&self) -> AbortSignal;
     fn result(&self) -> StepResultFuture;
@@ -158,7 +158,7 @@ pub enum TurnState {
 }
 
 pub trait TurnHandleContract: Send + Sync {
-    fn id(&self) -> i64;
+    fn id(&self) -> crate::agent::TurnId;
     fn state(&self) -> Option<TurnState>;
     fn signal(&self) -> AbortSignal;
     fn ready(&self) -> TurnReadyFuture;
@@ -211,8 +211,8 @@ pub enum AgentLoopState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentLoopStatus {
     pub state: AgentLoopState,
-    pub active_turn_id: Option<i64>,
-    pub pending_turn_ids: Vec<i64>,
+    pub active_turn_id: Option<crate::agent::TurnId>,
+    pub pending_turn_ids: Vec<crate::agent::TurnId>,
     pub has_pending_requests: bool,
     pub active_trace_id: Option<String>,
 }
@@ -227,7 +227,7 @@ pub type LoopRetry =
 
 pub struct LoopErrorContext {
     pub current_step: Option<StepHandle>,
-    pub turn_id: i64,
+    pub turn_id: crate::agent::TurnId,
     pub step: Option<u64>,
     pub step_id: Option<String>,
     pub signal: AbortSignal,
@@ -268,7 +268,7 @@ pub trait AgentLoopServiceContract: Send + Sync {
     async fn run(&self, options: LoopRunOptions) -> LoopRunResult;
 
     fn status(&self) -> AgentLoopStatus;
-    fn cancel(&self, turn_id: Option<i64>, reason: Option<LoopValue>) -> bool;
+    fn cancel(&self, turn_id: Option<crate::agent::TurnId>, reason: Option<LoopValue>) -> bool;
     async fn settled(&self);
     async fn shutdown(&self) {
         self.settled().await;
@@ -317,18 +317,24 @@ mod tests {
     #[test]
     fn states_defaults_and_service_identity_match_source_contract() {
         assert_eq!(AGENT_LOOP_SERVICE_ID.to_string(), "agentLoopService");
-        assert_eq!(LoopRunOptions::default().turn_id, 0);
+        assert_eq!(
+            LoopRunOptions::default().turn_id,
+            crate::agent::TurnId::new(0)
+        );
         assert_eq!(StepEnqueueOptions::default().at, None);
         assert_eq!(StepState::Queued, StepState::Queued);
         assert_eq!(TurnState::Running, TurnState::Running);
         let status = AgentLoopStatus {
             state: AgentLoopState::Idle,
             active_turn_id: None,
-            pending_turn_ids: vec![2, 3],
+            pending_turn_ids: vec![crate::agent::TurnId::new(2), crate::agent::TurnId::new(3)],
             has_pending_requests: true,
             active_trace_id: Some("trace".into()),
         };
-        assert_eq!(status.pending_turn_ids, [2, 3]);
+        assert_eq!(
+            status.pending_turn_ids,
+            [crate::agent::TurnId::new(2), crate::agent::TurnId::new(3)]
+        );
     }
 
     #[tokio::test]

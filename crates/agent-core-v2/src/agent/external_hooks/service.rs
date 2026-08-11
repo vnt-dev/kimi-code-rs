@@ -82,7 +82,7 @@ pub struct HookResultEvent {
     #[serde(rename = "type")]
     pub event_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<i64>,
+    pub turn_id: Option<crate::agent::TurnId>,
     pub hook_event: String,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -552,7 +552,7 @@ impl AgentExternalHooksService {
             self.fire_and_forget(
                 "Interrupt",
                 Map::from_iter([
-                    ("turnId".into(), Value::from(event.turn_id)),
+                    ("turnId".into(), Value::from(event.turn_id.get())),
                     ("reason".into(), Value::String("cancelled".into())),
                 ]),
                 None,
@@ -1106,7 +1106,7 @@ mod tests {
         let service = test_service(Arc::clone(&runner), context, Arc::clone(&event_bus));
         let controller = AbortController::new();
         let after_step = AfterStepContext {
-            turn_id: 7,
+            turn_id: crate::agent::TurnId::new(7),
             step: 1,
             signal: controller.signal(),
             usage: Default::default(),
@@ -1123,7 +1123,7 @@ mod tests {
             .store(true, Ordering::Release);
         assert_eq!(service.run_stop(&after_step).await.unwrap(), None);
         service.notify_turn_ended(&TurnEndedEvent {
-            turn_id: 7,
+            turn_id: crate::agent::TurnId::new(7),
             reason: TurnEndReason::Completed,
             error: None,
             duration_ms: None,

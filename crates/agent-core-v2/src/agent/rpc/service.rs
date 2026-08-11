@@ -744,7 +744,10 @@ fn user_message_with_attachments(
     }
 }
 
-fn prompt_submit_result(handle: &PromptHandle, turn_id: Option<i64>) -> PromptSubmitResult {
+fn prompt_submit_result(
+    handle: &PromptHandle,
+    turn_id: Option<crate::agent::TurnId>,
+) -> PromptSubmitResult {
     let snapshot = handle.snapshot();
     PromptSubmitResult {
         prompt_id: snapshot.id,

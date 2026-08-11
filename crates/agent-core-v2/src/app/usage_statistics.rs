@@ -7,10 +7,10 @@ use std::{
 };
 
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
-use kimi_code_transcript::model::ids::TurnId;
 use serde::{Deserialize, Serialize};
 
 use crate::_base::utils::fs::atomic_write;
+use crate::agent::TurnId;
 
 const CACHE_VERSION: u32 = 1;
 const CACHE_RELATIVE_PATH: &str = "cache/usage-statistics-v1.json";
