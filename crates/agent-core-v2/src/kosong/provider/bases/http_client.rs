@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-pub const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+pub const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 pub fn default_provider_http_client() -> reqwest::Client {
     provider_http_client(PROVIDER_REQUEST_TIMEOUT)
@@ -10,7 +10,8 @@ pub fn default_provider_http_client() -> reqwest::Client {
 
 fn provider_http_client(timeout: Duration) -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(timeout)
+        .connect_timeout(timeout)
+        .read_timeout(timeout)
         .build()
         .expect("the built-in provider HTTP client configuration must be valid")
 }
@@ -20,11 +21,6 @@ mod tests {
     use tokio::{io::AsyncReadExt, net::TcpListener};
 
     use super::*;
-
-    #[test]
-    fn built_in_provider_request_timeout_is_sixty_seconds() {
-        assert_eq!(PROVIDER_REQUEST_TIMEOUT, Duration::from_secs(60));
-    }
 
     #[tokio::test]
     async fn provider_http_client_enforces_its_total_request_timeout() {
