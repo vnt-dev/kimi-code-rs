@@ -228,7 +228,7 @@ impl AgentStepRetryService {
     async fn confirm_retry(
         &self,
         context: &LoopErrorContext,
-        step: u64,
+        step: crate::agent::StepId,
         failed_attempt: u64,
         error_message: &str,
     ) -> bool {
@@ -248,7 +248,7 @@ impl AgentStepRetryService {
     fn publish_retry(
         &self,
         context: &LoopErrorContext,
-        step: u64,
+        step: crate::agent::StepId,
         failed_attempt: u64,
         max_attempts: u64,
         delay_ms: f64,
@@ -300,7 +300,7 @@ impl LoopErrorHandler for StepRetryHandler {
 #[serde(rename_all = "camelCase")]
 struct RetryEvent {
     turn_id: crate::agent::TurnId,
-    step: u64,
+    step: crate::agent::StepId,
     #[serde(skip_serializing_if = "Option::is_none")]
     step_id: Option<String>,
     failed_attempt: u64,
@@ -354,7 +354,7 @@ const RETRY_CONFIRMATION_LABEL: &str = "Retry";
 
 fn retry_confirmation_request(
     context: &LoopErrorContext,
-    step: u64,
+    step: crate::agent::StepId,
     failed_attempt: u64,
     error_message: &str,
 ) -> QuestionRequest {

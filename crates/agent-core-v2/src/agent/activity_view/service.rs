@@ -48,7 +48,7 @@ struct MutableTurn {
     origin: PromptOrigin,
     phase: TurnPhase,
     stream: Option<ActivityStream>,
-    step: u64,
+    step: crate::agent::StepId,
     ending: bool,
     ending_reason: Option<ActivityEndingReason>,
     retry: Option<ActivityRetryState>,
@@ -64,7 +64,7 @@ impl MutableTurn {
             origin,
             phase: TurnPhase::Running,
             stream: None,
-            step: 0,
+            step: crate::agent::StepId::new(0),
             ending: false,
             ending_reason: None,
             retry: None,
@@ -384,7 +384,7 @@ impl AgentActivityView {
         self.publish();
     }
 
-    fn on_step_started(&self, step: u64) {
+    fn on_step_started(&self, step: crate::agent::StepId) {
         self.mutate_turn(|turn| {
             turn.step = step;
             turn.phase = TurnPhase::Running;
@@ -695,7 +695,7 @@ mod tests {
         };
         assert!(activity_equal(&left, &right));
 
-        right.turn.as_mut().unwrap().step = 1;
+        right.turn.as_mut().unwrap().step = crate::agent::StepId::new(1);
         assert!(!activity_equal(&left, &right));
     }
 
@@ -783,7 +783,7 @@ mod tests {
         publish(&bus, "turn.step.started", json!({"turnId": 1, "step": 2}));
         publish(&bus, "assistant.delta", json!({"turnId": 1, "delta": "a"}));
         let turn = view.state().turn.unwrap();
-        assert_eq!(turn.step, 2);
+        assert_eq!(turn.step, crate::agent::StepId::new(2));
         assert_eq!(turn.phase, TurnPhase::Streaming);
         assert_eq!(turn.stream, Some(ActivityStream::Assistant));
 

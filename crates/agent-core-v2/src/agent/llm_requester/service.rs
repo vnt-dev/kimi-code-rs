@@ -1073,7 +1073,7 @@ mod tests {
     fn request_fields_match_typescript_source_mapping() {
         let turn = AgentLlmRequestSource::Turn {
             turn_id: crate::agent::TurnId::new(7),
-            step: Some(2.0),
+            step: Some(crate::agent::StepId::new(2)),
             log_fields: Some(Map::from_iter([(
                 "attempt".into(),
                 Value::String("retry-1".into()),

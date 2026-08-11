@@ -106,7 +106,7 @@ impl AgentToolSelectAnnouncementsService {
                         let Some(service) = service.upgrade() else {
                             return Ok(());
                         };
-                        let is_boundary = context.step == 1
+                        let is_boundary = context.step == crate::agent::StepId::new(1)
                             || service
                                 .needs_boundary_injection
                                 .swap(false, Ordering::SeqCst);

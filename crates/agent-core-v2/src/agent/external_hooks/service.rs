@@ -1107,7 +1107,7 @@ mod tests {
         let controller = AbortController::new();
         let after_step = AfterStepContext {
             turn_id: crate::agent::TurnId::new(7),
-            step: 1,
+            step: crate::agent::StepId::new(1),
             signal: controller.signal(),
             usage: Default::default(),
             finish_reason: FinishReason::Completed,

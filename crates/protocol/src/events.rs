@@ -926,14 +926,14 @@ pub enum AgentInterruptedReason {
 pub enum AgentPhase {
     Idle,
     Running {
-        turn_id: f64,
-        step: f64,
+        turn_id: crate::TurnId,
+        step: crate::StepId,
         step_id: String,
         since: f64,
     },
     Streaming {
-        turn_id: f64,
-        step: f64,
+        turn_id: crate::TurnId,
+        step: crate::StepId,
         step_id: String,
         stream: AgentStreamKind,
         #[serde(
@@ -951,15 +951,15 @@ pub enum AgentPhase {
         since: f64,
     },
     ToolCall {
-        turn_id: f64,
-        step: f64,
+        turn_id: crate::TurnId,
+        step: crate::StepId,
         tool_call_id: String,
         name: String,
         since: f64,
     },
     Retrying {
-        turn_id: f64,
-        step: f64,
+        turn_id: crate::TurnId,
+        step: crate::StepId,
         step_id: String,
         failed_attempt: f64,
         next_attempt: f64,
@@ -980,25 +980,25 @@ pub enum AgentPhase {
         since: f64,
     },
     AwaitingApproval {
-        turn_id: f64,
+        turn_id: crate::TurnId,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
             deserialize_with = "optional_non_null"
         )]
-        step: Option<f64>,
+        step: Option<crate::StepId>,
         #[serde(default, skip_serializing_if = "OptionalJsonValue::is_absent")]
         approval: OptionalJsonValue,
         since: f64,
     },
     Interrupted {
-        turn_id: f64,
+        turn_id: crate::TurnId,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
             deserialize_with = "optional_non_null"
         )]
-        step: Option<f64>,
+        step: Option<crate::StepId>,
         reason: AgentInterruptedReason,
         #[serde(
             default,
@@ -1009,7 +1009,7 @@ pub enum AgentPhase {
         at: f64,
     },
     Ended {
-        turn_id: f64,
+        turn_id: crate::TurnId,
         reason: TurnEndReason,
         #[serde(
             default,
@@ -1352,7 +1352,7 @@ pub struct LiveUserMessage {
 pub struct TurnStartedEvent {
     #[serde(rename = "type")]
     pub event_type: TurnStartedEventType,
-    pub turn_id: f64,
+    pub turn_id: crate::TurnId,
     pub origin: PromptOrigin,
     #[serde(
         default,
@@ -1375,7 +1375,7 @@ event_type!(TurnEndedEventType, "turn.ended");
 pub struct TurnEndedEvent {
     #[serde(rename = "type")]
     pub event_type: TurnEndedEventType,
-    pub turn_id: f64,
+    pub turn_id: crate::TurnId,
     pub reason: TurnEndReason,
     #[serde(
         default,
@@ -1398,8 +1398,8 @@ event_type!(TurnStepStartedEventType, "turn.step.started");
 pub struct TurnStepStartedEvent {
     #[serde(rename = "type")]
     pub event_type: TurnStepStartedEventType,
-    pub turn_id: f64,
-    pub step: f64,
+    pub turn_id: crate::TurnId,
+    pub step: crate::StepId,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1415,8 +1415,8 @@ event_type!(TurnStepCompletedEventType, "turn.step.completed");
 pub struct TurnStepCompletedEvent {
     #[serde(rename = "type")]
     pub event_type: TurnStepCompletedEventType,
-    pub turn_id: f64,
-    pub step: f64,
+    pub turn_id: crate::TurnId,
+    pub step: crate::StepId,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1492,8 +1492,8 @@ event_type!(TurnStepRetryingEventType, "turn.step.retrying");
 pub struct TurnStepRetryingEvent {
     #[serde(rename = "type")]
     pub event_type: TurnStepRetryingEventType,
-    pub turn_id: f64,
-    pub step: f64,
+    pub turn_id: crate::TurnId,
+    pub step: crate::StepId,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1521,8 +1521,8 @@ event_type!(TurnStepInterruptedEventType, "turn.step.interrupted");
 pub struct TurnStepInterruptedEvent {
     #[serde(rename = "type")]
     pub event_type: TurnStepInterruptedEventType,
-    pub turn_id: f64,
-    pub step: f64,
+    pub turn_id: crate::TurnId,
+    pub step: crate::StepId,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1546,7 +1546,7 @@ event_type!(ThinkingDeltaEventType, "thinking.delta");
 pub struct AssistantDeltaEvent {
     #[serde(rename = "type")]
     pub event_type: AssistantDeltaEventType,
-    pub turn_id: f64,
+    pub turn_id: crate::TurnId,
     pub delta: String,
 }
 
@@ -1555,7 +1555,7 @@ pub struct AssistantDeltaEvent {
 pub struct ThinkingDeltaEvent {
     #[serde(rename = "type")]
     pub event_type: ThinkingDeltaEventType,
-    pub turn_id: f64,
+    pub turn_id: crate::TurnId,
     pub delta: String,
 }
 
@@ -1571,7 +1571,7 @@ pub struct HookResultEvent {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "optional_non_null"
     )]
-    pub turn_id: Option<f64>,
+    pub turn_id: Option<crate::TurnId>,
     pub hook_event: String,
     pub content: String,
     #[serde(
@@ -1589,7 +1589,7 @@ event_type!(ToolCallDeltaEventType, "tool.call.delta");
 pub struct ToolCallDeltaEvent {
     #[serde(rename = "type")]
     pub event_type: ToolCallDeltaEventType,
-    pub turn_id: f64,
+    pub turn_id: crate::TurnId,
     pub tool_call_id: String,
     #[serde(
         default,
@@ -1612,7 +1612,7 @@ event_type!(ToolCallStartedEventType, "tool.call.started");
 pub struct ToolCallStartedEvent {
     #[serde(rename = "type")]
     pub event_type: ToolCallStartedEventType,
-    pub turn_id: f64,
+    pub turn_id: crate::TurnId,
     pub tool_call_id: String,
     pub name: String,
     pub args: Value,
@@ -1637,7 +1637,7 @@ event_type!(ToolProgressEventType, "tool.progress");
 pub struct ToolProgressEvent {
     #[serde(rename = "type")]
     pub event_type: ToolProgressEventType,
-    pub turn_id: f64,
+    pub turn_id: crate::TurnId,
     pub tool_call_id: String,
     pub update: ToolUpdate,
 }
@@ -1694,7 +1694,7 @@ event_type!(ToolResultEventType, "tool.result");
 pub struct ToolResultEvent {
     #[serde(rename = "type")]
     pub event_type: ToolResultEventType,
-    pub turn_id: f64,
+    pub turn_id: crate::TurnId,
     pub tool_call_id: String,
     pub output: Value,
     #[serde(
@@ -1841,7 +1841,7 @@ pub struct CompactionBlockedEvent {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "optional_non_null"
     )]
-    pub turn_id: Option<f64>,
+    pub turn_id: Option<crate::TurnId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2221,13 +2221,16 @@ mod tests {
             }))
             .is_err()
         );
-        assert!(
-            serde_json::from_value::<AgentPhase>(serde_json::json!({
-                "kind": "streaming", "turnId": 1, "step": 2, "stepId": "s",
-                "stream": "tool_call", "since": 3
-            }))
-            .is_ok()
-        );
+        let phase: AgentPhase = serde_json::from_value(serde_json::json!({
+            "kind": "streaming", "turnId": 1.9, "step": 2.9, "stepId": "s",
+            "stream": "tool_call", "since": 3
+        }))
+        .unwrap();
+        assert!(matches!(
+            phase,
+            AgentPhase::Streaming { turn_id, step, .. }
+                if turn_id == crate::TurnId::new(1) && step == crate::StepId::new(2)
+        ));
         assert!(
             serde_json::from_value::<WorkspaceDeletedEvent>(serde_json::json!({
                 "type": "event.workspace.deleted", "workspace_id": "", "root": "/repo"

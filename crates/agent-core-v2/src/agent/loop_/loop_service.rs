@@ -994,7 +994,7 @@ impl AgentLoopService {
         };
         runtime.steps += 1;
         let step = StepRuntime {
-            number: runtime.steps,
+            number: crate::agent::StepId::new(runtime.steps),
             uuid: uuid::Uuid::new_v4().to_string(),
             batch,
             mutable_step,
@@ -1215,9 +1215,9 @@ impl AgentLoopService {
         &self,
         turn_id: crate::agent::TurnId,
         signal: AbortSignal,
-        current_step: u64,
+        current_step: crate::agent::StepId,
         step_uuid: String,
-        on_started: Option<Arc<dyn Fn(u64) + Send + Sync>>,
+        on_started: Option<Arc<dyn Fn(crate::agent::StepId) + Send + Sync>>,
     ) -> Result<StepExecutionResult, LoopValue> {
         self.state.lock().unwrap().active_request_trace = None;
         let mut before = BeforeStepContext {
@@ -1248,7 +1248,7 @@ impl AgentLoopService {
             Some(AgentLlmRequestOverrides {
                 source: Some(AgentLlmRequestSource::Turn {
                     turn_id,
-                    step: Some(current_step as f64),
+                    step: Some(current_step),
                     log_fields: None,
                 }),
                 ..AgentLlmRequestOverrides::default()
@@ -1292,7 +1292,7 @@ impl AgentLoopService {
         &self,
         turn_id: crate::agent::TurnId,
         signal: &AbortSignal,
-        current_step: u64,
+        current_step: crate::agent::StepId,
         step_uuid: &str,
     ) -> Result<(), LoopValue> {
         signal
@@ -1307,7 +1307,7 @@ impl AgentLoopService {
             .append_loop_event(LoopRecordedEvent::StepBegin {
                 uuid: step_uuid.into(),
                 turn_id: Some(turn_id),
-                step: Some(current_step as f64),
+                step: Some(current_step),
             })
             .map_err(loop_error)
     }
@@ -1315,7 +1315,7 @@ impl AgentLoopService {
     fn append_response_content(
         &self,
         turn_id: crate::agent::TurnId,
-        current_step: u64,
+        current_step: crate::agent::StepId,
         step_uuid: &str,
         response: &AgentLlmRequestFinish,
     ) -> Result<(), LoopValue> {
@@ -1326,7 +1326,7 @@ impl AgentLoopService {
                     part: part.clone(),
                     uuid: Some(uuid::Uuid::new_v4().to_string()),
                     turn_id: Some(turn_id),
-                    step: Some(current_step as f64),
+                    step: Some(current_step),
                 })
                 .map_err(loop_error)?;
         }
@@ -1337,7 +1337,7 @@ impl AgentLoopService {
         &self,
         turn_id: crate::agent::TurnId,
         signal: AbortSignal,
-        current_step: u64,
+        current_step: crate::agent::StepId,
         step_uuid: &str,
         response: &AgentLlmRequestFinish,
         trace: LlmRequestTrace,
@@ -1370,7 +1370,7 @@ impl AgentLoopService {
                 extras: None,
                 uuid: Some(uuid),
                 turn_id: Some(turn_id),
-                step: Some(current_step as f64),
+                step: Some(current_step),
             });
         });
         let mut stream = self.tool_executor.execute(
@@ -1423,7 +1423,7 @@ impl AgentLoopService {
         &self,
         turn_id: crate::agent::TurnId,
         signal: &AbortSignal,
-        current_step: u64,
+        current_step: crate::agent::StepId,
         step_uuid: &str,
         response: &AgentLlmRequestFinish,
         finish_reason: FinishReason,
@@ -1439,7 +1439,7 @@ impl AgentLoopService {
             .append_loop_event(LoopRecordedEvent::StepEnd {
                 uuid: step_uuid.into(),
                 turn_id: Some(turn_id),
-                step: Some(current_step as f64),
+                step: Some(current_step),
                 finish_reason: Some(normalized.clone()),
                 usage: Some(response.usage),
                 llm_first_token_latency_ms: timing.map(|value| value.first_token_latency_ms),
@@ -1475,7 +1475,7 @@ impl AgentLoopService {
         &self,
         turn_id: crate::agent::TurnId,
         signal: AbortSignal,
-        current_step: u64,
+        current_step: crate::agent::StepId,
         usage: TokenUsage,
         finish_reason: FinishReason,
     ) -> Result<bool, LoopValue> {
@@ -1494,7 +1494,7 @@ impl AgentLoopService {
     fn emit_step_interrupted(
         &self,
         turn_id: crate::agent::TurnId,
-        step: Option<u64>,
+        step: Option<crate::agent::StepId>,
         reason: &str,
         message: Option<String>,
     ) {
@@ -1823,7 +1823,7 @@ struct LoopRuntime {
 }
 
 struct StepRuntime {
-    number: u64,
+    number: crate::agent::StepId,
     uuid: String,
     batch: StepRequestBatch,
     mutable_step: Option<Arc<StepHandleImpl>>,
@@ -1945,11 +1945,11 @@ fn error_payload(value: &LoopValue) -> KimiErrorPayload {
     }
 }
 
-fn result_steps(result: &LoopRunResult) -> u64 {
+fn result_steps(result: &LoopRunResult) -> crate::agent::StepId {
     match result {
         LoopRunResult::Completed { steps, .. }
         | LoopRunResult::Failed { steps, .. }
-        | LoopRunResult::Cancelled { steps, .. } => *steps,
+        | LoopRunResult::Cancelled { steps, .. } => crate::agent::StepId::new(*steps),
     }
 }
 
@@ -2198,7 +2198,7 @@ mod tests {
             .unwrap();
         let mut context = AfterStepContext {
             turn_id: crate::agent::TurnId::new(1),
-            step: 1,
+            step: crate::agent::StepId::new(1),
             signal: AbortController::new().signal(),
             usage: empty_usage(),
             finish_reason: FinishReason::ToolCalls,

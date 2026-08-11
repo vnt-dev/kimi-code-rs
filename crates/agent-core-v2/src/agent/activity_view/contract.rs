@@ -77,7 +77,7 @@ pub struct ActivityTurnState {
     pub phase: TurnPhase,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<ActivityStream>,
-    pub step: u64,
+    pub step: crate::agent::StepId,
     pub ending: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ending_reason: Option<ActivityEndingReason>,

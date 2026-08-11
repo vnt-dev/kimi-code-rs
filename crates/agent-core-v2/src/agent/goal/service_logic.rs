@@ -79,8 +79,11 @@ pub struct GoalBudgetTelemetryProperties {
     pub has_wall_clock_budget: bool,
 }
 
-pub fn has_step_budget_remaining(max_steps: Option<f64>, current_step: f64) -> bool {
-    max_steps.is_none_or(|max_steps| max_steps <= 0.0 || current_step < max_steps)
+pub fn has_step_budget_remaining(
+    max_steps: Option<u64>,
+    current_step: crate::agent::StepId,
+) -> bool {
+    max_steps.is_none_or(|max_steps| max_steps == 0 || current_step.get() < max_steps)
 }
 
 fn number_or_empty(value: Option<f64>) -> String {
@@ -149,9 +152,21 @@ mod tests {
         assert!(!matches_goal(&state(), Some("other")));
         assert!(is_goal_mutation_tool("UpdateGoal"));
         assert!(!is_goal_mutation_tool("ReadFile"));
-        assert!(has_step_budget_remaining(None, 100.0));
-        assert!(has_step_budget_remaining(Some(0.0), 100.0));
-        assert!(has_step_budget_remaining(Some(2.0), 1.0));
-        assert!(!has_step_budget_remaining(Some(2.0), 2.0));
+        assert!(has_step_budget_remaining(
+            None,
+            crate::agent::StepId::new(100)
+        ));
+        assert!(has_step_budget_remaining(
+            Some(0),
+            crate::agent::StepId::new(100)
+        ));
+        assert!(has_step_budget_remaining(
+            Some(2),
+            crate::agent::StepId::new(1)
+        ));
+        assert!(!has_step_budget_remaining(
+            Some(2),
+            crate::agent::StepId::new(2)
+        ));
     }
 }

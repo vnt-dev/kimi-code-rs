@@ -1,3 +1,9 @@
-pub mod turn_id;
+pub mod step_id {
+    pub use kimi_code_protocol::ids::step_id::*;
+}
 
-pub use turn_id::TurnId;
+pub mod turn_id {
+    pub use kimi_code_protocol::ids::turn_id::*;
+}
+
+pub use kimi_code_protocol::{StepId, TurnId};

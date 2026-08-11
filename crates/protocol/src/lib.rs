@@ -6,6 +6,7 @@ pub mod error_codes;
 pub mod events;
 pub mod file;
 pub mod fs;
+pub mod ids;
 pub mod message;
 pub mod model_catalog;
 pub mod pagination;
@@ -29,6 +30,7 @@ pub use error_codes::{ERROR_CODE_REASON, ErrorCode};
 pub use events::*;
 pub use file::FileMeta;
 pub use fs::*;
+pub use ids::{StepId, TurnId};
 pub use message::*;
 pub use model_catalog::{
     ModelCatalogItem, ProviderCatalogItem, ProviderCatalogStatus, ProviderRefreshChange,

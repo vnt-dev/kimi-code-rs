@@ -80,7 +80,7 @@ struct State {
     consecutive_key: Option<String>,
     consecutive_count: u64,
     active_turn_id: Option<crate::agent::TurnId>,
-    active_step: u64,
+    active_step: crate::agent::StepId,
 }
 
 struct DedupTelemetryInput<'a> {
@@ -89,7 +89,7 @@ struct DedupTelemetryInput<'a> {
     args: &'a serde_json::Value,
     dup_type: ToolCallDupType,
     turn_id: Option<crate::agent::TurnId>,
-    step: u64,
+    step: crate::agent::StepId,
     trace: Option<&'a LlmRequestTrace>,
 }
 
@@ -206,7 +206,7 @@ impl AgentToolDedupeService {
         Ok(())
     }
 
-    fn begin_step(&self, turn_id: crate::agent::TurnId, step: u64) {
+    fn begin_step(&self, turn_id: crate::agent::TurnId, step: crate::agent::StepId) {
         let mut state = self.state.lock().unwrap();
         if state.active_turn_id != Some(turn_id) {
             state.active_turn_id = Some(turn_id);
@@ -622,7 +622,7 @@ mod tests {
             AgentToolExecutorServiceHandle(Arc::clone(&executor)),
         )
         .unwrap();
-        dedupe.begin_step(crate::agent::TurnId::new(1), 1);
+        dedupe.begin_step(crate::agent::TurnId::new(1), crate::agent::StepId::new(1));
         let calls = ["original", "duplicate"]
             .into_iter()
             .map(|id| ToolCall {

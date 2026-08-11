@@ -39,4 +39,4 @@ pub mod tool_select;
 pub mod usage;
 pub mod user_tool;
 
-pub use ids::TurnId;
+pub use ids::{StepId, TurnId};

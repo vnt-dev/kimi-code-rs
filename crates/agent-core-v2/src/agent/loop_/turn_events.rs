@@ -76,7 +76,7 @@ pub struct TurnFilesChangedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct TurnStepStartedEvent {
     pub turn_id: crate::agent::TurnId,
-    pub step: u64,
+    pub step: crate::agent::StepId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_id: Option<String>,
 }
@@ -84,7 +84,7 @@ pub struct TurnStepStartedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct TurnStepCompletedEvent {
     pub turn_id: crate::agent::TurnId,
-    pub step: u64,
+    pub step: crate::agent::StepId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,7 +112,7 @@ pub struct TurnStepCompletedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct TurnStepInterruptedEvent {
     pub turn_id: crate::agent::TurnId,
-    pub step: u64,
+    pub step: crate::agent::StepId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_id: Option<String>,
     pub reason: String,

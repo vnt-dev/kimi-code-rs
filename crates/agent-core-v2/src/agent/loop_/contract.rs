@@ -70,14 +70,14 @@ impl From<Value> for LoopValue {
 #[derive(Clone)]
 pub struct BeforeStepContext {
     pub turn_id: crate::agent::TurnId,
-    pub step: u64,
+    pub step: crate::agent::StepId,
     pub signal: AbortSignal,
 }
 
 #[derive(Clone)]
 pub struct AfterStepContext {
     pub turn_id: crate::agent::TurnId,
-    pub step: u64,
+    pub step: crate::agent::StepId,
     pub signal: AbortSignal,
     pub usage: TokenUsage,
     pub finish_reason: FinishReason,
@@ -90,7 +90,7 @@ pub struct LoopErrorHandlerRegistrationOptions<'a> {
     pub after: Option<&'a str>,
 }
 
-pub type LoopOnStarted = Arc<dyn Fn(u64) + Send + Sync>;
+pub type LoopOnStarted = Arc<dyn Fn(crate::agent::StepId) + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct LoopRunOptions {
@@ -228,7 +228,7 @@ pub type LoopRetry =
 pub struct LoopErrorContext {
     pub current_step: Option<StepHandle>,
     pub turn_id: crate::agent::TurnId,
-    pub step: Option<u64>,
+    pub step: Option<crate::agent::StepId>,
     pub step_id: Option<String>,
     pub signal: AbortSignal,
     pub error: LoopValue,

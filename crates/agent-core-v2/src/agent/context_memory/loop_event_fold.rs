@@ -49,7 +49,7 @@ pub enum LoopRecordedEvent {
         )]
         turn_id: Option<crate::agent::TurnId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        step: Option<f64>,
+        step: Option<crate::agent::StepId>,
     },
     #[serde(rename = "step.end", rename_all = "camelCase")]
     StepEnd {
@@ -61,7 +61,7 @@ pub enum LoopRecordedEvent {
         )]
         turn_id: Option<crate::agent::TurnId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        step: Option<f64>,
+        step: Option<crate::agent::StepId>,
         #[serde(skip_serializing_if = "Option::is_none")]
         finish_reason: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,7 +98,7 @@ pub enum LoopRecordedEvent {
         )]
         turn_id: Option<crate::agent::TurnId>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        step: Option<f64>,
+        step: Option<crate::agent::StepId>,
     },
     #[serde(rename = "tool.call", rename_all = "camelCase")]
     ToolCall {
@@ -118,7 +118,7 @@ pub enum LoopRecordedEvent {
         )]
         turn_id: Option<crate::agent::TurnId>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        step: Option<f64>,
+        step: Option<crate::agent::StepId>,
     },
     #[serde(rename = "tool.result", rename_all = "camelCase")]
     ToolResult {
@@ -360,7 +360,7 @@ mod tests {
                 extras: None,
                 uuid: None,
                 turn_id: Some(crate::agent::TurnId::new(1)),
-                step: Some(2.0),
+                step: Some(crate::agent::StepId::new(2)),
             })
             .unwrap(),
             serde_json::json!({
@@ -370,9 +370,27 @@ mod tests {
                 "name": "Lookup",
                 "args": { "q": "moon" },
                 "turnId": "1",
-                "step": 2.0
+                "step": 2
             })
         );
+    }
+
+    #[test]
+    fn event_deserialization_truncates_legacy_fractional_steps() {
+        let event: LoopRecordedEvent = serde_json::from_value(serde_json::json!({
+            "type": "step.begin",
+            "uuid": "s1",
+            "step": 2.9
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            event,
+            LoopRecordedEvent::StepBegin {
+                step: Some(step),
+                ..
+            } if step == crate::agent::StepId::new(2)
+        ));
     }
 
     #[test]

@@ -146,6 +146,87 @@ fn parse_numeric_turn_id(value: &str) -> Result<TurnId, ()> {
         .and_then(|value| turn_id_from_f64(value).map_err(|_| ()))
 }
 
+struct NonNegativeTurnId(TurnId);
+
+impl<'de> Deserialize<'de> for NonNegativeTurnId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NonNegativeTurnIdVisitor)
+    }
+}
+
+struct NonNegativeTurnIdVisitor;
+
+impl Visitor<'_> for NonNegativeTurnIdVisitor {
+    type Value = NonNegativeTurnId;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a non-negative integer turn id")
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        TurnId::try_from(value)
+            .map(NonNegativeTurnId)
+            .map_err(E::custom)
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        if value >= 0 {
+            Ok(NonNegativeTurnId(TurnId::new(value)))
+        } else {
+            Err(E::custom("turn id must be non-negative"))
+        }
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value < -(i64::MIN as f64) {
+            Ok(NonNegativeTurnId(TurnId::new(value as i64)))
+        } else {
+            Err(E::custom("turn id must be a non-negative integer"))
+        }
+    }
+}
+
+/// Serde adapter for protocol fields that require a non-negative turn id.
+pub mod non_negative {
+    use serde::{Deserialize, Deserializer};
+
+    use super::{NonNegativeTurnId, TurnId};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<TurnId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        NonNegativeTurnId::deserialize(deserializer).map(|value| value.0)
+    }
+}
+
+/// Serde adapter for optional protocol fields that require a non-negative turn id.
+pub mod non_negative_option {
+    use serde::{Deserialize, Deserializer};
+
+    use super::{NonNegativeTurnId, TurnId};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<TurnId>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<NonNegativeTurnId>::deserialize(deserializer)
+            .map(|value| value.map(|value| value.0))
+    }
+}
+
 /// Serde adapter for historical records whose turn id is written as a string.
 pub mod string_option {
     use serde::{Deserialize, Deserializer, Serializer};
@@ -183,6 +264,14 @@ mod tests {
         turn_id: Option<TurnId>,
     }
 
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct NonNegativeRecord {
+        #[serde(deserialize_with = "non_negative::deserialize")]
+        turn_id: TurnId,
+        #[serde(default, deserialize_with = "non_negative_option::deserialize")]
+        optional_turn_id: Option<TurnId>,
+    }
+
     #[test]
     fn legacy_string_adapter_preserves_wire_shape_and_accepts_old_values() {
         let record = LegacyRecord {
@@ -216,5 +305,30 @@ mod tests {
             );
         }
         assert!(serde_json::from_value::<TurnId>(json!("turn-1")).is_err());
+    }
+
+    #[test]
+    fn non_negative_adapters_preserve_rest_validation() {
+        assert_eq!(
+            serde_json::from_value::<NonNegativeRecord>(json!({
+                "turn_id": 7,
+                "optional_turn_id": 8
+            }))
+            .unwrap(),
+            NonNegativeRecord {
+                turn_id: TurnId::new(7),
+                optional_turn_id: Some(TurnId::new(8))
+            }
+        );
+        assert!(serde_json::from_value::<NonNegativeRecord>(json!({"turn_id": -1})).is_err());
+        assert!(serde_json::from_value::<NonNegativeRecord>(json!({"turn_id": 1.5})).is_err());
+        assert!(serde_json::from_value::<NonNegativeRecord>(json!({"turn_id": "1"})).is_err());
+        assert!(
+            serde_json::from_value::<NonNegativeRecord>(json!({
+                "turn_id": 1,
+                "optional_turn_id": -1
+            }))
+            .is_err()
+        );
     }
 }

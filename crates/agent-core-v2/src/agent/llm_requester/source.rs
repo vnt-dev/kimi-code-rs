@@ -13,7 +13,7 @@ pub enum AgentLlmRequestSource {
         #[serde(rename = "turnId")]
         turn_id: crate::agent::TurnId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        step: Option<f64>,
+        step: Option<crate::agent::StepId>,
         #[serde(rename = "logFields", default, skip_serializing_if = "Option::is_none")]
         log_fields: Option<AgentLlmRequestLogFields>,
     },
@@ -54,13 +54,13 @@ mod tests {
     fn discriminated_union_preserves_camel_case_fields_and_optional_values() {
         let turn = AgentLlmRequestSource::Turn {
             turn_id: crate::agent::TurnId::new(7),
-            step: Some(2.0),
+            step: Some(crate::agent::StepId::new(2)),
             log_fields: Some(Map::from_iter([("projection".into(), json!("strict"))])),
         };
         assert_eq!(
             serde_json::to_value(&turn).unwrap(),
             json!({
-                "type": "turn", "turnId": 7, "step": 2.0,
+                "type": "turn", "turnId": 7, "step": 2,
                 "logFields": {"projection": "strict"}
             })
         );

@@ -736,12 +736,11 @@ impl AgentGoalService {
             .and_then(|value| {
                 serde_json::from_value::<crate::agent::loop_::LoopControl>(value).ok()
             })
-            .and_then(|control| control.max_steps_per_turn)
-            .map(|value| value as f64);
+            .and_then(|control| control.max_steps_per_turn);
         let mut runtime = self.state.lock().unwrap();
         if context.finish_reason == FinishReason::ToolCalls
             && !runtime.budget_grace_turns.contains(&context.turn_id)
-            && has_step_budget_remaining(max_steps, context.step as f64)
+            && has_step_budget_remaining(max_steps, context.step)
         {
             runtime.budget_grace_turns.insert(context.turn_id);
             drop(runtime);
@@ -796,9 +795,8 @@ impl AgentGoalService {
             .and_then(|value| {
                 serde_json::from_value::<crate::agent::loop_::LoopControl>(value).ok()
             })
-            .and_then(|control| control.max_steps_per_turn)
-            .map(|value| value as f64);
-        if !has_step_budget_remaining(max_steps, context.step as f64) {
+            .and_then(|control| control.max_steps_per_turn);
+        if !has_step_budget_remaining(max_steps, context.step) {
             return Ok(());
         }
         self.loop_service

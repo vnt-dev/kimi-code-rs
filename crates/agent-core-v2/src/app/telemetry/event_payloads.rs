@@ -298,7 +298,7 @@ impl_event_payload!(TurnStartedEvent, "turn_started", Agent);
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TurnInterruptedEvent {
     pub turn_id: crate::agent::TurnId,
-    pub at_step: u64,
+    pub at_step: crate::agent::StepId,
     pub mode: AgentTelemetryMode,
     pub interrupt_reason: TurnInterruptReason,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -365,7 +365,7 @@ pub struct ApiErrorEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub step_no: Option<u64>,
+    pub step_no: Option<crate::agent::StepId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
 }
@@ -638,7 +638,7 @@ impl_event_payload!(GoalStatusChangedEvent, "goal_status_changed", Agent);
 pub struct ToolCallDedupDetectedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<crate::agent::TurnId>,
-    pub step_no: u64,
+    pub step_no: crate::agent::StepId,
     pub tool_call_id: String,
     pub tool_name: String,
     pub dup_type: ToolCallDupType,
