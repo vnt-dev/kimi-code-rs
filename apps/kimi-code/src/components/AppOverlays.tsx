@@ -175,28 +175,27 @@ export function AppOverlays({
         />
       )}
 
-      {settingsOpen && (
-        <SettingsDialog
-          appVersion={appVersion}
-          colorScheme={colorScheme}
-          language={language}
-          notificationsEnabled={notificationsEnabled}
-          auth={auth}
-          accountProfile={accountProfile}
-          accountUsage={accountUsage}
-          accountUsageBusy={accountUsageBusy}
-          accountUsageError={accountUsageError}
-          onRefreshAccountUsage={onRefreshAccountUsage}
-          onLogin={onStartLogin}
-          onSignOut={onSignOut}
-          onColorSchemeChange={onColorSchemeChange}
-          onLanguageChange={onLanguageChange}
-          onNotificationsEnabledChange={onNotificationsEnabledChange}
-          onProvidersChanged={onProvidersChanged}
-          onPluginsChanged={onPluginsChanged}
-          onClose={onCloseSettings}
-        />
-      )}
+      <SettingsDialog
+        open={settingsOpen}
+        appVersion={appVersion}
+        colorScheme={colorScheme}
+        language={language}
+        notificationsEnabled={notificationsEnabled}
+        auth={auth}
+        accountProfile={accountProfile}
+        accountUsage={accountUsage}
+        accountUsageBusy={accountUsageBusy}
+        accountUsageError={accountUsageError}
+        onRefreshAccountUsage={onRefreshAccountUsage}
+        onLogin={onStartLogin}
+        onSignOut={onSignOut}
+        onColorSchemeChange={onColorSchemeChange}
+        onLanguageChange={onLanguageChange}
+        onNotificationsEnabledChange={onNotificationsEnabledChange}
+        onProvidersChanged={onProvidersChanged}
+        onPluginsChanged={onPluginsChanged}
+        onClose={onCloseSettings}
+      />
 
       {agentManagerOpen && agentManagerWorkspace && (
         <CustomAgentManagerDialog

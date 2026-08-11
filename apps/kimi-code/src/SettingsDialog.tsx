@@ -46,6 +46,7 @@ function webServerStateLabel(state: WebServerStatus["state"] = "stopped"): strin
 }
 
 export default function SettingsDialog({
+  open,
   appVersion,
   colorScheme,
   language,
@@ -65,6 +66,7 @@ export default function SettingsDialog({
   onPluginsChanged,
   onClose,
 }: {
+  open: boolean;
   appVersion?: string;
   colorScheme: ColorScheme;
   language: Language;
@@ -139,8 +141,9 @@ export default function SettingsDialog({
   );
 
   useEffect(() => {
-    if (!isDesktop()) return;
+    if (!open || !isDesktop()) return;
     let active = true;
+    setWebBusy(true);
     void invoke<WebServerStatus>("get_web_server_status")
       .then((status) => {
         if (!active) return;
@@ -159,9 +162,10 @@ export default function SettingsDialog({
     return () => {
       active = false;
     };
-  }, []);
+  }, [open]);
 
   useEffect(() => {
+    if (!open) return;
     const previousFocus = document.activeElement;
     dialogRef.current?.focus();
 
@@ -199,7 +203,7 @@ export default function SettingsDialog({
       document.removeEventListener("keydown", handleKeyDown);
       if (previousFocus instanceof HTMLElement) previousFocus.focus();
     };
-  }, [onClose]);
+  }, [onClose, open]);
 
   const handleCheckForUpdates = async (): Promise<void> => {
     if (!isDesktop()) {
@@ -331,6 +335,10 @@ export default function SettingsDialog({
       setNotificationBusy(false);
     }
   };
+
+  // Keep this component mounted while hidden so an in-flight updater request
+  // retains its progress and pending Update resource across dialog reopenings.
+  if (!open) return null;
 
   return (
     <div
