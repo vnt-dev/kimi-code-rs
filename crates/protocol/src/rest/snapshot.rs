@@ -41,7 +41,6 @@ pub struct InFlightToolCall {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InFlightTurn {
-    #[serde(deserialize_with = "crate::ids::turn_id::non_negative::deserialize")]
     pub turn_id: crate::TurnId,
     pub assistant_text: String,
     pub thinking_text: String,

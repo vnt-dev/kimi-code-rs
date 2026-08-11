@@ -56,11 +56,7 @@ pub struct QuestionRequest {
     pub question_id: String,
     #[serde(deserialize_with = "non_empty")]
     pub session_id: String,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::ids::turn_id::non_negative_option::deserialize"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<crate::TurnId>,
     #[serde(
         default,

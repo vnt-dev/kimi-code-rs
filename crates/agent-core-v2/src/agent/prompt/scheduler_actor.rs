@@ -1642,7 +1642,7 @@ fn now() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     use async_trait::async_trait;
     use futures_util::{FutureExt, future, stream};
@@ -1831,7 +1831,7 @@ mod tests {
 
     struct FakeLoop {
         hooks: AgentLoopHooks,
-        next_id: AtomicI64,
+        next_id: AtomicU64,
         active: Mutex<Option<Arc<FakeTurn>>>,
         requests: Mutex<Vec<Arc<dyn StepRequest>>>,
     }
@@ -1840,7 +1840,7 @@ mod tests {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 hooks: AgentLoopHooks::default(),
-                next_id: AtomicI64::new(1),
+                next_id: AtomicU64::new(1),
                 active: Mutex::new(None),
                 requests: Mutex::new(Vec::new()),
             })

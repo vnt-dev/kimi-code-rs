@@ -249,8 +249,8 @@ fn event_turn_id(event: &DomainEvent) -> Option<crate::agent::TurnId> {
     event
         .fields
         .get("turnId")
-        .and_then(serde_json::Value::as_i64)
-        .map(crate::agent::TurnId::new)
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 fn event_prompt_id(event: &DomainEvent) -> Option<&str> {
