@@ -111,7 +111,10 @@ import {
   WindowTitleBar
 } from "./components/ChatHeader";
 import { ComposerDock } from "./components/ComposerDock";
-import { ProjectLanding } from "./components/ProjectLanding";
+import {
+  ProjectConversationEmpty,
+  ProjectLanding,
+} from "./components/ProjectLanding";
 import {
   CompactionSummarySidebar,
   PluginCommandDetailSidebar,
@@ -3067,6 +3070,13 @@ export default function App() {
               updatePrompt={updatePrompt}
             />
           </>
+        ) : activeProject ? (
+          <ProjectConversationEmpty
+            collapsed={sidebarCollapsed}
+            menuButtonRef={mobileMenuButtonRef}
+            onExpand={openSidebar}
+            onCreateConversation={() => void createConversation(activeProject)}
+          />
         ) : (
           <ProjectLanding
             collapsed={sidebarCollapsed}

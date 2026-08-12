@@ -119,21 +119,6 @@
   filter: brightness(1.06);
 }
 
-.landing-shortcut {
-  z-index: 1;
-  margin-top: 17px;
-  color: #50505a;
-  font-size: 11px;
-}
-
-.landing-shortcut span {
-  margin-right: 7px;
-  padding: 2px 5px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  color: #696973;
-}
-
 .modal-backdrop {
   position: fixed;
   inset: 0;

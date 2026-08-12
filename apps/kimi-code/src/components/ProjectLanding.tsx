@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { Folder, FolderGit2, Menu } from "lucide-react";
+import { Folder, FolderGit2, Menu, MessageSquarePlus } from "lucide-react";
 
 import { t } from "../i18n";
 
@@ -47,10 +47,49 @@ export function ProjectLanding({
         <Folder size={17} />
         {t("landing.openProject")}
       </button>
-      <div className="landing-shortcut">
-        <span>{t("landing.tip")}</span>
-        {t("landing.dragHint")}
+    </div>
+  );
+}
+
+export function ProjectConversationEmpty({
+  collapsed,
+  menuButtonRef,
+  onExpand,
+  onCreateConversation,
+}: {
+  collapsed: boolean;
+  menuButtonRef?: RefObject<HTMLButtonElement | null>;
+  onExpand: () => void;
+  onCreateConversation: () => void;
+}) {
+  return (
+    <div className="project-landing project-conversation-empty">
+      {collapsed && (
+        <button
+          className="landing-menu icon-button"
+          ref={menuButtonRef}
+          type="button"
+          aria-label={t("sidebar.expand")}
+          onClick={onExpand}
+        >
+          <Menu size={18} />
+        </button>
+      )}
+      <div className="landing-visual">
+        <span className="landing-grid" />
+        <div className="landing-folder">
+          <MessageSquarePlus size={42} />
+        </div>
+        <i className="landing-dot dot-one" />
+        <i className="landing-dot dot-two" />
+        <i className="landing-dot dot-three" />
       </div>
+      <h1>{t("projectEmpty.title")}</h1>
+      <p>{t("projectEmpty.copy")}</p>
+      <button className="landing-primary" onClick={onCreateConversation}>
+        <MessageSquarePlus size={17} />
+        {t("conversation.create")}
+      </button>
     </div>
   );
 }

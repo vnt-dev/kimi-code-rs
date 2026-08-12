@@ -952,9 +952,7 @@ input:focus-visible {
 }
 
 .send-zone > span,
-.composer-caption,
-.landing-shortcut,
-.landing-shortcut span {
+.composer-caption {
   color: var(--subtle);
   font-size: 11px;
 }

@@ -802,8 +802,8 @@ const zh = {
   "landing.copy1": "选择本地代码目录。每个项目都有独立的对话空间，",
   "landing.copy2": "你的上下文和灵感会一直留在这里。",
   "landing.openProject": "打开本地项目",
-  "landing.tip": "提示",
-  "landing.dragHint": "你也可以把项目文件夹拖到窗口中",
+  "projectEmpty.title": "创建一个新对话",
+  "projectEmpty.copy": "这个项目还没有对话。创建一个对话，开始探索和修改代码。",
 
   "removal.close": "关闭确认窗口",
   "removal.projectTitle": "移除这个项目？",
@@ -1621,8 +1621,8 @@ const en: Record<TranslationKey, string> = {
   "landing.copy1": "Choose a local code directory. Every project gets its own conversation space,",
   "landing.copy2": "and your context and ideas stay right here.",
   "landing.openProject": "Open local project",
-  "landing.tip": "Tip",
-  "landing.dragHint": "You can also drag a project folder into the window",
+  "projectEmpty.title": "Create a new conversation",
+  "projectEmpty.copy": "This project has no conversations yet. Create one to start exploring and changing the code.",
 
   "removal.close": "Close confirmation dialog",
   "removal.projectTitle": "Remove this project?",

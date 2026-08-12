@@ -317,7 +317,7 @@ export function createWorkspaceActions({
         return {
           projects: [...current.projects, project],
           activeProjectId: project.id,
-          activeConversationId: undefined,
+          activeConversationId: project.conversations[0]?.id,
         };
       });
       if (mobileLayout) closeMobileNavigation();
