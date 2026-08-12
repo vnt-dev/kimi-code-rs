@@ -5,6 +5,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -12,6 +13,7 @@ use std::{
 use std::os::windows::process::CommandExt;
 
 use indexmap::IndexMap;
+use tokio::sync::OnceCell;
 
 pub const KIMI_CODE_PLATFORM: &str = "kimi_code_cli";
 pub const KIMI_CODE_CUSTOM_HEADERS_ENV: &str = "KIMI_CODE_CUSTOM_HEADERS";
@@ -65,7 +67,16 @@ impl IdentityError {
                 .to_owned(),
         }
     }
+
+    fn initialization(message: impl fmt::Display) -> Self {
+        Self {
+            message: format!("Failed to initialize Kimi device identity: {message}"),
+        }
+    }
 }
+
+static DEVICE_SYSTEM_INFO: OnceCell<DeviceSystemInfo> = OnceCell::const_new();
+static DEVICE_IDS: OnceLock<Mutex<HashMap<PathBuf, Arc<OnceCell<String>>>>> = OnceLock::new();
 
 impl fmt::Display for IdentityError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -115,10 +126,35 @@ pub fn create_kimi_device_headers(
     create_kimi_device_headers_with_info(home_dir, version, &system_info())
 }
 
+/// Creates the device headers without performing process or file I/O on the async worker.
+/// System information is initialized once per process and device IDs once per home directory.
+pub async fn create_kimi_device_headers_async(
+    home_dir: &Path,
+    version: &str,
+) -> Result<IndexMap<String, String>, IdentityError> {
+    let system = DEVICE_SYSTEM_INFO
+        .get_or_try_init(|| async {
+            tokio::task::spawn_blocking(system_info)
+                .await
+                .map_err(IdentityError::initialization)
+        })
+        .await?;
+    let device_id = cached_kimi_device_id(home_dir).await?;
+    create_kimi_device_headers_with_info_and_id(version, system, &device_id)
+}
+
 pub fn create_kimi_device_headers_with_info(
     home_dir: &Path,
     version: &str,
     system: &DeviceSystemInfo,
+) -> Result<IndexMap<String, String>, IdentityError> {
+    create_kimi_device_headers_with_info_and_id(version, system, &create_kimi_device_id(home_dir))
+}
+
+fn create_kimi_device_headers_with_info_and_id(
+    version: &str,
+    system: &DeviceSystemInfo,
+    device_id: &str,
 ) -> Result<IndexMap<String, String>, IdentityError> {
     Ok(IndexMap::from([
         ("X-Msh-Platform".to_owned(), KIMI_CODE_PLATFORM.to_owned()),
@@ -138,10 +174,7 @@ pub fn create_kimi_device_headers_with_info(
             "X-Msh-Os-Version".to_owned(),
             ascii_header(&system.os_release, "unknown"),
         ),
-        (
-            "X-Msh-Device-Id".to_owned(),
-            create_kimi_device_id(home_dir),
-        ),
+        ("X-Msh-Device-Id".to_owned(), device_id.to_owned()),
     ]))
 }
 
@@ -172,6 +205,51 @@ pub fn create_kimi_default_headers(
         &options.host.version,
     )?);
     Ok(headers)
+}
+
+/// Async equivalent of [`create_kimi_default_headers`] that caches blocking device identity I/O.
+pub async fn create_kimi_default_headers_async(
+    options: &KimiIdentityOptions,
+) -> Result<IndexMap<String, String>, IdentityError> {
+    let mut headers = IndexMap::from([(
+        "User-Agent".to_owned(),
+        create_kimi_user_agent(&options.host)?,
+    )]);
+    headers
+        .extend(create_kimi_device_headers_async(&options.home_dir, &options.host.version).await?);
+    Ok(headers)
+}
+
+async fn cached_kimi_device_id(home_dir: &Path) -> Result<String, IdentityError> {
+    let key = absolute_home_dir(home_dir);
+    let cell = {
+        let mut cells = DEVICE_IDS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(
+            cells
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(OnceCell::new())),
+        )
+    };
+    cell.get_or_try_init(|| async move {
+        tokio::task::spawn_blocking(move || create_kimi_device_id(&key))
+            .await
+            .map_err(IdentityError::initialization)
+    })
+    .await
+    .cloned()
+}
+
+fn absolute_home_dir(home_dir: &Path) -> PathBuf {
+    if home_dir.is_absolute() {
+        home_dir.to_owned()
+    } else {
+        std::env::current_dir()
+            .map(|current| current.join(home_dir))
+            .unwrap_or_else(|_| home_dir.to_owned())
+    }
 }
 
 // Original: parseKimiCodeCustomHeaders()
@@ -407,6 +485,23 @@ mod tests {
         assert_eq!(read_kimi_device_id(&first_home), Some(first.id));
         fs::remove_dir_all(first_home).expect("cleanup first");
         fs::remove_dir_all(second_home).expect("cleanup second");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_headers_share_one_device_id_during_concurrent_initialization() {
+        let home = temp_home();
+        let results = futures_util::future::join_all(
+            (0..16).map(|_| create_kimi_device_headers_async(&home, "1.2.3")),
+        )
+        .await;
+        let device_ids = results
+            .into_iter()
+            .map(|result| result.expect("headers")["X-Msh-Device-Id"].clone())
+            .collect::<Vec<_>>();
+
+        assert!(device_ids.iter().all(|id| id == &device_ids[0]));
+        assert_eq!(read_kimi_device_id(&home), Some(device_ids[0].clone()));
+        fs::remove_dir_all(home).expect("cleanup");
     }
 
     #[test]

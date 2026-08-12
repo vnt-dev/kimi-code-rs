@@ -20,7 +20,7 @@ use kimi_code_oauth::{
     BoosterWalletInfo, CredentialKind, DeviceAuthorization, DeviceCodeObserver,
     KIMI_CODE_PROVIDER_NAME, KimiHostIdentity, KimiIdentityOptions, KimiOAuthLoginOptions,
     ManagedKimiCodeApplyOptions, ManagedKimiCodeModelInfo, ManagedUserInfo, ManagedUserInfoPhone,
-    OAuthManagerError, UsageRow, apply_managed_kimi_code_config, create_kimi_default_headers,
+    OAuthManagerError, UsageRow, apply_managed_kimi_code_config, create_kimi_default_headers_async,
     fetch_managed_kimi_code_models, managed_usage::DEFAULT_KIMI_CODE_BASE_URL,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -121,6 +121,7 @@ pub struct KimiCodeDesktopClient {
     models_configured: AtomicBool,
     config_gate: AsyncMutex<()>,
     usage_statistics_gate: AsyncMutex<()>,
+    identity_headers: tokio::sync::OnceCell<IndexMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -601,6 +602,7 @@ impl KimiCodeDesktopClient {
             models_configured: AtomicBool::new(false),
             config_gate: AsyncMutex::new(()),
             usage_statistics_gate: AsyncMutex::new(()),
+            identity_headers: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -1982,7 +1984,7 @@ impl KimiCodeDesktopClient {
 
     async fn fetch_models(&self) -> Result<Vec<ManagedKimiCodeModelInfo>, String> {
         let token = self.fresh_token().await?;
-        let headers = self.identity_headers()?;
+        let headers = self.identity_headers().await?;
         fetch_managed_kimi_code_models(
             &token,
             Some(DEFAULT_KIMI_CODE_BASE_URL),
@@ -2090,16 +2092,22 @@ impl KimiCodeDesktopClient {
             .map_err(|error| error.to_string())
     }
 
-    fn identity_headers(&self) -> Result<IndexMap<String, String>, String> {
-        create_kimi_default_headers(&KimiIdentityOptions {
-            home_dir: self.home_dir.clone(),
-            host: KimiHostIdentity {
-                user_agent_product: "kimi-code-desktop".to_owned(),
-                version: self.client_version.clone(),
-                user_agent_suffix: Some("Tauri".to_owned()),
-            },
-        })
-        .map_err(|error| error.to_string())
+    async fn identity_headers(&self) -> Result<IndexMap<String, String>, String> {
+        self.identity_headers
+            .get_or_try_init(|| async {
+                create_kimi_default_headers_async(&KimiIdentityOptions {
+                    home_dir: self.home_dir.clone(),
+                    host: KimiHostIdentity {
+                        user_agent_product: "kimi-code-desktop".to_owned(),
+                        version: self.client_version.clone(),
+                        user_agent_suffix: Some("Tauri".to_owned()),
+                    },
+                })
+                .await
+                .map_err(|error| error.to_string())
+            })
+            .await
+            .cloned()
     }
 }
 

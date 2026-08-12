@@ -11,7 +11,7 @@ use super::{
     constants::kimi_code_flow_config,
     identity::{
         IdentityError, KimiHostIdentity, KimiIdentityOptions, assert_kimi_host_identity,
-        create_kimi_default_headers, create_kimi_device_headers,
+        create_kimi_default_headers_async,
     },
     managed_auth::{KIMI_CODE_OAUTH_KEY, KIMI_CODE_PROVIDER_NAME, resolve_kimi_code_oauth_key},
     managed_config::{ManagedKimiCodeApplyOptions, ManagedKimiCodeApplyResult},
@@ -294,7 +294,7 @@ pub struct KimiOAuthToolkit<A = NoManagedConfigAdapter> {
     refresh_threshold: Option<Arc<RefreshThreshold>>,
     on_refresh: Option<Arc<RefreshObserver>>,
     managers: Mutex<HashMap<String, Arc<OAuthManager>>>,
-    identity_headers: Mutex<Option<indexmap::IndexMap<String, String>>>,
+    identity_headers: tokio::sync::OnceCell<indexmap::IndexMap<String, String>>,
     config_adapter: Option<Arc<A>>,
 }
 
@@ -316,12 +316,15 @@ impl<A> KimiOAuthToolkit<A> {
         let flow_config = options.flow_config.unwrap_or_else(kimi_code_flow_config);
         let identity = options.identity;
         let runtime = options.runtime.unwrap_or_else(|| {
-            let device_headers = identity.clone().map(|identity| {
-                let home_dir = home_dir.clone();
-                Arc::new(move || create_kimi_device_headers(&home_dir, &identity.version).ok())
-                    as Arc<dyn Fn() -> Option<indexmap::IndexMap<String, String>> + Send + Sync>
-            });
-            Arc::new(SystemOAuthManagerRuntime::new(device_headers))
+            identity.as_ref().map_or_else(
+                || Arc::new(SystemOAuthManagerRuntime::default()),
+                |identity| {
+                    Arc::new(SystemOAuthManagerRuntime::with_device_identity(
+                        home_dir.clone(),
+                        identity.version.clone(),
+                    ))
+                },
+            )
         });
         Ok(Self {
             home_dir,
@@ -333,7 +336,7 @@ impl<A> KimiOAuthToolkit<A> {
             refresh_threshold: options.refresh_threshold,
             on_refresh: options.on_refresh,
             managers: Mutex::new(HashMap::new()),
-            identity_headers: Mutex::new(None),
+            identity_headers: tokio::sync::OnceCell::new(),
             config_adapter: options.config_adapter,
         })
     }
@@ -610,25 +613,24 @@ impl<A> KimiOAuthToolkit<A> {
             .map_err(|error| error.to_string())
     }
 
-    fn identity_headers(
+    async fn identity_headers(
         &self,
     ) -> Result<Option<indexmap::IndexMap<String, String>>, KimiOAuthToolkitError> {
         let Some(identity) = &self.identity else {
             return Ok(None);
         };
-        let mut cached = self
+        let headers = self
             .identity_headers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(headers) = cached.as_ref() {
-            return Ok(Some(headers.clone()));
-        }
-        let headers = create_kimi_default_headers(&KimiIdentityOptions {
-            home_dir: self.home_dir.clone(),
-            host: identity.clone(),
-        })?;
-        *cached = Some(headers.clone());
-        Ok(Some(headers))
+            .get_or_try_init(|| async {
+                create_kimi_default_headers_async(&KimiIdentityOptions {
+                    home_dir: self.home_dir.clone(),
+                    host: identity.clone(),
+                })
+                .await
+                .map_err(KimiOAuthToolkitError::from)
+            })
+            .await?;
+        Ok(Some(headers.clone()))
     }
 }
 
@@ -679,7 +681,7 @@ where
             .unwrap_or(self.config_adapter.is_some());
         let provision = if should_provision {
             if let Some(adapter) = self.config_adapter.as_deref() {
-                let headers = self.identity_headers()?;
+                let headers = self.identity_headers().await?;
                 match provision_with_token(
                     adapter,
                     &access_token,

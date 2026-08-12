@@ -10,7 +10,7 @@ use std::{
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use tokio::{
-    sync::{Mutex as AsyncMutex, Notify, oneshot},
+    sync::{Mutex as AsyncMutex, Notify, OnceCell, oneshot},
     task::JoinHandle,
 };
 
@@ -118,18 +118,52 @@ pub trait OAuthManagerRuntime: Send + Sync {
 
 type DeviceHeaderFactory = dyn Fn() -> Option<DeviceHeaders> + Send + Sync;
 
+#[derive(Clone)]
+enum DeviceHeaderSource {
+    Factory(Arc<DeviceHeaderFactory>),
+    Identity { home_dir: PathBuf, version: String },
+}
+
 #[derive(Clone, Default)]
 pub struct SystemOAuthManagerRuntime {
-    device_headers: Option<Arc<DeviceHeaderFactory>>,
+    device_header_source: Option<DeviceHeaderSource>,
+    device_headers: Arc<OnceCell<Option<DeviceHeaders>>>,
 }
 
 impl SystemOAuthManagerRuntime {
     pub fn new(device_headers: Option<Arc<DeviceHeaderFactory>>) -> Self {
-        Self { device_headers }
+        Self {
+            device_header_source: device_headers.map(DeviceHeaderSource::Factory),
+            device_headers: Arc::new(OnceCell::new()),
+        }
     }
 
-    fn device_headers(&self) -> Option<DeviceHeaders> {
-        self.device_headers.as_ref().and_then(|factory| factory())
+    pub fn with_device_identity(home_dir: PathBuf, version: String) -> Self {
+        Self {
+            device_header_source: Some(DeviceHeaderSource::Identity { home_dir, version }),
+            device_headers: Arc::new(OnceCell::new()),
+        }
+    }
+
+    async fn device_headers(&self) -> Option<DeviceHeaders> {
+        self.device_headers
+            .get_or_init(|| async {
+                match self.device_header_source.clone() {
+                    Some(DeviceHeaderSource::Factory(factory)) => {
+                        tokio::task::spawn_blocking(move || factory())
+                            .await
+                            .unwrap_or(None)
+                    }
+                    Some(DeviceHeaderSource::Identity { home_dir, version }) => {
+                        super::identity::create_kimi_device_headers_async(&home_dir, &version)
+                            .await
+                            .ok()
+                    }
+                    None => None,
+                }
+            })
+            .await
+            .clone()
     }
 }
 
@@ -151,7 +185,7 @@ impl OAuthManagerRuntime for SystemOAuthManagerRuntime {
         config: &OAuthFlowConfig,
         refresh_token: &str,
     ) -> Result<TokenInfo, OAuthError> {
-        let headers = self.device_headers();
+        let headers = self.device_headers().await;
         refresh_access_token(
             config,
             refresh_token,
@@ -167,7 +201,7 @@ impl OAuthManagerRuntime for SystemOAuthManagerRuntime {
         &self,
         config: &OAuthFlowConfig,
     ) -> Result<DeviceAuthorization, OAuthError> {
-        let headers = self.device_headers();
+        let headers = self.device_headers().await;
         request_device_authorization(config, headers.as_ref()).await
     }
 
@@ -176,7 +210,7 @@ impl OAuthManagerRuntime for SystemOAuthManagerRuntime {
         config: &OAuthFlowConfig,
         device_code: &str,
     ) -> Result<DevicePollResult, OAuthError> {
-        let headers = self.device_headers();
+        let headers = self.device_headers().await;
         poll_device_token(config, device_code, headers.as_ref()).await
     }
 }
@@ -749,6 +783,20 @@ mod tests {
     #[derive(Default)]
     struct MemoryStorage {
         tokens: Mutex<HashMap<String, TokenInfo>>,
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn system_runtime_initializes_device_headers_once() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let factory_calls = Arc::clone(&calls);
+        let runtime = SystemOAuthManagerRuntime::new(Some(Arc::new(move || {
+            factory_calls.fetch_add(1, Ordering::SeqCst);
+            Some(DeviceHeaders::new())
+        })));
+
+        futures_util::future::join_all((0..16).map(|_| runtime.device_headers())).await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[async_trait]
