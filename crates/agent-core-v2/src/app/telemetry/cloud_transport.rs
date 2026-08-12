@@ -11,7 +11,10 @@ use serde::Deserialize;
 use serde_json::{Map, Number, Value};
 
 use crate::{
-    _base::utils::abort::{AbortError, AbortSignal},
+    _base::utils::{
+        abort::{AbortError, AbortSignal},
+        hash::encode_hex,
+    },
     persistence::interface::storage::{
         FileSystemStorageService, StorageError, StorageWriteOptions,
     },
@@ -564,10 +567,7 @@ fn format_js_number(number: f64) -> String {
 
 fn random_hex_12() -> String {
     let bytes = uuid::Uuid::new_v4();
-    bytes.as_bytes()[..6]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    encode_hex(&bytes.as_bytes()[..6])
 }
 
 // Original: buildUserId().

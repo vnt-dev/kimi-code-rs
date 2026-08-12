@@ -175,16 +175,12 @@ fn current_iso_time() -> String {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use sha2::{Digest, Sha256};
-
     use super::*;
+    use crate::_base::utils::hash::sha256_hex;
 
     #[test]
     fn system_template_is_byte_identical_to_the_source_asset() {
-        let digest = Sha256::digest(SYSTEM_PROMPT_TEMPLATE.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let digest = sha256_hex(SYSTEM_PROMPT_TEMPLATE.as_bytes());
         assert_eq!(
             digest,
             "ae0a53980f99df339518c3a707b2f0b4af56b1fa3879749f96e245de3c83fd8c"

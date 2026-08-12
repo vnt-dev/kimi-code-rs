@@ -2570,6 +2570,7 @@ dependencies = [
  "gcp_auth",
  "getrandom 0.3.4",
  "globset",
+ "hex",
  "http",
  "ignore",
  "image",
@@ -2643,6 +2644,7 @@ name = "kimi-code-minidb"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "crc32fast",
  "file-id",
  "futures-util",
  "libc",

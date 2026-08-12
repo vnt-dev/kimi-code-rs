@@ -1,4 +1,4 @@
-use sha2::{Digest, Sha256};
+use super::hash::sha256_hex_prefix;
 
 const MAX_WORKDIR_SLUG_LENGTH: usize = 40;
 const WORKDIR_KEY_PREFIX: &str = "wd_";
@@ -38,11 +38,8 @@ pub fn encode_work_dir_key(work_dir: &str) -> String {
     let normalized = slashed.trim_end_matches('/');
     let base = normalized.rsplit('/').next().unwrap_or(normalized);
     let slug = slugify_work_dir_name(base);
-    let hash = Sha256::digest(normalized.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("{WORKDIR_KEY_PREFIX}{slug}_{}", &hash[..HASH_LENGTH])
+    let hash = sha256_hex_prefix(normalized.as_bytes(), HASH_LENGTH / 2);
+    format!("{WORKDIR_KEY_PREFIX}{slug}_{hash}")
 }
 
 // Original:

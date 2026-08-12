@@ -16,6 +16,7 @@ futures-util = "0.3"
 getrandom = "0.3"
 gcp_auth = "0.12.7"
 globset = { version = "0.4.19", default-features = false }
+hex = "0.4.3"
 indexmap = { version = "2", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 http = "1"

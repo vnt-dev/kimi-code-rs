@@ -1,18 +1,13 @@
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
-use base64::{
-    Engine,
-    alphabet::STANDARD,
-    engine::{GeneralPurpose, general_purpose::STANDARD as BASE64_STANDARD},
-};
-use sha2::{Digest, Sha256};
-
 use crate::{
-    _base::di::{
-        descriptors::SyncDescriptor,
-        instantiation::ServicesAccessorExt,
-        scope::{InstantiationType, LifecycleScope, register_scoped_service},
+    _base::{
+        di::{
+            descriptors::SyncDescriptor,
+            instantiation::ServicesAccessorExt,
+            scope::{InstantiationType, LifecycleScope, register_scoped_service},
+        },
+        utils::hash::sha256_hex,
     },
     agent::scope_context::{AGENT_SCOPE_CONTEXT_ID, AgentScopeContext},
     kosong::contract::message::{ContentPart, MediaUrl},
@@ -21,6 +16,12 @@ use crate::{
         storage::StorageError,
     },
     wire::wire_service::WireBlobService,
+};
+use async_trait::async_trait;
+use base64::{
+    Engine,
+    alphabet::STANDARD,
+    engine::{GeneralPurpose, general_purpose::STANDARD as BASE64_STANDARD},
 };
 
 use super::{
@@ -124,7 +125,7 @@ impl AgentBlobService {
         mime_type: &str,
         base64_payload: &str,
     ) -> Result<String, StorageError> {
-        let hash = hex_sha256(base64_payload.as_bytes());
+        let hash = sha256_hex(base64_payload.as_bytes());
         let binary: Arc<[u8]> = decode_node_base64(base64_payload).into();
         self.blobs.put(&self.storage_scope, &hash, &binary).await?;
         self.cache.lock().unwrap().set(hash.clone(), binary);
@@ -308,13 +309,6 @@ fn format_data_uri(mime_type: &str, payload: &[u8]) -> String {
         "data:{mime_type};base64,{}",
         BASE64_STANDARD.encode(payload)
     )
-}
-
-fn hex_sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 // Node Buffer.from(text, "base64") accepts URL-safe characters, ignores
@@ -512,7 +506,7 @@ mod tests {
         assert_eq!(decode_node_base64("YQ==ignored"), b"a");
         assert_eq!(decode_node_base64("Y=Q"), b"");
         assert_eq!(
-            hex_sha256(b"AQID"),
+            sha256_hex(b"AQID"),
             "b70035bb783a47bf61ac3ff70b005308e167ee984365690e638c1481b8ca2936"
         );
     }

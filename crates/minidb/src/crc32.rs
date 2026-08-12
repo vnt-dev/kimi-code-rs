@@ -1,32 +1,8 @@
-use std::sync::OnceLock;
-
-const POLYNOMIAL: u32 = 0xedb8_8320;
-static TABLE: OnceLock<[u32; 256]> = OnceLock::new();
-
-fn build_table() -> [u32; 256] {
-    let mut table = [0; 256];
-    for (index, entry) in table.iter_mut().enumerate() {
-        let mut crc = index as u32;
-        for _ in 0..8 {
-            crc = if crc & 1 == 1 {
-                POLYNOMIAL ^ (crc >> 1)
-            } else {
-                crc >> 1
-            };
-        }
-        *entry = crc;
-    }
-    table
-}
-
 // Original: packages/minidb/src/crc32.ts, crc32().
 pub fn crc32(bytes: &[u8], previous: u32) -> u32 {
-    let table = TABLE.get_or_init(build_table);
-    let mut crc = previous ^ u32::MAX;
-    for byte in bytes {
-        crc = table[((crc ^ u32::from(*byte)) & 0xff) as usize] ^ (crc >> 8);
-    }
-    crc ^ u32::MAX
+    let mut hasher = crc32fast::Hasher::new_with_initial(previous);
+    hasher.update(bytes);
+    hasher.finalize()
 }
 
 #[cfg(test)]

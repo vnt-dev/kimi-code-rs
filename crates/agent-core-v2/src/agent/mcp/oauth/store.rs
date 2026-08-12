@@ -7,7 +7,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::persistence::interface::atomic_document_store::AtomicDocumentStoreHandle;
+use crate::{
+    _base::utils::hash::encode_hex,
+    persistence::interface::atomic_document_store::AtomicDocumentStoreHandle,
+};
 
 pub const MCP_OAUTH_CREDENTIALS_SCOPE: &str = "credentials/mcp";
 
@@ -59,12 +62,7 @@ pub fn mcp_oauth_store_key(
     hasher.update(server_name.as_bytes());
     hasher.update([0]);
     hasher.update(resource.as_bytes());
-    let mut digest = String::with_capacity(64);
-    for byte in hasher.finalize() {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        digest.push(char::from(HEX[usize::from(byte >> 4)]));
-        digest.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
+    let digest = encode_hex(hasher.finalize());
     Ok(format!("{safe_name}-{}", &digest[..24]))
 }
 

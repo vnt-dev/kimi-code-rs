@@ -4,8 +4,9 @@ use std::{
     time::SystemTime,
 };
 
-use sha2::{Digest, Sha256};
 use tokio::fs;
+
+use crate::_base::utils::hash::sha256_hex_prefix;
 
 // Original:
 //   packages/agent-core-v2/src/agent/media/image-originals.ts
@@ -43,7 +44,7 @@ pub async fn persist_original_image(
     }
     let dir = options.dir.clone().unwrap_or_else(original_image_cache_dir);
     let max_total_bytes = options.max_total_bytes.unwrap_or(DEFAULT_MAX_TOTAL_BYTES);
-    let hash = hex_sha256(bytes);
+    let hash = sha256_hex_prefix(bytes, 16);
     let extension = mime_extension(mime_type).unwrap_or("img");
     let path = dir.join(format!("{hash}.{extension}"));
 
@@ -119,15 +120,6 @@ fn mime_extension(mime_type: &str) -> Option<&'static str> {
         "image/tiff" => Some("tif"),
         _ => None,
     }
-}
-
-fn hex_sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest
-        .iter()
-        .take(16)
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]

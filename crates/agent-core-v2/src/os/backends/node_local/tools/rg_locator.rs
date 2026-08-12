@@ -13,11 +13,12 @@ use std::{
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use sha2::{Digest, Sha256};
-use std::fmt::Write as _;
 use tokio::{io::AsyncWriteExt, sync::watch};
 
-use crate::_base::utils::abort::{AbortError, AbortSignal};
+use crate::_base::utils::{
+    abort::{AbortError, AbortSignal},
+    hash::sha256_hex,
+};
 
 const RG_VERSION: &str = "15.0.0";
 const RG_BASE_URL: &str = "https://code.kimi.com/kimi-code/rg";
@@ -508,15 +509,6 @@ async fn set_executable(_: &Path) -> Result<(), RgLocatorError> {
 
 fn failure(error: impl fmt::Display) -> RgLocatorError {
     RgLocatorError::Failure(error.to_string())
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut output = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        write!(output, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    output
 }
 
 pub fn rg_unavailable_message(cause: impl fmt::Display) -> String {

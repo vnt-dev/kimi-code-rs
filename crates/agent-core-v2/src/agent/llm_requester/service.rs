@@ -11,7 +11,6 @@ use std::{
 use async_trait::async_trait;
 use futures_util::{StreamExt, future::FutureExt};
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -22,7 +21,7 @@ use crate::{
             instantiation::ServicesAccessorExt,
             scope::{InstantiationType, LifecycleScope, register_scoped_service},
         },
-        utils::abort::AbortSignal,
+        utils::{abort::AbortSignal, hash::sha256_hex},
     },
     agent::{
         context_memory::{AGENT_CONTEXT_MEMORY_SERVICE_ID, AgentContextMemoryServiceHandle},
@@ -810,10 +809,7 @@ fn projection_field(fields: &AgentLlmRequestLogFields) -> Option<LlmRequestProje
 }
 
 fn fingerprint(content: &str) -> String {
-    Sha256::digest(content.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    sha256_hex(content.as_bytes())
 }
 
 fn dispatch_request_trace(

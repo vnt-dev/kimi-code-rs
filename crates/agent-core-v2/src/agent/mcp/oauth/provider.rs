@@ -12,7 +12,7 @@ use url::Url;
 use super::{
     McpOAuthStore, McpOAuthStoreKeyError, canonical_mcp_oauth_resource, mcp_oauth_store_key,
 };
-use crate::persistence::interface::storage::StorageError;
+use crate::{_base::utils::hash::encode_hex, persistence::interface::storage::StorageError};
 
 pub const MCP_OAUTH_TOKENS_SUFFIX: &str = "-tokens.json";
 pub const MCP_OAUTH_CLIENT_SUFFIX: &str = "-client.json";
@@ -180,10 +180,7 @@ impl McpOAuthClientProvider {
         }
         let mut bytes = [0_u8; 16];
         getrandom::fill(&mut bytes)?;
-        let state = bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let state = encode_hex(bytes);
         cache.state = Some(state.clone());
         Ok(state)
     }

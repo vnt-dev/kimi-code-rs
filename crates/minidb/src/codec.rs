@@ -405,20 +405,20 @@ fn read_frame_ref_at(file: &mut File, position: u64, size: u64) -> io::Result<Op
     if size.saturating_sub(position) < frame_len {
         return Ok(None);
     }
-    let mut checksum = 0;
+    let mut checksum = crc32fast::Hasher::new();
     let mut checksum_position = position + 2;
     let mut remaining = frame_len - CRC_SIZE as u64 - 2;
     while remaining > 0 {
         let length = remaining.min(CRC_CHUNK_SIZE as u64) as usize;
         let mut chunk = vec![0; length];
         read_exact_at(file, checksum_position, &mut chunk)?;
-        checksum = crc32(&chunk, checksum);
+        checksum.update(&chunk);
         checksum_position += length as u64;
         remaining -= length as u64;
     }
     let mut stored = [0_u8; CRC_SIZE];
     read_exact_at(file, position + frame_len - CRC_SIZE as u64, &mut stored)?;
-    if u32::from_le_bytes(stored) != checksum {
+    if u32::from_le_bytes(stored) != checksum.finalize() {
         return Ok(None);
     }
     let key_start = position + HEADER_SIZE as u64;

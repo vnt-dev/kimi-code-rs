@@ -163,6 +163,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
+    use crate::_base::utils::hash::encode_hex;
 
     #[test]
     fn builtins_preserve_order_paths_and_invocation_metadata() {
@@ -216,11 +217,7 @@ mod tests {
         ] {
             hasher.update(body.as_bytes());
         }
-        let digest = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let digest = encode_hex(hasher.finalize());
         assert_eq!(
             digest,
             "b231b7a53025b5690cd5f5f9a77e253650c13f2197f138e36d19526e0ec685c0"

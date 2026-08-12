@@ -13,7 +13,6 @@ use std::{
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
@@ -27,7 +26,10 @@ use crate::{
         errors::{serialize::make_error_payload, unexpected_error::on_unexpected_error},
         event::Event,
         lifecycle::lifecycle_machine::BoxError,
-        utils::abort::{AbortError, AbortSignal},
+        utils::{
+            abort::{AbortError, AbortSignal},
+            hash::sha256_hex,
+        },
     },
     agent::{
         mcp::{
@@ -531,10 +533,7 @@ fn discovery_hash(
         enabled_names,
         collisions,
     })?;
-    Ok(Sha256::digest(input)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(sha256_hex(&input))
 }
 
 #[async_trait]

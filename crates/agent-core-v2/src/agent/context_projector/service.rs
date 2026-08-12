@@ -17,6 +17,7 @@ use crate::{
             scope::{InstantiationType, LifecycleScope, register_scoped_service},
         },
         log::{LOG_SERVICE_ID, LogPayload, LogServiceHandle},
+        utils::hash::encode_hex,
     },
     agent::{
         context_memory::{
@@ -417,12 +418,7 @@ fn media_key(part: &ContentPart) -> Option<String> {
     hash.update(value.id.as_deref().unwrap_or(""));
     hash.update([0]);
     hash.update(&value.url);
-    Some(
-        hash.finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-    )
+    Some(encode_hex(hash.finalize()))
 }
 fn placeholder(part: &ContentPart, stripped: bool) -> Option<&'static str> {
     Some(match (part, stripped) {

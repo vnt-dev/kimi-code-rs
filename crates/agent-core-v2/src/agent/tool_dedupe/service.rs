@@ -9,7 +9,6 @@ use std::{
 };
 
 use futures_util::future::BoxFuture;
-use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -22,7 +21,7 @@ use crate::{
             scope::{InstantiationType, LifecycleScope, register_scoped_service},
         },
         lifecycle::lifecycle_machine::BoxError,
-        utils::canonical_args::canonical_telemetry_args,
+        utils::{canonical_args::canonical_telemetry_args, hash::sha256_hex_prefix},
     },
     agent::{
         loop_::{AGENT_LOOP_SERVICE_ID, AgentLoopServiceHandle},
@@ -419,12 +418,7 @@ fn make_reminder_text_2(repeat_count: u64) -> String {
     )
 }
 fn args_hash(args: &serde_json::Value) -> String {
-    let digest = Sha256::digest(canonical_telemetry_args(args).as_bytes());
-    digest
-        .iter()
-        .take(4)
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    sha256_hex_prefix(canonical_telemetry_args(args).as_bytes(), 4)
 }
 fn append_reminder(mut result: ExecutableToolResult, reminder: &str) -> ExecutableToolResult {
     match &mut result.output {
