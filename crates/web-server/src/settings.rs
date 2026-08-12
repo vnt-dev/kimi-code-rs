@@ -1,10 +1,10 @@
-use std::{
-    fs::{self, OpenOptions},
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
+use std::{io, path::Path};
 
 use serde::{Deserialize, Serialize};
+use tokio::{
+    fs::{self, OpenOptions},
+    io::AsyncWriteExt,
+};
 use uuid::Uuid;
 
 use crate::DEFAULT_WEB_SERVER_PORT;
@@ -45,8 +45,8 @@ impl Default for WebServerSettings {
     }
 }
 
-pub(crate) fn load_settings(path: &Path) -> Result<WebServerSettings, String> {
-    let bytes = match fs::read(path) {
+pub(crate) async fn load_settings(path: &Path) -> Result<WebServerSettings, String> {
+    let bytes = match fs::read(path).await {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Ok(WebServerSettings::default());
@@ -59,10 +59,11 @@ pub(crate) fn load_settings(path: &Path) -> Result<WebServerSettings, String> {
     Ok(settings)
 }
 
-pub(crate) fn save_settings(path: &Path, settings: WebServerSettings) -> Result<(), String> {
+pub(crate) async fn save_settings(path: &Path, settings: WebServerSettings) -> Result<(), String> {
     validate_settings(settings)?;
     let bytes = serde_json::to_vec_pretty(&settings).map_err(|error| error.to_string())?;
     atomic_write(path, &bytes, false)
+        .await
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
@@ -73,8 +74,8 @@ pub(crate) fn validate_settings(settings: WebServerSettings) -> Result<(), Strin
     Ok(())
 }
 
-pub(crate) fn load_or_create_token(path: &Path) -> Result<String, String> {
-    match fs::read_to_string(path) {
+pub(crate) async fn load_or_create_token(path: &Path) -> Result<String, String> {
+    match fs::read_to_string(path).await {
         Ok(token) if !token.trim().is_empty() => return Ok(token.trim().to_owned()),
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -86,20 +87,21 @@ pub(crate) fn load_or_create_token(path: &Path) -> Result<String, String> {
     getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
     let token = URL_SAFE_NO_PAD.encode(bytes);
     atomic_write(path, token.as_bytes(), true)
+        .await
         .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
     Ok(token)
 }
 
-fn atomic_write(path: &Path, bytes: &[u8], _private: bool) -> io::Result<()> {
+async fn atomic_write(path: &Path, bytes: &[u8], _private: bool) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "path has no parent directory")
     })?;
-    fs::create_dir_all(parent)?;
+    fs::create_dir_all(parent).await?;
 
     #[cfg(unix)]
     if _private {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await?;
     }
 
     let temp = temporary_path(path);
@@ -110,19 +112,21 @@ fn atomic_write(path: &Path, bytes: &[u8], _private: bool) -> io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(&temp)?;
-    let write_result = (|| {
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        replace_file(&temp, path)
-    })();
+    let mut file = options.open(&temp).await?;
+    let write_result = async {
+        file.write_all(bytes).await?;
+        file.sync_all().await?;
+        drop(file);
+        fs::rename(&temp, path).await
+    }
+    .await;
     if write_result.is_err() {
-        let _ = fs::remove_file(&temp);
+        let _ = fs::remove_file(&temp).await;
     }
     write_result
 }
 
-fn temporary_path(path: &Path) -> PathBuf {
+fn temporary_path(path: &Path) -> std::path::PathBuf {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -130,73 +134,48 @@ fn temporary_path(path: &Path) -> PathBuf {
     path.with_file_name(format!(".{name}.{}.tmp", Uuid::new_v4()))
 }
 
-#[cfg(not(windows))]
-fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(source, destination)
-}
-
-#[cfg(windows)]
-fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    };
-
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let result = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     fn temp_dir() -> PathBuf {
         std::env::temp_dir().join(format!("kimi-web-settings-{}", Uuid::new_v4()))
     }
 
-    #[test]
-    fn settings_default_and_round_trip() {
+    #[tokio::test]
+    async fn settings_default_and_round_trip() {
         let directory = temp_dir();
         let path = directory.join("web-server.json");
-        assert_eq!(load_settings(&path).unwrap(), WebServerSettings::default());
+        assert_eq!(
+            load_settings(&path).await.unwrap(),
+            WebServerSettings::default()
+        );
         let expected = WebServerSettings {
             enabled: true,
             port: 61234,
             listen_scope: WebServerListenScope::Global,
         };
-        save_settings(&path, expected).unwrap();
-        assert_eq!(load_settings(&path).unwrap(), expected);
+        save_settings(&path, expected).await.unwrap();
+        assert_eq!(load_settings(&path).await.unwrap(), expected);
 
-        fs::write(&path, br#"{"enabled":false,"port":58627}"#).unwrap();
+        fs::write(&path, br#"{"enabled":false,"port":58627}"#)
+            .await
+            .unwrap();
         assert_eq!(
-            load_settings(&path).unwrap().listen_scope,
+            load_settings(&path).await.unwrap().listen_scope,
             WebServerListenScope::Local
         );
-        let _ = fs::remove_dir_all(directory);
+        let _ = fs::remove_dir_all(directory).await;
     }
 
-    #[test]
-    fn token_is_persistent_and_url_safe() {
+    #[tokio::test]
+    async fn token_is_persistent_and_url_safe() {
         let directory = temp_dir();
         let path = directory.join("server.token");
-        let first = load_or_create_token(&path).unwrap();
-        let second = load_or_create_token(&path).unwrap();
+        let first = load_or_create_token(&path).await.unwrap();
+        let second = load_or_create_token(&path).await.unwrap();
         assert_eq!(first, second);
         assert_eq!(first.len(), 43);
         assert!(
@@ -204,6 +183,6 @@ mod tests {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
         );
-        let _ = fs::remove_dir_all(directory);
+        let _ = fs::remove_dir_all(directory).await;
     }
 }

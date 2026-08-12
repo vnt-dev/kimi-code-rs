@@ -71,39 +71,36 @@ impl WebServerController {
         settings_path: impl Into<PathBuf>,
         token_path: impl Into<PathBuf>,
     ) -> Self {
-        let settings_path = settings_path.into();
-        let (settings, error) = match load_settings(&settings_path) {
-            Ok(settings) => (settings, None),
-            Err(error) => (WebServerSettings::default(), Some(error)),
-        };
         Self {
             client,
             assets,
             version: version.into(),
-            settings_path,
+            settings_path: settings_path.into(),
             token_path: token_path.into(),
             events: Arc::new(ApplicationEventBus::default()),
             operation: Mutex::new(()),
             inner: Mutex::new(ControllerState {
-                settings,
-                state: if error.is_some() {
-                    WebServerState::Error
-                } else {
-                    WebServerState::Stopped
-                },
+                settings: WebServerSettings::default(),
+                state: WebServerState::Stopped,
                 running: None,
                 token: None,
-                error,
+                error: None,
             }),
         }
     }
 
     pub async fn restore(&self) -> WebServerStatus {
-        let settings = self.inner.lock().await.settings;
-        if !settings.enabled {
-            return self.status().await;
-        }
-        if let Err(error) = self.apply(settings, false).await {
+        let _operation = self.operation.lock().await;
+        let settings = match load_settings(&self.settings_path).await {
+            Ok(settings) => settings,
+            Err(error) => {
+                let mut inner = self.inner.lock().await;
+                inner.state = WebServerState::Error;
+                inner.error = Some(error);
+                return status_from(&inner);
+            }
+        };
+        if let Err(error) = self.apply_locked(settings, false).await {
             let mut inner = self.inner.lock().await;
             inner.state = WebServerState::Error;
             inner.error = Some(error);
@@ -160,10 +157,13 @@ impl WebServerController {
     async fn apply(&self, settings: WebServerSettings, persist: bool) -> Result<(), String> {
         validate_settings(settings)?;
         let _operation = self.operation.lock().await;
+        self.apply_locked(settings, persist).await
+    }
 
+    async fn apply_locked(&self, settings: WebServerSettings, persist: bool) -> Result<(), String> {
         if !settings.enabled {
             if persist {
-                save_settings(&self.settings_path, settings)?;
+                save_settings(&self.settings_path, settings).await?;
             }
             let running = {
                 let mut inner = self.inner.lock().await;
@@ -179,24 +179,30 @@ impl WebServerController {
             return Ok(());
         }
 
-        {
+        let already_running = {
             let mut inner = self.inner.lock().await;
             if inner.running.as_ref().is_some_and(|running| {
                 running.port == settings.port && running.listen_scope == settings.listen_scope
             }) {
-                if persist {
-                    save_settings(&self.settings_path, settings)?;
-                }
-                inner.settings = settings;
-                inner.state = WebServerState::Running;
+                true
+            } else {
+                inner.state = WebServerState::Starting;
                 inner.error = None;
-                return Ok(());
+                false
             }
-            inner.state = WebServerState::Starting;
+        };
+        if already_running {
+            if persist {
+                save_settings(&self.settings_path, settings).await?;
+            }
+            let mut inner = self.inner.lock().await;
+            inner.settings = settings;
+            inner.state = WebServerState::Running;
             inner.error = None;
+            return Ok(());
         }
 
-        let token = match load_or_create_token(&self.token_path) {
+        let token = match load_or_create_token(&self.token_path).await {
             Ok(token) => token,
             Err(error) => {
                 self.mark_error(&error).await;
@@ -221,7 +227,7 @@ impl WebServerController {
             }
         };
 
-        if persist && let Err(error) = save_settings(&self.settings_path, settings) {
+        if persist && let Err(error) = save_settings(&self.settings_path, settings).await {
             next.close().await;
             self.mark_error(&error).await;
             return Err(error);
@@ -421,6 +427,7 @@ mod tests {
                 listen_scope: WebServerListenScope::Local,
             },
         )
+        .await
         .unwrap();
         let controller = controller(&root);
         let status = controller.restore().await;
