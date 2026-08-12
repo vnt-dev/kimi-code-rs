@@ -110,12 +110,9 @@ fn temporary_with_suffix(file_path: &Path, suffix: &str) -> std::path::PathBuf {
 }
 
 async fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    if let Err(error) = fs::remove_file(to).await
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        return Err(error);
-    }
+    // Keep this as a single rename operation: on Windows, Rust implements rename
+    // with MoveFileExW(MOVEFILE_REPLACE_EXISTING), so deleting `to` first creates
+    // a crash- and reader-visible window in which neither version is available.
     fs::rename(from, to).await
 }
 
