@@ -22,6 +22,7 @@ http = "1"
 ignore = "0.4"
 jsonschema = { version = "0.48.5", default-features = false }
 kimi-code-protocol = { path = "../protocol" }
+kimi-code-fs = { path = "../fs" }
 kimi-code-minidb = { path = "../minidb" }
 kimi-code-oauth = { path = "../oauth" }
 libc = "0.2"

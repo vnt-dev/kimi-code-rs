@@ -1,0 +1,14 @@
+[package]
+name = "kimi-code-fs"
+version = "0.1.0"
+edition = "2024"
+description = "Shared filesystem utilities for Kimi Code"
+license = "MIT"
+publish = false
+
+[dependencies]
+atomic-write-file = "0.3.1"
+tokio = { version = "1", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["fs", "macros", "rt"] }

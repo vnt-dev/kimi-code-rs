@@ -1,12 +1,12 @@
 use std::{
     error::Error,
     ffi::OsStr,
-    fmt, fs,
-    io::{self, Write},
+    fmt, fs, io,
     path::{Path, PathBuf},
 };
 
 use async_trait::async_trait;
+use kimi_code_fs::atomic_write;
 
 use super::types::{TokenInfo, token_from_wire, token_to_wire};
 
@@ -101,11 +101,10 @@ impl TokenStorage for FileTokenStorage {
     // Original: FileTokenStorage.save()
     async fn save(&self, name: &str, token: &TokenInfo) -> Result<(), TokenStorageError> {
         let target = self.path_for(name)?;
-        let directory = self.directory.clone();
-        let token = token.clone();
-        tokio::task::spawn_blocking(move || save_token(&directory, &target, &token))
-            .await
-            .map_err(TokenStorageError::Join)?
+        ensure_private_directory(&self.directory).await?;
+        let data = serde_json::to_string_pretty(&token_to_wire(token))? + "\n";
+        atomic_write(target, data, Some(0o600)).await?;
+        Ok(())
     }
 
     // Original: FileTokenStorage.remove()
@@ -154,68 +153,14 @@ fn load_token(file: &Path) -> Result<Option<TokenInfo>, TokenStorageError> {
     Ok(Some(token_from_wire(object)))
 }
 
-fn save_token(directory: &Path, target: &Path, token: &TokenInfo) -> Result<(), TokenStorageError> {
-    ensure_private_directory(directory)?;
-    let mut temp_name = target.as_os_str().to_os_string();
-    temp_name.push(format!(
-        ".tmp.{}.{}",
-        std::process::id(),
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    ));
-    let temp = PathBuf::from(temp_name);
-    let result = (|| {
-        let data = serde_json::to_string_pretty(&token_to_wire(token))? + "\n";
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temp)?;
-        file.write_all(data.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&temp, fs::Permissions::from_mode(0o600))?;
-        }
-        replace_file(&temp, target)?;
-        Ok::<(), TokenStorageError>(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
-}
-
-fn ensure_private_directory(directory: &Path) -> io::Result<()> {
-    fs::create_dir_all(directory)?;
+async fn ensure_private_directory(directory: &Path) -> io::Result<()> {
+    tokio::fs::create_dir_all(directory).await?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(directory, fs::Permissions::from_mode(0o700));
+        let _ = tokio::fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).await;
     }
     Ok(())
-}
-
-fn replace_file(source: &Path, target: &Path) -> io::Result<()> {
-    match fs::rename(source, target) {
-        Ok(()) => Ok(()),
-        #[cfg(windows)]
-        Err(error)
-            if target.exists()
-                && matches!(
-                    error.kind(),
-                    io::ErrorKind::AlreadyExists | io::ErrorKind::PermissionDenied
-                ) =>
-        {
-            fs::remove_file(target)?;
-            fs::rename(source, target)
-        }
-        Err(error) => Err(error),
-    }
 }
 
 #[cfg(test)]

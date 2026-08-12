@@ -3,6 +3,7 @@ members = [
     ".",
     "apps/kimi-code/src-tauri",
     "crates/agent-core-v2",
+    "crates/fs",
     "crates/minidb",
     "crates/oauth",
     "crates/protocol",
@@ -10,4 +11,3 @@ members = [
     "crates/web-server",
 ]
 resolver = "3"
-

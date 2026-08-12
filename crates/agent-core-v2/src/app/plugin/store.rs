@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::_base::utils::fs::atomic_write;
+
 use super::types::{PluginCapabilityState, PluginGithubMetadata, PluginSource};
 
 const INSTALLED_DIR: &str = "plugins";
@@ -90,8 +92,7 @@ fn parse_installed(file_path: &Path, text: &str) -> Result<InstalledFile, Instal
     serde_json::from_value(value).map_err(|error| parse_error(file_path, error))
 }
 
-// Original: store.ts, writeInstalled(). The fixed `.tmp` name and write-then-
-// rename order are intentionally retained.
+// Original: store.ts, writeInstalled().
 pub async fn write_installed(
     kimi_home_dir: impl AsRef<Path>,
     data: &InstalledFile,
@@ -99,10 +100,8 @@ pub async fn write_installed(
     let directory = kimi_home_dir.as_ref().join("plugins");
     tokio::fs::create_dir_all(&directory).await?;
     let final_path = directory.join("installed.json");
-    let temporary_path = PathBuf::from(format!("{}.tmp", final_path.to_string_lossy()));
     let text = serde_json::to_string_pretty(data)?;
-    tokio::fs::write(&temporary_path, text).await?;
-    tokio::fs::rename(temporary_path, final_path).await?;
+    atomic_write(&final_path, text, None).await?;
     Ok(())
 }
 
@@ -161,9 +160,38 @@ mod tests {
         let text = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(!text.ends_with('\n'));
         assert!(text.contains("\n  \"plugins\": ["));
-        assert!(!path.with_file_name("installed.json.tmp").exists());
         assert_eq!(read_installed(&home).await.unwrap(), data);
 
+        tokio::fs::remove_dir_all(home).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_writers_do_not_collide_on_a_shared_temporary_path() {
+        let home = temporary_home();
+        let first = InstalledFile {
+            version: 1,
+            plugins: Vec::new(),
+        };
+        let second = InstalledFile {
+            version: 2,
+            plugins: Vec::new(),
+        };
+
+        let (first_result, second_result) = tokio::join!(
+            write_installed(&home, &first),
+            write_installed(&home, &second)
+        );
+
+        first_result.unwrap();
+        second_result.unwrap();
+        let stored = read_installed(&home).await.unwrap();
+        assert!(stored == first || stored == second);
+        let mut entries = tokio::fs::read_dir(home.join(INSTALLED_DIR)).await.unwrap();
+        assert_eq!(
+            entries.next_entry().await.unwrap().unwrap().file_name(),
+            INSTALLED_FILE
+        );
+        assert!(entries.next_entry().await.unwrap().is_none());
         tokio::fs::remove_dir_all(home).await.unwrap();
     }
 

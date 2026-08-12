@@ -2,11 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/config/migrations.ts`.
 
-use std::{collections::HashMap, io::Write, path::Path, time::SystemTime};
+use std::{collections::HashMap, path::Path, time::SystemTime};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Map, Value};
 
+use crate::_base::utils::fs::atomic_write;
 use crate::persistence::interface::atomic_document_store::AtomicDocumentStoreHandle;
 
 const MIGRATIONS_FILE: &str = "migrations-effort.json";
@@ -15,8 +16,9 @@ const CONFIG_SCOPE: &str = "";
 
 // Original: readMigrationMarkers(). Missing, corrupt, and non-object documents
 // all mean that no migration has completed.
-fn read_migration_markers(home_dir: &Path) -> HashMap<String, String> {
-    std::fs::read(home_dir.join(MIGRATIONS_FILE))
+async fn read_migration_markers(home_dir: &Path) -> HashMap<String, String> {
+    tokio::fs::read(home_dir.join(MIGRATIONS_FILE))
+        .await
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
@@ -24,38 +26,29 @@ fn read_migration_markers(home_dir: &Path) -> HashMap<String, String> {
 
 // Original: writeMigrationMarker(). Every failure is intentionally ignored;
 // a lost marker merely causes another safe check at the next startup.
-fn write_migration_marker(home_dir: &Path, key: &str) {
-    let _ = try_write_migration_marker(home_dir, key);
+async fn write_migration_marker(home_dir: &Path, key: &str) {
+    let _ = try_write_migration_marker(home_dir, key).await;
 }
 
-fn try_write_migration_marker(home_dir: &Path, key: &str) -> std::io::Result<()> {
-    create_private_dir_all(home_dir)?;
-    let mut markers = read_migration_markers(home_dir);
+async fn try_write_migration_marker(home_dir: &Path, key: &str) -> std::io::Result<()> {
+    create_private_dir_all(home_dir).await?;
+    let mut markers = read_migration_markers(home_dir).await;
     let now: DateTime<Utc> = SystemTime::now().into();
     markers.insert(key.into(), now.to_rfc3339_opts(SecondsFormat::Millis, true));
     let mut bytes = serde_json::to_vec_pretty(&markers).map_err(std::io::Error::other)?;
     bytes.push(b'\n');
     let path = home_dir.join(MIGRATIONS_FILE);
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(&bytes)
+    atomic_write(path, bytes, Some(0o600)).await
 }
 
-fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
+async fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(path).await?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await?;
     }
-    builder.create(path)
+    Ok(())
 }
 
 // Original: migrateThinkingEffortMaxToHigh(). This method deliberately catches
@@ -67,7 +60,10 @@ pub async fn migrate_thinking_effort_max_to_high(
     config_key: &str,
     home_dir: &Path,
 ) {
-    if read_migration_markers(home_dir).contains_key(THINKING_EFFORT_MAX_TO_HIGH) {
+    if read_migration_markers(home_dir)
+        .await
+        .contains_key(THINKING_EFFORT_MAX_TO_HIGH)
+    {
         return;
     }
 
@@ -85,7 +81,7 @@ pub async fn migrate_thinking_effort_max_to_high(
     {
         return;
     }
-    write_migration_marker(home_dir, THINKING_EFFORT_MAX_TO_HIGH);
+    write_migration_marker(home_dir, THINKING_EFFORT_MAX_TO_HIGH).await;
 }
 
 fn rewrite_thinking_effort(document: &mut Map<String, Value>) -> bool {
@@ -187,7 +183,11 @@ mod tests {
             backend.value.lock().unwrap().as_ref().unwrap()["thinking"]["effort"],
             "high"
         );
-        assert!(read_migration_markers(&home).contains_key(THINKING_EFFORT_MAX_TO_HIGH));
+        assert!(
+            read_migration_markers(&home)
+                .await
+                .contains_key(THINKING_EFFORT_MAX_TO_HIGH)
+        );
 
         backend.value.lock().unwrap().as_mut().unwrap()["thinking"]["effort"] =
             Value::String("max".into());

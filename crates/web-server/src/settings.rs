@@ -1,11 +1,8 @@
 use std::{io, path::Path};
 
+use kimi_code_fs::atomic_write;
 use serde::{Deserialize, Serialize};
-use tokio::{
-    fs::{self, OpenOptions},
-    io::AsyncWriteExt,
-};
-use uuid::Uuid;
+use tokio::fs;
 
 use crate::DEFAULT_WEB_SERVER_PORT;
 
@@ -62,7 +59,8 @@ pub(crate) async fn load_settings(path: &Path) -> Result<WebServerSettings, Stri
 pub(crate) async fn save_settings(path: &Path, settings: WebServerSettings) -> Result<(), String> {
     validate_settings(settings)?;
     let bytes = serde_json::to_vec_pretty(&settings).map_err(|error| error.to_string())?;
-    atomic_write(path, &bytes, false)
+    ensure_parent_directory(path, false).await?;
+    atomic_write(path, &bytes, None)
         .await
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
@@ -86,52 +84,30 @@ pub(crate) async fn load_or_create_token(path: &Path) -> Result<String, String> 
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
     let token = URL_SAFE_NO_PAD.encode(bytes);
-    atomic_write(path, token.as_bytes(), true)
+    ensure_parent_directory(path, true).await?;
+    atomic_write(path, token.as_bytes(), Some(0o600))
         .await
         .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
     Ok(token)
 }
 
-async fn atomic_write(path: &Path, bytes: &[u8], _private: bool) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "path has no parent directory")
-    })?;
-    fs::create_dir_all(parent).await?;
+async fn ensure_parent_directory(path: &Path, _private: bool) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent directory"))
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    fs::create_dir_all(parent)
+        .await
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
 
     #[cfg(unix)]
     if _private {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await?;
+        fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .await
+            .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
     }
-
-    let temp = temporary_path(path);
-    let mut options = OpenOptions::new();
-    options.create_new(true).write(true);
-    #[cfg(unix)]
-    if _private {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temp).await?;
-    let write_result = async {
-        file.write_all(bytes).await?;
-        file.sync_all().await?;
-        drop(file);
-        fs::rename(&temp, path).await
-    }
-    .await;
-    if write_result.is_err() {
-        let _ = fs::remove_file(&temp).await;
-    }
-    write_result
-}
-
-fn temporary_path(path: &Path) -> std::path::PathBuf {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("web-server");
-    path.with_file_name(format!(".{name}.{}.tmp", Uuid::new_v4()))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -139,6 +115,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use uuid::Uuid;
 
     fn temp_dir() -> PathBuf {
         std::env::temp_dir().join(format!("kimi-web-settings-{}", Uuid::new_v4()))
