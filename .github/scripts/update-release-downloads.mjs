@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -90,6 +97,84 @@ export function mergeDownloadSection(notes, section) {
   return `${notes.slice(0, start)}${section}${notes.slice(end + END_MARKER.length)}`;
 }
 
+function releaseAssetId(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.hostname !== "api.github.com") return undefined;
+  return parsed.pathname.match(/\/releases\/assets\/(\d+)$/)?.[1];
+}
+
+export function normalizeUpdaterManifest(manifest, assets) {
+  const downloadUrls = new Map(
+    assets.map((asset) => [String(asset.id), asset.browser_download_url]),
+  );
+  let changed = false;
+  const platforms = Object.fromEntries(
+    Object.entries(manifest.platforms || {}).map(([target, platform]) => {
+      const assetId = releaseAssetId(platform.url);
+      if (!assetId) return [target, platform];
+
+      const downloadUrl = downloadUrls.get(assetId);
+      if (!downloadUrl) {
+        throw new Error(
+          `updater platform ${target} references unknown release asset ${assetId}`,
+        );
+      }
+      changed = true;
+      return [target, { ...platform, url: downloadUrl }];
+    }),
+  );
+
+  return {
+    changed,
+    manifest: changed ? { ...manifest, platforms } : manifest,
+  };
+}
+
+function normalizeReleaseUpdaterManifest({ repository, tag, release }) {
+  const latestAsset = release.assets.find((asset) => asset.name === "latest.json");
+  if (!latestAsset) {
+    throw new Error(`release ${tag} does not contain latest.json`);
+  }
+
+  const manifest = JSON.parse(
+    execFileSync(
+      "gh",
+      [
+        "api",
+        "-H",
+        "Accept: application/octet-stream",
+        `repos/${repository}/releases/assets/${latestAsset.id}`,
+      ],
+      { encoding: "utf8", env: process.env, windowsHide: true },
+    ),
+  );
+  const normalized = normalizeUpdaterManifest(manifest, release.assets);
+  if (!normalized.changed) {
+    console.log(`Release ${tag} updater links are already normalized.`);
+    return;
+  }
+
+  const manifestDir = mkdtempSync(join(tmpdir(), "kimi-updater-manifest-"));
+  const manifestPath = join(manifestDir, "latest.json");
+  try {
+    writeFileSync(manifestPath, `${JSON.stringify(normalized.manifest, null, 2)}\n`);
+    execFileSync(
+      "gh",
+      ["release", "upload", tag, manifestPath, "--repo", repository, "--clobber"],
+      { stdio: "inherit", env: process.env, windowsHide: true },
+    );
+  } finally {
+    rmSync(manifestDir, { recursive: true, force: true });
+  }
+
+  console.log(`Normalized updater download links for release ${tag}.`);
+}
+
 function requiredEnv(name) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
@@ -106,10 +191,11 @@ function main() {
   const release = JSON.parse(
     execFileSync(
       "gh",
-      ["release", "view", tag, "--repo", repository, "--json", "body,assets"],
+      ["api", `repos/${repository}/releases/tags/${tag}`],
       { encoding: "utf8", env: process.env, windowsHide: true },
     ),
   );
+  normalizeReleaseUpdaterManifest({ repository, tag, release });
   const assetNames = new Set(release.assets.map((asset) => asset.name));
   const releaseUrl = `${serverUrl}/${repository}/releases/download/${tag}`;
   const section = buildDownloadSection({ version, releaseUrl, assetNames });

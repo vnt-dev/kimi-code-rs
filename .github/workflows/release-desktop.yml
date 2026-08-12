@@ -58,7 +58,7 @@ jobs:
           prerelease: false
           releaseAssetNamePattern: '[name]_[version]_windows_[arch][setup][ext]'
 
-      - name: Update release download links
+      - name: Finalize release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node .github/scripts/update-release-downloads.mjs
@@ -120,7 +120,7 @@ jobs:
           releaseAssetNamePattern: '[name]_[version]_linux_[arch][ext]'
           args: --bundles appimage,deb
 
-      - name: Update release download links
+      - name: Finalize release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node .github/scripts/update-release-downloads.mjs
@@ -179,7 +179,7 @@ jobs:
           releaseAssetNamePattern: '[name]_[version]_macos_[arch][ext]'
           args: --target aarch64-apple-darwin
 
-      - name: Update release download links
+      - name: Finalize release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node .github/scripts/update-release-downloads.mjs
@@ -198,7 +198,7 @@ jobs:
           releaseAssetNamePattern: '[name]_[version]_macos_[arch][ext]'
           args: --target x86_64-apple-darwin
 
-      - name: Update release download links
+      - name: Finalize release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node .github/scripts/update-release-downloads.mjs

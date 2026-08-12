@@ -55,6 +55,9 @@ jobs:
         working-directory: apps/kimi-code
         run: pnpm build
 
+      - name: Test release metadata scripts
+        run: node --test .github/scripts/*.test.mjs
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
