@@ -16,6 +16,7 @@ pub struct MessageListQuery {
     pub after_id: Option<String>,
     pub page_size: Option<usize>,
     pub role: Option<MessageRole>,
+    pub agent_id: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageResponse<T> {
@@ -54,7 +55,8 @@ mod tests {
                 before_id: None,
                 after_id: None,
                 page_size: None,
-                role: None
+                role: None,
+                agent_id: None
             }
         );
         assert_eq!(

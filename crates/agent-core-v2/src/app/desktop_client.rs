@@ -1890,7 +1890,11 @@ impl KimiCodeDesktopClient {
         Ok(subscriptions)
     }
 
-    pub async fn list_messages(&self, conversation_id: &str) -> Result<DesktopMessagePage, String> {
+    pub async fn list_messages(
+        &self,
+        conversation_id: &str,
+        agent_id: Option<&str>,
+    ) -> Result<DesktopMessagePage, String> {
         let messages = self
             .app
             .get(MESSAGE_LEGACY_SERVICE_ID)
@@ -1905,6 +1909,7 @@ impl KimiCodeDesktopClient {
                     MessageListQuery {
                         before_id,
                         page_size: Some(1000),
+                        agent_id: agent_id.map(str::to_owned),
                         ..MessageListQuery::default()
                     },
                 )

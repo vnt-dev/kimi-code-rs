@@ -2,6 +2,7 @@ import {
   Fragment,
   type ReactNode,
   memo,
+  useEffect,
   useState,
 } from "react";
 import {
@@ -29,6 +30,8 @@ import {
 import {
   finalResponseMessage,
   formatElapsedDuration,
+  groupHistoryMessages,
+  mergeHistoryToolResults,
   messageOriginKind,
   type HistoryConversationTurn,
   type RenderMessage,
@@ -59,11 +62,12 @@ import { toolInputSummary } from "../../chat/toolInputSummary";
 import { parseStreamingToolInput } from "../../chat/streamingToolInput";
 import { parseCronFireMessage, type CronFireMessage } from "../../cronFire";
 import { t } from "../../i18n";
+import type { SubagentConversationHistory } from "../../app/appUtils";
 import type { PluginCommandDetail } from "../../pluginCommandMessage";
 import { SkillPromptDisplayContent } from "../../prompt/SkillPromptDisplay";
 import {
-  mergeSubagentRuns,
-  parseAgentSwarmResult,
+  collectHistoricalSubagentRuns,
+  subagentInvocationMessages,
   subagentRunsWithSwarmItems,
   type SubagentRun,
   type SubagentRunStatus,
@@ -813,11 +817,15 @@ function SubagentPanel({
   subagents,
   liveTurns,
   nestedRuns,
+  histories,
+  onLoadHistory,
   parentActive,
 }: {
   subagents: readonly SubagentRun[];
   liveTurns?: Record<string, InFlightTurn>;
   nestedRuns?: SubagentRunsByTool;
+  histories?: Record<string, SubagentConversationHistory>;
+  onLoadHistory?: (agentId: string, force?: boolean) => void;
   parentActive: boolean;
 }) {
   const statuses = subagents.map((subagent) =>
@@ -874,6 +882,9 @@ function SubagentPanel({
               liveTurn={liveTurns?.[subagent.subagentId]}
               liveTurns={liveTurns}
               nestedRuns={nestedRuns}
+              history={histories?.[subagent.subagentId]}
+              histories={histories}
+              onLoadHistory={onLoadHistory}
             />
           ))}
         </div>
@@ -888,20 +899,39 @@ function SubagentRow({
   liveTurn,
   liveTurns,
   nestedRuns,
+  history,
+  histories,
+  onLoadHistory,
 }: {
   subagent: SubagentRun;
   status: DisplaySubagentStatus;
   liveTurn?: InFlightTurn;
   liveTurns?: Record<string, InFlightTurn>;
   nestedRuns?: SubagentRunsByTool;
+  history?: SubagentConversationHistory;
+  histories?: Record<string, SubagentConversationHistory>;
+  onLoadHistory?: (agentId: string, force?: boolean) => void;
 }) {
   const hasDetail =
     liveTurn !== undefined ||
+    (onLoadHistory !== undefined && runHasHistory(subagent)) ||
     Boolean(subagent.resultSummary) ||
     Boolean(subagent.error) ||
     subagent.usage !== undefined ||
     subagent.contextTokens !== undefined;
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (open && history === undefined && onLoadHistory && runHasHistory(subagent)) {
+      onLoadHistory(subagent.subagentId);
+    }
+  }, [
+    history,
+    onLoadHistory,
+    open,
+    subagent.historyAvailable,
+    subagent.historyPrompt,
+    subagent.subagentId,
+  ]);
   const tokenTotal = subagent.usage
     ? inputTokenUsage(subagent.usage) + subagent.usage.output
     : undefined;
@@ -953,6 +983,31 @@ function SubagentRow({
               nestedRuns={nestedRuns}
             />
           )}
+          {!liveTurn && history?.loading && (
+            <div className="subagent-history-state">
+              <span className="spinner" />
+              {t("subagent.historyLoading")}
+            </div>
+          )}
+          {!liveTurn && history?.error && (
+            <div className="subagent-history-state error">
+              <span>{history.error}</span>
+              <button
+                type="button"
+                onClick={() => onLoadHistory?.(subagent.subagentId, true)}
+              >
+                {t("common.retry")}
+              </button>
+            </div>
+          )}
+          {!liveTurn && history && !history.loading && !history.error && (
+            <SubagentHistoryTimeline
+              history={history}
+              run={subagent}
+              histories={histories}
+              onLoadHistory={onLoadHistory}
+            />
+          )}
           {subagent.resultSummary && (
             <section className="subagent-result-summary">
               <header>
@@ -987,6 +1042,52 @@ function SubagentRow({
           )}
         </div>
       </Collapsible>
+    </div>
+  );
+}
+
+function runHasHistory(run: SubagentRun): boolean {
+  return run.historyAvailable === true && Boolean(run.historyPrompt);
+}
+
+function SubagentHistoryTimeline({
+  history,
+  run,
+  histories,
+  onLoadHistory,
+}: {
+  history: SubagentConversationHistory;
+  run: SubagentRun;
+  histories?: Record<string, SubagentConversationHistory>;
+  onLoadHistory?: (agentId: string, force?: boolean) => void;
+}) {
+  const messages = subagentInvocationMessages(history.items, run);
+  if (messages.length === 0) {
+    return (
+      <div className="subagent-history-state">
+        {t("subagent.historyEmpty")}
+      </div>
+    );
+  }
+  const presentation = mergeHistoryToolResults(messages);
+  const turns = groupHistoryMessages(presentation.messages);
+  const nestedRuns = collectHistoricalSubagentRuns(messages);
+
+  return (
+    <div className="subagent-live-timeline historical">
+      {turns.flatMap((turn) =>
+        turn.responses.map((message) => (
+          <AssistantMessagePart
+            key={message.id}
+            message={message}
+            toolResults={presentation.results}
+            subagentRuns={nestedRuns}
+            subagentHistories={histories}
+            onLoadSubagentHistory={onLoadHistory}
+            onCompactionSummaryOpen={() => undefined}
+          />
+        )),
+      )}
     </div>
   );
 }
@@ -1148,7 +1249,8 @@ export const HistoryTurnView = memo(function HistoryTurnView({
   turn,
   toolResults,
   subagentRuns,
-  subagentLiveTurns,
+  subagentHistories,
+  onLoadSubagentHistory,
   messageDurations,
   messageFileChanges,
   undoableUserMessageId,
@@ -1163,7 +1265,8 @@ export const HistoryTurnView = memo(function HistoryTurnView({
   turn: HistoryConversationTurn;
   toolResults: Map<string, ToolResultContent>;
   subagentRuns?: SubagentRunsByTool;
-  subagentLiveTurns?: Record<string, InFlightTurn>;
+  subagentHistories?: Record<string, SubagentConversationHistory>;
+  onLoadSubagentHistory: (agentId: string, force?: boolean) => void;
   messageDurations: Record<string, number>;
   messageFileChanges: Record<string, readonly TurnFileChange[]>;
   undoableUserMessageId?: string;
@@ -1210,7 +1313,8 @@ export const HistoryTurnView = memo(function HistoryTurnView({
           message={turn.user}
           toolResults={toolResults}
           subagentRuns={subagentRuns}
-          subagentLiveTurns={subagentLiveTurns}
+          subagentHistories={subagentHistories}
+          onLoadSubagentHistory={onLoadSubagentHistory}
           onSkillOpen={onSkillOpen}
           onPluginCommandOpen={onPluginCommandOpen}
           canUndo={turn.user.id === undoableUserMessageId}
@@ -1251,7 +1355,8 @@ export const HistoryTurnView = memo(function HistoryTurnView({
                         message={message}
                         toolResults={toolResults}
                         subagentRuns={subagentRuns}
-                        subagentLiveTurns={subagentLiveTurns}
+                        subagentHistories={subagentHistories}
+                        onLoadSubagentHistory={onLoadSubagentHistory}
                         onCompactionSummaryOpen={onCompactionSummaryOpen}
                         compactionEvent={compactionEvent}
                       />
@@ -1262,7 +1367,8 @@ export const HistoryTurnView = memo(function HistoryTurnView({
                   message={finalResponse}
                   toolResults={toolResults}
                   subagentRuns={subagentRuns}
-                  subagentLiveTurns={subagentLiveTurns}
+                  subagentHistories={subagentHistories}
+                  onLoadSubagentHistory={onLoadSubagentHistory}
                   onCompactionSummaryOpen={onCompactionSummaryOpen}
                   compactionEvent={compactionEvent}
                 />
@@ -1274,7 +1380,8 @@ export const HistoryTurnView = memo(function HistoryTurnView({
                   message={message}
                   toolResults={toolResults}
                   subagentRuns={subagentRuns}
-                  subagentLiveTurns={subagentLiveTurns}
+                  subagentHistories={subagentHistories}
+                  onLoadSubagentHistory={onLoadSubagentHistory}
                   onCompactionSummaryOpen={onCompactionSummaryOpen}
                   compactionEvent={compactionEvent}
                 />
@@ -1385,7 +1492,8 @@ function UserMessageView({
   message,
   toolResults,
   subagentRuns,
-  subagentLiveTurns,
+  subagentHistories,
+  onLoadSubagentHistory,
   onSkillOpen,
   onPluginCommandOpen,
   canUndo = false,
@@ -1394,7 +1502,8 @@ function UserMessageView({
   message: RenderMessage;
   toolResults: Map<string, ToolResultContent>;
   subagentRuns?: SubagentRunsByTool;
-  subagentLiveTurns?: Record<string, InFlightTurn>;
+  subagentHistories?: Record<string, SubagentConversationHistory>;
+  onLoadSubagentHistory: (agentId: string, force?: boolean) => void;
   onSkillOpen: (name: string) => void;
   onPluginCommandOpen: (command: PluginCommandDetail) => void;
   canUndo?: boolean;
@@ -1434,7 +1543,8 @@ function UserMessageView({
           parts={structured}
           toolResults={toolResults}
           subagentRuns={subagentRuns}
-          subagentLiveTurns={subagentLiveTurns}
+          subagentHistories={subagentHistories}
+          onLoadSubagentHistory={onLoadSubagentHistory}
         />
       </div>
       {canUndo && onUndo && (
@@ -1458,14 +1568,16 @@ function AssistantMessagePart({
   message,
   toolResults,
   subagentRuns,
-  subagentLiveTurns,
+  subagentHistories,
+  onLoadSubagentHistory,
   onCompactionSummaryOpen,
   compactionEvent,
 }: {
   message: RenderMessage;
   toolResults: Map<string, ToolResultContent>;
   subagentRuns?: SubagentRunsByTool;
-  subagentLiveTurns?: Record<string, InFlightTurn>;
+  subagentHistories?: Record<string, SubagentConversationHistory>;
+  onLoadSubagentHistory?: (agentId: string, force?: boolean) => void;
   onCompactionSummaryOpen: (message: RenderMessage) => void;
   compactionEvent?: CompactionEvent;
 }) {
@@ -1505,7 +1617,8 @@ function AssistantMessagePart({
             parts={structured}
             toolResults={toolResults}
             subagentRuns={subagentRuns}
-            subagentLiveTurns={subagentLiveTurns}
+            subagentHistories={subagentHistories}
+            onLoadSubagentHistory={onLoadSubagentHistory}
           />
         </div>
       )}
@@ -1968,13 +2081,15 @@ function HistoryToolCard({
   result,
   subagents,
   subagentRuns,
-  subagentLiveTurns,
+  subagentHistories,
+  onLoadSubagentHistory,
 }: {
   tool: Extract<MessageContent, { type: "tool_use" }>;
   result?: ToolResultContent;
   subagents: readonly SubagentRun[];
   subagentRuns?: SubagentRunsByTool;
-  subagentLiveTurns?: Record<string, InFlightTurn>;
+  subagentHistories?: Record<string, SubagentConversationHistory>;
+  onLoadSubagentHistory?: (agentId: string, force?: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const status = result
@@ -1983,15 +2098,7 @@ function HistoryToolCard({
       : "completed"
     : "incomplete";
   const summary = toolInputSummary(tool.input);
-  const historicalSubagents =
-    tool.tool_name === "AgentSwarm"
-      ? parseAgentSwarmResult(result?.output, tool.tool_call_id, tool.input)
-      : [];
-  const mergedSubagents = mergeSubagentRuns(historicalSubagents, subagents);
-  const displayedSubagents =
-    historicalSubagents.length > 0
-      ? mergedSubagents
-      : subagentRunsWithSwarmItems(mergedSubagents, tool.input);
+  const displayedSubagents = subagentRunsWithSwarmItems(subagents, tool.input);
 
   return (
     <div className={`history-tool-card ${status}`}>
@@ -2016,8 +2123,9 @@ function HistoryToolCard({
       {displayedSubagents.length > 0 && (
         <SubagentPanel
           subagents={displayedSubagents}
-          liveTurns={subagentLiveTurns}
           nestedRuns={subagentRuns}
+          histories={subagentHistories}
+          onLoadHistory={onLoadSubagentHistory}
           parentActive={false}
         />
       )}
@@ -2044,12 +2152,14 @@ export function StructuredMessageContent({
   parts,
   toolResults,
   subagentRuns,
-  subagentLiveTurns,
+  subagentHistories,
+  onLoadSubagentHistory,
 }: {
   parts: MessageContent[];
   toolResults: Map<string, ToolResultContent>;
   subagentRuns?: SubagentRunsByTool;
-  subagentLiveTurns?: Record<string, InFlightTurn>;
+  subagentHistories?: Record<string, SubagentConversationHistory>;
+  onLoadSubagentHistory?: (agentId: string, force?: boolean) => void;
 }) {
   if (parts.length === 0) return null;
   return (
@@ -2064,7 +2174,8 @@ export function StructuredMessageContent({
                 result={result}
                 subagents={subagentRuns?.[part.tool_call_id] ?? []}
                 subagentRuns={subagentRuns}
-                subagentLiveTurns={subagentLiveTurns}
+                subagentHistories={subagentHistories}
+                onLoadSubagentHistory={onLoadSubagentHistory}
                 key={`${part.tool_call_id}-${index}`}
               />
             );

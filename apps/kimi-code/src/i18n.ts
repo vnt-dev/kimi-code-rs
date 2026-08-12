@@ -783,6 +783,8 @@ const zh = {
   "subagent.starting": "正在启动",
   "subagent.taskEnded": "任务已结束",
   "subagent.waitingOutput": "等待子代理输出…",
+  "subagent.historyLoading": "正在读取子代理会话…",
+  "subagent.historyEmpty": "未找到本次执行的会话记录",
 
   "common.retry": "重试",
   "common.cancel": "取消",
@@ -1595,6 +1597,8 @@ const en: Record<TranslationKey, string> = {
   "subagent.starting": "Starting",
   "subagent.taskEnded": "Task ended",
   "subagent.waitingOutput": "Waiting for subagent output…",
+  "subagent.historyLoading": "Loading subagent conversation…",
+  "subagent.historyEmpty": "No conversation data was found for this run",
 
   "common.retry": "Retry",
   "common.cancel": "Cancel",

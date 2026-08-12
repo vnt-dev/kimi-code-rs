@@ -392,7 +392,7 @@
 
 .subagent-row-detail {
   display: flex;
-  padding: 1px 7px 7px 30px;
+  padding: 1px 0 7px;
   flex-direction: column;
   gap: 8px;
 }
@@ -526,6 +526,35 @@
   border-radius: 0;
   background: transparent;
   white-space: pre;
+}
+
+.subagent-history-state {
+  display: flex;
+  min-height: 34px;
+  padding: 7px 8px;
+  align-items: center;
+  gap: 7px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.subagent-history-state.error {
+  color: var(--danger, #d47878);
+}
+
+.subagent-history-state button {
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.subagent-live-timeline.historical {
+  border-left-color: var(--line);
 }
 
 .subagent-row-detail pre.error {

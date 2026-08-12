@@ -43,7 +43,8 @@ import {
   newQueuedPromptId,
   type AgentSubscription,
   type ConversationHistory,
-  type PendingAgentSubscription
+  type PendingAgentSubscription,
+  type SessionSubagentHistories,
 } from "./app/appUtils";
 import { createWorkspaceActions } from "./app/createWorkspaceActions";
 import { useChatScroll } from "./app/useChatScroll";
@@ -167,6 +168,7 @@ import {
   loadDesktopState
 } from "./store";
 import {
+  collectHistoricalSubagentRuns,
   type SessionSubagentRuns
 } from "./subagentEvents";
 import { cronTaskBadge, type CronTaskDescriptor } from "./cronTasks";
@@ -305,6 +307,8 @@ export default function App() {
   const [subagentRuns, setSubagentRuns] = useState<SessionSubagentRuns>({});
   const [subagentLiveTurns, setSubagentLiveTurns] =
     useState<SubagentLiveTurns>({});
+  const [subagentHistories, setSubagentHistories] =
+    useState<SessionSubagentHistories>({});
   const [modeBusy, setModeBusy] = useState(false);
   const [goalEditTarget, setGoalEditTarget] = useState<GoalSnapshot>();
   const [goalEditBusy, setGoalEditBusy] = useState(false);
@@ -337,6 +341,9 @@ export default function App() {
   const accountUsageRequest = useRef(0);
   const accountProfileRequest = useRef(0);
   const historyRequests = useRef<Record<string, number>>({});
+  const subagentHistoryRequests = useRef<Record<string, number>>({});
+  const subagentHistoryPromises = useRef<Map<string, Promise<void>>>(new Map());
+  const observedHistoryItems = useRef<Record<string, ProtocolMessage[]>>({});
   const desktopInventoryRequest = useRef(0);
   const backgroundTaskRequests = useRef<Record<string, number>>({});
   const skillsRequest = useRef(0);
@@ -443,12 +450,135 @@ export default function App() {
   const activeSubagentLiveTurns = activeConversation
     ? subagentLiveTurns[activeConversation.id]
     : undefined;
+  const activeSubagentHistories = activeConversation
+    ? subagentHistories[activeConversation.id]
+    : undefined;
   const activeHistory = activeConversation
     ? historyByConversation[activeConversation.id]
     : undefined;
   const activeCronTaskCount = activeConversation
     ? cronTaskCounts[activeConversation.id] ?? 0
     : 0;
+
+  const loadSubagentHistory = useCallback((
+    sessionId: string,
+    agentId: string,
+    force = false,
+  ): void => {
+    const key = `${sessionId}\u0000${agentId}`;
+    if (!force && subagentHistoryPromises.current.has(key)) return;
+    const cached = subagentHistories[sessionId]?.[agentId];
+    if (!force && cached && !cached.loading && !cached.error) return;
+
+    const request = (subagentHistoryRequests.current[key] ?? 0) + 1;
+    subagentHistoryRequests.current[key] = request;
+    setSubagentHistories((current) => ({
+      ...current,
+      [sessionId]: {
+        ...current[sessionId],
+        [agentId]: {
+          agentId,
+          items: current[sessionId]?.[agentId]?.items ?? [],
+          loading: true,
+        },
+      },
+    }));
+
+    const pending = fetchConversationHistory(sessionId, agentId)
+      .then((page) => {
+        if (request !== subagentHistoryRequests.current[key]) return;
+        setSubagentHistories((current) => ({
+          ...current,
+          [sessionId]: {
+            ...current[sessionId],
+            [agentId]: {
+              agentId,
+              items: [...page.items].reverse(),
+              loading: false,
+            },
+          },
+        }));
+      })
+      .catch((error) => {
+        if (request !== subagentHistoryRequests.current[key]) return;
+        setSubagentHistories((current) => ({
+          ...current,
+          [sessionId]: {
+            ...current[sessionId],
+            [agentId]: {
+              agentId,
+              items: current[sessionId]?.[agentId]?.items ?? [],
+              loading: false,
+              error: conciseError(error),
+            },
+          },
+        }));
+      })
+      .finally(() => {
+        if (subagentHistoryPromises.current.get(key) === pending) {
+          subagentHistoryPromises.current.delete(key);
+        }
+      });
+    subagentHistoryPromises.current.set(key, pending);
+  }, [subagentHistories]);
+
+  useEffect(() => {
+    const changedSessions: string[] = [];
+    for (const [sessionId, history] of Object.entries(historyByConversation)) {
+      const previous = observedHistoryItems.current[sessionId];
+      if (previous && previous !== history.items) changedSessions.push(sessionId);
+      observedHistoryItems.current[sessionId] = history.items;
+    }
+    if (changedSessions.length === 0) return;
+    const changed = new Set(changedSessions);
+    for (const key of Object.keys(subagentHistoryRequests.current)) {
+      const sessionId = key.slice(0, key.indexOf("\u0000"));
+      if (changed.has(sessionId)) {
+        subagentHistoryRequests.current[key] += 1;
+        subagentHistoryPromises.current.delete(key);
+      }
+    }
+    setSubagentHistories((current) => {
+      let next = current;
+      for (const sessionId of changed) {
+        if (!(sessionId in next)) continue;
+        if (next === current) next = { ...current };
+        delete next[sessionId];
+      }
+      return next;
+    });
+  }, [historyByConversation]);
+
+  useEffect(() => {
+    const knownSessions = new Set(
+      desktop.projects.flatMap((project) =>
+        project.conversations.map((conversation) => conversation.id),
+      ),
+    );
+    setSubagentHistories((current) => {
+      let changed = false;
+      const next: SessionSubagentHistories = {};
+      for (const [sessionId, histories] of Object.entries(current)) {
+        if (!knownSessions.has(sessionId)) {
+          changed = true;
+          continue;
+        }
+        next[sessionId] = histories;
+      }
+      return changed ? next : current;
+    });
+    for (const key of Object.keys(subagentHistoryRequests.current)) {
+      const sessionId = key.slice(0, key.indexOf("\u0000"));
+      if (knownSessions.has(sessionId)) continue;
+      subagentHistoryRequests.current[key] += 1;
+      subagentHistoryPromises.current.delete(key);
+    }
+    for (const sessionId of Object.keys(observedHistoryItems.current)) {
+      if (!knownSessions.has(sessionId)) {
+        delete observedHistoryItems.current[sessionId];
+      }
+    }
+  }, [desktop.projects]);
   const updateCronTaskCount = useCallback((sessionId: string, count: number): void => {
     setCronTaskCounts((current) => ({ ...current, [sessionId]: count }));
   }, []);
@@ -483,6 +613,10 @@ export default function App() {
   );
   const historyToolPresentation = useMemo(
     () => mergeHistoryToolResults(visibleHistoryMessages),
+    [visibleHistoryMessages],
+  );
+  const historicalSubagentRuns = useMemo(
+    () => collectHistoricalSubagentRuns(visibleHistoryMessages),
     [visibleHistoryMessages],
   );
   const latestHistoryCompactionSummaryId = [...visibleHistoryMessages]
@@ -2794,8 +2928,11 @@ export default function App() {
                       key={turn.id}
                       turn={turn}
                       toolResults={historyToolPresentation.results}
-                      subagentRuns={activeSubagentRuns}
-                      subagentLiveTurns={activeSubagentLiveTurns}
+                      subagentRuns={historicalSubagentRuns}
+                      subagentHistories={activeSubagentHistories}
+                      onLoadSubagentHistory={(agentId, force) =>
+                        loadSubagentHistory(activeConversation.id, agentId, force)
+                      }
                       messageDurations={
                         messageDurations[activeConversation.id] ?? {}
                       }

@@ -14,6 +14,18 @@ export interface ConversationHistory {
   error?: string;
 }
 
+export interface SubagentConversationHistory {
+  agentId: string;
+  items: ProtocolMessage[];
+  loading: boolean;
+  error?: string;
+}
+
+export type SessionSubagentHistories = Record<
+  string,
+  Record<string, SubagentConversationHistory>
+>;
+
 export interface AgentSubscription {
   agentId: string;
   subscriptionId: string;
@@ -32,9 +44,11 @@ export function newQueuedPromptId(): string {
 
 export function fetchConversationHistory(
   conversationId: string,
+  agentId?: string,
 ): Promise<MessagePage> {
   return invoke<MessagePage>("list_conversation_messages", {
     sessionId: conversationId,
+    agentId,
   });
 }
 

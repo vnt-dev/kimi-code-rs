@@ -456,8 +456,12 @@ async fn conversation_context_usage(
 async fn list_conversation_messages(
     state: State<'_, AppState>,
     session_id: String,
+    agent_id: Option<String>,
 ) -> Result<DesktopMessagePage, String> {
-    state.client.list_messages(&session_id).await
+    state
+        .client
+        .list_messages(&session_id, agent_id.as_deref())
+        .await
 }
 
 #[tauri::command]

@@ -33,7 +33,13 @@ use crate::{
         },
     },
     persistence::interface::append_log_store::{APPEND_LOG_STORE_SERVICE_ID, AppendLogStoreHandle},
-    session::agent_lifecycle::ensure_main_agent,
+    session::{
+        agent_lifecycle::{
+            AGENT_LIFECYCLE_SERVICE_ID, AGENT_NOT_FOUND, CreateAgentOptions, MAIN_AGENT_ID,
+            ensure_main_agent, labels_from_agent_meta,
+        },
+        session_metadata::SESSION_METADATA_ID,
+    },
     wire::{
         contract::WIRE_SERVICE_ID,
         record::{AGENT_WIRE_RECORD_KEY, WireRecord},
@@ -85,7 +91,11 @@ impl MessageLegacyService {
         }
     }
 
-    async fn load_messages(&self, session_id: &str) -> MessageLegacyResult<Vec<ProtocolMessage>> {
+    async fn load_messages(
+        &self,
+        session_id: &str,
+        agent_id: Option<&str>,
+    ) -> MessageLegacyResult<Vec<ProtocolMessage>> {
         let Some(summary) = self.index.get(session_id).await? else {
             return Err(Box::new(Error2::new(
                 SESSION_NOT_FOUND,
@@ -99,7 +109,38 @@ impl MessageLegacyService {
         let Some(session) = session else {
             return Ok(Vec::new());
         };
-        let agent = ensure_main_agent(&session, None).await?;
+        let agent_id = agent_id.unwrap_or(MAIN_AGENT_ID);
+        let agent = if agent_id == MAIN_AGENT_ID {
+            ensure_main_agent(&session, None).await?
+        } else {
+            let metadata = session.get(SESSION_METADATA_ID)?;
+            let persisted = metadata.read().await?;
+            let meta = persisted
+                .agents
+                .as_ref()
+                .and_then(|agents| agents.get(agent_id))
+                .cloned()
+                .ok_or_else(|| {
+                    Box::new(Error2::new(
+                        AGENT_NOT_FOUND,
+                        format!("agent {agent_id} does not exist in session {session_id}"),
+                    )) as Box<dyn Error + Send + Sync>
+                })?;
+            let lifecycle = session.get(AGENT_LIFECYCLE_SERVICE_ID)?;
+            match lifecycle.get(agent_id) {
+                Some(agent) => agent,
+                None => {
+                    lifecycle
+                        .create(CreateAgentOptions {
+                            agent_id: Some(agent_id.into()),
+                            forked_from: meta.forked_from.clone(),
+                            labels: labels_from_agent_meta(&meta),
+                            ..CreateAgentOptions::default()
+                        })
+                        .await?
+                }
+            }
+        };
 
         let transcript = self.read_transcript(&agent).await?;
         let context_messages = agent.get(AGENT_CONTEXT_MEMORY_SERVICE_ID)?.get();
@@ -129,7 +170,9 @@ impl MessageLegacyServiceContract for MessageLegacyService {
         session_id: &str,
         query: MessageListQuery,
     ) -> MessageLegacyResult<PageResponse<ProtocolMessage>> {
-        let mut messages = self.load_messages(session_id).await?;
+        let mut messages = self
+            .load_messages(session_id, query.agent_id.as_deref())
+            .await?;
         messages.reverse();
 
         let pivot_index = if let Some(before_id) = query.before_id.as_deref() {
@@ -166,7 +209,7 @@ impl MessageLegacyServiceContract for MessageLegacyService {
         session_id: &str,
         message_id: &str,
     ) -> MessageLegacyResult<ProtocolMessage> {
-        self.load_messages(session_id)
+        self.load_messages(session_id, None)
             .await?
             .into_iter()
             .find(|message| message.id == message_id)
@@ -282,7 +325,10 @@ pub fn register_message_legacy_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
+    };
 
     use futures_util::{FutureExt, future::BoxFuture, stream};
     use serde_json::{Value, json};
@@ -328,6 +374,10 @@ mod tests {
         session::agent_lifecycle::{
             AGENT_LIFECYCLE_SERVICE_ID, AgentLifecycleServiceContract, AgentLifecycleServiceHandle,
             AgentListFilter, AgentScopeHandle, CreateAgentOptions, ForkAgentOptions, MAIN_AGENT_ID,
+        },
+        session::session_metadata::{
+            AgentMeta, AgentMetaType, SessionMeta, SessionMetaPatch, SessionMetadataChangedEvent,
+            SessionMetadataContract, SessionMetadataHandle,
         },
         wire::{
             contract::{WIRE_SERVICE_ID, WireServiceHandle},
@@ -477,6 +527,7 @@ mod tests {
     #[derive(Default)]
     struct AgentLifecycle {
         agent: Mutex<Option<AgentScopeHandle>>,
+        created: Mutex<Vec<String>>,
     }
 
     impl Disposable for AgentLifecycle {
@@ -496,8 +547,11 @@ mod tests {
 
         fn create(
             &self,
-            _: CreateAgentOptions,
+            options: CreateAgentOptions,
         ) -> BoxFuture<'static, Result<AgentScopeHandle, BoxError>> {
+            if let Some(agent_id) = options.agent_id {
+                self.created.lock().unwrap().push(agent_id);
+            }
             futures_util::future::ready(Ok(self
                 .agent
                 .lock()
@@ -531,6 +585,54 @@ mod tests {
 
         fn remove(&self, _: String) -> BoxFuture<'static, Result<(), BoxError>> {
             futures_util::future::ready(Ok(())).boxed()
+        }
+    }
+
+    struct Metadata {
+        data: SessionMeta,
+    }
+
+    #[async_trait]
+    impl SessionMetadataContract for Metadata {
+        async fn ready(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+
+        fn on_did_change_metadata(&self) -> Event<SessionMetadataChangedEvent> {
+            Event::none()
+        }
+
+        async fn read(&self) -> Result<SessionMeta, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(self.data.clone())
+        }
+
+        async fn update(
+            &self,
+            _: SessionMetaPatch,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+
+        async fn set_title(
+            &self,
+            _: String,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+
+        async fn set_archived(
+            &self,
+            _: bool,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+
+        async fn register_agent(
+            &self,
+            _: String,
+            _: AgentMeta,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
         }
     }
 
@@ -649,6 +751,7 @@ mod tests {
 
     struct Fixture {
         service: MessageLegacyService,
+        agent_lifecycle: Arc<AgentLifecycle>,
         _app: Scope,
     }
 
@@ -703,6 +806,42 @@ mod tests {
         session_extra.set_instance(
             AGENT_LIFECYCLE_SERVICE_ID,
             Arc::new(AgentLifecycleServiceHandle(lifecycle_handle)),
+        );
+        let metadata: Arc<dyn SessionMetadataContract> = Arc::new(Metadata {
+            data: SessionMeta {
+                id: "s1".into(),
+                version: Some(2),
+                title: None,
+                is_custom_title: None,
+                last_prompt: None,
+                created_at: 1_000,
+                updated_at: 1_000,
+                archived: false,
+                cwd: None,
+                forked_from: None,
+                agents: Some(BTreeMap::from([
+                    (
+                        MAIN_AGENT_ID.into(),
+                        AgentMeta {
+                            r#type: Some(AgentMetaType::Main),
+                            ..AgentMeta::default()
+                        },
+                    ),
+                    (
+                        "agent-1".into(),
+                        AgentMeta {
+                            r#type: Some(AgentMetaType::Sub),
+                            parent_agent_id: Some(MAIN_AGENT_ID.into()),
+                            ..AgentMeta::default()
+                        },
+                    ),
+                ])),
+                custom: None,
+            },
+        });
+        session_extra.set_instance(
+            SESSION_METADATA_ID,
+            Arc::new(SessionMetadataHandle(metadata)),
         );
         let app = Scope::create_app(ScopeOptions::default());
         let session = app
@@ -764,6 +903,7 @@ mod tests {
                 SessionIndexHandle(index),
                 append_log,
             ),
+            agent_lifecycle,
             _app: app,
         }
     }
@@ -815,6 +955,50 @@ mod tests {
         assert_eq!(
             error.downcast_ref::<Error2>().unwrap().code,
             MESSAGE_NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn reads_registered_subagent_history_and_rejects_unknown_agents() {
+        let fixture = fixture(
+            vec![json!({
+                "type": "context.append_message",
+                "message": text_message(Role::Assistant, "child response")
+            })],
+            Vec::new(),
+            false,
+        );
+        let page = fixture
+            .service
+            .list(
+                "s1",
+                MessageListQuery {
+                    agent_id: Some("agent-1".into()),
+                    ..MessageListQuery::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(
+            fixture.agent_lifecycle.created.lock().unwrap().as_slice(),
+            ["agent-1"]
+        );
+
+        let error = fixture
+            .service
+            .list(
+                "s1",
+                MessageListQuery {
+                    agent_id: Some("agent-outside".into()),
+                    ..MessageListQuery::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<Error2>().unwrap().code,
+            AGENT_NOT_FOUND
         );
     }
 

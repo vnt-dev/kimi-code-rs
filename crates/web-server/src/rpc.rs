@@ -25,6 +25,8 @@ fn encode<T: Serialize>(value: T) -> Result<Value, RpcError> {
 #[serde(rename_all = "camelCase")]
 struct SessionArgs {
     session_id: String,
+    #[serde(default)]
+    agent_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -555,7 +557,7 @@ pub(crate) async fn dispatch_rpc(
             let args: SessionArgs = decode(args)?;
             encode(
                 client
-                    .list_messages(&args.session_id)
+                    .list_messages(&args.session_id, args.agent_id.as_deref())
                     .await
                     .map_err(RpcError::transport)?,
             )
