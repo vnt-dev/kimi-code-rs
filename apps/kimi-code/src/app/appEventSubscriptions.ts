@@ -194,7 +194,7 @@ export function subscribeToAppEvents({
           ...current,
           [conversationId]: {
             conversationId,
-            items: [...page.items].reverse(),
+            items: page.items,
             loading: false,
           },
         }));
@@ -291,7 +291,7 @@ export function subscribeToAppEvents({
                 ...current,
                 [conversationId]: {
                   conversationId,
-                  items: [...page.items].reverse(),
+                  items: page.items,
                   loading: false,
                 },
               }));

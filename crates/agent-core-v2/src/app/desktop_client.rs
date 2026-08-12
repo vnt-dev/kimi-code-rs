@@ -71,9 +71,7 @@ use crate::{
         event::event_bus::EVENT_BUS_SERVICE_ID,
         file::{FILE_SERVICE_ID, FileByteStream, FileMeta, FileServiceError, SaveOptions},
         host_folder_browser::{FS_HOST_FOLDER_BROWSER_ID, FsBrowseResponse, FsHomeResponse},
-        message_legacy::{
-            MESSAGE_LEGACY_SERVICE_ID, MessageListQuery, PageResponse as MessagePageResponse,
-        },
+        message_legacy::MESSAGE_LEGACY_SERVICE_ID,
         plugin::{
             GetPluginInfoInput, InstallPluginInput, PLUGIN_SERVICE_ID, PluginInfo,
             PluginInstallOperation, PluginSummary, PluginUpdateStatus, ReloadSummary,
@@ -1899,48 +1897,22 @@ impl KimiCodeDesktopClient {
             .app
             .get(MESSAGE_LEGACY_SERVICE_ID)
             .map_err(|error| error.to_string())?;
-        let mut items = Vec::new();
-        let mut before_id = None;
-
-        loop {
-            let page = messages
-                .list(
-                    conversation_id,
-                    MessageListQuery {
-                        before_id,
-                        page_size: Some(1000),
-                        agent_id: agent_id.map(str::to_owned),
-                        ..MessageListQuery::default()
-                    },
-                )
-                .await;
-
-            match page {
-                Ok(MessagePageResponse {
-                    items: page_items,
-                    has_more,
-                }) => {
-                    before_id = page_items.last().map(|message| message.id.clone());
-                    items.extend(page_items);
-                    if !has_more || before_id.is_none() {
-                        return Ok(DesktopMessagePage {
-                            items,
-                            has_more: false,
-                        });
-                    }
-                }
-                Err(error)
-                    if error
-                        .downcast_ref::<Error2>()
-                        .is_some_and(|error| error.code == "session.not_found") =>
-                {
-                    return Ok(DesktopMessagePage {
-                        items: Vec::new(),
-                        has_more: false,
-                    });
-                }
-                Err(error) => return Err(error.to_string()),
+        match messages.list_all(conversation_id, agent_id).await {
+            Ok(items) => Ok(DesktopMessagePage {
+                items,
+                has_more: false,
+            }),
+            Err(error)
+                if error
+                    .downcast_ref::<Error2>()
+                    .is_some_and(|error| error.code == "session.not_found") =>
+            {
+                Ok(DesktopMessagePage {
+                    items: Vec::new(),
+                    has_more: false,
+                })
             }
+            Err(error) => Err(error.to_string()),
         }
     }
 

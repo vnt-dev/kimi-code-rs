@@ -26,6 +26,12 @@ pub struct PageResponse<T> {
 pub type MessageLegacyResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 #[async_trait]
 pub trait MessageLegacyServiceContract: Send + Sync {
+    /// Returns the complete history in chronological order (oldest first).
+    async fn list_all(
+        &self,
+        session_id: &str,
+        agent_id: Option<&str>,
+    ) -> MessageLegacyResult<Vec<ProtocolMessage>>;
     async fn list(
         &self,
         session_id: &str,

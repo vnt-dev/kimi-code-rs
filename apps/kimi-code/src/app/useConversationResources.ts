@@ -218,7 +218,7 @@ export function useConversationResources({
     try {
       const page = await fetchConversationHistory(conversationId);
       if (request !== historyRequests.current[conversationId]) return false;
-      const items = [...page.items].reverse();
+      const items = page.items;
       const durationMs = completedTurn?.durationMs;
       if (completedTurn && durationMs !== undefined) {
         const messageId = completedTurnMessageId(items, completedTurn);

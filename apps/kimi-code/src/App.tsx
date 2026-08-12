@@ -492,7 +492,7 @@ export default function App() {
             ...current[sessionId],
             [agentId]: {
               agentId,
-              items: [...page.items].reverse(),
+              items: page.items,
               loading: false,
             },
           },
@@ -1626,7 +1626,7 @@ export default function App() {
           ...current,
           [conversationId]: {
             conversationId,
-            items: [...page.items].reverse(),
+            items: page.items,
             loading: false,
           },
         }));

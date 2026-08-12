@@ -165,6 +165,14 @@ impl MessageLegacyService {
 
 #[async_trait]
 impl MessageLegacyServiceContract for MessageLegacyService {
+    async fn list_all(
+        &self,
+        session_id: &str,
+        agent_id: Option<&str>,
+    ) -> MessageLegacyResult<Vec<ProtocolMessage>> {
+        self.load_messages(session_id, agent_id).await
+    }
+
     async fn list(
         &self,
         session_id: &str,
@@ -1180,5 +1188,27 @@ mod tests {
             ["msg_s1_000001"]
         );
         assert!(!older.has_more);
+    }
+
+    #[tokio::test]
+    async fn lists_all_messages_in_chronological_order_without_the_page_size_limit() {
+        let fixture = fixture(
+            (0..=MAX_PAGE_SIZE)
+                .map(|index| {
+                    json!({
+                        "type": "context.append_message",
+                        "message": text_message(Role::User, &format!("u{index}"))
+                    })
+                })
+                .collect(),
+            Vec::new(),
+            false,
+        );
+
+        let messages = fixture.service.list_all("s1", None).await.unwrap();
+
+        assert_eq!(messages.len(), MAX_PAGE_SIZE + 1);
+        assert_eq!(messages.first().unwrap().id, "msg_s1_000000");
+        assert_eq!(messages.last().unwrap().id, "msg_s1_000100");
     }
 }
