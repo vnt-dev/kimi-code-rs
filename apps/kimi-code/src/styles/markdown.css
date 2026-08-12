@@ -93,6 +93,31 @@
   font-size: 11px;
 }
 
+.code-copy {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  color: #85858f;
+  background: transparent;
+  cursor: pointer;
+}
+
+.code-copy:hover {
+  color: #d1d1d7;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.code-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .code-wrap pre {
   margin: 0;
   overflow-x: auto;

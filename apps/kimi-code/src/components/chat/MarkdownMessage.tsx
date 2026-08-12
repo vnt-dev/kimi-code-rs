@@ -7,9 +7,11 @@ import {
   useRef,
   useState,
 } from "react";
+import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { t } from "../../i18n";
 import { resolveMarkdownExternalUrl } from "../../markdownLinks";
 import { openExternalUrl } from "../../transport";
 import { PreviewableImage } from "./PreviewableImage";
@@ -19,11 +21,35 @@ function MarkdownCodeBlock({ children }: { children: ReactNode }) {
     ? children.props.className
     : undefined;
   const language = className?.match(/language-([^\s]+)/)?.[1] ?? "code";
+  const code = isValidElement<{ children?: ReactNode }>(children)
+    ? children.props.children
+    : children;
+  const text = typeof code === "string" ? code.replace(/\n$/, "") : "";
+  const [copied, setCopied] = useState(false);
+
+  const copyCode = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch (error) {
+      console.error("failed to copy Markdown code block", error);
+    }
+  };
 
   return (
     <div className="code-wrap">
       <div className="code-label">
         <span>{language}</span>
+        <button
+          type="button"
+          className="code-copy"
+          title={copied ? t("common.copied") : t("common.copy")}
+          aria-label={copied ? t("common.copied") : t("common.copy")}
+          onClick={() => void copyCode()}
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
       </div>
       <pre>{children}</pre>
     </div>
