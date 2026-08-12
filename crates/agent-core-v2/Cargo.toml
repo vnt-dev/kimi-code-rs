@@ -29,6 +29,7 @@ libc = "0.2"
 notify = "8.2.0"
 percent-encoding = "2"
 portable-pty = "0.9.0"
+quick-xml = "0.41"
 regex = "1"
 regress = { version = "0.11.1", default-features = false, features = ["std", "utf16"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls-no-provider", "stream"] }

@@ -2583,6 +2583,7 @@ dependencies = [
  "notify",
  "percent-encoding",
  "portable-pty",
+ "quick-xml",
  "readability",
  "regex",
  "regress",

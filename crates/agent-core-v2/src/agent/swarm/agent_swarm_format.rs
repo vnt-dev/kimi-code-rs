@@ -8,6 +8,8 @@ use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
+use crate::_base::utils::xml_escape::{escape_xml_attribute, escape_xml_text};
+
 pub const DEFAULT_SUBAGENT_TYPE: &str = "coder";
 pub const PROMPT_TEMPLATE_PLACEHOLDER: &str = "{{item}}";
 pub const MAX_AGENT_SWARM_SUBAGENTS: usize = 128;
@@ -208,7 +210,9 @@ pub fn render_swarm_results(results: &[AgentSwarmResult]) -> String {
         let agent_id = result
             .agent_id
             .as_ref()
-            .map_or_else(String::new, |agent_id| format!(" agent_id=\"{agent_id}\""));
+            .map_or_else(String::new, |agent_id| {
+                format!(" agent_id=\"{}\"", escape_xml_attribute(agent_id))
+            });
         let mode = matches!(result.spec, AgentSwarmSpec::Resume { .. })
             .then_some(" mode=\"resume\"")
             .unwrap_or_default();
@@ -224,6 +228,7 @@ pub fn render_swarm_results(results: &[AgentSwarmResult]) -> String {
         } else {
             result.error.as_deref().unwrap_or("unknown error")
         };
+        let body = escape_xml_text(body);
         lines.push(format!(
             "<subagent{mode}{agent_id}{item}{state} outcome=\"{status}\">{body}</subagent>"
         ));
@@ -245,14 +250,6 @@ pub fn render_swarm_summary(completed: usize, failed: usize, aborted: usize) -> 
         parts.push(format!("aborted: {aborted}"));
     }
     parts.join(", ")
-}
-
-pub fn escape_xml_attribute(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 fn normalize_optional_string(value: &str) -> Option<&str> {
@@ -376,13 +373,13 @@ mod tests {
             AgentSwarmResult {
                 spec: AgentSwarmSpec::Spawn {
                     index: 1,
-                    item: "a & <b>\"".into(),
+                    item: "a & <b>\"'".into(),
                     prompt: "unused".into(),
                 },
-                agent_id: Some("agent-a".into()),
+                agent_id: Some("agent-<&\"'".into()),
                 status: AgentSwarmStatus::Completed,
                 state: Some(AgentSwarmState::Started),
-                result: Some("done".into()),
+                result: Some("done <&> \"'".into()),
                 error: None,
             },
             AgentSwarmResult {
@@ -402,7 +399,7 @@ mod tests {
 
         assert_eq!(
             output,
-            "<agent_swarm_result>\n<summary>completed: 1, failed: 1</summary>\n<resume_hint>Call AgentSwarm with resume_agent_ids using the agent_id values in this result to continue unfinished work.</resume_hint>\n<subagent agent_id=\"agent-a\" item=\"a &amp; &lt;b&gt;&quot;\" state=\"started\" outcome=\"completed\">done</subagent>\n<subagent mode=\"resume\" agent_id=\"agent-b\" state=\"not_started\" outcome=\"failed\">unknown error</subagent>\n</agent_swarm_result>"
+            "<agent_swarm_result>\n<summary>completed: 1, failed: 1</summary>\n<resume_hint>Call AgentSwarm with resume_agent_ids using the agent_id values in this result to continue unfinished work.</resume_hint>\n<subagent agent_id=\"agent-&lt;&amp;&quot;&apos;\" item=\"a &amp; &lt;b&gt;&quot;&apos;\" state=\"started\" outcome=\"completed\">done &lt;&amp;&gt; \"'</subagent>\n<subagent mode=\"resume\" agent_id=\"agent-b\" state=\"not_started\" outcome=\"failed\">unknown error</subagent>\n</agent_swarm_result>"
         );
     }
 }

@@ -3,7 +3,7 @@
 //! Original: `packages/agent-core-v2/src/agent/task/taskService.ts`.
 
 use crate::_base::utils::abort::user_cancellation_reason;
-use crate::_base::utils::xml_escape::{escape_xml, escape_xml_attr};
+use crate::_base::utils::xml_escape::{escape_xml_attribute, escape_xml_text};
 use crate::agent::context_memory::{ContextMessage, PromptOrigin};
 use serde_json::Value;
 
@@ -181,8 +181,8 @@ pub fn agent_task_notification_children(output: &AgentTaskOutputSnapshot) -> Opt
 pub fn render_output_file_block(output_path: &str, output_size_bytes: usize) -> String {
     format!(
         "<output-file path=\"{}\" bytes=\"{output_size_bytes}\">\nRead the output file to retrieve the result: {}\n</output-file>",
-        escape_xml_attr(output_path),
-        escape_xml(output_path)
+        escape_xml_attribute(output_path),
+        escape_xml_text(output_path)
     )
 }
 
@@ -202,7 +202,7 @@ pub fn render_output_preview_block(output: &AgentTaskOutputSnapshot) -> String {
         output.preview_bytes,
         output.output_size_bytes,
         output.truncated,
-        escape_xml(&output.preview)
+        escape_xml_text(&output.preview)
     )
 }
 
@@ -422,7 +422,7 @@ mod tests {
         };
         assert_eq!(
             agent_task_notification_children(&persisted).unwrap()[0],
-            "<output-file path=\"/tmp/a&amp;&quot;b\" bytes=\"12\">\nRead the output file to retrieve the result: /tmp/a&amp;&quot;b\n</output-file>"
+            "<output-file path=\"/tmp/a&amp;&quot;b\" bytes=\"12\">\nRead the output file to retrieve the result: /tmp/a&amp;\"b\n</output-file>"
         );
     }
 

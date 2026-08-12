@@ -21,7 +21,7 @@ use crate::{
         },
         utils::{
             abort::{AbortController, user_cancellation_reason},
-            xml_escape::escape_xml,
+            xml_escape::escape_xml_text,
         },
     },
     agent::{
@@ -113,7 +113,7 @@ impl AgentShellCommandService {
     }
 
     fn append_shell_input(&self, command: &str) -> Result<(), ShellCommandServiceError> {
-        let text = format!("<bash-input>\n{}\n</bash-input>", escape_xml(command));
+        let text = format!("<bash-input>\n{}\n</bash-input>", escape_xml_text(command));
         self.context
             .append(vec![context_message(
                 text,
@@ -133,8 +133,8 @@ impl AgentShellCommandService {
     ) -> Result<(), ShellCommandServiceError> {
         let text = format!(
             "<bash-stdout>{}</bash-stdout><bash-stderr>{}</bash-stderr>",
-            escape_xml(stdout),
-            escape_xml(stderr)
+            escape_xml_text(stdout),
+            escape_xml_text(stderr)
         );
         self.context
             .append(vec![context_message(

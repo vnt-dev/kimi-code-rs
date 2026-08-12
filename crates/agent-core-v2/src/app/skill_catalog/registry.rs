@@ -7,7 +7,7 @@ use std::{collections::HashMap, sync::LazyLock};
 use regex::{Captures, Regex};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::_base::utils::xml_escape::{escape_xml_attr, escape_xml_tags};
+use crate::_base::utils::xml_escape::{escape_xml_attribute, escape_xml_tags};
 
 use super::{
     parser::skill_argument_names,
@@ -137,7 +137,7 @@ impl InMemorySkillCatalog {
         };
         format!(
             "<kimi-plugin-instructions plugin=\"{}\">\n{}\n</kimi-plugin-instructions>\n\n{}",
-            escape_xml_attr(&plugin.id),
+            escape_xml_attribute(&plugin.id),
             instructions,
             content
         )

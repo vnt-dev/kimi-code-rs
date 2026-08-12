@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::{
     _base::{
         di::lifecycle::{Disposable, DisposableHandle, DisposeResult},
-        utils::render_prompt::render_prompt,
+        utils::{render_prompt::render_prompt, xml_escape::escape_xml_text},
     },
     agent::{
         context_injector::{
@@ -82,7 +82,7 @@ fn build_blocked_note(goal: &GoalSnapshot) -> String {
             ("reason_suffix".into(), Value::String(reason_suffix(goal))),
             (
                 "objective".into(),
-                Value::String(escape_untrusted_text(&goal.objective)),
+                Value::String(escape_xml_text(&goal.objective)),
             ),
             (
                 "completion_criterion_block".into(),
@@ -99,7 +99,7 @@ fn build_paused_note(goal: &GoalSnapshot) -> String {
             ("reason_suffix".into(), Value::String(reason_suffix(goal))),
             (
                 "objective".into(),
-                Value::String(escape_untrusted_text(&goal.objective)),
+                Value::String(escape_xml_text(&goal.objective)),
             ),
             (
                 "completion_criterion_block".into(),
@@ -121,7 +121,7 @@ fn build_goal_reminder(goal: &GoalSnapshot) -> String {
         &HashMap::from([
             (
                 "objective".into(),
-                Value::String(escape_untrusted_text(&goal.objective)),
+                Value::String(escape_xml_text(&goal.objective)),
             ),
             (
                 "completion_criterion_block".into(),
@@ -160,7 +160,7 @@ fn reason_suffix(goal: &GoalSnapshot) -> String {
     goal.terminal_reason
         .as_ref()
         .map_or_else(String::new, |reason| {
-            format!(" ({})", escape_untrusted_text(reason))
+            format!(" ({})", escape_xml_text(reason))
         })
 }
 
@@ -170,7 +170,7 @@ fn completion_criterion_block(goal: &GoalSnapshot) -> String {
         .map_or_else(String::new, |criterion| {
             format!(
                 "<untrusted_completion_criterion>\n{}\n</untrusted_completion_criterion>\n",
-                escape_untrusted_text(criterion)
+                escape_xml_text(criterion)
             )
         })
 }
@@ -224,12 +224,6 @@ fn max_budget_fraction(goal: &GoalSnapshot) -> f64 {
         fractions.push(goal.wall_clock_ms / budget);
     }
     fractions.into_iter().fold(0.0, f64::max)
-}
-
-fn escape_untrusted_text(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 fn format_elapsed(milliseconds: f64) -> String {

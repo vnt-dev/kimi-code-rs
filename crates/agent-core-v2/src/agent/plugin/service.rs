@@ -18,7 +18,7 @@ use crate::{
         },
         lifecycle::lifecycle_machine::BoxError,
         log::{LOG_SERVICE_ID, LogPayload, LogServiceHandle, Logger},
-        utils::xml_escape::escape_xml_attr,
+        utils::xml_escape::escape_xml_attribute,
     },
     agent::{
         context_injector::{
@@ -253,8 +253,8 @@ fn render_session_start_block(
 ) -> String {
     format!(
         "<plugin_session_start plugin=\"{}\" skill=\"{}\">\n{skill_content}\n</plugin_session_start>",
-        escape_xml_attr(&session_start.plugin_id),
-        escape_xml_attr(&skill.name)
+        escape_xml_attribute(&session_start.plugin_id),
+        escape_xml_attribute(&skill.name)
     )
 }
 

@@ -2,7 +2,10 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/skill/prompt.ts`.
 
-use crate::{_base::utils::xml_escape::escape_xml, app::skill_catalog::SkillSource};
+use crate::{
+    _base::utils::xml_escape::{escape_xml_attribute, escape_xml_text},
+    app::skill_catalog::SkillSource,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SkillPromptTrigger {
@@ -32,7 +35,7 @@ pub struct RenderSkillPromptInput<'a> {
 pub fn render_user_slash_skill_prompt(input: RenderSkillPromptInput<'_>) -> String {
     format!(
         "User activated the skill \"{}\". Follow the loaded skill instructions.\n\n{}",
-        escape_xml(input.skill_name),
+        escape_xml_text(input.skill_name),
         render_skill_loaded_block(&input, SkillPromptTrigger::UserSlash)
     )
 }
@@ -76,7 +79,9 @@ pub fn render_skill_loaded_block(
         ("args", Some(input.skill_args)),
     ]
     .into_iter()
-    .filter_map(|(name, value)| value.map(|value| format!(" {name}=\"{}\"", escape_xml(value))))
+    .filter_map(|(name, value)| {
+        value.map(|value| format!(" {name}=\"{}\"", escape_xml_attribute(value)))
+    })
     .collect::<String>();
     format!(
         "<kimi-skill-loaded{attributes}>\n{}\n</kimi-skill-loaded>",

@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Local, Utc};
 
-use crate::agent::context_memory::PromptOrigin;
+use crate::{_base::utils::xml_escape::escape_xml_attribute, agent::context_memory::PromptOrigin};
 
 pub fn format_local_iso_with_offset(ms: f64) -> String {
     let Some(utc) = DateTime::<Utc>::from_timestamp(
@@ -53,7 +53,7 @@ fn attr(value: &str) -> String {
     if value.is_empty() {
         "unknown".into()
     } else {
-        value.replace('&', "&amp;").replace('"', "&quot;")
+        escape_xml_attribute(value)
     }
 }
 
@@ -64,8 +64,8 @@ mod tests {
     fn cron_fire_xml_preserves_exact_wrapping_and_attribute_escaping() {
         let text = render_cron_fire_xml(
             &PromptOrigin::CronJob {
-                job_id: "a&b".into(),
-                cron: "0 \" * * *".into(),
+                job_id: "a<&b".into(),
+                cron: "0 \"' * * *".into(),
                 recurring: true,
                 coalesced_count: 2,
                 stale: false,
@@ -74,7 +74,7 @@ mod tests {
         );
         assert_eq!(
             text,
-            "<cron-fire jobId=\"a&amp;b\" cron=\"0 &quot; * * *\" recurring=\"true\" coalescedCount=\"2\" stale=\"false\">\n<prompt>\n<keep>\n</prompt>\n</cron-fire>"
+            "<cron-fire jobId=\"a&lt;&amp;b\" cron=\"0 &quot;&apos; * * *\" recurring=\"true\" coalescedCount=\"2\" stale=\"false\">\n<prompt>\n<keep>\n</prompt>\n</cron-fire>"
         );
     }
     #[test]

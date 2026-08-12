@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-use crate::_base::utils::xml_escape::escape_xml_attr;
+use crate::_base::utils::xml_escape::escape_xml_attribute;
 
 // Original: task/notificationXml.ts, renderNotificationXml(). Attribute
 // values alone are escaped; model-visible text and child XML stay verbatim.
@@ -47,7 +47,7 @@ fn optional_string_attr(value: Option<&Value>) -> Option<String> {
     value
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .map(escape_xml_attr)
+        .map(escape_xml_attribute)
 }
 
 fn string_value(value: Option<&Value>) -> &str {
