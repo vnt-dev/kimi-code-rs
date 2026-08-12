@@ -46,8 +46,6 @@ const AGENT_TOOLS: &[&str] = &[
     "mcp__*",
 ];
 const CODER_TOOLS: &[&str] = &[
-    "Agent",
-    "AgentSwarm",
     "Bash",
     "CronCreate",
     "CronDelete",
@@ -162,17 +160,17 @@ mod tests {
     fn registers_default_and_task_profiles_once() {
         register_builtin_agent_lifecycle_profiles();
         let catalog = AgentProfileCatalogService::new();
-        assert_eq!(catalog.get_default().unwrap().name, "agent");
-        assert_eq!(
-            catalog
-                .get("coder")
-                .unwrap()
-                .summary_policy
-                .as_ref()
-                .unwrap()
-                .min_chars,
-            200
-        );
+        let agent = catalog.get_default().unwrap();
+        assert_eq!(agent.name, "agent");
+        let agent_tools = agent.tools.as_ref().unwrap();
+        assert!(agent_tools.iter().any(|tool| tool == "Agent"));
+        assert!(agent_tools.iter().any(|tool| tool == "AgentSwarm"));
+
+        let coder = catalog.get("coder").unwrap();
+        let coder_tools = coder.tools.as_ref().unwrap();
+        assert!(!coder_tools.iter().any(|tool| tool == "Agent"));
+        assert!(!coder_tools.iter().any(|tool| tool == "AgentSwarm"));
+        assert_eq!(coder.summary_policy.as_ref().unwrap().min_chars, 200);
         assert_eq!(
             catalog.get("explore").unwrap().tools.as_ref().unwrap(),
             &EXPLORE_TOOLS
