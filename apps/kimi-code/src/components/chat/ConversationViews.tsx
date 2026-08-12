@@ -3,6 +3,7 @@ import {
   type ReactNode,
   memo,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import {
@@ -27,6 +28,15 @@ import {
   X,
 } from "lucide-react";
 
+import {
+  buildToolLineDiff,
+  historyTurnFileChanges,
+  liveTurnFileChangeRevision,
+  liveTurnFileChanges,
+  type ToolDiffLine,
+  type ToolFileChange,
+  type ToolFileOperation,
+} from "../../chat/fileChanges";
 import {
   finalResponseMessage,
   formatElapsedDuration,
@@ -79,7 +89,6 @@ import type {
   MessageContent,
   Project,
   ProtocolMessage,
-  TurnFileChange,
 } from "../../types";
 import {
   formatBytes,
@@ -178,6 +187,11 @@ export function LiveTurnView({
   const streaming = isTurnRunning(turn);
   const cronFire = parseCronFireMessage(turn.prompt);
   const showUserMessage = hasVisibleLiveUserMessage(turn);
+  const fileChangeRevision = liveTurnFileChangeRevision(turn);
+  const fileChanges = useMemo(
+    () => liveTurnFileChanges(turn),
+    [fileChangeRevision],
+  );
 
   return (
     <section
@@ -313,8 +327,8 @@ export function LiveTurnView({
               </div>
             )}
           {turn.error && <div className="live-turn-error">{turn.error}</div>}
-          {turn.fileChanges && turn.fileChanges.length > 0 && (
-            <TurnFileChangesCard files={turn.fileChanges} />
+          {fileChanges.length > 0 && (
+            <TurnFileChangesCard files={fileChanges} />
           )}
           <AssistantResponseStatus
             running={isTurnRunning(turn)}
@@ -1075,20 +1089,49 @@ function SubagentHistoryTimeline({
 
   return (
     <div className="subagent-live-timeline historical">
-      {turns.flatMap((turn) =>
-        turn.responses.map((message) => (
-          <AssistantMessagePart
-            key={message.id}
-            message={message}
-            toolResults={presentation.results}
-            subagentRuns={nestedRuns}
-            subagentHistories={histories}
-            onLoadSubagentHistory={onLoadHistory}
-            onCompactionSummaryOpen={() => undefined}
-          />
-        )),
-      )}
+      {turns.map((turn) => (
+        <SubagentHistoryTurn
+          turn={turn}
+          toolResults={presentation.results}
+          nestedRuns={nestedRuns}
+          histories={histories}
+          onLoadHistory={onLoadHistory}
+          key={turn.id}
+        />
+      ))}
     </div>
+  );
+}
+
+function SubagentHistoryTurn({
+  turn,
+  toolResults,
+  nestedRuns,
+  histories,
+  onLoadHistory,
+}: {
+  turn: HistoryConversationTurn;
+  toolResults: Map<string, ToolResultContent>;
+  nestedRuns: SubagentRunsByTool;
+  histories?: Record<string, SubagentConversationHistory>;
+  onLoadHistory?: (agentId: string, force?: boolean) => void;
+}) {
+  const fileChanges = historyTurnFileChanges(turn.responses, toolResults);
+  return (
+    <section className="subagent-history-turn">
+      {turn.responses.map((message) => (
+        <AssistantMessagePart
+          key={message.id}
+          message={message}
+          toolResults={toolResults}
+          subagentRuns={nestedRuns}
+          subagentHistories={histories}
+          onLoadSubagentHistory={onLoadHistory}
+          onCompactionSummaryOpen={() => undefined}
+        />
+      ))}
+      {fileChanges.length > 0 && <TurnFileChangesCard files={fileChanges} />}
+    </section>
   );
 }
 
@@ -1126,6 +1169,11 @@ function SubagentLiveTimeline({
 }) {
   const streaming = isTurnRunning(turn);
   const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
+  const fileChangeRevision = liveTurnFileChangeRevision(turn);
+  const fileChanges = useMemo(
+    () => liveTurnFileChanges(turn),
+    [fileChangeRevision],
+  );
 
   return (
     <div className="subagent-live-timeline">
@@ -1187,6 +1235,7 @@ function SubagentLiveTimeline({
         </div>
       )}
       {turn.error && <div className="live-turn-error">{turn.error}</div>}
+      {fileChanges.length > 0 && <TurnFileChangesCard files={fileChanges} />}
     </div>
   );
 }
@@ -1252,7 +1301,6 @@ export const HistoryTurnView = memo(function HistoryTurnView({
   subagentHistories,
   onLoadSubagentHistory,
   messageDurations,
-  messageFileChanges,
   undoableUserMessageId,
   onUndoUserMessage,
   copiedMessageId,
@@ -1268,7 +1316,6 @@ export const HistoryTurnView = memo(function HistoryTurnView({
   subagentHistories?: Record<string, SubagentConversationHistory>;
   onLoadSubagentHistory: (agentId: string, force?: boolean) => void;
   messageDurations: Record<string, number>;
-  messageFileChanges: Record<string, readonly TurnFileChange[]>;
   undoableUserMessageId?: string;
   onUndoUserMessage: (message: RenderMessage) => void;
   copiedMessageId?: string;
@@ -1299,9 +1346,10 @@ export const HistoryTurnView = memo(function HistoryTurnView({
     inferredDuration >= 0
       ? inferredDuration
       : undefined);
-  const fileChanges = finalResponse
-    ? messageFileChanges[finalResponse.id]
-    : undefined;
+  const fileChanges = useMemo(
+    () => historyTurnFileChanges(turn.responses, toolResults),
+    [toolResults, turn.responses],
+  );
 
   return (
     <section
@@ -1387,7 +1435,7 @@ export const HistoryTurnView = memo(function HistoryTurnView({
                 />
               ))
             )}
-            {fileChanges && fileChanges.length > 0 && (
+            {fileChanges.length > 0 && (
               <TurnFileChangesCard files={fileChanges} />
             )}
             {finalResponse && (
@@ -1424,20 +1472,34 @@ export const HistoryTurnView = memo(function HistoryTurnView({
 function TurnFileChangesCard({
   files,
 }: {
-  files: readonly TurnFileChange[];
+  files: readonly ToolFileChange[];
 }) {
   const [open, setOpen] = useState(true);
-  const additions = files.reduce(
-    (total, file) => total + (file.additions ?? 0),
-    0,
+  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(
+    () => new Set(),
   );
-  const deletions = files.reduce(
-    (total, file) => total + (file.deletions ?? 0),
-    0,
-  );
-  const hasLineStats = files.some(
-    (file) => file.additions !== undefined || file.deletions !== undefined,
-  );
+  const [copiedPath, setCopiedPath] = useState<string>();
+  const additions = files.reduce((total, file) => total + file.additions, 0);
+  const deletions = files.reduce((total, file) => total + file.deletions, 0);
+
+  const togglePath = (path: string): void => {
+    setExpandedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const copyPath = (path: string): void => {
+    void navigator.clipboard.writeText(path).then(() => {
+      setCopiedPath(path);
+      window.setTimeout(
+        () => setCopiedPath((current) => current === path ? undefined : current),
+        1400,
+      );
+    });
+  };
 
   return (
     <section className="turn-file-changes">
@@ -1453,37 +1515,119 @@ function TurnFileChangesCard({
         <span className="turn-file-changes-title">
           {t("filesChanged.title", { count: files.length })}
         </span>
-        {hasLineStats && (
-          <span className="turn-file-changes-totals">
-            <span className="additions">+{additions}</span>
-            <span className="deletions">-{deletions}</span>
-          </span>
-        )}
+        <span className="turn-file-changes-totals">
+          <span className="additions">+{additions}</span>
+          <span className="deletions">-{deletions}</span>
+        </span>
         {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
       </button>
       <Collapsible open={open}>
         <div className="turn-file-changes-list">
-          {files.map((file) => (
-            <div className="turn-file-change-row" key={file.path}>
-              <span className={`file-change-status ${file.change}`}>
-                {file.change === "created"
-                  ? "+"
-                  : file.change === "deleted"
-                    ? "-"
-                    : "~"}
-              </span>
-              <span className="turn-file-change-path">{file.path}</span>
-              {(file.additions !== undefined ||
-                file.deletions !== undefined) && (
-                <span className="turn-file-change-lines">
-                  <span className="additions">+{file.additions ?? 0}</span>
-                  <span className="deletions">-{file.deletions ?? 0}</span>
-                </span>
-              )}
-            </div>
-          ))}
+          {files.map((file) => {
+            const expanded = expandedPaths.has(file.path);
+            return (
+              <div className="turn-file-change" key={file.path}>
+                <div className="turn-file-change-row">
+                  <button
+                    type="button"
+                    className="turn-file-change-toggle"
+                    aria-expanded={expanded}
+                    onClick={() => togglePath(file.path)}
+                  >
+                    <span className="file-change-status">
+                      <FileCode2 size={13} />
+                    </span>
+                    <span
+                      className="turn-file-change-path"
+                      title={file.path}
+                    >
+                      {file.path}
+                    </span>
+                    <span className="turn-file-change-lines">
+                      <span className="additions">+{file.additions}</span>
+                      <span className="deletions">-{file.deletions}</span>
+                    </span>
+                    {expanded ? (
+                      <ChevronDown size={13} />
+                    ) : (
+                      <ChevronRight size={13} />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="turn-file-change-copy"
+                    title={
+                      copiedPath === file.path
+                        ? t("common.copied")
+                        : t("filesChanged.copyPath")
+                    }
+                    aria-label={
+                      copiedPath === file.path
+                        ? t("common.copied")
+                        : t("filesChanged.copyPath")
+                    }
+                    onClick={() => copyPath(file.path)}
+                  >
+                    {copiedPath === file.path ? (
+                      <Check size={13} />
+                    ) : (
+                      <Copy size={13} />
+                    )}
+                  </button>
+                </div>
+                <Collapsible open={expanded}>
+                  <div className="turn-file-change-operations">
+                    {file.operations.map((operation, index) => (
+                      <TurnFileOperationView
+                        operation={operation}
+                        path={file.path}
+                        index={index}
+                        key={`${operation.kind}-${index}`}
+                      />
+                    ))}
+                  </div>
+                </Collapsible>
+              </div>
+            );
+          })}
         </div>
       </Collapsible>
+    </section>
+  );
+}
+
+function TurnFileOperationView({
+  operation,
+  path,
+  index,
+}: {
+  operation: ToolFileOperation;
+  path: string;
+  index: number;
+}) {
+  const label =
+    operation.kind === "edit"
+      ? operation.replaceAll
+        ? t("filesChanged.editReplaceAll")
+        : t("filesChanged.edit")
+      : operation.mode === "append"
+        ? t("filesChanged.writeAppend")
+        : t("filesChanged.writeOverwrite");
+  return (
+    <section className="turn-file-operation">
+      <header>
+        <span>{label}</span>
+        <small>#{index + 1}</small>
+      </header>
+      {operation.kind === "edit" ? (
+        <EditDiffView path={path} lines={operation.lines} showHeader={false} />
+      ) : (
+        <WriteContentView
+          path={path}
+          content={operation.content}
+          showHeader={false}
+        />
+      )}
     </section>
   );
 }
@@ -1714,20 +1858,39 @@ function editToolInput(
   };
 }
 
-function EditDiffLine({
-  kind,
-  lineno,
-  text,
+function EditDiffLine({ line }: { line: ToolDiffLine }) {
+  return (
+    <div className={`edit-diff-line ${line.kind}`}>
+      <span className="edit-diff-sign">
+        {line.kind === "removed" ? "-" : line.kind === "added" ? "+" : " "}
+      </span>
+      <span className="edit-diff-code">{line.text}</span>
+    </div>
+  );
+}
+
+function EditDiffView({
+  path,
+  lines,
+  showHeader = true,
 }: {
-  kind: "removed" | "added";
-  lineno: number;
-  text: string;
+  path?: string;
+  lines: readonly ToolDiffLine[];
+  showHeader?: boolean;
 }) {
   return (
-    <div className={`edit-diff-line ${kind}`}>
-      <span className="edit-diff-lineno">{lineno}</span>
-      <span className="edit-diff-sign">{kind === "removed" ? "-" : "+"}</span>
-      <span className="edit-diff-code">{text}</span>
+    <div className="edit-diff">
+      {showHeader && path && (
+        <div className="edit-diff-header">
+          <FileCode2 size={12} />
+          <span>{path}</span>
+        </div>
+      )}
+      <div className="edit-diff-body">
+        {lines.map((line, index) => (
+          <EditDiffLine line={line} key={`${line.kind}-${index}`} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -1735,74 +1898,73 @@ function EditDiffLine({
 function EditToolDiff({ input }: { input: unknown }) {
   const edit = editToolInput(input);
   if (!edit) return null;
-  const removed = edit.oldString?.replace(/\r?\n$/, "").split(/\r?\n/);
-  const added =
-    edit.newString === ""
-      ? undefined
-      : edit.newString?.replace(/\r?\n$/, "").split(/\r?\n/);
   return (
-    <div className="edit-diff">
-      {edit.path && (
-        <div className="edit-diff-header">
-          <FileCode2 size={12} />
-          <span>{edit.path}</span>
-        </div>
-      )}
-      <div className="edit-diff-body">
-        {removed?.map((line, index) => (
-          <EditDiffLine
-            kind="removed"
-            lineno={index + 1}
-            text={line}
-            key={`removed-${index}`}
-          />
-        ))}
-        {added?.map((line, index) => (
-          <EditDiffLine
-            kind="added"
-            lineno={index + 1}
-            text={line}
-            key={`added-${index}`}
-          />
-        ))}
-      </div>
-    </div>
+    <EditDiffView
+      path={edit.path}
+      lines={buildToolLineDiff(edit.oldString ?? "", edit.newString ?? "")}
+    />
   );
 }
 
 function writeToolInput(
   input: unknown,
-): { path?: string; content: string } | undefined {
+): { path?: string; content: string; mode: "overwrite" | "append" } | undefined {
   if (!input || typeof input !== "object") return undefined;
   const record = input as Record<string, unknown>;
   if (typeof record.content !== "string") return undefined;
   return {
     path: typeof record.path === "string" ? record.path : undefined,
     content: record.content,
+    mode: record.mode === "append" ? "append" : "overwrite",
   };
 }
 
-function WriteToolContent({ input }: { input: unknown }) {
-  const write = writeToolInput(input);
-  if (!write) return null;
-  const lines = write.content.replace(/\r?\n$/, "").split(/\r?\n/);
+function WriteContentView({
+  path,
+  content,
+  mode,
+  showHeader = true,
+}: {
+  path?: string;
+  content: string;
+  mode?: "overwrite" | "append";
+  showHeader?: boolean;
+}) {
+  const lines = content.length === 0
+    ? []
+    : content.replaceAll("\r\n", "\n").replace(/\n$/, "").split("\n");
   return (
     <div className="edit-diff">
-      {write.path && (
+      {showHeader && (path || mode) && (
         <div className="edit-diff-header">
           <FileCode2 size={12} />
-          <span>{write.path}</span>
+          {path && <span>{path}</span>}
+          {mode && <small>{mode}</small>}
         </div>
       )}
       <div className="edit-diff-body">
         {lines.map((line, index) => (
           <div className="edit-diff-line context" key={index}>
-            <span className="edit-diff-lineno">{index + 1}</span>
+            <span className="edit-diff-lineno old" />
+            <span className="edit-diff-lineno new">{index + 1}</span>
+            <span className="edit-diff-sign"> </span>
             <span className="edit-diff-code">{line}</span>
           </div>
         ))}
       </div>
     </div>
+  );
+}
+
+function WriteToolContent({ input }: { input: unknown }) {
+  const write = writeToolInput(input);
+  if (!write) return null;
+  return (
+    <WriteContentView
+      path={write.path}
+      content={write.content}
+      mode={write.mode}
+    />
   );
 }
 

@@ -196,8 +196,7 @@ import type {
   ProtocolMessage,
   SkillContent,
   SkillDescriptor,
-  TodoItem,
-  TurnFileChange
+  TodoItem
 } from "./types";
 import { conciseError } from "./utils/errors";
 
@@ -286,9 +285,6 @@ export default function App() {
   >({});
   const [messageDurations, setMessageDurations] = useState<
     Record<string, Record<string, number>>
-  >({});
-  const [messageFileChanges, setMessageFileChanges] = useState<
-    Record<string, Record<string, readonly TurnFileChange[]>>
   >({});
   const [plans, setPlans] = useState<Record<string, PlanData | null>>({});
   const [goals, setGoals] = useState<Record<string, GoalSnapshot | null>>({});
@@ -1892,7 +1888,6 @@ export default function App() {
     setLoginBusy,
     setLoginOpen,
     setMessageDurations,
-    setMessageFileChanges,
     setProfileOpen,
     setPromptAttachments,
     setPromptSkills,
@@ -2935,9 +2930,6 @@ export default function App() {
                       }
                       messageDurations={
                         messageDurations[activeConversation.id] ?? {}
-                      }
-                      messageFileChanges={
-                        messageFileChanges[activeConversation.id] ?? {}
                       }
                       undoableUserMessageId={undoableUserMessageId}
                       onUndoUserMessage={setUndoMessageTarget}

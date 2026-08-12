@@ -46,7 +46,6 @@ import type {
   Model,
   SkillContent,
   SkillDescriptor,
-  TurnFileChange,
 } from "../types";
 import { conciseError } from "../utils/errors";
 import {
@@ -90,9 +89,6 @@ interface ConversationResourceOptions {
   setLoginBusy: Setter<boolean>;
   setLoginOpen: Setter<boolean>;
   setMessageDurations: Setter<Record<string, Record<string, number>>>;
-  setMessageFileChanges: Setter<
-    Record<string, Record<string, readonly TurnFileChange[]>>
-  >;
   setProfileOpen: Setter<boolean>;
   setPromptAttachments: (
     update: PromptDraftUpdater<PromptAttachment[]>,
@@ -152,7 +148,6 @@ export function useConversationResources({
   setLoginBusy,
   setLoginOpen,
   setMessageDurations,
-  setMessageFileChanges,
   setProfileOpen,
   setPromptAttachments,
   setPromptSkills,
@@ -225,31 +220,16 @@ export function useConversationResources({
       if (request !== historyRequests.current[conversationId]) return false;
       const items = [...page.items].reverse();
       const durationMs = completedTurn?.durationMs;
-      const fileChanges = completedTurn?.fileChanges;
-      if (
-        completedTurn &&
-        (durationMs !== undefined || (fileChanges?.length ?? 0) > 0)
-      ) {
+      if (completedTurn && durationMs !== undefined) {
         const messageId = completedTurnMessageId(items, completedTurn);
         if (messageId) {
-          if (durationMs !== undefined) {
-            setMessageDurations((current) => ({
-              ...current,
-              [conversationId]: {
-                ...current[conversationId],
-                [messageId]: durationMs,
-              },
-            }));
-          }
-          if (fileChanges && fileChanges.length > 0) {
-            setMessageFileChanges((current) => ({
-              ...current,
-              [conversationId]: {
-                ...current[conversationId],
-                [messageId]: fileChanges,
-              },
-            }));
-          }
+          setMessageDurations((current) => ({
+            ...current,
+            [conversationId]: {
+              ...current[conversationId],
+              [messageId]: durationMs,
+            },
+          }));
         }
       }
       setHistoryByConversation((current) => ({

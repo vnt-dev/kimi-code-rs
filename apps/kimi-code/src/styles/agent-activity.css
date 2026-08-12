@@ -653,6 +653,12 @@
   word-break: break-all;
 }
 
+.edit-diff-header small {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  color: var(--subtle);
+}
+
 .edit-diff-body {
   max-height: 280px;
   padding: 4px 0;
@@ -711,7 +717,7 @@
 }
 
 .edit-diff-line.context {
-  padding-left: 14px;
+  background: transparent;
 }
 
 .edit-diff-line.context .edit-diff-code {
