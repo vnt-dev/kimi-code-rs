@@ -488,6 +488,7 @@
   flex: 1;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
   scrollbar-width: thin;
   scrollbar-color: #45484f transparent;
 }
