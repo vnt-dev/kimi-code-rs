@@ -32,6 +32,7 @@ use crate::{
 
 const WS_BEARER_PROTOCOL_PREFIX: &str = "kimi-code.bearer.";
 const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+const WS_OUTGOING_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Clone, Debug)]
 pub struct WebAsset {
@@ -54,14 +55,16 @@ where
 }
 
 pub(crate) struct RpcConnection {
-    sender: mpsc::UnboundedSender<String>,
+    sender: mpsc::Sender<String>,
+    cancellation: CancellationToken,
     subscriptions: Mutex<HashMap<String, DisposableHandle>>,
 }
 
 impl RpcConnection {
-    fn new(sender: mpsc::UnboundedSender<String>) -> Self {
+    fn new(sender: mpsc::Sender<String>) -> Self {
         Self {
             sender,
+            cancellation: CancellationToken::new(),
             subscriptions: Mutex::new(HashMap::new()),
         }
     }
@@ -72,7 +75,12 @@ impl RpcConnection {
             payload,
         };
         if let Ok(serialized) = serde_json::to_string(&frame) {
-            let _ = self.sender.send(serialized);
+            // Event producers are synchronous, so they cannot wait for backpressure. A full
+            // queue means this client is not keeping up; disconnect it instead of retaining an
+            // unbounded number of agent events in memory.
+            if self.sender.try_send(serialized).is_err() {
+                self.cancellation.cancel();
+            }
         }
     }
 
@@ -363,8 +371,9 @@ async fn websocket_handler(
 
 async fn websocket_session(state: ServerState, mut socket: WebSocket) {
     let connection_id = Uuid::new_v4().to_string();
-    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let (sender, mut receiver) = mpsc::channel(WS_OUTGOING_QUEUE_CAPACITY);
     let connection = Arc::new(RpcConnection::new(sender));
+    let cancellation = connection.cancellation.clone();
     if let Ok(mut connections) = state.connections.lock() {
         connections.insert(connection_id.clone(), Arc::clone(&connection));
     } else {
@@ -376,13 +385,19 @@ async fn websocket_session(state: ServerState, mut socket: WebSocket) {
         connection_id: connection_id.clone(),
     })
     .expect("ready frame is serializable");
-    if socket.send(Message::Text(ready.into())).await.is_ok() {
+    if send_websocket_message(&mut socket, Message::Text(ready.into()), &cancellation).await {
         let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
         loop {
             tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => break,
                 outgoing = receiver.recv() => {
                     let Some(outgoing) = outgoing else { break };
-                    if socket.send(Message::Text(outgoing.into())).await.is_err() { break; }
+                    if !send_websocket_message(
+                        &mut socket,
+                        Message::Text(outgoing.into()),
+                        &cancellation,
+                    ).await { break; }
                 }
                 incoming = socket.next() => {
                     match incoming {
@@ -391,7 +406,11 @@ async fn websocket_session(state: ServerState, mut socket: WebSocket) {
                     }
                 }
                 _ = heartbeat.tick() => {
-                    if socket.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
+                    if !send_websocket_message(
+                        &mut socket,
+                        Message::Ping(Vec::new().into()),
+                        &cancellation,
+                    ).await { break; }
                 }
             }
         }
@@ -401,6 +420,18 @@ async fn websocket_session(state: ServerState, mut socket: WebSocket) {
         connections.remove(&connection_id);
     }
     connection.dispose_all();
+}
+
+async fn send_websocket_message(
+    socket: &mut WebSocket,
+    message: Message,
+    cancellation: &CancellationToken,
+) -> bool {
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => false,
+        result = socket.send(message) => result.is_ok(),
+    }
 }
 
 async fn static_handler(
@@ -1056,7 +1087,7 @@ mod tests {
 
     #[test]
     fn connection_disposes_owned_subscriptions() {
-        let (sender, _receiver) = mpsc::unbounded_channel();
+        let (sender, _receiver) = mpsc::channel(WS_OUTGOING_QUEUE_CAPACITY);
         let connection = RpcConnection::new(sender);
         let disposed = Arc::new(AtomicUsize::new(0));
         for _ in 0..2 {
@@ -1071,5 +1102,22 @@ mod tests {
         assert_eq!(disposed.load(Ordering::SeqCst), 2);
         connection.dispose_all();
         assert_eq!(disposed.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn slow_connection_is_cancelled_when_outgoing_queue_is_full() {
+        let (sender, receiver) = mpsc::channel(WS_OUTGOING_QUEUE_CAPACITY);
+        let connection = RpcConnection::new(sender);
+
+        for sequence in 0..WS_OUTGOING_QUEUE_CAPACITY {
+            connection.emit("agent-token", json!({ "sequence": sequence }));
+        }
+        assert_eq!(receiver.len(), WS_OUTGOING_QUEUE_CAPACITY);
+        assert!(!connection.cancellation.is_cancelled());
+
+        connection.emit("agent-token", json!({ "sequence": "overflow" }));
+
+        assert_eq!(receiver.len(), WS_OUTGOING_QUEUE_CAPACITY);
+        assert!(connection.cancellation.is_cancelled());
     }
 }
