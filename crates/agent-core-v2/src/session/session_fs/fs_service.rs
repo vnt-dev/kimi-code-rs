@@ -62,9 +62,9 @@ use super::{
     FsSearchHit, FsSearchRequest, FsSearchResponse, FsStatManyRequest, FsStatManyResponse,
     FsStatRequest, FsStatResponse, GitignoreMatcher, RgJsonRecord, RgJsonRecordType, RgProbe,
     RgResolution, SESSION_FS_SERVICE_ID, SessionFsError, SessionFsResult, SessionFsServiceContract,
-    SessionFsServiceHandle, compile_grep_pattern, compute_fuzzy_score, compute_match_positions,
-    ensure_fs_errors_registered, ensure_rg_path, matches_any_glob, rg_path, rg_text, run_command,
-    strip_trailing_newline,
+    SessionFsServiceHandle, compile_glob_set, compile_grep_pattern, compute_fuzzy_score,
+    compute_match_positions, ensure_fs_errors_registered, ensure_rg_path, rg_path, rg_text,
+    run_command, strip_trailing_newline,
 };
 
 const SEARCH_HARD_CAP: usize = 500;
@@ -342,21 +342,29 @@ impl SessionFsService {
             None
         };
         let expression = compile_grep_pattern(&request)?;
+        let include_globs = request
+            .include_globs
+            .as_deref()
+            .map(compile_glob_set)
+            .transpose()?;
+        let exclude_globs = request
+            .exclude_globs
+            .as_deref()
+            .map(compile_glob_set)
+            .transpose()?;
         let entries = self.walk_entries(matcher.as_ref()).await;
         let files = entries
             .into_iter()
             .filter(|entry| entry.kind == FsKind::File)
             .filter(|entry| {
-                request
-                    .include_globs
+                include_globs
                     .as_ref()
-                    .is_none_or(|globs| matches_any_glob(&entry.relative, globs))
+                    .is_none_or(|globs| globs.is_match(&entry.relative))
             })
             .filter(|entry| {
-                request
-                    .exclude_globs
+                exclude_globs
                     .as_ref()
-                    .is_none_or(|globs| !matches_any_glob(&entry.relative, globs))
+                    .is_none_or(|globs| !globs.is_match(&entry.relative))
             })
             .map(|entry| entry.relative)
             .collect::<Vec<_>>();
@@ -555,6 +563,11 @@ impl SessionFsServiceContract for SessionFsService {
         } else {
             None
         };
+        let exclude_globs = request
+            .exclude_globs
+            .as_deref()
+            .map(compile_glob_set)
+            .transpose()?;
         let mut items = Vec::new();
         let mut children_by_path = IndexMap::new();
         let mut truncated = false;
@@ -588,10 +601,9 @@ impl SessionFsServiceContract for SessionFsService {
                 }) {
                     continue;
                 }
-                if request
-                    .exclude_globs
+                if exclude_globs
                     .as_ref()
-                    .is_some_and(|globs| matches_any_glob(&child_relative, globs))
+                    .is_some_and(|globs| globs.is_match(&child_relative))
                 {
                     continue;
                 }
@@ -870,6 +882,16 @@ impl SessionFsServiceContract for SessionFsService {
         } else {
             None
         };
+        let include_globs = request
+            .include_globs
+            .as_deref()
+            .map(compile_glob_set)
+            .transpose()?;
+        let exclude_globs = request
+            .exclude_globs
+            .as_deref()
+            .map(compile_glob_set)
+            .transpose()?;
         let query_lower = request.query.to_lowercase();
         let mut candidates = self
             .walk_entries(matcher.as_ref())
@@ -878,14 +900,12 @@ impl SessionFsServiceContract for SessionFsService {
             .filter_map(|entry| {
                 let score = compute_fuzzy_score(&entry.name, &query_lower);
                 if score <= 0.0
-                    || request
-                        .include_globs
+                    || include_globs
                         .as_ref()
-                        .is_some_and(|globs| !matches_any_glob(&entry.relative, globs))
-                    || request
-                        .exclude_globs
+                        .is_some_and(|globs| !globs.is_match(&entry.relative))
+                    || exclude_globs
                         .as_ref()
-                        .is_some_and(|globs| matches_any_glob(&entry.relative, globs))
+                        .is_some_and(|globs| globs.is_match(&entry.relative))
                 {
                     return None;
                 }
@@ -1731,6 +1751,7 @@ mod tests {
         let search = service
             .search(FsSearchRequest {
                 query: "lib".into(),
+                include_globs: Some(vec!["src/{lib,main}[.]rs".into()]),
                 ..FsSearchRequest::default()
             })
             .await

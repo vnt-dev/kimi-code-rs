@@ -5,8 +5,8 @@
 use std::{path::Path, sync::Arc};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use regex::Regex;
 use regress::{Flags as JsRegexFlags, Regex as JsRegex};
 use serde::Deserialize;
 
@@ -112,47 +112,20 @@ fn find_utf16(haystack: &[u16], needle: &[u16], start: usize) -> Option<usize> {
         .map(|position| start + position)
 }
 
-pub fn matches_any_glob(relative_path: &str, globs: &[String]) -> bool {
-    globs
-        .iter()
-        .any(|glob| glob_to_regex(glob).is_ok_and(|expression| expression.is_match(relative_path)))
-}
-
-fn glob_to_regex(glob: &str) -> Result<Regex, regex::Error> {
-    let mut expression = String::from("^");
-    append_glob_body(&mut expression, glob);
-    expression.push('$');
-    Regex::new(&expression)
-}
-
-fn append_glob_body(expression: &mut String, glob: &str) {
-    let characters = glob.chars().collect::<Vec<_>>();
-    let mut index = 0;
-    while index < characters.len() {
-        let character = characters[index];
-        if character == '*' && characters.get(index + 1) == Some(&'*') {
-            expression.push_str(".*");
-            index += 2;
-            if characters.get(index) == Some(&'/') {
-                index += 1;
-            }
-        } else if character == '*' {
-            expression.push_str("[^/]*");
-            index += 1;
-        } else if character == '?' {
-            expression.push_str("[^/]");
-            index += 1;
-        } else {
-            if matches!(
-                character,
-                '.' | '+' | '^' | '$' | '{' | '}' | '(' | ')' | '|' | '[' | ']' | '\\'
-            ) {
-                expression.push('\\');
-            }
-            expression.push(character);
-            index += 1;
+pub fn compile_glob_set(globs: &[String]) -> Result<GlobSet, globset::Error> {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in globs {
+        // Preserve the previous behavior where an invalid pattern simply did
+        // not match, while compiling every valid pattern only once.
+        if let Ok(glob) = GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .backslash_escape(true)
+            .build()
+        {
+            builder.add(glob);
         }
     }
+    builder.build()
 }
 
 pub fn compile_grep_pattern(request: &FsGrepRequest) -> Result<JsRegex, regress::Error> {
@@ -263,10 +236,21 @@ mod tests {
 
     #[test]
     fn globs_preserve_single_and_recursive_wildcards() {
-        assert!(!matches_any_glob("src/a.ts", &["*.ts".into()]));
-        assert!(matches_any_glob("a.ts", &["*.ts".into()]));
-        assert!(matches_any_glob("src/a.ts", &["**/*.ts".into()]));
-        assert!(!matches_any_glob("src/a.js", &["**/*.ts".into()]));
+        let top_level = compile_glob_set(&["*.ts".into()]).unwrap();
+        assert!(!top_level.is_match("src/a.ts"));
+        assert!(top_level.is_match("a.ts"));
+
+        let recursive = compile_glob_set(&["**/*.ts".into()]).unwrap();
+        assert!(recursive.is_match("src/a.ts"));
+        assert!(!recursive.is_match("src/a.js"));
+
+        let richer_syntax = compile_glob_set(&["src/{lib,main}[0-9].rs".into()]).unwrap();
+        assert!(richer_syntax.is_match("src/lib7.rs"));
+        assert!(richer_syntax.is_match("src/main2.rs"));
+        assert!(!richer_syntax.is_match("src/test2.rs"));
+
+        let valid_and_invalid = compile_glob_set(&["[".into(), "*.rs".into()]).unwrap();
+        assert!(valid_and_invalid.is_match("lib.rs"));
 
         let mut ignore = GitignoreMatcher::new();
         ignore.add(".git/\ndist/\n*.log\n!important.log\n");
