@@ -4,7 +4,7 @@
 
 use std::{
     collections::HashMap,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use serde_json::{Map, Value};
@@ -521,21 +521,7 @@ fn string_or_string_array(raw: &Value) -> Option<Vec<&str>> {
 }
 
 fn resolve_lexical(root: &Path, value: &str) -> PathBuf {
-    normalize_lexical(&root.join(value))
-}
-
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            component => out.push(component.as_os_str()),
-        }
-    }
-    out
+    path_clean::clean(root.join(value))
 }
 
 fn is_within(child: &Path, parent: &Path) -> bool {

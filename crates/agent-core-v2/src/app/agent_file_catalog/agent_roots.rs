@@ -205,15 +205,11 @@ async fn push_existing_root(
 
 fn absolute_lexical(path: &Path) -> Result<PathBuf, HostFsError> {
     if path.is_absolute() {
-        return Ok(normalize_lexical(path));
+        return Ok(path_clean::clean(path));
     }
     let current = env::current_dir()
         .map_err(|error| to_host_fs_error(Box::new(error), &path.to_string_lossy(), "resolve"))?;
-    Ok(normalize_lexical(&current.join(path)))
-}
-
-fn normalize_lexical(path: &Path) -> PathBuf {
-    resolve_agent_path(&path.to_string_lossy(), Path::new("/"), Path::new("~"))
+    Ok(path_clean::clean(current.join(path)))
 }
 
 fn is_unavailable(error: &HostFsError) -> bool {

@@ -4,7 +4,7 @@
 
 use std::{
     collections::HashMap,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use serde::Deserialize;
@@ -96,7 +96,7 @@ pub async fn load_mcp_servers(
 }
 
 async fn find_project_root(cwd: &Path) -> Result<PathBuf, McpConfigLoadError> {
-    let start = normalize_path(cwd);
+    let start = path_clean::clean(cwd);
     let mut current = start.clone();
     loop {
         if path_exists(&current.join(".git")).await.map_err(|source| {
@@ -177,35 +177,17 @@ fn normalize_stdio_cwd(config: McpServerConfig, base: Option<&Path>) -> McpServe
     };
     stdio.cwd = Some(match stdio.cwd.take() {
         Some(cwd) => resolve_path(base, Path::new(&cwd)).display().to_string(),
-        None => normalize_path(base).display().to_string(),
+        None => path_clean::clean(base).display().to_string(),
     });
     McpServerConfig::Stdio(stdio)
 }
 
 fn resolve_path(base: &Path, value: &Path) -> PathBuf {
     if value.is_absolute() {
-        normalize_path(value)
+        path_clean::clean(value)
     } else {
-        normalize_path(&base.join(value))
+        path_clean::clean(base.join(value))
     }
-}
-
-// Mirrors pathe's lexical normalize for the source's `.git` parent walk and
-// stdio cwd resolution without requiring filesystem paths to already exist.
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut output = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => output.push(prefix.as_os_str()),
-            Component::RootDir => output.push(component.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                output.pop();
-            }
-            Component::Normal(segment) => output.push(segment),
-        }
-    }
-    output
 }
 
 #[cfg(test)]

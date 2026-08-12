@@ -4,7 +4,7 @@
 
 use std::{
     collections::HashSet,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use futures_util::future::join_all;
@@ -119,7 +119,7 @@ async fn load_agents_md_for_roots(
     }
 
     for work_dir in work_dirs {
-        let root_work_dir = normalize_lexical(work_dir);
+        let root_work_dir = path_clean::clean(work_dir);
         let project_root = find_project_root(deps, &root_work_dir).await;
         for directory in dirs_root_to_leaf(&root_work_dir, &project_root) {
             collect_agent_file(
@@ -170,7 +170,7 @@ async fn collect_agent_file(
     let Some(file) = read_agent_file(deps, path, warnings).await else {
         return false;
     };
-    let key = normalize_lexical(&file.path);
+    let key = path_clean::clean(&file.path);
     if !seen.insert(key) {
         return false;
     }
@@ -192,7 +192,7 @@ async fn load_additional_dirs_info(
 }
 
 async fn find_project_root(deps: &ProfileContextDeps, work_dir: &Path) -> PathBuf {
-    let initial = normalize_lexical(work_dir);
+    let initial = path_clean::clean(work_dir);
     let mut current = initial.clone();
     loop {
         if path_exists(deps, &current.join(".git")).await {
@@ -210,7 +210,7 @@ async fn find_project_root(deps: &ProfileContextDeps, work_dir: &Path) -> PathBu
 
 fn dirs_root_to_leaf(work_dir: &Path, project_root: &Path) -> Vec<PathBuf> {
     let mut directories = Vec::new();
-    let mut current = normalize_lexical(work_dir);
+    let mut current = path_clean::clean(work_dir);
     loop {
         directories.push(current.clone());
         if current == project_root {
@@ -406,22 +406,6 @@ async fn list_directory(
     } else {
         lines.join("\n")
     }
-}
-
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut output = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                output.pop();
-            }
-            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
-                output.push(component)
-            }
-        }
-    }
-    output
 }
 
 #[cfg(test)]

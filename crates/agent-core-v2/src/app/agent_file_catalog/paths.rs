@@ -2,7 +2,7 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/agentFileCatalog/paths.ts`.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::os::interface::{
     host_file_system::HostFileSystemService,
@@ -21,9 +21,9 @@ pub fn resolve_agent_path(path: &str, base_dir: &Path, os_home_dir: &Path) -> Pa
         ),
     };
     if path.is_absolute() {
-        normalize_lexical(&path)
+        path_clean::clean(path)
     } else {
-        normalize_lexical(&base_dir.join(path))
+        path_clean::clean(base_dir.join(path))
     }
 }
 
@@ -75,33 +75,6 @@ fn is_missing_path_error(error: &HostFsError) -> bool {
     matches!(error.code(), OS_FS_NOT_FOUND | OS_FS_NOT_DIRECTORY)
 }
 
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            Component::RootDir => normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR)),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let can_pop = normalized
-                    .file_name()
-                    .is_some_and(|name| name != std::ffi::OsStr::new(".."));
-                if can_pop {
-                    normalized.pop();
-                } else if !normalized.has_root() {
-                    normalized.push("..");
-                }
-            }
-            Component::Normal(component) => normalized.push(component),
-        }
-    }
-    if normalized.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        normalized
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -126,6 +99,27 @@ mod tests {
         assert_eq!(
             resolve_agent_path("/etc/../tmp", base, home),
             Path::new("/tmp")
+        );
+        assert_eq!(
+            resolve_agent_path("../../review", Path::new("workspace"), home),
+            Path::new("../review")
+        );
+        assert_eq!(
+            resolve_agent_path("/../../tmp", base, home),
+            Path::new("/tmp")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_agent_path_preserves_windows_prefixes() {
+        assert_eq!(
+            resolve_agent_path(
+                r"C:\workspace\..\agents",
+                Path::new(r"D:\project"),
+                Path::new(r"C:\Users\kimi"),
+            ),
+            Path::new(r"C:\agents")
         );
     }
 

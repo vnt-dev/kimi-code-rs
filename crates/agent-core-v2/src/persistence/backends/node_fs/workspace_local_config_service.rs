@@ -3,11 +3,7 @@
 //! Original:
 //! `packages/agent-core-v2/src/persistence/backends/node-fs/workspaceLocalConfigService.ts`.
 
-use std::{
-    error::Error,
-    path::{Component, Path, PathBuf},
-    sync::Arc,
-};
+use std::{error::Error, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
@@ -56,8 +52,8 @@ impl FileWorkspaceLocalConfigService {
     }
 
     fn workspace_local_config_path(project_root: &str) -> String {
-        path_to_string(&normalize_path(
-            &Path::new(project_root)
+        path_to_string(&path_clean::clean(
+            Path::new(project_root)
                 .join(".kimi-code")
                 .join("local.toml"),
         ))
@@ -67,7 +63,7 @@ impl FileWorkspaceLocalConfigService {
     // filesystem entry marks a project root; failure to find one returns the
     // normalized initial directory rather than an error.
     async fn find_project_root(&self, work_dir: &str) -> String {
-        let initial = path_to_string(&normalize_path(Path::new(work_dir)));
+        let initial = path_to_string(&path_clean::clean(work_dir));
         let mut current = initial.clone();
         loop {
             if self.path_exists(&Path::new(&current).join(".git")).await {
@@ -189,7 +185,7 @@ impl FileWorkspaceLocalConfigService {
                 self.bootstrap.cwd().join(base).join(expanded)
             }
         };
-        path_to_string(&normalize_path(&path))
+        path_to_string(&path_clean::clean(path))
     }
 
     fn expand_home(&self, value: &str) -> String {
@@ -363,7 +359,7 @@ fn parse_workspace_local_toml(
 fn normalize_additional_dirs(additional_dirs: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for additional_dir in additional_dirs {
-        let additional_dir = path_to_string(&normalize_path(Path::new(additional_dir)));
+        let additional_dir = path_to_string(&path_clean::clean(additional_dir));
         if !normalized.contains(&additional_dir) {
             normalized.push(additional_dir);
         }
@@ -376,13 +372,12 @@ fn normalize_additional_dir_input(additional_dir: &str) -> WorkspaceLocalConfigR
     if trimmed.is_empty() {
         return Err(config_directory_error());
     }
-    Ok(path_to_string(&normalize_path(Path::new(trimmed))))
+    Ok(path_to_string(&path_clean::clean(trimmed)))
 }
 
 fn has_same_additional_dir(dirs: &[String], target: &str) -> bool {
-    let target = normalize_path(Path::new(target));
-    dirs.iter()
-        .any(|dir| normalize_path(Path::new(dir)) == target)
+    let target = path_clean::clean(target);
+    dirs.iter().any(|dir| path_clean::clean(dir) == target)
 }
 
 fn config_directory_error() -> Box<dyn Error + Send + Sync> {
@@ -425,33 +420,6 @@ fn dirname(path: &str) -> String {
     }
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            Component::RootDir => normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR)),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let can_pop = normalized
-                    .file_name()
-                    .is_some_and(|name| name != std::ffi::OsStr::new(".."));
-                if can_pop {
-                    normalized.pop();
-                } else if !normalized.has_root() {
-                    normalized.push("..");
-                }
-            }
-            Component::Normal(component) => normalized.push(component),
-        }
-    }
-    if normalized.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        normalized
-    }
-}
-
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -477,7 +445,7 @@ pub fn register_workspace_local_config_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, path::PathBuf};
 
     use crate::{
         app::bootstrap::{BootstrapOptions, BootstrapService},

@@ -4,7 +4,7 @@
 //! `BoundedTail`, `resolveStdioCwd()`, and `mergeStdioEnv()`.
 
 use std::{
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
     time::Duration,
@@ -453,13 +453,13 @@ fn box_stdio_error(error: McpStdioClientError) -> McpClientError {
 // usable by Tokio's child-process command builder.
 pub fn resolve_stdio_cwd(config_cwd: Option<&str>, default_cwd: Option<&Path>) -> Option<PathBuf> {
     let config_cwd = config_cwd?;
-    let config_path = Path::new(config_cwd);
+    let config_path = path_clean::clean(config_cwd);
     if config_path.is_absolute() {
-        return Some(config_path.into());
+        return Some(config_path);
     }
 
     let Some(default_cwd) = default_cwd else {
-        return Some(config_path.into());
+        return Some(config_path);
     };
     let base = if default_cwd.is_absolute() {
         default_cwd.into()
@@ -468,23 +468,7 @@ pub fn resolve_stdio_cwd(config_cwd: Option<&str>, default_cwd: Option<&Path>) -
             .unwrap_or_default()
             .join(default_cwd)
     };
-    Some(normalize_lexically(&base.join(config_path)))
-}
-
-fn normalize_lexically(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
-                normalized.push(component.as_os_str());
-            }
-        }
-    }
-    normalized
+    Some(path_clean::clean(base.join(config_path)))
 }
 
 // Original: mergeStdioEnv().
@@ -544,10 +528,14 @@ mod tests {
             resolve_stdio_cwd(Some("servers/../mcp"), Some(&workspace)),
             Some(workspace.join("mcp"))
         );
-        let absolute = std::env::temp_dir().join("mcp");
+        let absolute = std::env::temp_dir().join("servers/../mcp");
         assert_eq!(
             resolve_stdio_cwd(absolute.to_str(), Some(&workspace)),
-            Some(absolute)
+            Some(std::env::temp_dir().join("mcp"))
+        );
+        assert_eq!(
+            resolve_stdio_cwd(Some("../servers/../mcp"), None),
+            Some(PathBuf::from("../mcp"))
         );
         assert_eq!(resolve_stdio_cwd(None, Some(&workspace)), None);
     }

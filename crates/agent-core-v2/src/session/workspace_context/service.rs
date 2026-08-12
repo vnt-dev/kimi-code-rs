@@ -3,7 +3,7 @@
 //! Original: `packages/agent-core-v2/src/session/workspaceContext/workspaceContextService.ts`.
 
 use std::{
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
 
@@ -86,9 +86,9 @@ impl SessionWorkspaceContextContract for SessionWorkspaceContextService {
     fn resolve(&self, relative: &str) -> PathBuf {
         let state = self.read_state();
         if Path::new(relative).is_absolute() {
-            normalize_lexical(Path::new(relative))
+            path_clean::clean(relative)
         } else {
-            normalize_lexical(&state.work_dir.join(relative))
+            path_clean::clean(state.work_dir.join(relative))
         }
     }
 
@@ -96,7 +96,7 @@ impl SessionWorkspaceContextContract for SessionWorkspaceContextService {
     // retains the source's `relative.startsWith("..")` behavior.
     fn is_within(&self, absolute_path: &str) -> bool {
         let target = resolve_from_process(absolute_path)
-            .unwrap_or_else(|_| normalize_lexical(Path::new(absolute_path)));
+            .unwrap_or_else(|_| path_clean::clean(absolute_path));
         let state = self.read_state();
         is_within_directory(&target, &state.work_dir)
             || state
@@ -147,28 +147,7 @@ fn resolve_from_process(path: &str) -> std::io::Result<PathBuf> {
     } else {
         std::env::current_dir()?.join(path)
     };
-    Ok(normalize_lexical(&absolute))
-}
-
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if matches!(
-                    normalized.components().next_back(),
-                    Some(Component::Normal(_))
-                ) {
-                    normalized.pop();
-                }
-            }
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                normalized.push(component.as_os_str());
-            }
-        }
-    }
-    normalized
+    Ok(path_clean::clean(absolute))
 }
 
 fn is_within_directory(target: &Path, directory: &Path) -> bool {
