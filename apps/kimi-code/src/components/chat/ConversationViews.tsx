@@ -70,6 +70,10 @@ import {
 } from "../../chat/messages";
 import { toolInputSummary } from "../../chat/toolInputSummary";
 import { parseStreamingToolInput } from "../../chat/streamingToolInput";
+import {
+  parseToolMediaOutput,
+  type ParsedToolMediaOutput,
+} from "../../chat/toolMediaOutput";
 import { parseCronFireMessage, type CronFireMessage } from "../../cronFire";
 import { t } from "../../i18n";
 import type { SubagentConversationHistory } from "../../app/appUtils";
@@ -2173,6 +2177,30 @@ function AgentToolResult({
   );
 }
 
+function ToolMediaResult({ result }: { result: ParsedToolMediaOutput }) {
+  return (
+    <div className="tool-media-result">
+      {result.items.map((item, index) => (
+        <figure className="tool-media-item" key={`${item.kind}-${index}`}>
+          {item.kind === "image" && (
+            <MessageImage
+              src={item.url}
+              alt={item.path ?? t("message.imageAlt")}
+              path={item.path}
+            />
+          )}
+          {item.kind === "audio" && <MessageAudio src={item.url} />}
+          {item.kind === "video" && <MessageVideo src={item.url} />}
+          {item.path && <figcaption title={item.path}>{item.path}</figcaption>}
+        </figure>
+      ))}
+      {result.remaining.length > 0 && (
+        <pre>{structuredValue(result.remaining)}</pre>
+      )}
+    </div>
+  );
+}
+
 export function ToolInputView({
   name,
   input,
@@ -2209,6 +2237,18 @@ export function ToolResultView({
   isError?: boolean;
 }) {
   if (name === "AgentSwarm" && !isError) return null;
+  const mediaResult =
+    name === "ReadMediaFile" && !isError
+      ? parseToolMediaOutput(output)
+      : undefined;
+  if (mediaResult) {
+    return (
+      <section className="tool-detail-section">
+        <span>{t("tool.result")}</span>
+        <ToolMediaResult result={mediaResult} />
+      </section>
+    );
+  }
   const agentText = name === "Agent" ? agentToolResultText(output) : undefined;
   if (agentText !== undefined) {
     return (

@@ -632,6 +632,36 @@
   border-top: 1px solid rgba(255, 255, 255, 0.045);
 }
 
+.tool-media-result {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-media-item {
+  display: flex;
+  min-width: 0;
+  margin: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.tool-media-item figcaption {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-media-item .history-media {
+  max-width: 100%;
+}
+
 .edit-diff {
   overflow: hidden;
   border: 1px solid var(--line);
