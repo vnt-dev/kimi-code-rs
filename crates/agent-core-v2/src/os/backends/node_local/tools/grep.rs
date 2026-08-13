@@ -858,8 +858,18 @@ fn format_ripgrep_error(exit_code: i32, stderr: &str, stderr_truncated: bool) ->
     if stderr.is_empty() {
         return format!("Failed to grep: ripgrep exited with code {exit_code}");
     }
+    let summary = summarize_ripgrep_stderr(stderr);
+    // When the stderr is a single line, the summary is that line itself;
+    // appending the full stderr would only repeat the same message.
+    if summary == stderr {
+        let mut message = format!("Failed to grep: {summary}");
+        if stderr_truncated {
+            message.push_str(&format!("\n[stderr truncated at {MAX_OUTPUT_BYTES} bytes]"));
+        }
+        return message;
+    }
     let mut lines = vec![
-        format!("Failed to grep: {}", summarize_ripgrep_stderr(stderr)),
+        format!("Failed to grep: {summary}"),
         String::new(),
         "ripgrep stderr:".into(),
         stderr.into(),
@@ -1066,6 +1076,21 @@ mod tests {
             omit_incomplete_trailing_record("a\0x\nb\0partial", GrepMode::Content),
             "a\0x\n"
         );
+    }
+
+    #[test]
+    fn single_line_ripgrep_error_is_not_repeated() {
+        let stderr = "rg: missing.rs: IO error for operation on missing.rs: 系统找不到指定的文件。 (os error 2)";
+        assert_eq!(
+            format_ripgrep_error(2, stderr, false),
+            format!("Failed to grep: {stderr}")
+        );
+        // Multi-line stderr still keeps the full stderr for context.
+        let multi = "rg: warning: something\nrg: missing.rs: IO error (os error 2)";
+        let formatted = format_ripgrep_error(2, multi, false);
+        assert!(formatted.starts_with("Failed to grep: rg: missing.rs: IO error (os error 2)"));
+        assert!(formatted.contains("ripgrep stderr:"));
+        assert!(formatted.contains(multi));
     }
 
     #[test]
