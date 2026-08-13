@@ -1,11 +1,24 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import { applyColorScheme, loadColorScheme } from "./appearance";
+import {
+  applyColorScheme,
+  applyCustomColors,
+  applyCustomFonts,
+  applyFontSize,
+  loadColorScheme,
+  loadCustomColors,
+  loadCustomFonts,
+  loadFontSize,
+} from "./appearance";
 import "./styles.css";
 import { isDesktop } from "./transport";
 
-applyColorScheme(loadColorScheme());
+const initialColorScheme = loadColorScheme();
+applyColorScheme(initialColorScheme);
+applyFontSize(loadFontSize());
+applyCustomColors(loadCustomColors()[initialColorScheme], initialColorScheme);
+applyCustomFonts(loadCustomFonts());
 
 if (isDesktop()) {
   document.addEventListener("contextmenu", (event) => event.preventDefault());

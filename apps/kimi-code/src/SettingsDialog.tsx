@@ -1,13 +1,29 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { Activity, Archive, Bot, Check, Copy, ExternalLink, Github, Globe, Info, Puzzle, RefreshCw, SlidersHorizontal, User, X, Zap } from "lucide-react";
 
-import type { ColorScheme } from "./appearance";
+import {
+  ACCENT_COLOR_PRESETS,
+  CUSTOM_FONT_NAME_MAX_LENGTH,
+  DEFAULT_SCHEME_COLORS,
+  FONT_SIZE_OPTIONS,
+  type ColorScheme,
+  type CustomColorKey,
+  type CustomColors,
+  type CustomFonts,
+  type CodeFontPreset,
+  type FontFamilyPreset,
+  type FontSize,
+  type FontRole,
+  type InterfaceFontPreset,
+} from "./appearance";
 import AccountSettings from "./AccountSettings";
 import AgentSettings from "./AgentSettings";
 import ArchivedSessionsSettings from "./ArchivedSessionsSettings";
-import SettingsSelect from "./components/SettingsSelect";
+import SettingsSelect, {
+  type SettingsSelectOption,
+} from "./components/SettingsSelect";
 import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
 import PluginSettings from "./PluginSettings";
 import ProviderSettings from "./ProviderSettings";
@@ -47,10 +63,290 @@ function webServerStateLabel(state: WebServerStatus["state"] = "stopped"): strin
   }
 }
 
+function FontSettingRow<T extends string>({
+  label,
+  description,
+  value,
+  options,
+  preview,
+  mono = false,
+  customValue,
+  onChange,
+  onCustomValueChange,
+}: {
+  label: string;
+  description: string;
+  value: T;
+  options: readonly SettingsSelectOption<T>[];
+  preview: string;
+  mono?: boolean;
+  customValue?: string;
+  onChange: (value: T) => void;
+  onCustomValueChange: (value: string) => void;
+}) {
+  const customSelected = value === "custom";
+  const customAvailable = customValue ? isFontAvailable(customValue) : false;
+
+  return (
+    <div className="settings-row settings-font-row">
+      <div className="settings-row-copy">
+        <span className="settings-row-label">{label}</span>
+        <small>{description}</small>
+      </div>
+      <div className="settings-font-controls">
+        <span className={`settings-font-preview ${mono ? "mono" : ""}`}>
+          {preview}
+        </span>
+        <SettingsSelect
+          className="settings-font-select"
+          value={value}
+          options={options}
+          ariaLabel={label}
+          onChange={onChange}
+        />
+      </div>
+      {customSelected ? (
+        <div className="settings-custom-font">
+          <input
+            type="text"
+            value={customValue ?? ""}
+            maxLength={CUSTOM_FONT_NAME_MAX_LENGTH}
+            placeholder={t("settings.fontCustomPlaceholder")}
+            aria-label={t("settings.fontCustomName", { label })}
+            spellCheck={false}
+            onChange={(event) => onCustomValueChange(event.target.value)}
+          />
+          <span className={customAvailable ? "available" : "unavailable"}>
+            {customValue
+              ? customAvailable
+                ? t("settings.fontDetected")
+                : t("settings.fontNotDetected")
+              : t("settings.fontCustomHint")}
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AccentColorSetting({
+  label,
+  colorScheme,
+  value,
+  fallback,
+  onChange,
+  onReset,
+}: {
+  label: string;
+  colorScheme: ColorScheme;
+  value?: string;
+  fallback: string;
+  onChange: (value: string) => void;
+  onReset: () => void;
+}) {
+  const currentColor = (value ?? fallback).toLowerCase();
+  const isCustomColor = !ACCENT_COLOR_PRESETS.some(
+    (preset) => preset.values[colorScheme] === currentColor,
+  );
+
+  return (
+    <div className="settings-row settings-accent-setting">
+      <span className="settings-row-label">{label}</span>
+      <div className="settings-color-controls" role="group" aria-label={label}>
+        {ACCENT_COLOR_PRESETS.map((preset) => {
+          const presetValue = preset.values[colorScheme];
+          const active = currentColor === presetValue;
+          return (
+            <button
+              className={`settings-color-swatch ${active ? "active" : ""}`}
+              type="button"
+              key={preset.name}
+              aria-label={`${label} ${preset.name}`}
+              aria-pressed={active}
+              style={{ "--swatch-color": presetValue } as CSSProperties}
+              onClick={() => onChange(presetValue)}
+            >
+              <span />
+            </button>
+          );
+        })}
+        <label
+          className={`settings-color-custom ${isCustomColor ? "active" : ""}`}
+          title={t("settings.customColor")}
+        >
+          <input
+            type="color"
+            value={value ?? fallback}
+            aria-label={t("settings.customColor")}
+            onChange={(event) => onChange(event.target.value)}
+          />
+          <span style={{ "--swatch-color": currentColor } as CSSProperties} />
+        </label>
+        {value ? (
+          <button
+            className="settings-color-reset"
+            type="button"
+            onClick={onReset}
+          >
+            {t("settings.resetColor")}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function isFontAvailable(fontFamily: string): boolean {
+  if (typeof document === "undefined") return true;
+  try {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) return true;
+    const sample = "mmmmmmmmmmWWWWW月亮0123456789@#";
+    const fallbacks = ["monospace", "serif", "sans-serif"];
+    return fallbacks.some((fallback) => {
+      context.font = `72px ${fallback}`;
+      const fallbackWidth = context.measureText(sample).width;
+      context.font = `72px ${JSON.stringify(fontFamily)}, ${fallback}`;
+      return context.measureText(sample).width !== fallbackWidth;
+    });
+  } catch {
+    return false;
+  }
+}
+
+function availabilityDescription(
+  description: string,
+  available: boolean,
+): string {
+  return `${description} · ${t(
+    available ? "settings.fontAvailable" : "settings.fontUnavailable",
+  )}`;
+}
+
+function interfaceFontOptions(): readonly SettingsSelectOption<InterfaceFontPreset>[] {
+  const notoAvailable = isFontAvailable("Noto Sans SC");
+  const yaheiAvailable = isFontAvailable("Microsoft YaHei");
+  const pingfangAvailable = isFontAvailable("PingFang SC");
+  return [
+    {
+      value: "kimi",
+      label: t("settings.fontInterfaceKimi"),
+      description: t("settings.fontInterfaceKimiDescription"),
+    },
+    {
+      value: "system",
+      label: t("settings.fontInterfaceSystem"),
+      description: t("settings.fontInterfaceSystemDescription"),
+    },
+    {
+      value: "noto-sans",
+      label: t("settings.fontInterfaceNotoSans"),
+      description: availabilityDescription(
+        t("settings.fontInterfaceNotoSansDescription"),
+        notoAvailable,
+      ),
+      disabled: !notoAvailable,
+    },
+    {
+      value: "microsoft-yahei",
+      label: "Microsoft YaHei",
+      description: availabilityDescription(
+        t("settings.fontInterfaceYaheiDescription"),
+        yaheiAvailable,
+      ),
+      disabled: !yaheiAvailable,
+    },
+    {
+      value: "pingfang",
+      label: "PingFang SC",
+      description: availabilityDescription(
+        t("settings.fontInterfacePingfangDescription"),
+        pingfangAvailable,
+      ),
+      disabled: !pingfangAvailable,
+    },
+    {
+      value: "serif",
+      label: t("settings.fontInterfaceSerif"),
+      description: t("settings.fontInterfaceSerifDescription"),
+    },
+    {
+      value: "custom",
+      label: t("settings.fontCustom"),
+      description: t("settings.fontCustomDescription"),
+    },
+  ];
+}
+
+function codeFontOptions(): readonly SettingsSelectOption<CodeFontPreset>[] {
+  const cascadiaAvailable =
+    isFontAvailable("Cascadia Code") || isFontAvailable("Cascadia Mono");
+  const consolasAvailable = isFontAvailable("Consolas");
+  const sfMonoAvailable = isFontAvailable("SF Mono");
+  const menloAvailable = isFontAvailable("Menlo");
+  return [
+    {
+      value: "kimi",
+      label: t("settings.fontCodeKimi"),
+      description: t("settings.fontCodeKimiDescription"),
+    },
+    {
+      value: "system",
+      label: t("settings.fontCodeSystem"),
+      description: t("settings.fontCodeSystemDescription"),
+    },
+    {
+      value: "cascadia",
+      label: "Cascadia Code",
+      description: availabilityDescription(
+        t("settings.fontCodeCascadiaDescription"),
+        cascadiaAvailable,
+      ),
+      disabled: !cascadiaAvailable,
+    },
+    {
+      value: "consolas",
+      label: "Consolas",
+      description: availabilityDescription(
+        t("settings.fontCodeConsolasDescription"),
+        consolasAvailable,
+      ),
+      disabled: !consolasAvailable,
+    },
+    {
+      value: "sf-mono",
+      label: "SF Mono",
+      description: availabilityDescription(
+        t("settings.fontCodeSfMonoDescription"),
+        sfMonoAvailable,
+      ),
+      disabled: !sfMonoAvailable,
+    },
+    {
+      value: "menlo",
+      label: "Menlo",
+      description: availabilityDescription(
+        t("settings.fontCodeMenloDescription"),
+        menloAvailable,
+      ),
+      disabled: !menloAvailable,
+    },
+    {
+      value: "custom",
+      label: t("settings.fontCustom"),
+      description: t("settings.fontCustomDescription"),
+    },
+  ];
+}
+
 export default function SettingsDialog({
   open,
   appVersion,
   colorScheme,
+  fontSize,
+  customColors,
+  customFonts,
   language,
   notificationsEnabled,
   auth,
@@ -62,6 +358,10 @@ export default function SettingsDialog({
   onLogin,
   onSignOut,
   onColorSchemeChange,
+  onFontSizeChange,
+  onCustomColorChange,
+  onCustomFontsChange,
+  onCustomFontNameChange,
   onLanguageChange,
   onNotificationsEnabledChange,
   onProvidersChanged,
@@ -71,6 +371,9 @@ export default function SettingsDialog({
   open: boolean;
   appVersion?: string;
   colorScheme: ColorScheme;
+  fontSize: FontSize;
+  customColors: CustomColors;
+  customFonts: CustomFonts;
   language: Language;
   notificationsEnabled: boolean;
   auth: AuthStatus;
@@ -82,6 +385,13 @@ export default function SettingsDialog({
   onLogin: () => void;
   onSignOut: () => void;
   onColorSchemeChange: (colorScheme: ColorScheme) => void;
+  onFontSizeChange: (fontSize: FontSize) => void;
+  onCustomColorChange: (key: CustomColorKey, value: string | undefined) => void;
+  onCustomFontsChange: (
+    key: FontRole,
+    value: FontFamilyPreset,
+  ) => void;
+  onCustomFontNameChange: (role: FontRole, value: string) => void;
   onLanguageChange: (language: Language) => void;
   onNotificationsEnabledChange: (enabled: boolean) => Promise<void>;
   onProvidersChanged: () => void;
@@ -532,6 +842,60 @@ export default function SettingsDialog({
                       onChange={onLanguageChange}
                     />
                   </div>
+                  <div className="settings-subsection-heading">
+                    <strong>{t("settings.typography")}</strong>
+                    <span>{t("settings.typographyDescription")}</span>
+                  </div>
+                  <div className="settings-row settings-font-row">
+                    <div className="settings-row-copy">
+                      <span className="settings-row-label">
+                        {t("settings.fontSize")}
+                      </span>
+                      <small>{t("settings.fontSizeDescription")}</small>
+                    </div>
+                    <SettingsSelect
+                      value={fontSize}
+                      options={FONT_SIZE_OPTIONS}
+                      ariaLabel={t("settings.fontSize")}
+                      onChange={onFontSizeChange}
+                    />
+                  </div>
+                  <FontSettingRow
+                    label={t("settings.fontInterface")}
+                    description={t("settings.fontInterfaceDescription")}
+                    value={customFonts.sans ?? "kimi"}
+                    options={interfaceFontOptions()}
+                    preview={t("settings.fontInterfacePreview")}
+                    customValue={customFonts.sansCustom}
+                    onChange={(value) => onCustomFontsChange("sans", value)}
+                    onCustomValueChange={(value) =>
+                      onCustomFontNameChange("sans", value)
+                    }
+                  />
+                  <FontSettingRow
+                    label={t("settings.fontCode")}
+                    description={t("settings.fontCodeDescription")}
+                    value={customFonts.mono ?? "kimi"}
+                    options={codeFontOptions()}
+                    preview={t("settings.fontCodePreview")}
+                    mono
+                    customValue={customFonts.monoCustom}
+                    onChange={(value) => onCustomFontsChange("mono", value)}
+                    onCustomValueChange={(value) =>
+                      onCustomFontNameChange("mono", value)
+                    }
+                  />
+                  <p className="settings-section-copy settings-color-copy">
+                    {t("settings.customColorsHint")}
+                  </p>
+                  <AccentColorSetting
+                    label={t("settings.accentColor")}
+                    colorScheme={colorScheme}
+                    value={customColors.accent}
+                    fallback={DEFAULT_SCHEME_COLORS[colorScheme].accent}
+                    onChange={(value) => onCustomColorChange("accent", value)}
+                    onReset={() => onCustomColorChange("accent", undefined)}
+                  />
                 </section>
 
                 <section

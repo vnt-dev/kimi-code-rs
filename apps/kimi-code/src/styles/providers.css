@@ -16,14 +16,14 @@
 
 .provider-settings-heading h3 {
   margin: 0 0 5px;
-  font-size: 18px;
+  font-size: calc(18px * var(--font-scale));
   font-weight: 600;
 }
 
 .provider-settings-heading p {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   line-height: 1.5;
 }
 
@@ -42,7 +42,7 @@
   color: var(--text);
   background: var(--sd-surface, var(--segment-surface));
   cursor: pointer;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   font-weight: 500;
   white-space: nowrap;
 }
@@ -143,7 +143,7 @@
 .provider-name strong,
 .provider-summary > strong {
   overflow: hidden;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -153,7 +153,7 @@
   overflow: hidden;
   max-width: 240px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -166,7 +166,7 @@
   border-radius: 999px;
   color: var(--muted);
   background: var(--sd-surface, var(--segment-surface));
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -198,7 +198,7 @@
 
 .provider-model-count {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   white-space: nowrap;
 }
 
@@ -246,7 +246,7 @@
 .provider-field > span,
 .provider-fields-grid label > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-weight: 500;
 }
 
@@ -266,7 +266,7 @@
   color: var(--text);
   background: var(--sd-surface, var(--segment-surface));
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .provider-form input:focus {
@@ -288,7 +288,7 @@
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--dialog-surface) 35%, transparent), transparent),
     var(--sd-surface, var(--segment-surface));
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   font-weight: 500;
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
 }
@@ -326,12 +326,12 @@
   min-height: 42px;
   padding: 7px 9px 7px 11px;
   border-radius: 7px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   line-height: 1.4;
 }
 
 .provider-select .settings-select-option-copy > small {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.45;
 }
 
@@ -385,7 +385,7 @@
   color: var(--accent);
   background: transparent;
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .provider-models-heading {
@@ -403,12 +403,12 @@
 }
 
 .provider-models-heading strong {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .provider-models-heading small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .provider-models {
@@ -445,7 +445,7 @@
   padding-bottom: 6px;
   color: var(--muted);
   background: var(--sd-surface, var(--segment-surface));
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   font-weight: 500;
 }
 
@@ -501,13 +501,13 @@
 .provider-model-option-label strong,
 .provider-effort-default > span {
   color: var(--text);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-weight: 550;
 }
 
 .provider-model-option-label small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   line-height: 1.35;
 }
 
@@ -529,7 +529,7 @@
   color: var(--muted);
   background: var(--dialog-surface);
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   white-space: nowrap;
   transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
 }
@@ -582,7 +582,7 @@
 }
 
 .provider-form-actions button.primary {
-  color: white;
+  color: var(--accent-contrast);
   border-color: var(--accent);
   background: var(--accent);
 }
@@ -608,7 +608,7 @@
 .provider-delete-confirm span {
   margin-right: auto;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .provider-error,
@@ -622,7 +622,7 @@
   border-radius: 8px;
   color: var(--danger, #d34f4f);
   background: color-mix(in srgb, var(--danger, #d34f4f) 8%, transparent);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .provider-guard {
@@ -642,7 +642,7 @@
   color: var(--text);
   background: var(--sd-surface, var(--segment-surface));
   cursor: pointer;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .provider-guard button.danger {
@@ -657,7 +657,7 @@
   justify-content: center;
   gap: 8px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .provider-empty {
@@ -685,13 +685,13 @@
 }
 
 .provider-managed strong {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
 }
 
 .provider-managed p {
   margin: 4px 0 12px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.5;
 }
 
@@ -707,7 +707,7 @@
   display: grid;
   grid-template-columns: 90px 1fr;
   gap: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .provider-managed dt {

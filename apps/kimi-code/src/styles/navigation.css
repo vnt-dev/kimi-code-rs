@@ -5,7 +5,7 @@
   min-width: 760px;
   flex-direction: column;
   background:
-    radial-gradient(circle at 68% -10%, rgba(111, 91, 224, 0.08), transparent 28%),
+    radial-gradient(circle at 68% -10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 28%),
     var(--bg);
 }
 
@@ -44,8 +44,8 @@
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(139, 124, 246, 0.32) 22%,
-    rgba(139, 124, 246, 0.08) 65%,
+    color-mix(in srgb, var(--accent) 32%, transparent) 22%,
+    color-mix(in srgb, var(--accent) 8%, transparent) 65%,
     transparent
   );
   content: "";
@@ -71,7 +71,7 @@
 .brand-mark.compact span {
   width: 14px;
   height: 5px;
-  box-shadow: 0 0 11px rgba(139, 124, 246, 0.28);
+  box-shadow: 0 0 11px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .titlebar-brand-copy {
@@ -92,14 +92,14 @@
 
 .titlebar-brand-copy strong {
   color: #ddddE4;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
   font-weight: 620;
   letter-spacing: 0.01em;
 }
 
 .titlebar-brand-copy span {
   color: #555560;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -192,8 +192,8 @@
   width: 18px;
   height: 7px;
   border-radius: 6px 2px 6px 2px;
-  background: linear-gradient(90deg, #bfb8ff, #7966ea);
-  box-shadow: 0 0 16px rgba(139, 124, 246, 0.35);
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .brand-mark span:last-child {
@@ -224,7 +224,7 @@
 
 .sidebar-heading-copy strong {
   color: #a9a9b3;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-weight: 600;
   letter-spacing: 0.04em;
 }
@@ -285,15 +285,15 @@
   align-items: center;
   justify-content: center;
   gap: 9px;
-  border: 1px solid rgba(139, 124, 246, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   border-radius: 9px;
-  color: #e8e5ff;
+  color: var(--accent-2);
   background:
-    linear-gradient(180deg, rgba(139, 124, 246, 0.15), rgba(139, 124, 246, 0.08)),
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 15%, transparent), color-mix(in srgb, var(--accent) 8%, transparent)),
     #313338;
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.04);
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--font-scale));
   font-weight: 550;
   transition: 150ms ease;
 }
@@ -308,7 +308,7 @@
 
 .new-project-button:hover {
   transform: translateY(-1px);
-  border-color: rgba(139, 124, 246, 0.45);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   background-color: #393b40;
 }
 
@@ -334,7 +334,7 @@
   align-items: center;
   justify-content: space-between;
   color: var(--subtle);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-weight: 600;
   letter-spacing: 0.11em;
   overflow: hidden;
@@ -420,7 +420,7 @@
     opacity 110ms ease,
     transform 160ms ease;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-weight: 520;
 }
 
@@ -536,8 +536,8 @@
 }
 
 .conversation-row.selected {
-  color: #e7e5fb;
-  background: linear-gradient(90deg, rgba(139, 124, 246, 0.12), rgba(139, 124, 246, 0.055));
+  color: var(--accent-2);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 12%, transparent), color-mix(in srgb, var(--accent) 5.5%, transparent));
 }
 
 .conversation-row.selected::before {
@@ -548,7 +548,7 @@
   height: 18px;
   border-radius: 2px;
   background: var(--accent);
-  box-shadow: 0 0 9px rgba(139, 124, 246, 0.55);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .conversation-select {
@@ -570,7 +570,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
 }
 
 .conversation-status-slot {
@@ -596,7 +596,7 @@
   width: 13px;
   height: 13px;
   border: 2px solid #414151;
-  border-top-color: #a699ff;
+  border-top-color: var(--accent-2);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -637,8 +637,8 @@
 }
 
 .conversation-archive-button:hover {
-  color: #c2b9ff;
-  background: rgba(139, 124, 246, 0.11);
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
 }
 
 .sidebar-empty {
@@ -672,7 +672,7 @@
 .sidebar-empty p {
   margin: 10px 0 0;
   color: #6c6c76;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   line-height: 1.55;
 }
 
@@ -730,10 +730,10 @@
   height: 32px;
   padding: 0;
   place-items: center;
-  border: 1px solid rgba(139, 124, 246, 0.24);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
   border-radius: 9px;
-  color: #b8affb;
-  background: rgba(139, 124, 246, 0.08);
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   cursor: pointer;
   transition:
     border-color 120ms ease,
@@ -742,9 +742,9 @@
 }
 
 .account-compact-kimi:hover {
-  border-color: rgba(139, 124, 246, 0.42);
-  color: #d2ccff;
-  background: rgba(139, 124, 246, 0.14);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .account-copy {
@@ -765,14 +765,14 @@
 
 .account-copy strong {
   color: #d5d5da;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
   font-weight: 550;
 }
 
 .account-copy small {
   margin-top: 3px;
   color: #62626c;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
 }
 
 .account-trailing-icon {
@@ -844,7 +844,7 @@
   border: 1px solid var(--line-strong);
   border-radius: 13px;
   background:
-    linear-gradient(150deg, rgba(139, 124, 246, 0.055), transparent 34%),
+    linear-gradient(150deg, color-mix(in srgb, var(--accent) 5.5%, transparent), transparent 34%),
     #313338;
   box-shadow:
     0 20px 60px rgba(0, 0, 0, 0.52),
@@ -880,21 +880,21 @@
 
 .profile-identity strong {
   color: #e1e1e6;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
   font-weight: 600;
 }
 
 .profile-identity-title small {
   margin: 0;
   color: #656570;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   font-weight: 450;
 }
 
 .profile-identity-copy > small {
   margin-top: 3px;
   color: var(--subtle);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
 }
 
 .profile-refresh {
@@ -912,8 +912,8 @@
 }
 
 .profile-refresh:hover:not(:disabled) {
-  color: #cbc6ff;
-  background: rgba(139, 124, 246, 0.09);
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
 .profile-refresh:disabled {
@@ -933,14 +933,14 @@
   align-items: center;
   justify-content: space-between;
   color: #b9b9c1;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-weight: 600;
   letter-spacing: 0.035em;
 }
 
 .account-usage-heading small {
   color: #666671;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   font-weight: 450;
   letter-spacing: 0;
 }
@@ -974,7 +974,7 @@
 .managed-usage-label strong {
   overflow: hidden;
   color: #d2d2d8;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--font-scale));
   font-weight: 520;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -982,8 +982,8 @@
 
 .managed-usage-label span {
   flex: 0 0 auto;
-  color: #aaa3e9;
-  font-size: 11.5px;
+  color: var(--accent-2);
+  font-size: calc(11.5px * var(--font-scale));
   font-variant-numeric: tabular-nums;
 }
 
@@ -1005,8 +1005,8 @@
   inset: 0 auto 0 0;
   min-width: 2px;
   border-radius: inherit;
-  background: linear-gradient(90deg, #7868e8, #a597ff);
-  box-shadow: 0 0 10px rgba(139, 124, 246, 0.2);
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 20%, transparent);
   transition: width 300ms ease;
 }
 
@@ -1021,7 +1021,7 @@
 .managed-usage-meta {
   justify-content: flex-end;
   color: #666671;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-variant-numeric: tabular-nums;
 }
 
@@ -1038,7 +1038,7 @@
   border: 1px dashed rgba(255, 255, 255, 0.07);
   border-radius: 8px;
   color: #777781;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   text-align: center;
 }
 
@@ -1075,7 +1075,7 @@
   border-radius: 7px;
   color: #b49a73;
   background: rgba(197, 141, 66, 0.055);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .account-usage-error span {
@@ -1091,7 +1091,7 @@
   color: #d5b57e;
   background: transparent;
   cursor: pointer;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .booster-wallet {
@@ -1109,12 +1109,12 @@
 
 .booster-balance span {
   color: #7f7f89;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .booster-balance strong {
-  color: #d5d2f4;
-  font-size: 15px;
+  color: var(--accent-2);
+  font-size: calc(15px * var(--font-scale));
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -1125,7 +1125,7 @@
   justify-content: space-between;
   gap: 10px;
   color: #656570;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .profile-popover-footer {
@@ -1144,7 +1144,7 @@
   color: #9b9ba4;
   background: transparent;
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .profile-signout:hover {

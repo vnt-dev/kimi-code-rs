@@ -18,9 +18,9 @@
   place-items: center;
   border: 2px solid var(--bg);
   border-radius: 999px;
-  color: #fff;
+  color: var(--accent-contrast);
   background: var(--accent);
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale));
   font-weight: 700;
   line-height: 1;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.24);
@@ -87,7 +87,7 @@
 }
 
 .cron-manager-heading h2 {
-  font-size: 18px;
+  font-size: calc(18px * var(--font-scale));
   font-weight: 650;
   letter-spacing: -0.012em;
 }
@@ -122,7 +122,7 @@
   align-items: center;
   gap: 8px;
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .cron-manager-banner.error {
@@ -205,13 +205,13 @@
 }
 
 .cron-manager-section-heading strong {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   font-weight: 600;
 }
 
 .cron-manager-section-heading small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .cron-manager-section-heading > button {
@@ -302,7 +302,7 @@
 
 .cron-manager-state {
   gap: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .cron-manager-empty {
@@ -325,13 +325,13 @@
 
 .cron-manager-empty strong {
   color: var(--text);
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale));
 }
 
 .cron-manager-empty p {
   max-width: 280px;
   margin: 7px 0 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   line-height: 1.55;
 }
 
@@ -381,7 +381,7 @@
 
 .cron-manager-task-title strong {
   overflow: hidden;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -390,7 +390,7 @@
 .cron-manager-task-title code {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
 }
 
 .cron-manager-kind {
@@ -398,7 +398,7 @@
   padding: 3px 7px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   font-weight: 550;
 }
 
@@ -419,7 +419,7 @@
   margin: 10px 0 9px 37px;
   overflow: hidden;
   color: color-mix(in srgb, var(--text) 84%, var(--muted));
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   line-height: 1.5;
   white-space: pre-wrap;
   -webkit-box-orient: vertical;
@@ -433,7 +433,7 @@
   justify-content: space-between;
   gap: 10px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
 }
 
 .cron-manager-task-meta span {
@@ -449,7 +449,7 @@
   align-items: center;
   gap: 5px;
   color: #d4a72c;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
 }
 
 .cron-manager-delete {
@@ -493,7 +493,7 @@
 .cron-manager-delete-confirm span {
   margin-right: auto;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .cron-manager-delete-confirm button {
@@ -503,7 +503,7 @@
   border-radius: 7px;
   color: var(--muted);
   background: transparent;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   cursor: pointer;
 }
 
@@ -526,13 +526,13 @@
 
 .cron-manager-label > span {
   color: color-mix(in srgb, var(--text) 88%, var(--muted));
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   font-weight: 550;
 }
 
 .cron-manager-label > small {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
   line-height: 1.4;
 }
 
@@ -551,14 +551,14 @@
   height: 38px;
   padding: 0 11px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .cron-manager-label textarea {
   min-height: 128px;
   padding: 10px 11px;
   resize: vertical;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   line-height: 1.5;
 }
 
@@ -588,7 +588,7 @@
   border-radius: 7px;
   color: var(--muted);
   background: transparent;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--font-scale));
   cursor: pointer;
 }
 
@@ -611,7 +611,7 @@
   border-radius: 7px;
   color: var(--muted);
   background: transparent;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
   cursor: pointer;
 }
 
@@ -641,7 +641,7 @@
   border-radius: 9px;
   color: var(--muted);
   background: color-mix(in srgb, var(--accent) 5%, transparent);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
   line-height: 1.45;
 }
 
@@ -659,9 +659,9 @@
   gap: 7px;
   border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
   border-radius: 9px;
-  color: #fff;
+  color: var(--accent-contrast);
   background: var(--accent);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 5px 14px color-mix(in srgb, var(--accent) 20%, transparent);

@@ -22,10 +22,10 @@
   grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
   gap: 9px;
-  border: 1px solid rgba(139, 124, 246, 0.18);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
   border-radius: 11px;
   background:
-    linear-gradient(135deg, rgba(139, 124, 246, 0.055), transparent 58%),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 5.5%, transparent), transparent 58%),
     rgba(38, 40, 46, 0.98);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
 }
@@ -35,10 +35,10 @@
   width: 30px;
   height: 30px;
   place-items: center;
-  border: 1px solid rgba(139, 124, 246, 0.2);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
   border-radius: 8px;
-  color: #a99df3;
-  background: rgba(139, 124, 246, 0.075);
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent) 7.5%, transparent);
 }
 
 .mode-status-copy,
@@ -59,19 +59,19 @@
 
 .mode-status-heading strong {
   color: #c9c6d0;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
   font-weight: 590;
 }
 
 .mode-status-heading small {
   color: #65626d;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .mode-status-detail {
   overflow: hidden;
   color: #797681;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -93,13 +93,13 @@
   color: #77747f;
   background: rgba(255, 255, 255, 0.018);
   cursor: pointer;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .mode-status-actions button:hover:not(:disabled) {
-  border-color: rgba(139, 124, 246, 0.2);
-  color: #b2accc;
-  background: rgba(139, 124, 246, 0.055);
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent) 5.5%, transparent);
 }
 
 .mode-status-actions button:disabled {
@@ -123,17 +123,17 @@
 
 .mode-status-card.plan .mode-status-heading strong {
   color: #edeef1;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
 }
 
 .mode-status-card.plan .mode-status-heading small {
   color: #b9bbc1;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .mode-status-card.plan .mode-status-detail {
   color: #c3c5ca;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
 }
 
 .mode-status-card.plan .mode-status-actions button {
@@ -141,7 +141,7 @@
   border-color: #42454c;
   color: #c1c3c8;
   background: #2b2d30;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .mode-status-card.plan .mode-status-actions button:hover:not(:disabled) {
@@ -231,13 +231,13 @@
 
 .composer-goal-heading strong {
   color: var(--text);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-weight: 600;
 }
 
 .composer-goal-heading small {
   color: var(--accent);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .composer-goal-card.paused .composer-goal-heading small {
@@ -251,7 +251,7 @@
 .composer-goal-objective {
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -273,7 +273,7 @@
   color: var(--muted);
   background: var(--surface-2);
   cursor: pointer;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
 }
 
 .composer-goal-actions button:hover:not(:disabled) {
@@ -337,7 +337,7 @@
 
 .todo-progress-anchor:focus-visible .todo-progress-pill,
 .background-task-anchor:focus-visible .background-task-pill {
-  outline: 2px solid rgba(139, 124, 246, 0.7);
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
   outline-offset: 2px;
 }
 
@@ -350,16 +350,16 @@
   align-items: center;
   justify-content: center;
   gap: 7px;
-  border: 1px solid rgba(139, 124, 246, 0.17);
+  border: 1px solid color-mix(in srgb, var(--accent) 17%, transparent);
   border-radius: 999px;
   color: #8c8995;
   background:
-    linear-gradient(135deg, rgba(139, 124, 246, 0.045), transparent 60%),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 4.5%, transparent), transparent 60%),
     rgba(38, 40, 46, 0.98);
   box-shadow:
     0 8px 24px rgba(0, 0, 0, 0.18),
     inset 0 1px rgba(255, 255, 255, 0.025);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
   cursor: default;
   transition:
     color 150ms ease,
@@ -373,10 +373,10 @@
 .background-task-anchor:hover .background-task-pill,
 .background-task-anchor:focus-within .background-task-pill {
   transform: translateY(-1px);
-  border-color: rgba(139, 124, 246, 0.32);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
   color: #b1aabc;
   background:
-    linear-gradient(135deg, rgba(139, 124, 246, 0.09), transparent 62%),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 62%),
     rgba(57, 59, 64, 0.98);
 }
 
@@ -384,7 +384,7 @@
   border-color: var(--accent-border);
   color: var(--muted);
   background: var(--surface-2);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   cursor: default;
 }
 
@@ -420,9 +420,9 @@
 .todo-progress-ring {
   width: 12px;
   height: 12px;
-  border: 1.5px solid rgba(139, 124, 246, 0.64);
-  color: #a99df3;
-  box-shadow: 0 0 8px rgba(139, 124, 246, 0.13);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 64%, transparent);
+  color: var(--accent-2);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 13%, transparent);
 }
 
 .todo-progress-ring::after {
@@ -430,8 +430,8 @@
   width: 3px;
   height: 3px;
   border-radius: 50%;
-  background: #a99df3;
-  box-shadow: 0 0 5px rgba(139, 124, 246, 0.65);
+  background: var(--accent-2);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 65%, transparent);
   content: "";
 }
 
@@ -457,7 +457,7 @@
   visibility: hidden;
   opacity: 0;
   background:
-    radial-gradient(circle at 20% 0, rgba(139, 124, 246, 0.08), transparent 40%),
+    radial-gradient(circle at 20% 0, color-mix(in srgb, var(--accent) 8%, transparent), transparent 40%),
     rgba(49, 51, 56, 0.985);
   box-shadow:
     0 20px 52px rgba(0, 0, 0, 0.42),
@@ -491,14 +491,14 @@
 
 .todo-popover-heading strong {
   color: #c9c6d0;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
   font-weight: 590;
 }
 
 .todo-popover-heading span {
   color: #706c78;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .todo-list {
@@ -523,7 +523,7 @@
   gap: 7px;
   border-radius: 7px;
   color: #92909a;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.45;
   transition:
     color 140ms ease,
@@ -537,7 +537,7 @@
 
 .todo-list-item.in_progress {
   color: #c3bdde;
-  background: rgba(139, 124, 246, 0.065);
+  background: color-mix(in srgb, var(--accent) 6.5%, transparent);
 }
 
 .todo-list-item.done {
@@ -557,16 +557,16 @@
 }
 
 .todo-list-item.in_progress .todo-status-mark {
-  border-color: #8f83d3;
-  box-shadow: 0 0 8px rgba(139, 124, 246, 0.17);
+  border-color: var(--accent-border);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 17%, transparent);
 }
 
 .todo-list-item.in_progress .todo-status-mark::after {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: #a99df3;
-  box-shadow: 0 0 5px rgba(139, 124, 246, 0.55);
+  background: var(--accent-2);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 55%, transparent);
   content: "";
 }
 
@@ -619,14 +619,14 @@
 
 .background-task-popover-heading strong {
   color: var(--text);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--font-scale));
   font-weight: 600;
 }
 
 .background-task-popover-heading span {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .background-task-list {
@@ -764,7 +764,7 @@
 .background-task-copy strong {
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-weight: 540;
   line-height: 1.4;
   text-overflow: ellipsis;
@@ -774,7 +774,7 @@
 .background-task-copy small {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .background-task-chevron {
@@ -798,7 +798,7 @@
 
 .background-task-detail > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .background-task-detail pre {
@@ -811,7 +811,7 @@
   color: var(--text);
   background: var(--surface-deep);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

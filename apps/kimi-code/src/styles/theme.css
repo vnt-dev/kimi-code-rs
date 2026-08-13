@@ -21,6 +21,7 @@
   --subtle: #6b7280;
   --accent: #58a6ff;
   --accent-2: #79b8ff;
+  --accent-contrast: #111318;
   --green: #3fb950;
   --danger: #ff7b72;
   --control-hover: rgba(255, 255, 255, 0.08);
@@ -63,6 +64,7 @@ html[data-color-scheme="light"] {
   --subtle: #9aa3af;
   --accent: #1783ff;
   --accent-2: #0f6fe0;
+  --accent-contrast: #111318;
   --green: #0e7a38;
   --danger: #c0392b;
   --control-hover: rgba(0, 0, 0, 0.05);
@@ -87,7 +89,7 @@ html[data-color-scheme="light"] {
 body {
   color: var(--text);
   background: var(--bg);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
 }
 
 html[data-color-scheme] * {
@@ -119,7 +121,7 @@ button:not(.window-control),
 textarea,
 select,
 input {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 button:focus-visible,
@@ -164,13 +166,13 @@ input:focus-visible {
 }
 
 .titlebar-brand-copy strong {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   font-weight: 600;
 }
 
 .titlebar-brand-copy span {
   color: var(--subtle);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   letter-spacing: 0.08em;
 }
 
@@ -189,7 +191,7 @@ input:focus-visible {
 }
 
 .sidebar-heading-copy strong {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   letter-spacing: 0;
 }
 
@@ -222,7 +224,7 @@ input:focus-visible {
   background: transparent;
   background-image: none;
   box-shadow: none;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   font-weight: 400;
 }
 
@@ -238,11 +240,11 @@ input:focus-visible {
 .approval-actions .approval-once,
 .interaction-card-actions .interaction-primary {
   border-color: var(--accent);
-  color: #ffffff;
+  color: var(--accent-contrast);
   background: var(--accent);
   background-image: none;
   box-shadow: none;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   font-weight: 500;
 }
 
@@ -251,7 +253,7 @@ input:focus-visible {
 .approval-actions .approval-once:hover:not(:disabled),
 .interaction-card-actions .interaction-primary:hover:not(:disabled) {
   border-color: var(--accent-2);
-  color: #ffffff;
+  color: var(--accent-contrast);
   background: var(--accent-2);
   transform: none;
   filter: none;
@@ -259,7 +261,7 @@ input:focus-visible {
 
 .sidebar-section-heading {
   color: var(--subtle);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   letter-spacing: 0.04em;
 }
 
@@ -298,7 +300,7 @@ input:focus-visible {
 .conversation-title,
 .account-copy strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .conversation-meta,
@@ -307,7 +309,7 @@ input:focus-visible {
 .account-copy small,
 .account-trailing-icon {
   color: var(--subtle);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .sidebar-empty {
@@ -321,7 +323,7 @@ input:focus-visible {
 }
 
 .account-button {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .assistant-avatar,
@@ -413,7 +415,7 @@ input:focus-visible {
   border-radius: 7px;
   background: transparent;
   cursor: pointer;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .profile-settings {
@@ -449,13 +451,13 @@ input:focus-visible {
 }
 
 .chat-heading h1 {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   font-weight: 600;
 }
 
 .path-line {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .chat-scroll {
@@ -474,12 +476,16 @@ input:focus-visible {
 
 .eyebrow {
   color: var(--subtle);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   letter-spacing: 0.12em;
 }
 
 .welcome h2 {
-  font-size: clamp(24px, 3vw, 32px);
+  font-size: clamp(
+    calc(24px * var(--font-scale)),
+    3vw,
+    calc(32px * var(--font-scale))
+  );
   font-weight: 600;
 }
 
@@ -490,7 +496,7 @@ input:focus-visible {
 .welcome-copy,
 .project-landing > p:not(.eyebrow) {
   color: var(--muted);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
 }
 
 .suggestion-grid button,
@@ -543,7 +549,7 @@ input:focus-visible {
 .question-options button strong,
 .approval-heading strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .suggestion-grid small,
@@ -555,7 +561,7 @@ input:focus-visible {
 .question-options button small,
 .approval-heading span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .history-loading,
@@ -571,7 +577,7 @@ input:focus-visible {
 .mode-status-heading small,
 .mode-status-detail {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .user-bubble {
@@ -579,7 +585,7 @@ input:focus-visible {
   color: var(--text);
   background: var(--accent-soft);
   background-image: none;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
 }
 
 .assistant-rail > i {
@@ -663,7 +669,7 @@ input:focus-visible {
 
 .markdown-body {
   color: var(--text);
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale));
 }
 
 .markdown-body h1,
@@ -723,7 +729,7 @@ input:focus-visible {
   background: var(--surface);
   background-image: none;
   box-shadow: none;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .message-actions button:hover,
@@ -788,7 +794,7 @@ input:focus-visible {
 
 .plan-review-card .plan-review-actions .interaction-primary {
   border-color: var(--accent);
-  color: #ffffff;
+  color: var(--accent-contrast);
   background: var(--accent);
 }
 
@@ -796,7 +802,7 @@ input:focus-visible {
   .plan-review-actions
   .interaction-primary:hover:not(:disabled) {
   border-color: var(--accent-2);
-  color: #ffffff;
+  color: var(--accent-contrast);
   background: var(--accent-2);
 }
 
@@ -875,7 +881,7 @@ input:focus-visible {
 
 .composer textarea {
   color: var(--text);
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale));
 }
 
 .composer textarea::placeholder {
@@ -885,7 +891,7 @@ input:focus-visible {
 .toolbar-select-trigger > span,
 .mode-toolbar-button {
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .toolbar-select-menu > button {
@@ -903,7 +909,7 @@ input:focus-visible {
 }
 
 .mode-toolbar-button span {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .mode-toolbar-button.active.plan-mode {
@@ -954,13 +960,13 @@ input:focus-visible {
 .send-zone > span,
 .composer-caption {
   color: var(--subtle);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .send-button {
   border: 0;
   border-radius: 50%;
-  color: #ffffff;
+  color: var(--accent-contrast);
   background: var(--accent);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
@@ -975,7 +981,7 @@ input:focus-visible {
 }
 
 .project-landing h1 {
-  font-size: 26px;
+  font-size: calc(26px * var(--font-scale));
   font-weight: 600;
 }
 
@@ -1004,7 +1010,7 @@ input:focus-visible {
 .waiting-line,
 .device-code {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .dialog-close {
@@ -1030,7 +1036,7 @@ input:focus-visible {
   color: var(--text);
   background: var(--control);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   outline: none;
 }
 
@@ -1056,7 +1062,7 @@ input:focus-visible {
 
 .directory-picker-dialog h2 {
   margin: 8px 0 18px;
-  font-size: 20px;
+  font-size: calc(20px * var(--font-scale));
 }
 
 .directory-path-form {
@@ -1073,7 +1079,7 @@ input:focus-visible {
   color: var(--text);
   background: var(--control);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   outline: none;
 }
 
@@ -1143,7 +1149,7 @@ input:focus-visible {
 
 .toast {
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .toast button {

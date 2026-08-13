@@ -145,13 +145,13 @@
 
   .web-runtime.mobile-layout .chat-heading h1 {
     max-width: calc(100vw - 150px);
-    font-size: 14px;
+    font-size: calc(14px * var(--font-scale));
   }
 
   .web-runtime.mobile-layout .path-line {
     max-width: calc(100vw - 150px);
     margin-top: 3px;
-    font-size: 12px;
+    font-size: calc(12px * var(--font-scale));
   }
 
   .web-runtime.mobile-layout .chat-title-menu {
@@ -239,7 +239,7 @@
   }
 
   .web-runtime.mobile-layout .project-landing h1 {
-    font-size: 23px;
+    font-size: calc(23px * var(--font-scale));
   }
 
   .web-runtime.mobile-layout .project-landing > p:not(.eyebrow) {
@@ -273,7 +273,7 @@
   .web-runtime.mobile-layout .question-other input,
   .web-runtime.mobile-layout .plan-review-feedback textarea {
     max-height: min(140px, 25dvh);
-    font-size: 16px;
+    font-size: calc(16px * var(--font-scale));
   }
 
   .web-runtime.mobile-layout .composer textarea {
@@ -343,7 +343,7 @@
 
   .web-runtime.mobile-layout .toolbar-select-trigger > span,
   .web-runtime.mobile-layout .mode-toolbar-button span {
-    font-size: 12px;
+    font-size: calc(12px * var(--font-scale));
   }
 
   .web-runtime.mobile-layout .toolbar-icon {
@@ -518,7 +518,7 @@
   .web-runtime.mobile-layout .web-credential-input,
   .web-runtime.mobile-layout .directory-path-form input {
     min-height: 44px;
-    font-size: 16px;
+    font-size: calc(16px * var(--font-scale));
   }
 
   .web-runtime.mobile-layout .directory-picker-dialog {
@@ -580,7 +580,7 @@
   .web-runtime.mobile-layout .settings-select-trigger,
   .web-runtime.mobile-layout .settings-port-input {
     min-height: 40px;
-    font-size: 16px;
+    font-size: calc(16px * var(--font-scale));
   }
 
   .web-runtime.mobile-layout .settings-toast,

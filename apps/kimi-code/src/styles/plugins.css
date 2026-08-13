@@ -30,7 +30,7 @@
 .plugin-settings-heading h3,
 .plugin-detail-hero h3 {
   color: var(--text);
-  font-size: 17px;
+  font-size: calc(17px * var(--font-scale));
   font-weight: 600;
 }
 
@@ -40,7 +40,7 @@
 .plugin-empty-copy {
   margin-top: 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.5;
 }
 
@@ -92,7 +92,7 @@
   color: var(--muted);
   background: transparent;
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .plugin-tabs button.active {
@@ -137,7 +137,7 @@
   background: transparent;
   outline: none;
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 .plugin-list {
@@ -169,7 +169,7 @@
   border-radius: 9px;
   color: var(--accent);
   background: var(--accent-soft);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-weight: 650;
 }
 
@@ -187,7 +187,7 @@
 .plugin-card-title strong {
   overflow: hidden;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -199,7 +199,7 @@
   border-radius: 5px;
   color: var(--muted);
   background: var(--control-hover);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .plugin-card-title span.official {
@@ -248,7 +248,7 @@
   margin-top: 5px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   line-height: 1.45;
   text-overflow: ellipsis;
 }
@@ -272,7 +272,7 @@
 .plugin-detail-actions button {
   min-height: 26px;
   padding: 0 8px;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .plugin-card-actions button.primary,
@@ -324,14 +324,14 @@
 .plugin-custom h4 {
   margin-top: 12px;
   color: var(--text);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
 }
 
 .plugin-custom > p,
 .plugin-empty p {
   max-width: 410px;
   margin-top: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.5;
 }
 
@@ -358,7 +358,7 @@
   color: var(--accent);
   background: var(--accent-soft);
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .plugin-folder-button,
@@ -380,7 +380,7 @@
   margin: 10px 0;
   padding: 9px 10px;
   border-radius: 8px;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   line-height: 1.45;
 }
 
@@ -416,7 +416,7 @@
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 7px;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .plugin-install-progress-label strong {
@@ -468,7 +468,7 @@
   min-height: 29px;
   margin-bottom: 14px;
   padding: 0 9px;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .plugin-detail-hero {
@@ -498,7 +498,7 @@
   grid-template-columns: 92px minmax(0, 1fr);
   gap: 10px;
   border-bottom: 1px solid var(--line);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .plugin-meta > div:last-child {
@@ -522,7 +522,7 @@
 .plugin-detail h4 {
   margin: 20px 0 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   font-weight: 550;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -550,14 +550,14 @@
 .plugin-mcp-row strong {
   display: block;
   color: var(--text);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .plugin-mcp-row small {
   display: block;
   margin-top: 3px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .plugin-diagnostics p {
@@ -569,7 +569,7 @@
   border-radius: 7px;
   color: var(--muted);
   background: var(--control-hover);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 
 .plugin-diagnostics p.error { color: #db8585; }
@@ -604,13 +604,13 @@
 
 .plugin-confirm h4 {
   margin-top: 10px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
 }
 
 .plugin-confirm p {
   margin-top: 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.55;
 }
 
@@ -629,7 +629,7 @@
   color: var(--text);
   background: var(--sd-surface, var(--segment-surface));
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 
 .plugin-confirm button.danger {

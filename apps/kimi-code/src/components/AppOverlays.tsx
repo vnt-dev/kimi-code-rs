@@ -1,5 +1,13 @@
 import { X } from "lucide-react";
-import type { ColorScheme } from "../appearance";
+import type {
+  ColorScheme,
+  CustomColorKey,
+  CustomColors,
+  CustomFonts,
+  FontFamilyPreset,
+  FontRole,
+  FontSize,
+} from "../appearance";
 import type { RenderMessage } from "../chat/history";
 import type { Language } from "../i18n";
 import { t } from "../i18n";
@@ -48,6 +56,9 @@ interface AppOverlaysProps {
   accountUsageBusy: boolean;
   accountUsageError?: string;
   colorScheme: ColorScheme;
+  fontSize: FontSize;
+  customColors: CustomColors;
+  customFonts: CustomFonts;
   language: Language;
   notificationsEnabled: boolean;
   notice?: string;
@@ -65,6 +76,13 @@ interface AppOverlaysProps {
   onCloseDirectoryPicker: () => void;
   onSelectDirectory: (path: string) => void;
   onColorSchemeChange: (colorScheme: ColorScheme) => void;
+  onFontSizeChange: (fontSize: FontSize) => void;
+  onCustomColorChange: (key: CustomColorKey, value: string | undefined) => void;
+  onCustomFontsChange: (
+    key: FontRole,
+    value: FontFamilyPreset,
+  ) => void;
+  onCustomFontNameChange: (role: FontRole, value: string) => void;
   onLanguageChange: (language: Language) => void;
   onNotificationsEnabledChange: (enabled: boolean) => Promise<void>;
   onProvidersChanged: () => void;
@@ -100,6 +118,9 @@ export function AppOverlays({
   accountUsageBusy,
   accountUsageError,
   colorScheme,
+  fontSize,
+  customColors,
+  customFonts,
   language,
   notificationsEnabled,
   notice,
@@ -117,6 +138,10 @@ export function AppOverlays({
   onCloseDirectoryPicker,
   onSelectDirectory,
   onColorSchemeChange,
+  onFontSizeChange,
+  onCustomColorChange,
+  onCustomFontsChange,
+  onCustomFontNameChange,
   onLanguageChange,
   onNotificationsEnabledChange,
   onProvidersChanged,
@@ -179,6 +204,9 @@ export function AppOverlays({
         open={settingsOpen}
         appVersion={appVersion}
         colorScheme={colorScheme}
+        fontSize={fontSize}
+        customColors={customColors}
+        customFonts={customFonts}
         language={language}
         notificationsEnabled={notificationsEnabled}
         auth={auth}
@@ -190,6 +218,10 @@ export function AppOverlays({
         onLogin={onStartLogin}
         onSignOut={onSignOut}
         onColorSchemeChange={onColorSchemeChange}
+        onFontSizeChange={onFontSizeChange}
+        onCustomColorChange={onCustomColorChange}
+        onCustomFontsChange={onCustomFontsChange}
+        onCustomFontNameChange={onCustomFontNameChange}
         onLanguageChange={onLanguageChange}
         onNotificationsEnabledChange={onNotificationsEnabledChange}
         onProvidersChanged={onProvidersChanged}

@@ -1,5 +1,6 @@
 :root {
   color-scheme: dark;
+  --font-scale: 1;
   --font-sans:
     "Schibsted Grotesk Variable", "Schibsted Grotesk", "Helvetica Neue",
     Arial, "Noto Sans SC Variable", "Noto Sans SC", "PingFang SC",
@@ -29,6 +30,7 @@
   --subtle: #656570;
   --accent: #8b7cf6;
   --accent-2: #b6adff;
+  --accent-contrast: #ffffff;
   --green: #54cf9a;
 }
 
@@ -47,7 +49,8 @@ body,
 
 button,
 textarea,
-select {
+select,
+input {
   font: inherit;
 }
 
@@ -58,6 +61,6 @@ button {
 button:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 2px solid rgba(139, 124, 246, 0.7);
+  outline: 2px solid var(--focus-outline, color-mix(in srgb, var(--accent) 70%, transparent));
   outline-offset: 2px;
 }

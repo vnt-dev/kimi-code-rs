@@ -57,10 +57,26 @@ import {
   type SlashMenuItem,
 } from "./plugins";
 import {
+  CUSTOM_FONT_NAME_MAX_LENGTH,
   applyColorScheme,
+  applyCustomColors,
+  applyCustomFonts,
+  applyFontSize,
   loadColorScheme,
+  loadCustomColors,
+  loadCustomFonts,
+  loadFontSize,
   saveColorScheme,
+  saveCustomColors,
+  saveCustomFonts,
+  saveFontSize,
   type ColorScheme,
+  type CustomColorKey,
+  type CustomColorsByScheme,
+  type CustomFonts,
+  type FontFamilyPreset,
+  type FontRole,
+  type FontSize,
 } from "./appearance";
 import {
   finalResponseMessage,
@@ -255,6 +271,10 @@ export default function App() {
   const [cronTaskCounts, setCronTaskCounts] = useState<Record<string, number>>({});
   const [colorScheme, setColorScheme] =
     useState<ColorScheme>(loadColorScheme);
+  const [fontSize, setFontSize] = useState<FontSize>(loadFontSize);
+  const [customColors, setCustomColors] =
+    useState<CustomColorsByScheme>(loadCustomColors);
+  const [customFonts, setCustomFonts] = useState<CustomFonts>(loadCustomFonts);
   const [language, setLanguageState] = useState<Language>(loadLanguage);
   const [notificationsEnabled, setNotificationsEnabled] = useState(
     loadNotificationsEnabled,
@@ -1229,6 +1249,55 @@ export default function App() {
     saveColorScheme(nextColorScheme);
   };
 
+  const updateFontSize = (nextFontSize: FontSize): void => {
+    setFontSize(nextFontSize);
+    saveFontSize(nextFontSize);
+  };
+
+  const updateCustomColor = (
+    key: CustomColorKey,
+    value: string | undefined,
+  ): void => {
+    setCustomColors((current) => {
+      const next: CustomColorsByScheme = {
+        ...current,
+        [colorScheme]: { ...current[colorScheme], [key]: value },
+      };
+      if (!value) delete next[colorScheme][key];
+      saveCustomColors(next);
+      return next;
+    });
+  };
+
+  const updateCustomFonts = (
+    key: FontRole,
+    value: FontFamilyPreset,
+  ): void => {
+    setCustomFonts((current) => {
+      const next: CustomFonts = {
+        ...current,
+        [key]: value === "kimi" ? undefined : value,
+      };
+      saveCustomFonts(next);
+      return next;
+    });
+  };
+
+  const updateCustomFontName = (role: FontRole, value: string): void => {
+    setCustomFonts((current) => {
+      const key = role === "sans" ? "sansCustom" : "monoCustom";
+      const normalized = value
+        .replace(/[\u0000-\u001f,]/g, "")
+        .slice(0, CUSTOM_FONT_NAME_MAX_LENGTH);
+      const next: CustomFonts = {
+        ...current,
+        [key]: normalized || undefined,
+      };
+      saveCustomFonts(next);
+      return next;
+    });
+  };
+
   const updateLanguage = (nextLanguage: Language): void => {
     setLanguage(nextLanguage);
     setLanguageState(nextLanguage);
@@ -1254,6 +1323,18 @@ export default function App() {
   useLayoutEffect(() => {
     applyColorScheme(colorScheme);
   }, [colorScheme]);
+
+  useLayoutEffect(() => {
+    applyFontSize(fontSize);
+  }, [fontSize]);
+
+  useLayoutEffect(() => {
+    applyCustomColors(customColors[colorScheme], colorScheme);
+  }, [customColors, colorScheme]);
+
+  useLayoutEffect(() => {
+    applyCustomFonts(customFonts);
+  }, [customFonts]);
 
   useLayoutEffect(() => {
     setLanguage(language);
@@ -3140,6 +3221,9 @@ export default function App() {
         accountUsageBusy={accountUsageBusy}
         accountUsageError={accountUsageError}
         colorScheme={colorScheme}
+        fontSize={fontSize}
+        customColors={customColors[colorScheme]}
+        customFonts={customFonts}
         language={language}
         notificationsEnabled={notificationsEnabled}
         notice={notice}
@@ -3174,6 +3258,10 @@ export default function App() {
           void addProjectPath(path);
         }}
         onColorSchemeChange={updateColorScheme}
+        onFontSizeChange={updateFontSize}
+        onCustomColorChange={updateCustomColor}
+        onCustomFontsChange={updateCustomFonts}
+        onCustomFontNameChange={updateCustomFontName}
         onLanguageChange={updateLanguage}
         onNotificationsEnabledChange={updateNotificationsEnabled}
         onProvidersChanged={() => void loadModels()}

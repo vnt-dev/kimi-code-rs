@@ -5,6 +5,7 @@ export interface SettingsSelectOption<T extends string> {
   value: T;
   label: string;
   description?: string;
+  disabled?: boolean;
 }
 
 export default function SettingsSelect<T extends string>({
@@ -49,11 +50,15 @@ export default function SettingsSelect<T extends string>({
 
   const focusOption = (direction: 1 | -1): void => {
     const items = Array.from(
-      menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? [],
+      menuRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="option"]:not(:disabled)',
+      ) ?? [],
     );
     if (items.length === 0) return;
     const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
-    const fallback = options.findIndex((option) => option.value === value);
+    const fallback = items.findIndex(
+      (item) => item.getAttribute("aria-selected") === "true",
+    );
     const startIndex = currentIndex >= 0 ? currentIndex : Math.max(fallback, 0);
     items[(startIndex + direction + items.length) % items.length]?.focus();
   };
@@ -111,6 +116,7 @@ export default function SettingsSelect<T extends string>({
                 type="button"
                 role="option"
                 aria-selected={selected}
+                disabled={option.disabled}
                 onClick={() => {
                   onChange(option.value);
                   closeAndRestoreFocus();
