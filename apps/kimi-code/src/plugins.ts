@@ -225,6 +225,35 @@ export function marketplaceUpdateAvailable(
   return compareSemver(entry.version, installed.version) === 1;
 }
 
+/**
+ * Built-in capabilities own the product meaning and install flow for their
+ * wiring plugins. A same-id marketplace row may advertise a newer version,
+ * but must not become a second, plain-plugin install entry in the UI.
+ */
+export function maskCapabilityMarketplaceEntries(
+  entries: readonly PluginMarketplaceEntry[],
+  capabilities: readonly CapabilityStatus[],
+): PluginMarketplaceEntry[] {
+  const builtInIds = new Set(
+    capabilities.flatMap((capability) =>
+      capability.pluginId && capability.pluginId !== capability.id
+        ? [capability.id, capability.pluginId]
+        : [capability.id],
+    ),
+  );
+  return entries.filter((entry) => !builtInIds.has(entry.id));
+}
+
+/** The masked catalog row may still contribute release metadata. */
+export function marketplaceEntryForCapability(
+  entries: readonly PluginMarketplaceEntry[],
+  capability: CapabilityStatus,
+): PluginMarketplaceEntry | undefined {
+  return entries.find(
+    (entry) => entry.id === capability.id || entry.id === capability.pluginId,
+  );
+}
+
 export function isThirdPartyEntry(entry: PluginMarketplaceEntry): boolean {
   return entry.tier !== "official";
 }

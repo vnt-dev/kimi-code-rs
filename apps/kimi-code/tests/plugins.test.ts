@@ -6,12 +6,15 @@ import {
   compareSemver,
   filterPluginCommands,
   isThirdPartyEntry,
+  maskCapabilityMarketplaceEntries,
+  marketplaceEntryForCapability,
   marketplaceUpdateAvailable,
   parseKnownPluginCommand,
   pluginInstallPercent,
   pluginTabNeedsNetwork,
   type PluginMarketplaceEntry,
   type PluginSummary,
+  type CapabilityStatus,
 } from "../src/plugins.ts";
 
 const installed: PluginSummary = {
@@ -76,6 +79,53 @@ test("installed and custom plugin tabs do not require network data", () => {
   assert.equal(pluginTabNeedsNetwork("custom"), false);
   assert.equal(pluginTabNeedsNetwork("official"), true);
   assert.equal(pluginTabNeedsNetwork("third-party"), true);
+});
+
+test("built-in capabilities mask same-id marketplace rows", () => {
+  const capability: CapabilityStatus = {
+    id: "kimi-webbridge",
+    pluginId: "kimi-webbridge",
+    displayName: "Kimi WebBridge",
+    description: "Browser control",
+    supported: true,
+    state: "not_installed",
+    steps: [],
+    install: { running: false },
+  };
+  const entries: PluginMarketplaceEntry[] = [
+    {
+      id: "kimi-webbridge",
+      displayName: "Kimi WebBridge",
+      tier: "official",
+      version: "1.11.3",
+      source: "https://example.test/kimi-webbridge.zip",
+    },
+    entry,
+  ];
+
+  assert.deepEqual(maskCapabilityMarketplaceEntries(entries, [capability]), [entry]);
+  assert.equal(marketplaceEntryForCapability(entries, capability)?.version, "1.11.3");
+});
+
+test("capability plugin ids also mask their marketplace wiring rows", () => {
+  const capability: CapabilityStatus = {
+    id: "kimi-cu",
+    pluginId: "kimi-cu-win",
+    displayName: "Kimi Computer Use",
+    description: "Computer control",
+    supported: false,
+    state: "unsupported",
+    steps: [],
+    install: { running: false },
+  };
+  const entries: PluginMarketplaceEntry[] = [
+    { ...entry, id: "kimi-cu", displayName: "Kimi CU" },
+    { ...entry, id: "kimi-cu-win", displayName: "Kimi CU Windows" },
+    entry,
+  ];
+
+  assert.deepEqual(maskCapabilityMarketplaceEntries(entries, [capability]), [entry]);
+  assert.equal(marketplaceEntryForCapability(entries, capability)?.id, "kimi-cu");
 });
 
 test("plugin install progress uses real download bytes when total size is known", () => {

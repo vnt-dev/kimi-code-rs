@@ -13,6 +13,8 @@ import {
 import { t, type TranslationKey } from "./i18n";
 import {
   isThirdPartyEntry,
+  maskCapabilityMarketplaceEntries,
+  marketplaceEntryForCapability,
   marketplaceUpdateAvailable,
   pluginInstallPercent,
   pluginTabNeedsNetwork,
@@ -470,6 +472,13 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
     : undefined;
 
   const requestInstall = (entry: PluginMarketplaceEntry): void => {
+    const capability = capabilities.find(
+      (item) => item.id === entry.id || item.pluginId === entry.id,
+    );
+    if (capability) {
+      void installCapability(capability);
+      return;
+    }
     if (isThirdPartyEntry(entry)) {
       setConfirm({
         kind: "install",
@@ -566,7 +575,10 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
   const visiblePlugins = plugins.filter((plugin) =>
     matches(plugin.displayName, plugin.id),
   );
-  const visibleMarket = (marketplace?.plugins ?? []).filter((entry) => {
+  const visibleMarket = maskCapabilityMarketplaceEntries(
+    marketplace?.plugins ?? [],
+    capabilities,
+  ).filter((entry) => {
     const tierMatches = tab === "official" ? entry.tier === "official" : entry.tier !== "official";
     return tierMatches && matches(entry.displayName, entry.description, entry.keywords);
   });
@@ -737,13 +749,18 @@ export default function PluginSettings({ onChanged }: { onChanged: () => void })
           {tab === "official" && visibleCapabilities.map((capability) => {
             const running = capability.install.running;
             const percent = capability.install.percent;
+            const catalogEntry = marketplaceEntryForCapability(
+              marketplace?.plugins ?? [],
+              capability,
+            );
+            const displayVersion = catalogEntry?.version ?? capability.version;
             return (
               <article className="plugin-card market" key={capability.id}>
                 <span className="plugin-avatar">{initials(capability.displayName)}</span>
                 <div className="plugin-card-body">
                   <div className="plugin-card-title">
                     <strong>{capability.displayName}</strong>
-                    {capability.version && <span>v{capability.version}</span>}
+                    {displayVersion && <span>v{displayVersion}</span>}
                     <span className="official">{t("plugins.official")}</span>
                     <span className={`capability-state ${capability.state}`}>
                       {t(CAPABILITY_STATE_KEYS[capability.state])}
