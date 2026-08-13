@@ -285,6 +285,13 @@ pub fn convert_message(
             Value::String(tool_call_id.clone()),
         );
     }
+    if message.role == Role::Assistant
+        && has_reasoning_part
+        && !result.contains_key("content")
+        && !result.contains_key("tool_calls")
+    {
+        result.insert("content".to_owned(), Value::String(String::new()));
+    }
     if has_reasoning_part || (preserve_thinking && message.role == Role::Assistant) {
         result.insert(
             reasoning_key
@@ -1297,6 +1304,38 @@ mod tests {
         assert_eq!(history[1]["content"][0]["text"], TOOL_RESULT_MEDIA_PROMPT);
         assert_eq!(history[1]["content"][1]["type"], "image_url");
         assert_eq!(history[2]["content"], "next");
+    }
+
+    #[test]
+    fn reasoning_only_assistant_has_explicit_empty_content_for_strict_gateways() {
+        let assistant = Message::new(
+            Role::Assistant,
+            vec![ContentPart::Think {
+                think: "earlier reasoning".to_owned(),
+                encrypted: None,
+            }],
+            Vec::new(),
+        );
+
+        let converted = convert_message(
+            &assistant,
+            Some("reasoning_content"),
+            ToolMessageConversion::Parts,
+            false,
+            true,
+        );
+
+        assert_eq!(
+            converted,
+            json!({
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "earlier reasoning",
+            })
+            .as_object()
+            .unwrap()
+            .clone()
+        );
     }
 
     #[test]
