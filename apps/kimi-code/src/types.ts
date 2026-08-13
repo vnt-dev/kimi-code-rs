@@ -302,6 +302,9 @@ export type AgentPromptPart = Extract<
   name: string;
   media_type: string;
   size: number;
+} | {
+  type: "image_file" | "audio_file" | "video_file";
+  file_id: string;
 };
 
 export interface TurnFileChange {

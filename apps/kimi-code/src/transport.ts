@@ -471,10 +471,11 @@ export async function uploadFileTransport(
   filename: string,
 ): Promise<unknown> {
   if (!isDesktop()) return webTransport.uploadFile(file, filename);
-  return tauriInvoke("upload_file", {
-    filename,
-    mediaType: file.type || "application/octet-stream",
-    bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
+  return tauriInvoke("upload_file", new Uint8Array(await file.arrayBuffer()), {
+    headers: {
+      "x-kimi-filename": encodeURIComponent(filename),
+      "content-type": file.type || "application/octet-stream",
+    },
   });
 }
 

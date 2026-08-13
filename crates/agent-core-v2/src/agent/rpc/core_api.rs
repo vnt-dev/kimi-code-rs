@@ -100,6 +100,20 @@ pub enum PromptFilePart {
     },
 }
 
+/// Media uploaded through the file service is represented by a small reference
+/// on the RPC wire. It is resolved to a provider-neutral content part before
+/// entering the prompt pipeline.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type")]
+pub enum PromptMediaFilePart {
+    #[serde(rename = "image_file")]
+    Image { file_id: String },
+    #[serde(rename = "audio_file")]
+    Audio { file_id: String },
+    #[serde(rename = "video_file")]
+    Video { file_id: String },
+}
+
 /// Prompt wire input accepts the provider-neutral content parts used today
 /// plus an uploaded-file reference. File parts are resolved before they enter
 /// the model/provider message contract.
@@ -108,6 +122,7 @@ pub enum PromptFilePart {
 pub enum PromptInputPart {
     Content(ContentPart),
     File(PromptFilePart),
+    MediaFile(PromptMediaFilePart),
 }
 
 impl From<ContentPart> for PromptInputPart {
@@ -933,6 +948,38 @@ mod tests {
                 ..
             }) if file_id == "f_2" && name == "notes.txt"
         ));
+    }
+
+    #[test]
+    fn prompt_payload_accepts_uploaded_media_references() {
+        let payload = serde_json::from_value::<PromptPayload>(json!({
+            "input": [
+                {"type": "image_file", "file_id": "f_image"},
+                {"type": "audio_file", "file_id": "f_audio"},
+                {"type": "video_file", "file_id": "f_video"}
+            ]
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            &payload.input[0],
+            PromptInputPart::MediaFile(PromptMediaFilePart::Image { file_id })
+                if file_id == "f_image"
+        ));
+        assert!(matches!(
+            &payload.input[1],
+            PromptInputPart::MediaFile(PromptMediaFilePart::Audio { file_id })
+                if file_id == "f_audio"
+        ));
+        assert!(matches!(
+            &payload.input[2],
+            PromptInputPart::MediaFile(PromptMediaFilePart::Video { file_id })
+                if file_id == "f_video"
+        ));
+        assert_eq!(
+            serde_json::to_value(payload).unwrap()["input"][0],
+            json!({"type": "image_file", "file_id": "f_image"})
+        );
     }
 
     #[test]

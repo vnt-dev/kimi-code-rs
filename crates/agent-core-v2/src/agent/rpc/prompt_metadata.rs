@@ -16,7 +16,7 @@ use crate::{
 
 use super::core_api::{
     ActivatePluginCommandPayload, ActivateSkillPayload, PromptFilePart, PromptInputPart,
-    PromptPayload,
+    PromptMediaFilePart, PromptPayload,
 };
 
 pub const MAX_TITLE_LENGTH: usize = 200;
@@ -63,6 +63,11 @@ pub fn prompt_metadata_text_from_payload(payload: &PromptPayload) -> Option<Stri
             PromptInputPart::File(PromptFilePart::File { name, .. }) => {
                 Some(format!("[file: {name}]"))
             }
+            PromptInputPart::MediaFile(part) => Some(match part {
+                PromptMediaFilePart::Image { .. } => "[image]".into(),
+                PromptMediaFilePart::Audio { .. } => "[audio]".into(),
+                PromptMediaFilePart::Video { .. } => "[video]".into(),
+            }),
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -433,7 +438,7 @@ sk-abcdefghijkl
             .iter()
             .filter_map(|part| match part {
                 PromptInputPart::Content(part) => Some(part.clone()),
-                PromptInputPart::File(_) => None,
+                PromptInputPart::File(_) | PromptInputPart::MediaFile(_) => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(

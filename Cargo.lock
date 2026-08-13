@@ -2616,6 +2616,7 @@ dependencies = [
  "kimi-code-agent-core-v2",
  "kimi-code-web-server",
  "notify-rust",
+ "percent-encoding",
  "rustls",
  "serde",
  "serde_json",

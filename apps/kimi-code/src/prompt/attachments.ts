@@ -1,7 +1,7 @@
-import { t } from "../i18n";
-import { uploadFileTransport } from "../transport";
-import type { AgentPromptPart } from "../types";
-import type { PromptAttachment, PromptAttachmentKind } from "../chat/liveTurns";
+import { t } from "../i18n.ts";
+import { uploadFileTransport } from "../transport.ts";
+import type { AgentPromptPart } from "../types.ts";
+import type { PromptAttachment, PromptAttachmentKind } from "../chat/liveTurns.ts";
 
 export const MAX_PROMPT_ATTACHMENTS = 8;
 const MAX_PROMPT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -82,21 +82,6 @@ export async function preparePromptAttachment(file: File): Promise<PromptAttachm
     throw new Error(t("error.fileTooLarge", { name: file.name }));
   }
 
-  if (kind === "file") {
-    const uploaded = (await uploadFileTransport(
-      file,
-      file.name || "attachment",
-    )) as UploadedFileMeta;
-    return {
-      id: uploaded.id,
-      fileId: uploaded.id,
-      name: uploaded.name,
-      mediaType: uploaded.media_type,
-      size: uploaded.size,
-      kind,
-    };
-  }
-
   let payload: Blob = file;
   if (kind === "image" && file.type !== "image/gif") {
     const bitmap = await createImageBitmap(file);
@@ -121,15 +106,18 @@ export async function preparePromptAttachment(file: File): Promise<PromptAttachm
     }
   }
 
+  const uploaded = (await uploadFileTransport(
+    payload,
+    file.name || "attachment",
+  )) as UploadedFileMeta;
+
   return {
-    id:
-      typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    name: file.name || `clipboard-${kind}`,
-    dataUrl: await readFileAsDataUrl(payload),
-    mediaType: payload.type || file.type || "application/octet-stream",
-    size: payload.size,
+    id: uploaded.id,
+    fileId: uploaded.id,
+    name: uploaded.name,
+    dataUrl: kind === "file" ? undefined : await readFileAsDataUrl(payload),
+    mediaType: uploaded.media_type,
+    size: uploaded.size,
     kind,
   };
 }
@@ -144,18 +132,18 @@ export function buildAgentPromptInput(
       switch (attachment.kind) {
         case "image":
           return {
-            type: "image_url",
-            imageUrl: { url: attachment.dataUrl!, id: attachment.id },
+            type: "image_file",
+            file_id: attachment.fileId!,
           };
         case "audio":
           return {
-            type: "audio_url",
-            audioUrl: { url: attachment.dataUrl!, id: attachment.id },
+            type: "audio_file",
+            file_id: attachment.fileId!,
           };
         case "video":
           return {
-            type: "video_url",
-            videoUrl: { url: attachment.dataUrl!, id: attachment.id },
+            type: "video_file",
+            file_id: attachment.fileId!,
           };
         case "file":
           return {

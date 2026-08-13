@@ -38,7 +38,10 @@ use serde_json::Value;
 use tauri::menu::MenuBuilder;
 #[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{
+    AppHandle, Emitter, Manager, State,
+    ipc::{InvokeBody, Request},
+};
 use tauri_plugin_opener::OpenerExt;
 
 struct AppState {
@@ -297,12 +300,27 @@ async fn delete_cron_task(
 }
 
 #[tauri::command]
-async fn upload_file(
-    state: State<'_, AppState>,
-    filename: String,
-    media_type: String,
-    bytes: Vec<u8>,
-) -> Result<FileMeta, String> {
+async fn upload_file(state: State<'_, AppState>, request: Request<'_>) -> Result<FileMeta, String> {
+    let filename = request
+        .headers()
+        .get("x-kimi-filename")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "upload filename header is missing".to_owned())?;
+    let filename = percent_encoding::percent_decode_str(filename)
+        .decode_utf8()
+        .map_err(|_| "upload filename is not valid UTF-8".to_owned())?
+        .into_owned();
+    let media_type = request
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+    let bytes = match request.body() {
+        InvokeBody::Raw(bytes) => bytes.clone(),
+        InvokeBody::Json(_) => return Err("upload body must be raw bytes".into()),
+    };
     state
         .client
         .upload_file(&filename, &media_type, bytes)

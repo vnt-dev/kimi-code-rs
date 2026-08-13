@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use futures_util::StreamExt;
 use tokio::{fs, io::AsyncWriteExt};
 use uuid::Uuid;
@@ -13,7 +14,7 @@ use crate::{
     kosong::contract::message::ContentPart,
 };
 
-use super::{PromptFilePart, PromptInputPart};
+use super::{PromptFilePart, PromptInputPart, PromptMediaFilePart};
 
 const ATTACHMENTS_DIR: &str = "attachments";
 const ATTACHMENT_NAME_MAX: usize = 100;
@@ -58,6 +59,30 @@ pub async fn resolve_prompt_attachments(
                     model_text,
                 });
             }
+            PromptInputPart::MediaFile(media) => {
+                let (file_id, kind) = match media {
+                    PromptMediaFilePart::Image { file_id } => (file_id, MediaKind::Image),
+                    PromptMediaFilePart::Audio { file_id } => (file_id, MediaKind::Audio),
+                    PromptMediaFilePart::Video { file_id } => (file_id, MediaKind::Video),
+                };
+                let file = files.get(&file_id).await?;
+                let data_url = uploaded_media_data_url(&file).await?;
+                let media_url = crate::kosong::contract::message::MediaUrl {
+                    url: data_url,
+                    id: Some(file.meta.id),
+                };
+                content.push(match kind {
+                    MediaKind::Image => ContentPart::ImageUrl {
+                        image_url: media_url,
+                    },
+                    MediaKind::Audio => ContentPart::AudioUrl {
+                        audio_url: media_url,
+                    },
+                    MediaKind::Video => ContentPart::VideoUrl {
+                        video_url: media_url,
+                    },
+                });
+            }
         }
     }
 
@@ -65,6 +90,49 @@ pub async fn resolve_prompt_attachments(
         content,
         attachments,
     })
+}
+
+#[derive(Clone, Copy)]
+enum MediaKind {
+    Image,
+    Audio,
+    Video,
+}
+
+async fn uploaded_media_data_url(file: &GetResult) -> io::Result<String> {
+    let capacity = usize::try_from(file.meta.size)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "uploaded media is too large"))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    let mut stream = (file.stream)(None);
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(io::Error::other)?;
+        if bytes.len().saturating_add(chunk.len()) > capacity {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "uploaded file {} declared {} bytes but streamed more data",
+                    file.meta.id, file.meta.size
+                ),
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.len() != capacity {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!(
+                "uploaded file {} declared {} bytes but streamed {} bytes",
+                file.meta.id,
+                file.meta.size,
+                bytes.len()
+            ),
+        ));
+    }
+    Ok(format!(
+        "data:{};base64,{}",
+        file.meta.media_type,
+        BASE64_STANDARD.encode(bytes)
+    ))
 }
 
 pub fn sanitize_attachment_name(name: &str) -> String {
@@ -257,5 +325,27 @@ mod tests {
         ));
 
         fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolves_uploaded_media_to_a_data_url() {
+        let service = stub_file("clip.bin", b"media");
+        let resolved = resolve_prompt_attachments(
+            vec![PromptInputPart::MediaFile(PromptMediaFilePart::Audio {
+                file_id: "f_client".into(),
+            })],
+            &service,
+            std::env::temp_dir(),
+        )
+        .await
+        .unwrap();
+
+        assert!(resolved.attachments.is_empty());
+        assert!(matches!(
+            &resolved.content[0],
+            ContentPart::AudioUrl { audio_url }
+                if audio_url.url == "data:application/xml;base64,bWVkaWE="
+                    && audio_url.id.as_deref() == Some("f_stored")
+        ));
     }
 }
