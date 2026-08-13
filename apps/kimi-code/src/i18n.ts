@@ -859,7 +859,7 @@ const zh = {
   "removal.projectTitle": "移除这个项目？",
   "removal.conversationTitle": "归档这个对话？",
   "removal.projectCopy": "“{name}”只会从项目列表中移除，本地目录和历史对话都不会被删除。重新打开该目录即可恢复。",
-  "removal.conversationCopy": "“{title}”将移入归档并从当前列表隐藏，之后可从「设置 → 已归档」中恢复。",
+  "removal.conversationCopy": "归档后将从当前列表隐藏，之后可从「设置 → 已归档」中恢复。",
 
   "login.close": "关闭登录窗口",
   "login.title": "连接你的 Kimi 账号",
@@ -1728,7 +1728,7 @@ const en: Record<TranslationKey, string> = {
   "removal.projectTitle": "Remove this project?",
   "removal.conversationTitle": "Archive this conversation?",
   "removal.projectCopy": "“{name}” will only be removed from the project list. The local directory and conversation history are not deleted — reopen the directory to restore it.",
-  "removal.conversationCopy": "“{title}” will be archived and hidden from the list. You can restore it later from Settings → Archived.",
+  "removal.conversationCopy": "It will be hidden from the list after archiving. You can restore it later from Settings → Archived.",
 
   "login.close": "Close sign-in dialog",
   "login.title": "Connect your Kimi account",

@@ -281,6 +281,23 @@
   white-space: nowrap;
 }
 
+.operation-target.conversation-title {
+  margin: 0 0 10px;
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+}
+
+.operation-target.conversation-title > span {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
 .operation-dialog-actions {
   display: grid;
   width: 100%;

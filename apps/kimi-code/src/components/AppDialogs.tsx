@@ -276,10 +276,18 @@ export function RemovalDialog({
         <h2 id="removal-dialog-title">
           {isProject ? t("removal.projectTitle") : t("removal.conversationTitle")}
         </h2>
+        {!isProject && (
+          <div
+            className="operation-target conversation-title"
+            title={target.title}
+          >
+            <span>{target.title}</span>
+          </div>
+        )}
         <p className="dialog-copy">
           {isProject
             ? t("removal.projectCopy", { name: target.name })
-            : t("removal.conversationCopy", { title: target.title })}
+            : t("removal.conversationCopy")}
         </p>
         {isProject && <div className="operation-target">{target.path}</div>}
         <div className="operation-dialog-actions">
