@@ -557,6 +557,13 @@ pub struct RenameSessionPayload {
     pub title: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GenerateConversationTitlePayload {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct UpdateSessionMetadataPayload {
     pub metadata: SessionMetadataPatch,

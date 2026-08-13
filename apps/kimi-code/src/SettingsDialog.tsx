@@ -28,12 +28,13 @@ import { LANGUAGE_OPTIONS, t, type Language } from "./i18n";
 import PluginSettings from "./PluginSettings";
 import ProviderSettings from "./ProviderSettings";
 import { invoke, isDesktop, openExternalUrl } from "./transport";
-import type { AccountProfile, AccountUsage, AuthStatus } from "./types";
+import type { AccountProfile, AccountUsage, AuthStatus, Model } from "./types";
 import UsageStatisticsSettings from "./UsageStatisticsSettings";
 import type { UsageStatistics } from "./usageStatistics";
 
 type SettingsTab = "general" | "agent" | "account" | "usage" | "providers" | "plugins" | "web" | "archived" | "about";
 type WebServerListenScope = "local" | "global";
+const CURRENT_CONVERSATION_MODEL = "__current_conversation_model__";
 
 interface WebServerStatus {
   state: "stopped" | "starting" | "running" | "error";
@@ -340,6 +341,33 @@ function codeFontOptions(): readonly SettingsSelectOption<CodeFontPreset>[] {
   ];
 }
 
+function conversationTitleModelOptions(
+  models: readonly Model[],
+  selected?: string,
+): readonly SettingsSelectOption<string>[] {
+  const options: SettingsSelectOption<string>[] = [
+    {
+      value: CURRENT_CONVERSATION_MODEL,
+      label: t("settings.conversationTitleModelCurrent"),
+      description: t("settings.conversationTitleModelCurrentDescription"),
+    },
+    ...models.map((model) => ({
+      value: model.id,
+      label: model.displayName,
+      description: `${model.providerId} · ${model.model}`,
+    })),
+  ];
+  if (selected && !models.some((model) => model.id === selected)) {
+    options.push({
+      value: selected,
+      label: selected,
+      description: t("settings.conversationTitleModelUnavailable"),
+      disabled: true,
+    });
+  }
+  return options;
+}
+
 export default function SettingsDialog({
   open,
   appVersion,
@@ -349,6 +377,9 @@ export default function SettingsDialog({
   customFonts,
   language,
   notificationsEnabled,
+  autoConversationTitlesEnabled,
+  conversationTitleModel,
+  models,
   auth,
   accountProfile,
   accountUsage,
@@ -364,6 +395,8 @@ export default function SettingsDialog({
   onCustomFontNameChange,
   onLanguageChange,
   onNotificationsEnabledChange,
+  onAutoConversationTitlesEnabledChange,
+  onConversationTitleModelChange,
   onProvidersChanged,
   onPluginsChanged,
   onClose,
@@ -376,6 +409,9 @@ export default function SettingsDialog({
   customFonts: CustomFonts;
   language: Language;
   notificationsEnabled: boolean;
+  autoConversationTitlesEnabled: boolean;
+  conversationTitleModel?: string;
+  models: Model[];
   auth: AuthStatus;
   accountProfile?: AccountProfile;
   accountUsage?: AccountUsage;
@@ -394,6 +430,8 @@ export default function SettingsDialog({
   onCustomFontNameChange: (role: FontRole, value: string) => void;
   onLanguageChange: (language: Language) => void;
   onNotificationsEnabledChange: (enabled: boolean) => Promise<void>;
+  onAutoConversationTitlesEnabledChange: (enabled: boolean) => void;
+  onConversationTitleModelChange: (modelId?: string) => void;
   onProvidersChanged: () => void;
   onPluginsChanged: () => void;
   onClose: () => void;
@@ -896,6 +934,65 @@ export default function SettingsDialog({
                     onChange={(value) => onCustomColorChange("accent", value)}
                     onReset={() => onCustomColorChange("accent", undefined)}
                   />
+                </section>
+
+                <section
+                  className="settings-section"
+                  aria-labelledby="conversation-titles-heading"
+                >
+                  <h3 id="conversation-titles-heading">
+                    {t("settings.conversationTitles")}
+                  </h3>
+                  <p className="settings-section-copy">
+                    {t("settings.conversationTitlesDescription")}
+                  </p>
+                  <div className="settings-row">
+                    <div>
+                      <span className="settings-row-label">
+                        {t("settings.conversationTitleModel")}
+                      </span>
+                      <small>{t("settings.conversationTitleModelHint")}</small>
+                    </div>
+                    <SettingsSelect
+                      value={
+                        conversationTitleModel ?? CURRENT_CONVERSATION_MODEL
+                      }
+                      options={conversationTitleModelOptions(
+                        models,
+                        conversationTitleModel,
+                      )}
+                      ariaLabel={t("settings.conversationTitleModel")}
+                      onChange={(value) =>
+                        onConversationTitleModelChange(
+                          value === CURRENT_CONVERSATION_MODEL
+                            ? undefined
+                            : value,
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="settings-row">
+                    <div>
+                      <span className="settings-row-label">
+                        {t("settings.autoConversationTitles")}
+                      </span>
+                      <small>{t("settings.autoConversationTitlesHint")}</small>
+                    </div>
+                    <button
+                      className={`settings-toggle ${autoConversationTitlesEnabled ? "active" : ""}`}
+                      type="button"
+                      role="switch"
+                      aria-label={t("settings.autoConversationTitles")}
+                      aria-checked={autoConversationTitlesEnabled}
+                      onClick={() =>
+                        onAutoConversationTitlesEnabledChange(
+                          !autoConversationTitlesEnabled,
+                        )
+                      }
+                    >
+                      <span />
+                    </button>
+                  </div>
                 </section>
 
                 <section

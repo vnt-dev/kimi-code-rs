@@ -21,6 +21,7 @@ import type {
   AuthStatus,
   DeviceCode,
   GoalSnapshot,
+  Model,
 } from "../types";
 import {
   DirectoryPickerDialog,
@@ -61,6 +62,9 @@ interface AppOverlaysProps {
   customFonts: CustomFonts;
   language: Language;
   notificationsEnabled: boolean;
+  autoConversationTitlesEnabled: boolean;
+  conversationTitleModel?: string;
+  models: Model[];
   notice?: string;
   onCloseLogin: () => void;
   onStartLogin: () => void;
@@ -85,6 +89,8 @@ interface AppOverlaysProps {
   onCustomFontNameChange: (role: FontRole, value: string) => void;
   onLanguageChange: (language: Language) => void;
   onNotificationsEnabledChange: (enabled: boolean) => Promise<void>;
+  onAutoConversationTitlesEnabledChange: (enabled: boolean) => void;
+  onConversationTitleModelChange: (modelId?: string) => void;
   onProvidersChanged: () => void;
   onPluginsChanged: () => void;
   onCloseSettings: () => void;
@@ -123,6 +129,9 @@ export function AppOverlays({
   customFonts,
   language,
   notificationsEnabled,
+  autoConversationTitlesEnabled,
+  conversationTitleModel,
+  models,
   notice,
   onCloseLogin,
   onStartLogin,
@@ -144,6 +153,8 @@ export function AppOverlays({
   onCustomFontNameChange,
   onLanguageChange,
   onNotificationsEnabledChange,
+  onAutoConversationTitlesEnabledChange,
+  onConversationTitleModelChange,
   onProvidersChanged,
   onPluginsChanged,
   onCloseSettings,
@@ -209,6 +220,9 @@ export function AppOverlays({
         customFonts={customFonts}
         language={language}
         notificationsEnabled={notificationsEnabled}
+        autoConversationTitlesEnabled={autoConversationTitlesEnabled}
+        conversationTitleModel={conversationTitleModel}
+        models={models}
         auth={auth}
         accountProfile={accountProfile}
         accountUsage={accountUsage}
@@ -224,6 +238,10 @@ export function AppOverlays({
         onCustomFontNameChange={onCustomFontNameChange}
         onLanguageChange={onLanguageChange}
         onNotificationsEnabledChange={onNotificationsEnabledChange}
+        onAutoConversationTitlesEnabledChange={
+          onAutoConversationTitlesEnabledChange
+        }
+        onConversationTitleModelChange={onConversationTitleModelChange}
         onProvidersChanged={onProvidersChanged}
         onPluginsChanged={onPluginsChanged}
         onClose={onCloseSettings}

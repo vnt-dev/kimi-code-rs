@@ -42,6 +42,7 @@ pub struct AgentLlmRequestOverrides {
     pub messages: Option<Vec<Message>>,
     pub tools: Option<Vec<Tool>>,
     pub system_prompt: Option<String>,
+    pub model_alias: Option<String>,
     pub source: Option<AgentLlmRequestSource>,
     pub max_output_size: Option<u64>,
 }

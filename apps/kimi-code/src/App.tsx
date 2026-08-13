@@ -192,6 +192,12 @@ import {
 } from "./subagentEvents";
 import { cronTaskBadge, type CronTaskDescriptor } from "./cronTasks";
 import {
+  loadAutoConversationTitlesEnabled,
+  loadConversationTitleModel,
+  saveAutoConversationTitlesEnabled,
+  saveConversationTitleModel,
+} from "./conversationTitles";
+import {
   getAppVersion,
   invoke,
   setWebCredential,
@@ -278,6 +284,11 @@ export default function App() {
   const [language, setLanguageState] = useState<Language>(loadLanguage);
   const [notificationsEnabled, setNotificationsEnabled] = useState(
     loadNotificationsEnabled,
+  );
+  const [autoConversationTitlesEnabled, setAutoConversationTitlesEnabled] =
+    useState(loadAutoConversationTitlesEnabled);
+  const [conversationTitleModel, setConversationTitleModel] = useState(
+    loadConversationTitleModel,
   );
   const [appVersion, setAppVersion] = useState<string>();
   const [accountUsage, setAccountUsage] = useState<AccountUsage>();
@@ -1320,6 +1331,16 @@ export default function App() {
     saveNotificationsEnabled(enabled);
   };
 
+  const updateAutoConversationTitlesEnabled = (enabled: boolean): void => {
+    setAutoConversationTitlesEnabled(enabled);
+    saveAutoConversationTitlesEnabled(enabled);
+  };
+
+  const updateConversationTitleModel = (modelId?: string): void => {
+    setConversationTitleModel(modelId);
+    saveConversationTitleModel(modelId);
+  };
+
   useLayoutEffect(() => {
     applyColorScheme(colorScheme);
   }, [colorScheme]);
@@ -2090,15 +2111,25 @@ export default function App() {
       return;
     }
 
+    const isFirstConversationMessage =
+      activeConversation.title === t("conversation.new");
     const title =
-      activeConversation.title === t("conversation.new")
+      isFirstConversationMessage
         ? (
+            text ||
             submittedText ||
             t("conversation.mediaTitle", { count: attachments.length })
           )
             .replace(/\s+/g, " ")
             .slice(0, 28)
         : activeConversation.title;
+    const titleSource =
+      autoConversationTitlesEnabled &&
+      isFirstConversationMessage &&
+      text &&
+      !queuedPromptId
+        ? text
+        : undefined;
     const input = buildAgentPromptInput(text, attachments);
 
     if (shouldCreateGoal) {
@@ -2162,6 +2193,31 @@ export default function App() {
         promptId: queuedPromptId,
         skills: skills.map((skill) => ({ name: skill.name })),
       });
+      if (titleSource) {
+        void client
+          .generateConversationTitle(titleSource, conversationTitleModel)
+          .then((generatedTitle) => {
+            if (!generatedTitle) return;
+            updateDesktop((current) => ({
+              ...current,
+              projects: current.projects.map((project) =>
+                project.id !== projectId
+                  ? project
+                  : {
+                      ...project,
+                      conversations: project.conversations.map((conversation) =>
+                        conversation.id === conversationId
+                          ? { ...conversation, title: generatedTitle }
+                          : conversation,
+                      ),
+                    },
+              ),
+            }));
+          })
+          .catch(() => {
+            // Keep the existing first-message title when generation fails.
+          });
+      }
       if (queuedPromptId) {
         // `prompt.submitted` only means the server owns the message.  Keep the
         // local row visible until `turn.started` proves that execution began.
@@ -3226,6 +3282,9 @@ export default function App() {
         customFonts={customFonts}
         language={language}
         notificationsEnabled={notificationsEnabled}
+        autoConversationTitlesEnabled={autoConversationTitlesEnabled}
+        conversationTitleModel={conversationTitleModel}
+        models={models}
         notice={notice}
         onCloseLogin={() => {
           if (!loginBusy) setLoginOpen(false);
@@ -3264,6 +3323,10 @@ export default function App() {
         onCustomFontNameChange={updateCustomFontName}
         onLanguageChange={updateLanguage}
         onNotificationsEnabledChange={updateNotificationsEnabled}
+        onAutoConversationTitlesEnabledChange={
+          updateAutoConversationTitlesEnabled
+        }
+        onConversationTitleModelChange={updateConversationTitleModel}
         onProvidersChanged={() => void loadModels()}
         onPluginsChanged={() => setPluginCommandRevision((value) => value + 1)}
         onCloseSettings={closeSettings}

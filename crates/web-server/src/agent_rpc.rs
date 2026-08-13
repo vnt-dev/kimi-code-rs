@@ -20,6 +20,7 @@ pub enum AgentRpcMethod {
     SetThinking,
     SetPermission,
     RenameSession,
+    GenerateConversationTitle,
     SetModel,
     GetModel,
     EnterPlan,
@@ -168,6 +169,14 @@ pub async fn dispatch_agent_rpc(
         AgentRpcMethod::RenameSession => {
             invoke!(rpc, payload, rename_session, RenameSessionPayload)
         }
+        AgentRpcMethod::GenerateConversationTitle => {
+            invoke!(
+                rpc,
+                payload,
+                generate_conversation_title,
+                GenerateConversationTitlePayload
+            )
+        }
         AgentRpcMethod::SetModel => invoke!(rpc, payload, set_model, SetModelPayload),
         AgentRpcMethod::GetModel => invoke!(rpc, payload, get_model, EmptyPayload),
         AgentRpcMethod::EnterPlan => invoke!(rpc, payload, enter_plan, EmptyPayload),
@@ -262,6 +271,10 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<AgentRpcMethod>("\"renameSession\"").unwrap(),
             AgentRpcMethod::RenameSession
+        ));
+        assert!(matches!(
+            serde_json::from_str::<AgentRpcMethod>("\"generateConversationTitle\"").unwrap(),
+            AgentRpcMethod::GenerateConversationTitle
         ));
     }
 

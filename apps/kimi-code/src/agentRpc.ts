@@ -36,6 +36,7 @@ export type AgentRpcMethod =
   | "setThinking"
   | "setPermission"
   | "renameSession"
+  | "generateConversationTitle"
   | "setModel"
   | "getModel"
   | "enterPlan"
@@ -211,6 +212,12 @@ export function createAgentClient(scope: AgentScope) {
     },
     renameSession(title: string) {
       return callAgentRpc<void>(scope, "renameSession", { title });
+    },
+    generateConversationTitle(text: string, model?: string) {
+      return callAgentRpc<string | null>(scope, "generateConversationTitle", {
+        text,
+        ...(model ? { model } : {}),
+      });
     },
     enterPlan() {
       return callAgentRpc<void>(scope, "enterPlan");

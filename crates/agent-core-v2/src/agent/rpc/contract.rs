@@ -56,6 +56,10 @@ pub trait AgentRpcServiceContract: Send + Sync {
     async fn set_thinking(&self, payload: SetThinkingPayload) -> AgentRpcResult<()>;
     async fn set_permission(&self, payload: SetPermissionPayload) -> AgentRpcResult<()>;
     async fn rename_session(&self, payload: RenameSessionPayload) -> AgentRpcResult<()>;
+    async fn generate_conversation_title(
+        &self,
+        payload: GenerateConversationTitlePayload,
+    ) -> AgentRpcResult<Option<String>>;
     async fn set_model(&self, payload: SetModelPayload) -> AgentRpcResult<SetModelResult>;
     async fn get_model(&self, payload: EmptyPayload) -> AgentRpcResult<String>;
     async fn enter_plan(&self, payload: EmptyPayload) -> AgentRpcResult<()>;

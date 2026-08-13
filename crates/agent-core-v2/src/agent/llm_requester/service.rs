@@ -54,8 +54,11 @@ use crate::{
             },
             contract::{MODELS_SECTION, ModelsSection},
             effective_max_completion_tokens,
-            thinking::{THINKING_SECTION, ThinkingConfig, resolve_thinking_keep},
-            types::ModelOverrides,
+            thinking::{
+                THINKING_SECTION, ThinkingConfig, default_thinking_effort_for_model,
+                resolve_thinking_keep,
+            },
+            types::{ModelOverrides, ModelThinkingCapabilities, ModelThinkingMetadata},
         },
     },
     wire::contract::{WIRE_SERVICE_ID, WireServiceHandle},
@@ -360,7 +363,7 @@ impl AgentLlmRequesterService {
                 .map_err(|error| error as AgentLlmRequestError)?;
         }
         let source_turn = source_turn_id(overrides.source.as_ref());
-        let (resolved, mut params, prompt) = match source_turn {
+        let (mut resolved, mut params, prompt) = match source_turn {
             Some(id) => self.turn_config(id)?,
             None => (
                 self.profile
@@ -372,6 +375,28 @@ impl AgentLlmRequesterService {
                 self.profile.get_system_prompt(),
             ),
         };
+        if let Some(model_alias) = overrides.model_alias.as_deref() {
+            let model = self
+                .catalog
+                .get(model_alias)
+                .map_err(AgentLlmRequestError::from)?;
+            resolved.model_alias = model_alias.to_owned();
+            resolved.model_capabilities = model.capabilities.clone();
+            resolved.max_output_size = model.max_output_size;
+            resolved.always_thinking = model.always_thinking.then_some(true);
+            resolved.thinking_level =
+                default_thinking_effort_for_model(Some(&ModelThinkingMetadata {
+                    capabilities: Some(ModelThinkingCapabilities::Structured(
+                        model.capabilities.clone(),
+                    )),
+                    adaptive_thinking: None,
+                    always_thinking: Some(model.always_thinking),
+                    support_efforts: model.support_efforts.clone(),
+                    default_effort: model.default_effort.clone(),
+                }));
+            params.thinking_effort = Some(resolved.thinking_level.clone());
+            params.thinking_keep = None;
+        }
         let model_overrides = self.model_overrides();
         let budget = resolve_completion_budget(ResolveCompletionBudgetArgs {
             max_output_size: overrides.max_output_size.or(resolved.max_output_size),
