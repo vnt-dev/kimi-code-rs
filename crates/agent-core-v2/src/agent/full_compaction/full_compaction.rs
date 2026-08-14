@@ -41,7 +41,7 @@ pub struct FullCompactionTask {
     pub abort_controller: AbortController,
     pub promise: FullCompactionFuture,
     pub trigger: CompactionSource,
-    pub token_count: f64,
+    pub token_count: u64,
     trace: Arc<Mutex<Option<LlmRequestTrace>>>,
 }
 
@@ -50,7 +50,7 @@ impl FullCompactionTask {
         abort_controller: AbortController,
         promise: FullCompactionFuture,
         trigger: CompactionSource,
-        token_count: f64,
+        token_count: u64,
         trace: Arc<Mutex<Option<LlmRequestTrace>>>,
     ) -> Self {
         Self {

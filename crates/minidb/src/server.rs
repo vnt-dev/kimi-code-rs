@@ -198,10 +198,10 @@ async fn handle(
                 if option == "EX" || option == "PX" {
                     index += 1;
                     let value = string(index)
-                        .and_then(|value| value.parse::<f64>().ok())
-                        .unwrap_or(f64::NAN);
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .ok_or(MiniDbError::InvalidTtl)?;
                     ttl = Some(if option == "EX" {
-                        value * 1_000.0
+                        value.saturating_mul(1_000)
                     } else {
                         value
                     });

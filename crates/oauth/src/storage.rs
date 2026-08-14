@@ -180,10 +180,10 @@ mod tests {
         TokenInfo {
             access_token: access.to_owned(),
             refresh_token: "rt-xyz".to_owned(),
-            expires_at: 1_700_000_000.0,
+            expires_at: 1_700_000_000,
             scope: "read write".to_owned(),
             token_type: "Bearer".to_owned(),
-            expires_in: 3_600.0,
+            expires_in: 3_600,
         }
     }
 
@@ -245,8 +245,8 @@ mod tests {
             .await
             .expect("load")
             .expect("token");
-        assert_eq!(token.expires_at, 0.0);
-        assert_eq!(token.expires_in, 0.0);
+        assert_eq!(token.expires_at, 0);
+        assert_eq!(token.expires_in, 0);
         assert_eq!(token.scope, "");
         assert_eq!(token.token_type, "");
         fs::remove_dir_all(directory).expect("cleanup");

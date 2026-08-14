@@ -173,8 +173,8 @@ impl<V> OpenOptions<V> {
 
 #[derive(Debug, Clone, Default)]
 pub struct SetOptions {
-    pub ttl_millis: Option<f64>,
-    pub datetimes: Option<BTreeMap<String, f64>>,
+    pub ttl_millis: Option<u64>,
+    pub datetimes: Option<BTreeMap<String, i64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,13 +193,13 @@ pub enum BatchInputOp<V> {
 pub struct DocumentRecord<V> {
     pub key: String,
     pub value: V,
-    pub datetimes: Option<BTreeMap<String, f64>>,
+    pub datetimes: Option<BTreeMap<String, i64>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DateTimeDocumentRecord<V> {
     pub record: DocumentRecord<V>,
-    pub datetime_value: f64,
+    pub datetime_value: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -242,7 +242,7 @@ pub struct TextQuery {
 #[derive(Debug, Clone, Default)]
 pub struct QueryOptions {
     pub key: Option<KeyQuery>,
-    pub datetimes: HashMap<String, RangeOptions<f64>>,
+    pub datetimes: HashMap<String, RangeOptions<i64>>,
     pub text: Option<TextQuery>,
     pub filter: Option<Value>,
     pub project: Option<Vec<String>>,
@@ -268,7 +268,7 @@ pub enum MiniDbError {
     EmptyKey,
     #[error("key too long (>{MAX_KEY_LEN})")]
     KeyTooLong,
-    #[error("ttl must be a finite number of milliseconds")]
+    #[error("ttl must be a non-negative integer number of milliseconds")]
     InvalidTtl,
     #[error("{0} indexes require the JSON codec")]
     JsonCodecRequired(&'static str),
@@ -324,7 +324,7 @@ struct DerivedState {
     access: Vec<Vec<u8>>,
 }
 
-type LiveJsonRecord = (String, Value, Option<BTreeMap<String, f64>>);
+type LiveJsonRecord = (String, Value, Option<BTreeMap<String, i64>>);
 struct WalTail {
     anchor: WalAnchor,
     offset: u64,
@@ -375,7 +375,7 @@ struct PreparedOp {
     value: Option<Vec<u8>>,
     meta: Option<Vec<u8>>,
     expire_at: i64,
-    datetimes: Option<BTreeMap<String, f64>>,
+    datetimes: Option<BTreeMap<String, i64>>,
     pk: Vec<u8>,
     index_value: Option<Value>,
 }
@@ -617,12 +617,9 @@ impl<V: Send + Sync + 'static> MiniDb<V> {
     ) -> Result<PreparedOp, MiniDbError> {
         check_key(key)?;
         let ttl = options.ttl_millis;
-        if ttl.is_some_and(|ttl| !ttl.is_finite()) {
-            return Err(MiniDbError::InvalidTtl);
-        }
-        let expire_at = ttl
-            .filter(|ttl| *ttl != 0.0)
-            .map_or(0, |ttl| now_millis().saturating_add(ttl.floor() as i64));
+        let expire_at = ttl.filter(|ttl| *ttl != 0).map_or(0, |ttl| {
+            now_millis().saturating_add(i64::try_from(ttl).unwrap_or(i64::MAX))
+        });
         let encoded = self
             .inner
             .codec
@@ -1199,11 +1196,8 @@ impl<V: Send + Sync + 'static> MiniDb<V> {
     pub async fn expire(
         &self,
         key: impl AsRef<[u8]>,
-        ttl_millis: f64,
+        ttl_millis: u64,
     ) -> Result<bool, MiniDbError> {
-        if !ttl_millis.is_finite() {
-            return Err(MiniDbError::InvalidTtl);
-        }
         let key = key.as_ref();
         let Some(record) = self.get_record(key)? else {
             return Ok(false);
@@ -1311,7 +1305,7 @@ impl<V: Send + Sync + 'static> MiniDb<V> {
     pub fn datetime_range(
         &self,
         column: &str,
-        options: &RangeOptions<f64>,
+        options: &RangeOptions<i64>,
     ) -> Result<Vec<DateTimeDocumentRecord<V>>, MiniDbError> {
         let rows = self
             .inner
@@ -2087,7 +2081,7 @@ fn apply_derived_set(
     key: &[u8],
     old: Option<&Value>,
     new: Option<&Value>,
-    datetimes: Option<&BTreeMap<String, f64>>,
+    datetimes: Option<&BTreeMap<String, i64>>,
 ) {
     let key = key_string(key);
     derived.datetimes.set(&key, datetimes);
@@ -2428,7 +2422,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(database.scan(&RangeOptions::default()).unwrap().len(), 2);
-        database.expire("a", -1.0).await.unwrap();
+        database.expire("a", 1).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert_eq!(database.get("a").unwrap(), None);
         database.backup(backup.path(), false).await.unwrap();
         database.close().await.unwrap();

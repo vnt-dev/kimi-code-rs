@@ -10,9 +10,9 @@ pub struct GoalSnapshotForModel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_criterion: Option<String>,
     pub status: GoalStatus,
-    pub turns_used: f64,
-    pub tokens_used: f64,
-    pub wall_clock_ms: f64,
+    pub turns_used: u64,
+    pub tokens_used: u64,
+    pub wall_clock_ms: u64,
     pub budget: GoalBudgetReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_reason: Option<String>,
@@ -53,9 +53,9 @@ mod tests {
             objective: "ship".into(),
             completion_criterion: None,
             status: GoalStatus::Active,
-            turns_used: 1.0,
-            tokens_used: 2.0,
-            wall_clock_ms: 3.0,
+            turns_used: 1,
+            tokens_used: 2,
+            wall_clock_ms: 3,
             budget: GoalBudgetReport {
                 token_budget: None,
                 turn_budget: None,

@@ -17,11 +17,18 @@ pub struct GoalState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_criterion: Option<String>,
     pub status: GoalStatus,
-    pub turns_used: f64,
-    pub tokens_used: f64,
-    pub wall_clock_ms: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wall_clock_resumed_at: Option<f64>,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub turns_used: u64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub tokens_used: u64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub wall_clock_ms: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_nullable_i64"
+    )]
+    pub wall_clock_resumed_at: Option<i64>,
     pub budget_limits: GoalBudgetLimits,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_reason: Option<String>,
@@ -36,8 +43,12 @@ pub struct CreateGoalPayload {
     pub objective: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_criterion: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wall_clock_resumed_at: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_i64"
+    )]
+    pub wall_clock_resumed_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<GoalStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,14 +66,30 @@ pub struct UpdateGoalPayload {
     pub status: Option<GoalStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turns_used: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tokens_used: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wall_clock_ms: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wall_clock_resumed_at: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub turns_used: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub tokens_used: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub wall_clock_ms: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_i64"
+    )]
+    pub wall_clock_resumed_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_limits: Option<GoalBudgetLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,34 +151,22 @@ fn define_clear_op(op_type: &'static str) -> DefinedOp<GoalModelState, EmptyGoal
         .expect("goal clear op must have one global definition")
 }
 
-fn validate_nonnegative(value: Option<f64>, field: &str) -> Result<(), String> {
-    if value.is_some_and(|value| !value.is_finite() || value < 0.0) {
-        Err(format!("{field} must be a finite nonnegative number"))
+fn validate_nonnegative_timestamp(value: Option<i64>, field: &str) -> Result<(), String> {
+    if value.is_some_and(|value| value < 0) {
+        Err(format!("{field} must be a nonnegative integer"))
     } else {
         Ok(())
     }
 }
 
-fn validate_budget(limits: Option<GoalBudgetLimits>) -> Result<(), String> {
-    let Some(limits) = limits else {
-        return Ok(());
-    };
-    validate_nonnegative(limits.token_budget, "tokenBudget")?;
-    validate_nonnegative(limits.turn_budget, "turnBudget")?;
-    validate_nonnegative(limits.wall_clock_budget_ms, "wallClockBudgetMs")
-}
-
+// Counter and budget fields are u64, so serde already rejects negatives,
+// NaN, and Infinity at deserialization time.
 fn validate_create(payload: &CreateGoalPayload) -> Result<(), String> {
-    validate_nonnegative(payload.wall_clock_resumed_at, "wallClockResumedAt")?;
-    validate_budget(payload.budget_limits)
+    validate_nonnegative_timestamp(payload.wall_clock_resumed_at, "wallClockResumedAt")
 }
 
 fn validate_update(payload: &UpdateGoalPayload) -> Result<(), String> {
-    validate_nonnegative(payload.turns_used, "turnsUsed")?;
-    validate_nonnegative(payload.tokens_used, "tokensUsed")?;
-    validate_nonnegative(payload.wall_clock_ms, "wallClockMs")?;
-    validate_nonnegative(payload.wall_clock_resumed_at, "wallClockResumedAt")?;
-    validate_budget(payload.budget_limits)
+    validate_nonnegative_timestamp(payload.wall_clock_resumed_at, "wallClockResumedAt")
 }
 
 // Original: goalOps.ts, createGoal.apply(). Audit-only status, actor, and
@@ -162,9 +177,9 @@ fn apply_create(_state: GoalModelState, payload: &CreateGoalPayload) -> GoalMode
         objective: payload.objective.clone(),
         completion_criterion: payload.completion_criterion.clone(),
         status: GoalStatus::Active,
-        turns_used: 0.0,
-        tokens_used: 0.0,
-        wall_clock_ms: 0.0,
+        turns_used: 0,
+        tokens_used: 0,
+        wall_clock_ms: 0,
         wall_clock_resumed_at: payload.wall_clock_resumed_at,
         budget_limits: GoalBudgetLimits::default(),
         terminal_reason: None,
@@ -240,11 +255,11 @@ mod tests {
             goal_id: "goal-1".into(),
             objective: "work".into(),
             completion_criterion: Some("done".into()),
-            wall_clock_resumed_at: Some(1000.0),
+            wall_clock_resumed_at: Some(1000),
             status: Some(GoalStatus::Blocked),
             actor: Some(GoalActor::System),
             budget_limits: Some(GoalBudgetLimits {
-                token_budget: Some(50.0),
+                token_budget: Some(50),
                 ..GoalBudgetLimits::default()
             }),
         }
@@ -254,10 +269,10 @@ mod tests {
     fn create_resets_state_and_ignores_audit_status_actor_and_budget() {
         let state = apply_create(None, &create_payload()).unwrap();
         assert_eq!(state.status, GoalStatus::Active);
-        assert_eq!(state.turns_used, 0.0);
-        assert_eq!(state.tokens_used, 0.0);
-        assert_eq!(state.wall_clock_ms, 0.0);
-        assert_eq!(state.wall_clock_resumed_at, Some(1000.0));
+        assert_eq!(state.turns_used, 0);
+        assert_eq!(state.tokens_used, 0);
+        assert_eq!(state.wall_clock_ms, 0);
+        assert_eq!(state.wall_clock_resumed_at, Some(1000));
         assert_eq!(state.budget_limits, GoalBudgetLimits::default());
         assert_eq!(state.completion_criterion.as_deref(), Some("done"));
     }
@@ -271,12 +286,12 @@ mod tests {
                 goal_id: Some("different-is-audit-only".into()),
                 status: Some(GoalStatus::Blocked),
                 reason: Some("waiting".into()),
-                turns_used: Some(2.0),
-                tokens_used: Some(9.0),
-                wall_clock_ms: Some(500.0),
-                wall_clock_resumed_at: Some(2000.0),
+                turns_used: Some(2),
+                tokens_used: Some(9),
+                wall_clock_ms: Some(500),
+                wall_clock_resumed_at: Some(2000),
                 budget_limits: Some(GoalBudgetLimits {
-                    turn_budget: Some(3.0),
+                    turn_budget: Some(3),
                     ..GoalBudgetLimits::default()
                 }),
                 actor: Some(GoalActor::Runtime),
@@ -287,23 +302,23 @@ mod tests {
         assert_eq!(blocked.status, GoalStatus::Blocked);
         assert_eq!(blocked.terminal_reason.as_deref(), Some("waiting"));
         assert_eq!(blocked.wall_clock_resumed_at, None);
-        assert_eq!(blocked.turns_used, 2.0);
-        assert_eq!(blocked.tokens_used, 9.0);
-        assert_eq!(blocked.wall_clock_ms, 500.0);
-        assert_eq!(blocked.budget_limits.turn_budget, Some(3.0));
+        assert_eq!(blocked.turns_used, 2);
+        assert_eq!(blocked.tokens_used, 9);
+        assert_eq!(blocked.wall_clock_ms, 500);
+        assert_eq!(blocked.budget_limits.turn_budget, Some(3));
 
         let resumed = apply_update(
             Some(blocked),
             &UpdateGoalPayload {
                 status: Some(GoalStatus::Active),
-                wall_clock_resumed_at: Some(3000.0),
+                wall_clock_resumed_at: Some(3000),
                 reason: Some("ignored".into()),
                 ..UpdateGoalPayload::default()
             },
         )
         .unwrap();
         assert_eq!(resumed.terminal_reason, None);
-        assert_eq!(resumed.wall_clock_resumed_at, Some(3000.0));
+        assert_eq!(resumed.wall_clock_resumed_at, Some(3000));
     }
 
     #[test]
@@ -335,9 +350,9 @@ mod tests {
         let create = create_goal(create_payload()).unwrap().payload_value;
         assert_eq!(create["goalId"], "goal-1");
         assert_eq!(create["completionCriterion"], "done");
-        assert_eq!(create["wallClockResumedAt"], 1000.0);
+        assert_eq!(create["wallClockResumedAt"], 1000);
         assert_eq!(create["status"], "blocked");
         assert_eq!(create["actor"], "system");
-        assert_eq!(create["budgetLimits"]["tokenBudget"], 50.0);
+        assert_eq!(create["budgetLimits"]["tokenBudget"], 50);
     }
 }

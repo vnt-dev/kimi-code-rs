@@ -15,7 +15,7 @@ const THINKING_EFFORT_CONFIG_DOCS_URL: &str =
 pub struct ApiStatusData {
     pub status_code: i32,
     pub request_id: Option<String>,
-    pub retry_after_ms: Option<f64>,
+    pub retry_after_ms: Option<u64>,
     pub trace_id: Option<String>,
 }
 
@@ -23,7 +23,7 @@ impl ApiStatusData {
     pub fn new(
         status_code: i32,
         request_id: Option<String>,
-        retry_after_ms: Option<f64>,
+        retry_after_ms: Option<u64>,
         trace_id: Option<String>,
     ) -> Self {
         Self {
@@ -368,7 +368,7 @@ pub fn normalize_api_status_error(
     status_code: i32,
     message: &str,
     request_id: Option<String>,
-    retry_after_ms: Option<f64>,
+    retry_after_ms: Option<u64>,
     trace_id: Option<String>,
 ) -> ChatProviderError {
     let data = ApiStatusData::new(status_code, request_id, retry_after_ms, trace_id);
@@ -403,16 +403,13 @@ pub fn normalize_api_status_error(
 }
 
 // Original: errors.ts, parseRetryAfterMs()
-pub fn parse_retry_after_ms(headers: Option<&HeaderMap>) -> Option<f64> {
+pub fn parse_retry_after_ms(headers: Option<&HeaderMap>) -> Option<u64> {
     let raw = headers?.get("retry-after")?.to_str().ok()?;
     static PARSE_INT_PREFIX: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*([+-]?\d+)").unwrap());
     let digits = PARSE_INT_PREFIX.captures(raw)?.get(1)?.as_str();
-    let seconds = digits.parse::<f64>().ok()?;
-    if !seconds.is_finite() || seconds < 0.0 {
-        return None;
-    }
-    Some(seconds * 1_000.0)
+    let seconds = digits.parse::<u64>().ok()?;
+    Some(seconds.saturating_mul(1_000))
 }
 
 // Original: errors.ts, parseTraceId()
@@ -669,7 +666,7 @@ mod tests {
             429,
             "context length exceeded",
             Some("request-1".to_owned()),
-            Some(2000.0),
+            Some(2000),
             Some("trace-1".to_owned()),
         );
         assert!(matches!(
@@ -679,7 +676,7 @@ mod tests {
         let data = rate.status_data().unwrap();
         assert_eq!(data.status_code, 429);
         assert_eq!(data.request_id.as_deref(), Some("request-1"));
-        assert_eq!(data.retry_after_ms, Some(2000.0));
+        assert_eq!(data.retry_after_ms, Some(2000));
         assert_eq!(data.trace_id.as_deref(), Some("trace-1"));
 
         assert!(matches!(
@@ -712,9 +709,9 @@ mod tests {
     #[test]
     fn retry_after_parser_matches_javascript_parse_int_prefix_rules() {
         for (raw, expected) in [
-            ("2", Some(2000.0)),
-            ("  +3seconds", Some(3000.0)),
-            ("1.5", Some(1000.0)),
+            ("2", Some(2000)),
+            ("  +3seconds", Some(3000)),
+            ("1.5", Some(1000)),
             ("-1", None),
             ("date", None),
         ] {

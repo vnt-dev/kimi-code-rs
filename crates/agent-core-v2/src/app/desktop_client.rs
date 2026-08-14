@@ -143,8 +143,8 @@ pub struct DesktopManagedUsage {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopManagedUsageRow {
     pub label: String,
-    pub used: f64,
-    pub limit: f64,
+    pub used: u64,
+    pub limit: u64,
     pub reset_hint: Option<String>,
 }
 
@@ -162,11 +162,11 @@ impl From<UsageRow> for DesktopManagedUsageRow {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopBoosterWalletInfo {
-    pub balance_cents: f64,
-    pub total_cents: f64,
+    pub balance_cents: i64,
+    pub total_cents: i64,
     pub monthly_charge_limit_enabled: bool,
-    pub monthly_charge_limit_cents: f64,
-    pub monthly_used_cents: f64,
+    pub monthly_charge_limit_cents: i64,
+    pub monthly_used_cents: i64,
     pub currency: String,
 }
 
@@ -249,7 +249,7 @@ pub struct DesktopDeviceCode {
     pub user_code: String,
     pub verification_uri: String,
     pub verification_uri_complete: String,
-    pub expires_in: Option<f64>,
+    pub expires_in: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -414,9 +414,9 @@ pub struct DesktopCronTask {
     pub id: String,
     pub cron: String,
     pub prompt: String,
-    pub created_at: f64,
+    pub created_at: i64,
     pub recurring: bool,
-    pub last_fired_at: Option<f64>,
+    pub last_fired_at: Option<i64>,
     pub human_schedule: String,
     pub next_fire_at: Option<String>,
     pub stale: bool,
@@ -532,17 +532,17 @@ pub struct DesktopInteraction {
 pub struct DesktopCompactionEvent {
     pub phase: String,
     pub trigger: Option<String>,
-    pub compacted_count: Option<f64>,
-    pub tokens_before: Option<f64>,
-    pub tokens_after: Option<f64>,
+    pub compacted_count: Option<u64>,
+    pub tokens_before: Option<u64>,
+    pub tokens_after: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopContextUsage {
-    pub context_tokens: f64,
-    pub measured_tokens: f64,
-    pub estimated_tokens: f64,
+    pub context_tokens: u64,
+    pub measured_tokens: u64,
+    pub estimated_tokens: u64,
     pub max_context_tokens: u64,
     pub usage_ratio: f64,
 }
@@ -2433,9 +2433,9 @@ fn map_desktop_cron_task(cron: &SessionCronServiceHandle, task: CronTask) -> Des
         id: task.id,
         cron: task.cron,
         prompt: task.prompt,
-        created_at: task.created_at,
+        created_at: task.created_at as i64,
         recurring: task.recurring != Some(false),
-        last_fired_at: task.last_fired_at,
+        last_fired_at: task.last_fired_at.map(|value| value as i64),
         human_schedule,
         next_fire_at,
         stale,
@@ -2517,7 +2517,7 @@ fn context_usage_from_size(context: ContextSize, max_context_tokens: u64) -> Des
     let usage_ratio = if max_context_tokens == 0 {
         0.0
     } else {
-        context.size / max_context_tokens as f64
+        context.size as f64 / max_context_tokens as f64
     };
     DesktopContextUsage {
         context_tokens: context.size,
@@ -3385,16 +3385,16 @@ mod tests {
     fn computes_desktop_context_usage_from_measured_and_estimated_tokens() {
         let usage = context_usage_from_size(
             ContextSize {
-                size: 64_000.0,
-                measured: 60_000.0,
-                estimated: 4_000.0,
+                size: 64_000,
+                measured: 60_000,
+                estimated: 4_000,
             },
             128_000,
         );
 
-        assert_eq!(usage.context_tokens, 64_000.0);
-        assert_eq!(usage.measured_tokens, 60_000.0);
-        assert_eq!(usage.estimated_tokens, 4_000.0);
+        assert_eq!(usage.context_tokens, 64_000);
+        assert_eq!(usage.measured_tokens, 60_000);
+        assert_eq!(usage.estimated_tokens, 4_000);
         assert_eq!(usage.max_context_tokens, 128_000);
         assert_eq!(usage.usage_ratio, 0.5);
     }

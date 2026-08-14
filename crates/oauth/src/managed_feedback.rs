@@ -21,7 +21,7 @@ pub struct SubmitFeedbackBody {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FetchSubmitFeedbackResult {
     Ok {
-        feedback_id: f64,
+        feedback_id: i64,
     },
     Error {
         status: Option<u16>,
@@ -92,15 +92,22 @@ pub async fn fetch_submit_feedback(
     }
 }
 
-fn parse_feedback_id(payload: &Value) -> Option<f64> {
+fn parse_feedback_id(payload: &Value) -> Option<i64> {
     read_feedback_id(payload).or_else(|| payload.get("data").and_then(read_feedback_id))
 }
 
-fn read_feedback_id(payload: &Value) -> Option<f64> {
+fn read_feedback_id(payload: &Value) -> Option<i64> {
     let record = payload.as_object()?;
     let value = record.get("feedback_id").or_else(|| record.get("id"))?;
-    let number = value.as_f64()?;
-    (number.is_finite() && number.fract() == 0.0).then_some(number)
+    match value {
+        Value::Number(number) => number.as_i64().or_else(|| {
+            number
+                .as_f64()
+                .filter(|number| number.is_finite() && number.fract() == 0.0)
+                .map(|number| number.trunc() as i64)
+        }),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -253,8 +260,8 @@ mod tests {
     #[test]
     fn accepts_only_integer_numeric_feedback_ids() {
         for (payload, expected) in [
-            (serde_json::json!({ "feedback_id": -1 }), Some(-1.0)),
-            (serde_json::json!({ "id": 2 }), Some(2.0)),
+            (serde_json::json!({ "feedback_id": -1 }), Some(-1)),
+            (serde_json::json!({ "id": 2 }), Some(2)),
             (serde_json::json!({ "feedback_id": 1.5 }), None),
             (serde_json::json!({ "feedback_id": "3" }), None),
         ] {

@@ -40,5 +40,6 @@ pub struct GuiStoreGetItemResponse {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuiStoreLengthResponse {
-    pub length: f64,
+    #[serde(deserialize_with = "crate::lenient::lenient_u64")]
+    pub length: u64,
 }

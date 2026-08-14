@@ -194,11 +194,8 @@ impl OAuthService {
         state: &FlowState,
         device: &DeviceAuthorization,
     ) -> Result<OAuthFlowStart, AuthOperationError> {
-        let expires_in = positive_seconds(
-            device
-                .expires_in
-                .unwrap_or(DEFAULT_DEVICE_EXPIRES_IN_SEC as f64),
-        );
+        let expires_in =
+            positive_seconds(device.expires_in.unwrap_or(DEFAULT_DEVICE_EXPIRES_IN_SEC));
         let interval = positive_seconds(device.interval);
         Ok(OAuthFlowStart::Pending(Box::new(OAuthFlowStartPending {
             flow_id: non_empty(&state.flow_id)?,
@@ -222,9 +219,7 @@ impl OAuthService {
             verification_uri_complete: Url::parse(&device.verification_uri_complete).ok()?,
             user_code: NonEmptyString::new(device.user_code.clone()).ok()?,
             expires_in: positive_seconds(
-                device
-                    .expires_in
-                    .unwrap_or(DEFAULT_DEVICE_EXPIRES_IN_SEC as f64),
+                device.expires_in.unwrap_or(DEFAULT_DEVICE_EXPIRES_IN_SEC),
             ),
             expires_at: state.expires_at,
             interval: positive_seconds(device.interval),
@@ -527,7 +522,7 @@ impl OAuthServiceContract for OAuthService {
                 let device = device.map_err(|_| AuthOperationError::new("OAuth login ended before a device code was issued"))?;
                 let mut state = state.lock().unwrap();
                 state.expires_at = Utc::now() + chrono::Duration::seconds(
-                    positive_seconds(device.expires_in.unwrap_or(DEFAULT_DEVICE_EXPIRES_IN_SEC as f64)).get() as i64
+                    positive_seconds(device.expires_in.unwrap_or(DEFAULT_DEVICE_EXPIRES_IN_SEC)).get() as i64
                 );
                 state.device = Some(device.clone());
                 Self::flow_start(&state, &device)
@@ -646,8 +641,8 @@ fn parse_url(value: &str) -> Result<Url, AuthOperationError> {
     Url::parse(value).map_err(operation_error)
 }
 
-fn positive_seconds(value: f64) -> NonZeroU64 {
-    NonZeroU64::new(value.max(1.0).floor() as u64).unwrap()
+fn positive_seconds(value: u64) -> NonZeroU64 {
+    NonZeroU64::new(value.max(1)).unwrap()
 }
 
 fn operation_error(error: impl std::fmt::Display) -> AuthOperationError {

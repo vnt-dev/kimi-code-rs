@@ -24,8 +24,8 @@ static MONOTONIC_EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 pub type DeadlineCallback = Arc<dyn Fn() + Send + Sync>;
 
 pub trait GoalDeadlineSchedulerContract: Send + Sync {
-    fn now(&self) -> f64;
-    fn schedule(&self, delay_ms: f64, callback: DeadlineCallback) -> DisposableHandle;
+    fn now(&self) -> u64;
+    fn schedule(&self, delay_ms: u64, callback: DeadlineCallback) -> DisposableHandle;
 }
 
 #[derive(Clone)]
@@ -46,29 +46,27 @@ pub const GOAL_DEADLINE_SCHEDULER_ID: ServiceIdentifier<GoalDeadlineSchedulerHan
 pub struct GoalDeadlineSchedulerService;
 
 impl GoalDeadlineSchedulerService {
-    fn timeout_duration(delay_ms: f64) -> Duration {
+    fn timeout_duration(delay_ms: u64) -> Duration {
         // Node's setTimeout coerces NaN, zero, negatives, and delays beyond a
-        // signed 32-bit millisecond value to one millisecond. This is applied
-        // after the source's Math.max(0, delayMs).
-        let delay_ms = delay_ms.max(0.0);
-        if !delay_ms.is_finite() || delay_ms < 1.0 || delay_ms > i32::MAX as f64 {
+        // signed 32-bit millisecond value to one millisecond.
+        if delay_ms == 0 || delay_ms > i32::MAX as u64 {
             Duration::from_millis(1)
         } else {
-            Duration::from_millis(delay_ms.trunc() as u64)
+            Duration::from_millis(delay_ms)
         }
     }
 }
 
 impl GoalDeadlineSchedulerContract for GoalDeadlineSchedulerService {
     // Original: GoalDeadlineSchedulerService.now().
-    fn now(&self) -> f64 {
-        MONOTONIC_EPOCH.elapsed().as_millis() as f64
+    fn now(&self) -> u64 {
+        MONOTONIC_EPOCH.elapsed().as_millis() as u64
     }
 
     // Original: GoalDeadlineSchedulerService.schedule(). A tokio task is the
     // Rust async timer equivalent of Node's unref'd timeout; cancellation is
     // observed immediately before invoking the callback.
-    fn schedule(&self, delay_ms: f64, callback: DeadlineCallback) -> DisposableHandle {
+    fn schedule(&self, delay_ms: u64, callback: DeadlineCallback) -> DisposableHandle {
         let cancelled = Arc::new(AtomicBool::new(false));
         let timer_cancelled = Arc::clone(&cancelled);
         tokio::spawn(async move {
@@ -110,15 +108,15 @@ mod tests {
             "goalDeadlineScheduler"
         );
         assert_eq!(
-            GoalDeadlineSchedulerService::timeout_duration(-2.0),
+            GoalDeadlineSchedulerService::timeout_duration(0),
             Duration::from_millis(1)
         );
         assert_eq!(
-            GoalDeadlineSchedulerService::timeout_duration(f64::NAN),
+            GoalDeadlineSchedulerService::timeout_duration(i32::MAX as u64 + 1),
             Duration::from_millis(1)
         );
         assert_eq!(
-            GoalDeadlineSchedulerService::timeout_duration(3.8),
+            GoalDeadlineSchedulerService::timeout_duration(3),
             Duration::from_millis(3)
         );
     }
@@ -129,7 +127,7 @@ mod tests {
         let fired = Arc::new(AtomicUsize::new(0));
         let callback_fired = Arc::clone(&fired);
         let cancel = scheduler.schedule(
-            10.0,
+            10,
             Arc::new(move || {
                 callback_fired.fetch_add(1, Ordering::Relaxed);
             }),
@@ -141,7 +139,7 @@ mod tests {
 
         let callback_fired = Arc::clone(&fired);
         let _timer = scheduler.schedule(
-            10.0,
+            10,
             Arc::new(move || {
                 callback_fired.fetch_add(1, Ordering::Relaxed);
             }),

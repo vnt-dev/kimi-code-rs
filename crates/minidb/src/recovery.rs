@@ -53,7 +53,7 @@ pub enum RecoveredOp {
         key: Vec<u8>,
         value_ref: ValueRef,
         expire_at: i64,
-        datetimes: Option<BTreeMap<String, f64>>,
+        datetimes: Option<BTreeMap<String, i64>>,
     },
     Del {
         key: Vec<u8>,
@@ -180,14 +180,74 @@ fn set_ref_to_ops(
     }])
 }
 
-fn parse_meta(meta: Option<&[u8]>) -> Result<Option<BTreeMap<String, f64>>, serde_json::Error> {
+fn parse_meta(meta: Option<&[u8]>) -> Result<Option<BTreeMap<String, i64>>, serde_json::Error> {
     #[derive(serde::Deserialize)]
     struct Metadata {
-        dt: Option<BTreeMap<String, f64>>,
+        #[serde(default, deserialize_with = "deserialize_datetimes")]
+        dt: Option<BTreeMap<String, i64>>,
     }
     meta.map(|bytes| serde_json::from_slice::<Metadata>(bytes).map(|meta| meta.dt))
         .transpose()
         .map(Option::flatten)
+}
+
+// Legacy writers stored datetime metadata as JSON numbers (possibly `100.0`);
+// accept both integers and integer-valued floats, truncating any fraction.
+fn deserialize_datetimes<'de, D>(deserializer: D) -> Result<Option<BTreeMap<String, i64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct DatetimesVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for DatetimesVisitor {
+        type Value = Option<BTreeMap<String, i64>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                formatter,
+                "a map of datetime column names to integer milliseconds"
+            )
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            let mut output = BTreeMap::new();
+            while let Some(key) = map.next_key::<String>()? {
+                let value: serde_json::Value = map.next_value()?;
+                let Some(number) = value.as_f64().filter(|number| number.is_finite()) else {
+                    return Err(serde::de::Error::custom(format!(
+                        "datetime value for column {key:?} must be a finite number"
+                    )));
+                };
+                let truncated = number.trunc();
+                if truncated < i64::MIN as f64 || truncated >= i64::MAX as f64 {
+                    return Err(serde::de::Error::custom(format!(
+                        "datetime value for column {key:?} is out of range"
+                    )));
+                }
+                output.insert(key, truncated as i64);
+            }
+            Ok(Some(output))
+        }
+    }
+
+    deserializer.deserialize_any(DatetimesVisitor)
 }
 
 fn read_at(file: &mut File, offset: u64, len: u32) -> io::Result<Vec<u8>> {

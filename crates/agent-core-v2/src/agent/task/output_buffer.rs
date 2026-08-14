@@ -46,7 +46,7 @@ impl TaskOutputBuffer {
 
     // Original: taskService.ts, getOutputSnapshot() in-memory fallback after
     // the persistence lookup returns no output.
-    pub fn snapshot(&self, max_preview_bytes: f64) -> AgentTaskOutputSnapshot {
+    pub fn snapshot(&self, max_preview_bytes: u64) -> AgentTaskOutputSnapshot {
         let available = self.retained_output();
         let available = available.as_bytes();
         let preview_limit = nonnegative_truncating_index(max_preview_bytes);
@@ -141,14 +141,8 @@ impl TaskOutputBuffer {
     }
 }
 
-fn nonnegative_truncating_index(value: f64) -> usize {
-    if value.is_nan() || value <= 0.0 {
-        0
-    } else if value.is_infinite() || value >= usize::MAX as f64 {
-        usize::MAX
-    } else {
-        value.trunc() as usize
-    }
+fn nonnegative_truncating_index(value: u64) -> usize {
+    value.min(usize::MAX as u64) as usize
 }
 
 #[cfg(test)]
@@ -247,7 +241,7 @@ mod tests {
         let mut output = TaskOutputBuffer::new(false);
         output.append("a€b".into(), false);
         assert_eq!(
-            output.snapshot(3.9),
+            output.snapshot(3),
             AgentTaskOutputSnapshot {
                 output_path: None,
                 output_size_bytes: 5,
@@ -257,9 +251,9 @@ mod tests {
                 preview: "��b".into(),
             }
         );
-        assert_eq!(output.snapshot(-1.0).preview, "");
-        assert_eq!(output.snapshot(f64::NAN).preview_bytes, 0);
-        assert_eq!(output.snapshot(f64::INFINITY).preview, "a€b");
+        assert_eq!(output.snapshot(0).preview, "");
+        assert_eq!(output.snapshot(0).preview_bytes, 0);
+        assert_eq!(output.snapshot(u64::MAX).preview, "a€b");
     }
 
     #[test]
@@ -267,7 +261,7 @@ mod tests {
         let mut output = TaskOutputBuffer::new(true);
         let large = format!("€{}", "x".repeat(MAX_RETAINED_OUTPUT_BYTES - 2));
         output.append(large, false);
-        let snapshot = output.snapshot(f64::INFINITY);
+        let snapshot = output.snapshot(u64::MAX);
         assert_eq!(snapshot.output_size_bytes, MAX_RETAINED_OUTPUT_BYTES + 1);
         assert_eq!(snapshot.preview_bytes, MAX_RETAINED_OUTPUT_BYTES + 1);
         assert!(snapshot.preview.starts_with('�'));

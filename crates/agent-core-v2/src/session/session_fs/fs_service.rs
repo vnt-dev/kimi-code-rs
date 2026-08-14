@@ -1037,7 +1037,7 @@ impl SessionFsServiceContract for SessionFsService {
             size: stat.size,
             etag: build_etag(&stat),
             mime: guess_mime(&relative, binary).into(),
-            modified_at: date_from_millis(stat.modified_millis.unwrap_or(0.0)),
+            modified_at: date_from_millis(stat.modified_millis.unwrap_or(0)),
         })
     }
 }
@@ -1273,7 +1273,7 @@ fn sort_children(children: &mut [ListChild], sort: FsListSort) {
 fn build_etag(stat: &HostFileStat) -> String {
     format!(
         "{}-{}-{}",
-        radix36(stat.modified_millis.unwrap_or(0.0).floor().max(0.0) as u64),
+        radix36(stat.modified_millis.unwrap_or(0).max(0) as u64),
         radix36(stat.size),
         radix36(stat.inode.unwrap_or(0))
     )
@@ -1310,7 +1310,7 @@ fn build_fs_entry(relative: &str, name: &str, stat: &HostFileStat, with_mime: bo
         name: name.into(),
         kind,
         size: (kind == FsKind::File).then_some(stat.size),
-        modified_at: date_from_millis(stat.modified_millis.unwrap_or(0.0))
+        modified_at: date_from_millis(stat.modified_millis.unwrap_or(0))
             .to_rfc3339_opts(SecondsFormat::Millis, true),
         etag: Some(build_etag(stat)),
         mime: (with_mime && kind == FsKind::File).then(|| guess_mime(relative, false).to_owned()),
@@ -1325,8 +1325,8 @@ fn build_fs_entry(relative: &str, name: &str, stat: &HostFileStat, with_mime: bo
     }
 }
 
-fn date_from_millis(millis: f64) -> DateTime<Utc> {
-    DateTime::from_timestamp_millis(millis as i64).unwrap_or(DateTime::UNIX_EPOCH)
+fn date_from_millis(millis: i64) -> DateTime<Utc> {
+    DateTime::from_timestamp_millis(millis).unwrap_or(DateTime::UNIX_EPOCH)
 }
 
 fn detect_binary(bytes: &[u8]) -> bool {

@@ -25,7 +25,7 @@ use super::{
     notification_key, render_notification_xml,
 };
 
-pub const NOTIFICATION_FALLBACK_PREVIEW_BYTES: f64 = 3_000.0;
+pub const NOTIFICATION_FALLBACK_PREVIEW_BYTES: u64 = 3_000;
 
 // Original: taskService.ts, TaskNotificationStepRequest.constructor().
 pub fn task_notification_step_request(message: ContextMessage) -> MessageStepRequest {

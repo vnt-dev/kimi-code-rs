@@ -118,7 +118,8 @@ impl DomainEventPayload for PluginCommandActivatedEvent {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationUndoneEvent {
-    pub count: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u32")]
+    pub count: u32,
     pub undone: u64,
 }
 
@@ -860,12 +861,8 @@ fn agent_rpc_message_error(message: String) -> AgentRpcError {
     Box::new(std::io::Error::other(message))
 }
 
-fn rpc_task_limit(limit: Option<f64>) -> Option<usize> {
-    let limit = limit?;
-    if !limit.is_finite() {
-        return None;
-    }
-    Some(limit.ceil().max(0.0).min(usize::MAX as f64) as usize)
+fn rpc_task_limit(limit: Option<u64>) -> Option<usize> {
+    Some(limit?.min(usize::MAX as u64) as usize)
 }
 
 // Original: registerScopedService(Agent, ..., Eager, "rpc").
@@ -948,11 +945,11 @@ mod tests {
     fn conversation_undone_event_is_broadcastable_to_all_clients() {
         assert_eq!(
             serde_json::to_value(ConversationUndoneEvent {
-                count: 1.0,
+                count: 1,
                 undone: 1,
             })
             .unwrap(),
-            serde_json::json!({ "count": 1.0, "undone": 1 })
+            serde_json::json!({ "count": 1, "undone": 1 })
         );
         assert_eq!(ConversationUndoneEvent::TYPE, "conversation.undone");
     }
@@ -970,11 +967,10 @@ mod tests {
     }
 
     #[test]
-    fn task_limit_conversion_matches_javascript_length_comparison() {
+    fn task_limit_clamps_to_usize_range() {
         assert_eq!(rpc_task_limit(None), None);
-        assert_eq!(rpc_task_limit(Some(1.2)), Some(2));
-        assert_eq!(rpc_task_limit(Some(-1.0)), Some(0));
-        assert_eq!(rpc_task_limit(Some(f64::INFINITY)), None);
-        assert_eq!(rpc_task_limit(Some(f64::NAN)), None);
+        assert_eq!(rpc_task_limit(Some(2)), Some(2));
+        assert_eq!(rpc_task_limit(Some(0)), Some(0));
+        assert_eq!(rpc_task_limit(Some(u64::MAX)), Some(usize::MAX));
     }
 }

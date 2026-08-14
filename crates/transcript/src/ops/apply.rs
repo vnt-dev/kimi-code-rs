@@ -193,7 +193,7 @@ fn apply_reset(snapshot: &AgentTranscriptSnapshot) -> ApplyResult {
 fn skeleton_turn(turn_id: &TurnId) -> TranscriptTurn {
     TranscriptTurn {
         turn_id: turn_id.clone(),
-        ordinal: turn_ordinal(turn_id) as i64,
+        ordinal: turn_ordinal(turn_id),
         state: TurnState::Running,
         origin: TurnOrigin::other(),
         prompt: None,

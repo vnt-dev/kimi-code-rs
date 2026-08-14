@@ -143,7 +143,7 @@ pub trait AgentPromptServiceContract: Disposable + Send + Sync {
     async fn abort(&self, prompt_id: &str, reason: Option<Arc<dyn Error + Send + Sync>>) -> bool;
     async fn inject(&self, message: ContextMessage) -> PromptServiceResult<Option<TurnHandle>>;
     async fn retry(&self) -> PromptServiceResult<Option<TurnHandle>>;
-    fn undo(&self, count: f64) -> PromptServiceResult<usize>;
+    fn undo(&self, count: u32) -> PromptServiceResult<usize>;
     async fn clear(&self) -> PromptServiceResult<()>;
     async fn shutdown(&self) {}
     fn hooks(&self) -> &AgentPromptHooks;

@@ -232,21 +232,21 @@ impl MessageLegacyServiceContract for MessageLegacyService {
 
 struct MergedHistory {
     messages: Vec<ContextMessage>,
-    times: Vec<Option<f64>>,
+    times: Vec<Option<i64>>,
 }
 
 fn merge_live_tail(
     transcript: ContextTranscript,
     context_messages: &[ContextMessage],
 ) -> MergedHistory {
-    if context_messages.len() as f64 <= transcript.folded_length {
+    if context_messages.len() as u64 <= transcript.folded_length {
         return MergedHistory {
             messages: transcript.entries,
             times: transcript.times,
         };
     }
 
-    let tail_start = transcript.folded_length.max(0.0).trunc() as usize;
+    let tail_start = transcript.folded_length as usize;
     let tail = context_messages.iter().skip(tail_start);
     let mut messages = transcript.entries;
     let mut times = transcript.times;
@@ -275,7 +275,7 @@ fn project_messages(
     session_id: &str,
     summary: &SessionSummary,
     messages: Vec<ContextMessage>,
-    times: &[Option<f64>],
+    times: &[Option<i64>],
 ) -> MessageLegacyResult<Vec<ProtocolMessage>> {
     let mut previous_ms = f64::NEG_INFINITY;
     messages
@@ -286,7 +286,8 @@ fn project_messages(
                 .get(index)
                 .copied()
                 .flatten()
-                .unwrap_or(summary.created_at + index as f64);
+                .map(|value| value as f64)
+                .unwrap_or(summary.created_at as f64 + index as f64);
             let created_at_ms = (previous_ms + 1.0).max(base_ms);
             previous_ms = created_at_ms;
             let created_at_ms = time_clip(created_at_ms)?;
@@ -294,7 +295,7 @@ fn project_messages(
                 session_id,
                 index as u64,
                 message,
-                time_clip(summary.created_at)?,
+                time_clip(summary.created_at as f64)?,
                 Some(created_at_ms),
             )?)
         })
@@ -481,7 +482,7 @@ mod tests {
             Ok(())
         }
 
-        fn undo(&self, _: f64) -> Result<UndoCut, ContextMemoryServiceError> {
+        fn undo(&self, _: u32) -> Result<UndoCut, ContextMemoryServiceError> {
             unreachable!("message history tests do not mutate context")
         }
 
@@ -786,8 +787,8 @@ mod tests {
             cwd: None,
             title: None,
             last_prompt: None,
-            created_at: 1_000.0,
-            updated_at: 1_000.0,
+            created_at: 1_000,
+            updated_at: 1_000,
             archived: false,
             custom: None,
         }

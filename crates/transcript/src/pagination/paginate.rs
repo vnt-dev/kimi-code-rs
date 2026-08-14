@@ -34,7 +34,7 @@ pub fn paginate_turns(items: &[TranscriptItem], query: &TurnPageQuery) -> TurnPa
             .filter(|segment| {
                 segment
                     .turn_id
-                    .is_some_and(|turn_id| compare_turn_ids(turn_id, after_turn) > 0.0)
+                    .is_some_and(|turn_id| compare_turn_ids(turn_id, after_turn).is_gt())
             })
             .collect();
         return page(&newer, page_size, Direction::Newer);
@@ -45,7 +45,7 @@ pub fn paginate_turns(items: &[TranscriptItem], query: &TurnPageQuery) -> TurnPa
             .filter(|segment| {
                 segment
                     .turn_id
-                    .is_none_or(|turn_id| compare_turn_ids(turn_id, before_turn) < 0.0)
+                    .is_none_or(|turn_id| compare_turn_ids(turn_id, before_turn).is_lt())
             })
             .collect();
         return page(&older, page_size, Direction::Older);

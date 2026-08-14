@@ -79,7 +79,7 @@ pub struct FileMeta {
 pub struct SaveOptions {
     pub name: Option<String>,
     pub mime_type: Option<String>,
-    pub expires_in_sec: Option<f64>,
+    pub expires_in_sec: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

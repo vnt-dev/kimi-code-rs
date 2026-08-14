@@ -21,7 +21,7 @@ use crate::kosong::contract::provider::{
     ResponseFormat, StreamedMessage, ThinkingEffort, ToolCallIdPolicy, TraceId,
 };
 use crate::kosong::contract::tool::Tool;
-use crate::kosong::contract::usage::TokenUsage;
+use crate::kosong::contract::usage::{TokenUsage, counter_from_json};
 use crate::kosong::provider::bases::anthropic::anthropic_hooks::AnthropicHooks;
 use crate::kosong::provider::bases::anthropic::anthropic_profile::{
     AnthropicModelFamily, AnthropicModelVersion, AnthropicThinkingMode,
@@ -870,10 +870,10 @@ impl AnthropicStreamedMessage {
             pending: VecDeque::new(),
             id: None,
             usage: TokenUsage {
-                input_other: 0.0,
-                output: 0.0,
-                input_cache_read: 0.0,
-                input_cache_creation: 0.0,
+                input_other: 0,
+                output: 0,
+                input_cache_read: 0,
+                input_cache_creation: 0,
             },
             finish_reason: None,
             raw_finish_reason: None,
@@ -887,12 +887,7 @@ impl AnthropicStreamedMessage {
     }
 
     fn extract_usage(&mut self, usage: Option<&Value>) {
-        let number = |key| {
-            usage
-                .and_then(|usage| usage.get(key))
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0)
-        };
+        let number = |key| counter_from_json(usage.and_then(|usage| usage.get(key)));
         self.usage = TokenUsage {
             input_other: number("input_tokens"),
             output: number("output_tokens"),
@@ -1062,8 +1057,8 @@ impl AnthropicStreamedMessage {
                         ),
                         ("input_tokens", &mut self.usage.input_other),
                     ] {
-                        if let Some(value) = usage.get(key).and_then(Value::as_f64) {
-                            *target = value;
+                        if let Some(value) = usage.get(key) {
+                            *target = counter_from_json(Some(value));
                         }
                     }
                 }
@@ -1612,7 +1607,7 @@ mod tests {
         assert_eq!(parts.len(), 3);
         assert_eq!(message.id(), Some("msg-1"));
         assert_eq!(message.finish_reason(), Some(FinishReason::ToolCalls));
-        assert_eq!(message.usage().unwrap().output, 4.0);
+        assert_eq!(message.usage().unwrap().output, 4);
 
         let events = futures_util::stream::iter([
             Ok(serde_json::json!({
@@ -1642,8 +1637,8 @@ mod tests {
         assert_eq!(call.stream_index, Some(StreamIndex::Number(2)));
         assert_eq!(message.id(), Some("msg-2"));
         assert_eq!(message.finish_reason(), Some(FinishReason::Completed));
-        assert_eq!(message.usage().unwrap().input_other, 8.0);
-        assert_eq!(message.usage().unwrap().output, 6.0);
+        assert_eq!(message.usage().unwrap().input_other, 8);
+        assert_eq!(message.usage().unwrap().output, 6);
     }
 
     #[tokio::test]

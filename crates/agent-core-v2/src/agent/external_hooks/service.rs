@@ -886,7 +886,7 @@ mod tests {
             Ok(())
         }
 
-        fn undo(&self, _count: f64) -> Result<UndoCut, ContextMemoryServiceError> {
+        fn undo(&self, _count: u32) -> Result<UndoCut, ContextMemoryServiceError> {
             Ok(UndoCut {
                 cut_index: -1,
                 removed_count: 0,

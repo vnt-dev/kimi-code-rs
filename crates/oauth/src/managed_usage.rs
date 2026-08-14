@@ -7,25 +7,25 @@ use super::api_error::read_api_error_message;
 
 const MANAGED_PREFIX: &str = "managed:";
 const KIMI_CODE_PLATFORM_ID: &str = "kimi-code";
-const FIXED_POINT_CENTS: f64 = 1_000_000.0;
+const FIXED_POINT_CENTS: u64 = 1_000_000;
 
 pub const DEFAULT_KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageRow {
     pub label: String,
-    pub used: f64,
-    pub limit: f64,
+    pub used: u64,
+    pub limit: u64,
     pub reset_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoosterWalletInfo {
-    pub balance_cents: f64,
-    pub total_cents: f64,
+    pub balance_cents: i64,
+    pub total_cents: i64,
     pub monthly_charge_limit_enabled: bool,
-    pub monthly_charge_limit_cents: f64,
-    pub monthly_used_cents: f64,
+    pub monthly_charge_limit_cents: i64,
+    pub monthly_used_cents: i64,
     pub currency: String,
 }
 
@@ -137,7 +137,7 @@ fn to_usage_row(raw: &Value, default_label: &str) -> Option<UsageRow> {
     let limit = to_int(record.get("limit"));
     let used = to_int(record.get("used")).or_else(|| {
         let remaining = to_int(record.get("remaining"))?;
-        Some(limit? - remaining)
+        Some(limit?.saturating_sub(remaining))
     });
     if used.is_none() && limit.is_none() {
         return None;
@@ -147,8 +147,8 @@ fn to_usage_row(raw: &Value, default_label: &str) -> Option<UsageRow> {
         .unwrap_or_else(|| default_label.to_owned());
     Some(UsageRow {
         label,
-        used: used.unwrap_or(0.0),
-        limit: limit.unwrap_or(0.0),
+        used: used.unwrap_or(0),
+        limit: limit.unwrap_or(0),
         reset_hint: reset_hint_from(record),
     })
 }
@@ -183,18 +183,18 @@ fn limit_label(
         .unwrap_or_default();
     if let Some(duration) = duration {
         if time_unit.contains("MINUTE") {
-            if duration >= 60.0 && duration % 60.0 == 0.0 {
-                return format!("{}h limit", js_integer_string(duration / 60.0));
+            if duration >= 60 && duration % 60 == 0 {
+                return format!("{}h limit", duration / 60);
             }
-            return format!("{}m limit", js_integer_string(duration));
+            return format!("{}m limit", duration);
         }
         if time_unit.contains("HOUR") {
-            return format!("{}h limit", js_integer_string(duration));
+            return format!("{}h limit", duration);
         }
         if time_unit.contains("DAY") {
-            return format!("{}d limit", js_integer_string(duration));
+            return format!("{}d limit", duration);
         }
-        return format!("{}s limit", js_integer_string(duration));
+        return format!("{}s limit", duration);
     }
     format!("Limit #{}", index + 1)
 }
@@ -210,7 +210,7 @@ fn reset_hint_from(record: &Map<String, Value>) -> Option<String> {
         }
     }
     for key in ["reset_in", "resetIn", "ttl", "window"] {
-        if let Some(seconds) = to_int(record.get(key)).filter(|seconds| *seconds > 0.0) {
+        if let Some(seconds) = to_int(record.get(key)).filter(|seconds| *seconds > 0) {
             return Some(format!("resets in {}", format_duration(seconds)));
         }
     }
@@ -224,7 +224,7 @@ fn parse_booster_wallet(raw: &Value) -> Option<BoosterWalletInfo> {
         return None;
     }
     let amount = to_int(balance.get("amount"))?;
-    if amount <= 0.0 {
+    if amount == 0 {
         return None;
     }
     let monthly_limit = parse_money(record.get("monthlyChargeLimit"));
@@ -242,37 +242,38 @@ fn parse_booster_wallet(raw: &Value) -> Option<BoosterWalletInfo> {
     Some(BoosterWalletInfo {
         balance_cents: to_int(balance.get("amountLeft"))
             .map(fixed_point_to_cents)
-            .unwrap_or(0.0),
+            .unwrap_or(0),
         total_cents: fixed_point_to_cents(amount),
         monthly_charge_limit_enabled: record
             .get("monthlyChargeLimitEnabled")
             .and_then(Value::as_bool)
             == Some(true),
-        monthly_charge_limit_cents: monthly_limit.as_ref().map_or(0.0, |money| money.cents),
-        monthly_used_cents: monthly_used.as_ref().map_or(0.0, |money| money.cents),
+        monthly_charge_limit_cents: monthly_limit.as_ref().map_or(0, |money| money.cents),
+        monthly_used_cents: monthly_used.as_ref().map_or(0, |money| money.cents),
         currency,
     })
 }
 
 struct Money {
-    cents: f64,
+    cents: i64,
     currency: String,
 }
 
 fn parse_money(raw: Option<&Value>) -> Option<Money> {
     let record = raw?.as_object()?;
     Some(Money {
-        cents: to_int(record.get("priceInCents"))?,
+        cents: to_int(record.get("priceInCents"))? as i64,
         currency: string_field(record, "currency").unwrap_or_default(),
     })
 }
 
-fn fixed_point_to_cents(value: f64) -> f64 {
-    let cents = value / FIXED_POINT_CENTS;
-    if cents > 0.0 && cents < 1.0 {
-        1.0
+fn fixed_point_to_cents(value: u64) -> i64 {
+    if value == 0 {
+        0
+    } else if value < FIXED_POINT_CENTS {
+        1
     } else {
-        (cents + 0.5).floor()
+        ((value + 500_000) / FIXED_POINT_CENTS) as i64
     }
 }
 
@@ -294,7 +295,7 @@ pub fn format_reset_time_at(value: &str, now_millis: i64) -> String {
     if diff_seconds <= 0 {
         "reset".to_owned()
     } else {
-        format!("resets in {}", format_duration(diff_seconds as f64))
+        format!("resets in {}", format_duration(diff_seconds as u64))
     }
 }
 
@@ -309,27 +310,26 @@ fn trim_iso_fraction_to_millis(value: &str) -> String {
 }
 
 // Original: formatDuration()
-pub fn format_duration(total_seconds: f64) -> String {
-    if !total_seconds.is_finite() || total_seconds <= 0.0 {
+pub fn format_duration(total_seconds: u64) -> String {
+    if total_seconds == 0 {
         return "0s".to_owned();
     }
-    let seconds = total_seconds.floor();
-    let days = (seconds / 86_400.0).floor();
-    let hours = ((seconds % 86_400.0) / 3_600.0).floor();
-    let minutes = ((seconds % 3_600.0) / 60.0).floor();
-    let secs = seconds % 60.0;
+    let days = total_seconds / 86_400;
+    let hours = (total_seconds % 86_400) / 3_600;
+    let minutes = (total_seconds % 3_600) / 60;
+    let secs = total_seconds % 60;
     let mut parts = Vec::new();
-    if days != 0.0 {
-        parts.push(format!("{}d", js_integer_string(days)));
+    if days != 0 {
+        parts.push(format!("{days}d"));
     }
-    if hours != 0.0 {
-        parts.push(format!("{}h", js_integer_string(hours)));
+    if hours != 0 {
+        parts.push(format!("{hours}h"));
     }
-    if minutes != 0.0 {
-        parts.push(format!("{}m", js_integer_string(minutes)));
+    if minutes != 0 {
+        parts.push(format!("{minutes}m"));
     }
-    if secs != 0.0 && parts.is_empty() {
-        parts.push(format!("{}s", js_integer_string(secs)));
+    if secs != 0 && parts.is_empty() {
+        parts.push(format!("{secs}s"));
     }
     if parts.is_empty() {
         "0s".to_owned()
@@ -338,22 +338,23 @@ pub fn format_duration(total_seconds: f64) -> String {
     }
 }
 
-fn to_int(value: Option<&Value>) -> Option<f64> {
+fn to_int(value: Option<&Value>) -> Option<u64> {
     let number = match value? {
-        Value::Number(number) => number.as_f64()?,
-        Value::String(value) if value.trim().is_empty() => 0.0,
+        Value::Number(number) => number.as_u64().or_else(|| {
+            number
+                .as_f64()
+                .filter(|number| number.is_finite() && *number >= 0.0)
+                .map(|number| number.trunc() as u64)
+        })?,
+        Value::String(value) if value.trim().is_empty() => 0,
         Value::String(value) => value.trim().parse().ok()?,
         _ => return None,
     };
-    number.is_finite().then(|| number.trunc())
+    Some(number)
 }
 
 fn string_field(record: &Map<String, Value>, key: &str) -> Option<String> {
     record.get(key)?.as_str().map(str::to_owned)
-}
-
-fn js_integer_string(value: f64) -> String {
-    format!("{value:.0}")
 }
 
 // Original: fetchManagedUsage()
@@ -463,8 +464,8 @@ mod tests {
             parsed.summary,
             Some(UsageRow {
                 label: "Weekly limit".to_owned(),
-                used: 800.0,
-                limit: 1_000.0,
+                used: 800,
+                limit: 1_000,
                 reset_hint: Some("resets in 1h 1m".to_owned())
             })
         );
@@ -491,11 +492,11 @@ mod tests {
         assert_eq!(
             parsed.extra_usage,
             Some(BoosterWalletInfo {
-                balance_cents: 1.0,
-                total_cents: 20_000.0,
+                balance_cents: 1,
+                total_cents: 20_000,
                 monthly_charge_limit_enabled: true,
-                monthly_charge_limit_cents: 20_000.0,
-                monthly_used_cents: 5_000.0,
+                monthly_charge_limit_cents: 20_000,
+                monthly_used_cents: 5_000,
                 currency: "CNY".to_owned()
             })
         );
@@ -511,12 +512,11 @@ mod tests {
     #[test]
     fn formats_durations_like_the_original_display() {
         for (seconds, expected) in [
-            (f64::NAN, "0s"),
-            (0.0, "0s"),
-            (45.9, "45s"),
-            (60.0, "1m"),
-            (3_661.0, "1h 1m"),
-            (90_061.0, "1d 1h 1m"),
+            (0, "0s"),
+            (45, "45s"),
+            (60, "1m"),
+            (3_661, "1h 1m"),
+            (90_061, "1d 1h 1m"),
         ] {
             assert_eq!(format_duration(seconds), expected);
         }
@@ -582,7 +582,7 @@ mod tests {
         let FetchManagedUsageResult::Ok { parsed } = result else {
             panic!("expected parsed usage")
         };
-        assert_eq!(parsed.summary.expect("summary").used, 40.0);
+        assert_eq!(parsed.summary.expect("summary").used, 40);
         let request = request.lock().expect("request lock").to_ascii_lowercase();
         assert!(request.starts_with("get /usages http/1.1"));
         assert!(request.contains("authorization: bearer secret"));

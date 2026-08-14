@@ -108,14 +108,14 @@ impl CompoundIndexManager {
     }
 
     // Original: CompoundIndexManager.add(). Datetime metadata takes precedence over document fields.
-    pub fn add(&mut self, pk: &str, doc: &Value, datetimes: Option<&BTreeMap<String, f64>>) {
+    pub fn add(&mut self, pk: &str, doc: &Value, datetimes: Option<&BTreeMap<String, i64>>) {
         for entry in self.indexes.values_mut() {
             let group = get_path(doc, &entry.info.group_by)
                 .filter(|value| !value.is_null())
                 .map(canonical_value);
             let order = datetimes
                 .and_then(|values| values.get(&entry.info.order_by))
-                .map(|value| OrderValue::Number(*value))
+                .map(|value| OrderValue::Number(*value as f64))
                 .or_else(|| {
                     get_path(doc, &entry.info.order_by)
                         .and_then(|value| order_value(value, entry.info.order_type))
@@ -182,7 +182,7 @@ impl CompoundIndexManager {
 
     pub fn rebuild<'a>(
         &mut self,
-        entries: impl IntoIterator<Item = (&'a str, &'a Value, Option<&'a BTreeMap<String, f64>>)>,
+        entries: impl IntoIterator<Item = (&'a str, &'a Value, Option<&'a BTreeMap<String, i64>>)>,
     ) {
         for entry in self.indexes.values_mut() {
             entry.groups.clear();

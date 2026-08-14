@@ -16,12 +16,12 @@ use crate::_base::utils::hash::sha256_hex_prefix;
 //   Filesystem work remains asynchronous. PathBuf is used at the Rust boundary;
 //   persist_original_image returns its display path because that value is embedded
 //   in the model-visible compression caption.
-pub const DEFAULT_MAX_TOTAL_BYTES: f64 = 1024.0 * 1024.0 * 1024.0;
+pub const DEFAULT_MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default)]
 pub struct PersistOriginalImageOptions {
     pub dir: Option<PathBuf>,
-    pub max_total_bytes: Option<f64>,
+    pub max_total_bytes: Option<u64>,
 }
 
 pub fn original_image_cache_dir() -> PathBuf {
@@ -69,13 +69,13 @@ pub async fn persist_original_image(
 
 struct CacheEntry {
     path: PathBuf,
-    size: f64,
+    size: u64,
     modified: SystemTime,
 }
 
 // Original: sweepCache(). The stable sort preserves directory enumeration
 // order for equal mtimes, matching JavaScript's stable Array#sort behavior.
-async fn sweep_cache(dir: &Path, max_total_bytes: f64) -> std::io::Result<()> {
+async fn sweep_cache(dir: &Path, max_total_bytes: u64) -> std::io::Result<()> {
     let mut names = fs::read_dir(dir).await?;
     let mut entries = Vec::new();
     while let Some(entry) = names.next_entry().await? {
@@ -88,11 +88,11 @@ async fn sweep_cache(dir: &Path, max_total_bytes: f64) -> std::io::Result<()> {
         }
         entries.push(CacheEntry {
             path,
-            size: metadata.len() as f64,
+            size: metadata.len(),
             modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
         });
     }
-    let mut total = entries.iter().map(|entry| entry.size).sum::<f64>();
+    let mut total = entries.iter().map(|entry| entry.size).sum::<u64>();
     if total <= max_total_bytes {
         return Ok(());
     }
@@ -176,7 +176,7 @@ mod tests {
         let dir = test_dir();
         let roomy = PersistOriginalImageOptions {
             dir: Some(dir.clone()),
-            max_total_bytes: Some(100.0),
+            max_total_bytes: Some(100),
         };
         let old = persist_original_image(b"older", "image/png", &roomy)
             .await
@@ -184,7 +184,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         let constrained = PersistOriginalImageOptions {
             dir: Some(dir.clone()),
-            max_total_bytes: Some(7.0),
+            max_total_bytes: Some(7),
         };
         let new = persist_original_image(b"newest", "image/png", &constrained)
             .await
@@ -197,7 +197,7 @@ mod tests {
             "image/png",
             &PersistOriginalImageOptions {
                 dir: Some(dir.clone()),
-                max_total_bytes: Some(1.0),
+                max_total_bytes: Some(1),
             },
         )
         .await;

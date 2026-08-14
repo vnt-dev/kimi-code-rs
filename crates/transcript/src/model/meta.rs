@@ -20,10 +20,18 @@ pub struct GoalMeta {
     pub status: GoalStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_criterion: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget_used: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget_limit: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_utils::lenient_u64::deserialize"
+    )]
+    pub budget_used: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_utils::lenient_u64::deserialize"
+    )]
+    pub budget_limit: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -5,9 +5,9 @@ use crate::wire::migration::WIRE_PROTOCOL_VERSION;
 use chrono::{DateTime, Utc};
 #[derive(Clone, Debug, Default)]
 pub struct SessionWireScan {
-    pub first_activity_ms: Option<f64>,
-    pub last_activity_ms: Option<f64>,
-    pub last_user_message_ms: Option<f64>,
+    pub first_activity_ms: Option<i64>,
+    pub last_activity_ms: Option<i64>,
+    pub last_user_message_ms: Option<i64>,
     pub first_user_input: Option<String>,
 }
 #[derive(Clone, Debug)]
@@ -52,9 +52,9 @@ pub fn build_export_manifest(args: BuildExportManifestArgs) -> ExportSessionMani
         shell_env: args.shell_env,
     }
 }
-fn iso(value: Option<f64>) -> Option<String> {
+fn iso(value: Option<i64>) -> Option<String> {
     value
-        .and_then(|ms| DateTime::<Utc>::from_timestamp_millis(ms as i64))
+        .and_then(DateTime::<Utc>::from_timestamp_millis)
         .map(|date| date.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 #[cfg(test)]
@@ -72,7 +72,7 @@ mod tests {
             version: "v".into(),
             wire_protocol_version: None,
             session_scan: SessionWireScan {
-                first_activity_ms: Some(1000.0),
+                first_activity_ms: Some(1000),
                 ..Default::default()
             },
             session_log_path: None,

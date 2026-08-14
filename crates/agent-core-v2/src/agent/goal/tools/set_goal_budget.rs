@@ -253,11 +253,11 @@ pub fn normalize_budget_input(mut input: SetGoalBudgetInput) -> SetGoalBudgetInp
 pub fn budget_limits_from_input(input: SetGoalBudgetInput) -> Option<GoalBudgetLimits> {
     match input.unit {
         BudgetUnit::Turns => Some(GoalBudgetLimits {
-            turn_budget: Some(input.value),
+            turn_budget: Some(input.value as u64),
             ..Default::default()
         }),
         BudgetUnit::Tokens => Some(GoalBudgetLimits {
-            token_budget: Some(input.value),
+            token_budget: Some(input.value as u64),
             ..Default::default()
         }),
         BudgetUnit::Milliseconds
@@ -268,7 +268,7 @@ pub fn budget_limits_from_input(input: SetGoalBudgetInput) -> Option<GoalBudgetL
             ((MIN_REASONABLE_TIME_BUDGET_MS..=MAX_REASONABLE_TIME_BUDGET_MS)
                 .contains(&milliseconds))
             .then(|| GoalBudgetLimits {
-                wall_clock_budget_ms: Some(milliseconds),
+                wall_clock_budget_ms: Some(milliseconds as u64),
                 ..Default::default()
             })
         }
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(turns.value, 2.0);
         assert_eq!(
             budget_limits_from_input(turns).unwrap().turn_budget,
-            Some(2.0)
+            Some(2)
         );
         assert_eq!(
             budget_limits_from_input(SetGoalBudgetInput {
@@ -365,7 +365,7 @@ mod tests {
             })
             .unwrap()
             .wall_clock_budget_ms,
-            Some(1000.0)
+            Some(1000)
         );
     }
 }

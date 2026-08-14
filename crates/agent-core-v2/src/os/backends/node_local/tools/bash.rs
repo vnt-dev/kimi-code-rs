@@ -509,7 +509,7 @@ impl BashTool {
         if !result.truncated {
             return executable;
         }
-        let Ok(output) = self.tasks.get_output_snapshot(task_id, 0.0).await else {
+        let Ok(output) = self.tasks.get_output_snapshot(task_id, 0).await else {
             return executable;
         };
         let Some(output_path) = output

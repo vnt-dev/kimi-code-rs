@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::_base::utils::fs::atomic_write;
 use crate::agent::TurnId;
 
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 const CACHE_RELATIVE_PATH: &str = "cache/usage-statistics-v1.json";
 const WIRE_FILENAME: &str = "wire.jsonl";
 
@@ -20,15 +20,15 @@ const WIRE_FILENAME: &str = "wire.jsonl";
 #[serde(rename_all = "camelCase")]
 pub struct DesktopDailyTokenUsage {
     pub date: String,
-    pub total_tokens: f64,
+    pub total_tokens: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopUsageStatistics {
-    pub total_tokens: f64,
-    pub peak_daily_tokens: f64,
-    pub longest_task_ms: f64,
+    pub total_tokens: u64,
+    pub peak_daily_tokens: u64,
+    pub longest_task_ms: u64,
     pub current_streak_days: u32,
     pub longest_streak_days: u32,
     pub days: Vec<DesktopDailyTokenUsage>,
@@ -45,8 +45,8 @@ struct UsageStatisticsCache {
 #[serde(rename_all = "camelCase")]
 struct CachedWireUsage {
     signature: FileSignature,
-    daily_tokens: BTreeMap<String, f64>,
-    longest_task_ms: f64,
+    daily_tokens: BTreeMap<String, u64>,
+    longest_task_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
@@ -298,9 +298,9 @@ fn parse_stable_wire_file(
 
 fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
     let reader = BufReader::new(File::open(path)?);
-    let mut daily_tokens = BTreeMap::<String, f64>::new();
+    let mut daily_tokens = BTreeMap::<String, u64>::new();
     let mut turn_spans = HashMap::<TurnId, (i64, i64)>::new();
-    let mut ended_durations = HashMap::<TurnId, f64>::new();
+    let mut ended_durations = HashMap::<TurnId, u64>::new();
 
     for line in reader.lines() {
         let Ok(line) = line else {
@@ -318,7 +318,7 @@ fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
                     continue;
                 };
                 let total = usage.grand_total();
-                if total > 0.0 && total.is_finite() {
+                if total > 0 {
                     *daily_tokens.entry(date).or_default() += total;
                 }
             }
@@ -338,9 +338,10 @@ fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
                     continue;
                 };
                 if duration_ms >= 0.0 && duration_ms.is_finite() {
+                    let duration_ms = duration_ms.trunc() as u64;
                     ended_durations
                         .entry(turn_id)
-                        .and_modify(|value| *value = value.max(duration_ms))
+                        .and_modify(|value| *value = (*value).max(duration_ms))
                         .or_insert(duration_ms);
                 }
             }
@@ -354,10 +355,10 @@ fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
             ended_durations
                 .get(turn_id)
                 .copied()
-                .unwrap_or_else(|| last.saturating_sub(*first) as f64)
+                .unwrap_or_else(|| last.saturating_sub(*first) as u64)
         })
         .chain(ended_durations.values().copied())
-        .fold(0.0, f64::max);
+        .fold(0, u64::max);
 
     Ok(CachedWireUsage {
         signature: file_signature(path)?,
@@ -367,7 +368,7 @@ fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
 }
 
 impl WireTokenUsage {
-    fn grand_total(&self) -> f64 {
+    fn grand_total(&self) -> u64 {
         [
             self.input_other,
             self.output,
@@ -376,6 +377,7 @@ impl WireTokenUsage {
         ]
         .into_iter()
         .filter(|value| value.is_finite() && *value > 0.0)
+        .map(|value| value.trunc() as u64)
         .sum()
     }
 }
@@ -394,8 +396,8 @@ fn aggregate_statistics(
     files: &BTreeMap<String, CachedWireUsage>,
     today: NaiveDate,
 ) -> DesktopUsageStatistics {
-    let mut daily_tokens = BTreeMap::<String, f64>::new();
-    let mut longest_task_ms = 0.0_f64;
+    let mut daily_tokens = BTreeMap::<String, u64>::new();
+    let mut longest_task_ms = 0_u64;
     for cached in files.values() {
         longest_task_ms = longest_task_ms.max(cached.longest_task_ms);
         for (date, total) in &cached.daily_tokens {
@@ -404,10 +406,10 @@ fn aggregate_statistics(
     }
 
     let total_tokens = daily_tokens.values().sum();
-    let peak_daily_tokens = daily_tokens.values().copied().fold(0.0, f64::max);
+    let peak_daily_tokens = daily_tokens.values().copied().fold(0, u64::max);
     let active_dates = daily_tokens
         .iter()
-        .filter(|(_, total)| **total > 0.0)
+        .filter(|(_, total)| **total > 0)
         .filter_map(|(date, _)| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
         .collect::<Vec<_>>();
     let (current_streak_days, longest_streak_days) = streaks(&active_dates, today);
@@ -533,9 +535,9 @@ mod tests {
 
         let outcome = scan_usage_statistics(&home, today).unwrap();
         assert_eq!(outcome.reparsed_files, 2);
-        assert_eq!(outcome.statistics.total_tokens, 110.0);
-        assert_eq!(outcome.statistics.peak_daily_tokens, 100.0);
-        assert_eq!(outcome.statistics.longest_task_ms, 15_000.0);
+        assert_eq!(outcome.statistics.total_tokens, 110);
+        assert_eq!(outcome.statistics.peak_daily_tokens, 100);
+        assert_eq!(outcome.statistics.longest_task_ms, 15_000);
         assert_eq!(outcome.statistics.current_streak_days, 2);
         assert_eq!(outcome.statistics.longest_streak_days, 2);
         assert_eq!(outcome.statistics.days.len(), 2);
@@ -576,13 +578,13 @@ mod tests {
         .unwrap();
         let changed = scan_usage_statistics(&home, today).unwrap();
         assert_eq!(changed.reparsed_files, 1);
-        assert_eq!(changed.statistics.total_tokens, 23.0);
+        assert_eq!(changed.statistics.total_tokens, 23);
         persist_cache(&home, &changed);
 
         fs::remove_file(main).unwrap();
         let deleted = scan_usage_statistics(&home, today).unwrap();
         assert_eq!(deleted.reparsed_files, 0);
-        assert_eq!(deleted.statistics.total_tokens, 18.0);
+        assert_eq!(deleted.statistics.total_tokens, 18);
         assert!(deleted.cache_contents.is_some());
         fs::remove_dir_all(home).unwrap();
     }
@@ -605,7 +607,7 @@ mod tests {
 
         let outcome = scan_usage_statistics(&home, today).unwrap();
         assert_eq!(outcome.reparsed_files, 1);
-        assert_eq!(outcome.statistics.total_tokens, 9.0);
+        assert_eq!(outcome.statistics.total_tokens, 9);
         assert!(outcome.cache_contents.is_some());
         fs::remove_dir_all(home).unwrap();
     }

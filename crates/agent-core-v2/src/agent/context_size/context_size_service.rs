@@ -29,13 +29,13 @@ use super::context_size_ops::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContextSize {
-    pub size: f64,
-    pub measured: f64,
-    pub estimated: f64,
+    pub size: u64,
+    pub measured: u64,
+    pub estimated: u64,
 }
 
 pub trait AgentContextSizeServiceContract: Send + Sync {
-    fn get(&self, start: Option<f64>, end: Option<f64>) -> ContextSize;
+    fn get(&self, start: Option<isize>, end: Option<isize>) -> ContextSize;
     fn measured(
         &self,
         input: &[Message],
@@ -69,7 +69,7 @@ pub enum ContextSizeServiceError {
 pub struct AgentContextSizeService {
     context: Arc<dyn AgentContextMemoryServiceContract>,
     wire: Arc<WireService>,
-    last_emitted_tokens: Mutex<f64>,
+    last_emitted_tokens: Mutex<u64>,
 }
 
 impl AgentContextSizeService {
@@ -81,7 +81,7 @@ impl AgentContextSizeService {
         Self {
             context,
             wire,
-            last_emitted_tokens: Mutex::new(0.0),
+            last_emitted_tokens: Mutex::new(0),
         }
     }
 
@@ -115,21 +115,21 @@ pub fn register_agent_context_size_service() {
 
 impl AgentContextSizeServiceContract for AgentContextSizeService {
     // Original: contextSizeService.ts, get().
-    fn get(&self, start: Option<f64>, end: Option<f64>) -> ContextSize {
+    fn get(&self, start: Option<isize>, end: Option<isize>) -> ContextSize {
         let context = self.context.get();
         let model = self.wire.get_model(&CONTEXT_SIZE_MODEL);
-        let context_length = context.len() as f64;
-        let measured_length = model.length.min(context_length);
-        let from = normalize_slice_index(start.unwrap_or(0.0), context.len());
-        let to = normalize_slice_index(end.unwrap_or(context_length), context.len());
-        let measured_end = js_min(to, measured_length);
-        let estimated_start = js_max(from, measured_length);
-        let measured = if from == 0.0 && measured_end == measured_length {
+        let context_length = context.len();
+        let measured_length = (model.length as usize).min(context_length);
+        let from = normalize_slice_index(start.unwrap_or(0), context_length);
+        let to = normalize_slice_index(end.unwrap_or(context_length as isize), context_length);
+        let measured_end = to.min(measured_length);
+        let estimated_start = from.max(measured_length);
+        let measured = if from == 0 && measured_end == measured_length {
             model.tokens
         } else {
-            estimate_context_range(&context, from, measured_end)
+            estimate_context_range(&context, from, measured_end) as u64
         };
-        let estimated = estimate_context_range(&context, estimated_start, to);
+        let estimated = estimate_context_range(&context, estimated_start, to) as u64;
         ContextSize {
             size: measured + estimated,
             measured,
@@ -150,7 +150,7 @@ impl AgentContextSizeServiceContract for AgentContextSizeService {
         }
         self.wire
             .dispatch([context_size_measured(ContextSizeMeasuredPayload {
-                length: context.len() as f64,
+                length: context.len() as u64,
                 tokens: grand_total(&usage),
             })?])?;
         self.emit_if_changed();
@@ -169,50 +169,20 @@ fn matches_context(input: &[Message], context: &[ContextMessage]) -> bool {
             .all(|(input, context)| input == &context.message)
 }
 
-fn estimate_context_range(context: &[ContextMessage], start: f64, end: f64) -> f64 {
-    let start = to_slice_index(start, context.len());
-    let end = to_slice_index(end, context.len());
+fn estimate_context_range(context: &[ContextMessage], start: usize, end: usize) -> usize {
     if start >= end {
-        return 0.0;
+        return 0;
     }
-    estimate_tokens_for_messages(context[start..end].iter().map(|message| &message.message)) as f64
+    estimate_tokens_for_messages(context[start..end].iter().map(|message| &message.message))
 }
 
-// Original: contextSizeService.ts, normalizeSliceIndex(). The returned number
-// intentionally remains fractional until Array#slice coercion.
-fn normalize_slice_index(index: f64, length: usize) -> f64 {
-    if index < 0.0 {
-        js_max(length as f64 + index, 0.0)
+// Original: contextSizeService.ts, normalizeSliceIndex(). Negative indices
+// count back from the end of the context, matching Array#slice coercion.
+fn normalize_slice_index(index: isize, length: usize) -> usize {
+    if index < 0 {
+        (length as isize + index).max(0) as usize
     } else {
-        js_min(index, length as f64)
-    }
-}
-
-fn to_slice_index(index: f64, length: usize) -> usize {
-    if index.is_nan() || index == f64::NEG_INFINITY {
-        0
-    } else if index == f64::INFINITY {
-        length
-    } else if index < 0.0 {
-        ((length as f64 + index.trunc()).max(0.0) as usize).min(length)
-    } else {
-        (index.trunc() as usize).min(length)
-    }
-}
-
-fn js_min(left: f64, right: f64) -> f64 {
-    if left.is_nan() || right.is_nan() {
-        f64::NAN
-    } else {
-        left.min(right)
-    }
-}
-
-fn js_max(left: f64, right: f64) -> f64 {
-    if left.is_nan() || right.is_nan() {
-        f64::NAN
-    } else {
-        left.max(right)
+        (index as usize).min(length)
     }
 }
 
@@ -343,7 +313,7 @@ mod tests {
                 .unwrap()
                 .get(None, None)
                 .size,
-            0.0
+            0
         );
         agent.dispose().unwrap();
         app.dispose().unwrap();
@@ -374,20 +344,20 @@ mod tests {
             .unwrap();
         size.wire
             .dispatch([context_size_measured(ContextSizeMeasuredPayload {
-                length: 1.0,
-                tokens: 10.0,
+                length: 1,
+                tokens: 10,
             })
             .unwrap()])
             .unwrap();
         assert_eq!(
             size.get(None, None),
             ContextSize {
-                size: 12.0,
-                measured: 10.0,
-                estimated: 2.0
+                size: 12,
+                measured: 10,
+                estimated: 2
             }
         );
-        assert_eq!(size.get(Some(-1.0), None).measured, 0.0);
+        assert_eq!(size.get(Some(-1), None).measured, 0);
         size.wire.flush().await.unwrap();
     }
 
@@ -404,26 +374,26 @@ mod tests {
             &input,
             &[],
             TokenUsage {
-                input_other: 2.0,
-                output: 3.0,
-                input_cache_read: 5.0,
-                input_cache_creation: 7.0,
+                input_other: 2,
+                output: 3,
+                input_cache_read: 5,
+                input_cache_creation: 7,
             },
         )
         .unwrap();
-        assert_eq!(size.get(None, None).measured, 17.0);
+        assert_eq!(size.get(None, None).measured, 17);
 
         let stale = vec![Message::new(Role::User, Vec::new(), Vec::new())];
         size.measured(
             &stale,
             &[],
             TokenUsage {
-                output: 99.0,
+                output: 99,
                 ..TokenUsage::default()
             },
         )
         .unwrap();
-        assert_eq!(size.get(None, None).measured, 17.0);
+        assert_eq!(size.get(None, None).measured, 17);
         size.wire.flush().await.unwrap();
     }
 }

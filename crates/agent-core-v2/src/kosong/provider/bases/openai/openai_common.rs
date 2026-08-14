@@ -9,7 +9,7 @@ use crate::kosong::contract::errors::{
 use crate::kosong::contract::message::{ContentPart, MediaUrl, Message, extract_text};
 use crate::kosong::contract::provider::FinishReason;
 use crate::kosong::contract::tool::Tool;
-use crate::kosong::contract::usage::TokenUsage;
+use crate::kosong::contract::usage::{TokenUsage, counter_from_json};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -109,30 +109,19 @@ pub fn is_function_tool_call(call_type: &str) -> bool {
 // Original: openai-common.ts, extractUsage()
 pub fn extract_usage(usage: &Value) -> Option<TokenUsage> {
     let usage = usage.as_object()?;
-    let prompt_tokens = usage
-        .get("prompt_tokens")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
-    let completion_tokens = usage
-        .get("completion_tokens")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
-    let cached = usage
-        .get("cached_tokens")
-        .and_then(Value::as_f64)
-        .or_else(|| {
-            usage
-                .get("prompt_tokens_details")
-                .and_then(Value::as_object)
-                .and_then(|details| details.get("cached_tokens"))
-                .and_then(Value::as_f64)
-        })
-        .unwrap_or(0.0);
+    let prompt_tokens = counter_from_json(usage.get("prompt_tokens"));
+    let completion_tokens = counter_from_json(usage.get("completion_tokens"));
+    let cached = counter_from_json(usage.get("cached_tokens")).max(counter_from_json(
+        usage
+            .get("prompt_tokens_details")
+            .and_then(Value::as_object)
+            .and_then(|details| details.get("cached_tokens")),
+    ));
     Some(TokenUsage {
-        input_other: prompt_tokens - cached,
+        input_other: prompt_tokens.saturating_sub(cached),
         output: completion_tokens,
         input_cache_read: cached,
-        input_cache_creation: 0.0,
+        input_cache_creation: 0,
     })
 }
 
@@ -289,17 +278,17 @@ mod tests {
         assert_eq!(
             extract_usage(&json!({"prompt_tokens":10,"completion_tokens":3,"cached_tokens":4})),
             Some(TokenUsage {
-                input_other: 6.0,
-                output: 3.0,
-                input_cache_read: 4.0,
-                input_cache_creation: 0.0
+                input_other: 6,
+                output: 3,
+                input_cache_read: 4,
+                input_cache_creation: 0
             })
         );
         assert_eq!(
             extract_usage(&json!({"prompt_tokens":10,"prompt_tokens_details":{"cached_tokens":2}}))
                 .unwrap()
                 .input_cache_read,
-            2.0
+            2
         );
     }
 

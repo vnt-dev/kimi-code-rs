@@ -181,7 +181,7 @@ struct RuntimeState {
     goal_turn_targets: HashMap<crate::agent::TurnId, String>,
     exhausted_turn_budget_goals: HashMap<crate::agent::TurnId, String>,
     wall_clock_deadline: Option<DisposableHandle>,
-    live_wall_clock_started_at: Option<f64>,
+    live_wall_clock_started_at: Option<u64>,
     pending_continuation: Option<PendingContinuation>,
     resume_continuation: Option<(crate::agent::TurnId, String)>,
     next_pending_id: u64,
@@ -480,7 +480,7 @@ impl AgentGoalService {
 
     pub async fn record_token_usage(
         &self,
-        token_delta: f64,
+        token_delta: u64,
     ) -> GoalServiceResult<Option<GoalSnapshot>> {
         self.assert_supported_agent()?;
         self.account_token_usage(token_delta, None)
@@ -528,7 +528,7 @@ impl AgentGoalService {
 
     fn account_token_usage(
         &self,
-        token_delta: f64,
+        token_delta: u64,
         goal_id: Option<&str>,
     ) -> GoalServiceResult<Option<GoalSnapshot>> {
         let Some(state) = self
@@ -538,7 +538,7 @@ impl AgentGoalService {
             return Ok(None);
         };
         self.wire.dispatch([update_goal(UpdateGoalPayload {
-            tokens_used: Some(state.tokens_used + token_delta.max(0.0)),
+            tokens_used: Some(state.tokens_used.saturating_add(token_delta)),
             ..UpdateGoalPayload::default()
         })?])?;
         let next = self.require_state()?;
@@ -558,14 +558,14 @@ impl AgentGoalService {
             return Ok(None);
         };
         self.wire.dispatch([update_goal(UpdateGoalPayload {
-            turns_used: Some(state.turns_used + 1.0),
+            turns_used: Some(state.turns_used.saturating_add(1)),
             ..UpdateGoalPayload::default()
         })?])?;
         let next = self.require_state()?;
         let snapshot = self.snapshot(&next);
         self.emit_goal_updated(Some(snapshot.clone()), None);
         let _ = self.telemetry.track_event(&GoalContinuedEvent {
-            turns_used: next.turns_used as u64,
+            turns_used: next.turns_used,
         });
         Ok(Some(snapshot))
     }
@@ -1229,9 +1229,9 @@ impl AgentGoalService {
         let _ = self.telemetry.track_event(&GoalStatusChangedEvent {
             actor: telemetry_actor(actor),
             status: telemetry_status(state.status),
-            turns_used: state.turns_used as u64,
-            tokens_used: state.tokens_used as u64,
-            wall_clock_ms: self.live_wall_clock_ms(state) as u64,
+            turns_used: state.turns_used,
+            tokens_used: state.tokens_used,
+            wall_clock_ms: self.live_wall_clock_ms(state),
             budget: telemetry_budget(limits),
         });
     }
@@ -1251,17 +1251,19 @@ impl AgentGoalService {
             .publish(DomainEvent::new("goal.updated", fields));
     }
 
-    fn settle_wall_clock(&self, state: &GoalState) -> f64 {
+    fn settle_wall_clock(&self, state: &GoalState) -> u64 {
         self.live_wall_clock_ms(state)
     }
 
-    fn live_wall_clock_ms(&self, state: &GoalState) -> f64 {
+    fn live_wall_clock_ms(&self, state: &GoalState) -> u64 {
         if state.status == GoalStatus::Active {
             if let Some(started_at) = self.state.lock().unwrap().live_wall_clock_started_at {
-                return state.wall_clock_ms + (self.deadline_scheduler.now() - started_at).max(0.0);
+                let elapsed = self.deadline_scheduler.now().saturating_sub(started_at);
+                return state.wall_clock_ms.saturating_add(elapsed);
             }
             if let Some(resumed_at) = state.wall_clock_resumed_at {
-                return state.wall_clock_ms + (epoch_millis() - resumed_at).max(0.0);
+                let elapsed = epoch_millis().saturating_sub(resumed_at) as u64;
+                return state.wall_clock_ms.saturating_add(elapsed);
             }
         }
         state.wall_clock_ms
@@ -1313,7 +1315,7 @@ impl AgentGoalService {
         if state.status != GoalStatus::Active || !started {
             return;
         }
-        let remaining_ms = (budget_ms - self.live_wall_clock_ms(state)).max(0.0);
+        let remaining_ms = budget_ms.saturating_sub(self.live_wall_clock_ms(state));
         let weak = self
             .self_weak
             .get()
@@ -1827,11 +1829,11 @@ fn coded_error_with_details(
     )))
 }
 
-fn epoch_millis() -> f64 {
+fn epoch_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as f64
+        .as_millis() as i64
 }
 
 fn status_name(status: GoalStatus) -> &'static str {
@@ -1980,7 +1982,7 @@ mod tests {
             Ok(())
         }
 
-        fn undo(&self, count: f64) -> Result<UndoCut, ContextMemoryServiceError> {
+        fn undo(&self, count: u32) -> Result<UndoCut, ContextMemoryServiceError> {
             Ok(compute_undo_cut(&self.get(), count))
         }
 
@@ -1993,8 +1995,8 @@ mod tests {
                 context_summary: input.context_summary.unwrap_or(input.summary),
                 compacted_count: input.compacted_count,
                 tokens_before: input.tokens_before,
-                tokens_after: input.tokens_after.unwrap_or(0.0),
-                kept_user_message_count: input.kept_user_message_count.unwrap_or(0.0),
+                tokens_after: input.tokens_after.unwrap_or(0),
+                kept_user_message_count: input.kept_user_message_count.unwrap_or(0),
                 kept_head_user_message_count: input.kept_head_user_message_count,
                 dropped_count: input.dropped_count,
             })
@@ -2337,7 +2339,7 @@ mod tests {
             .set_budget_limits(
                 SetGoalBudgetLimitsInput {
                     budget_limits: GoalBudgetLimits {
-                        turn_budget: Some(1.0),
+                        turn_budget: Some(1),
                         ..GoalBudgetLimits::default()
                     },
                 },

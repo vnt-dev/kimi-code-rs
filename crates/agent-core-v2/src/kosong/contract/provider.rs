@@ -182,8 +182,8 @@ impl ToolCallIdPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamDecodeStats {
-    pub server_decode_ms: f64,
-    pub client_consume_ms: f64,
+    pub server_decode_ms: u64,
+    pub client_consume_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,11 +331,11 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(StreamDecodeStats {
-                server_decode_ms: 12.5,
-                client_consume_ms: 3.0,
+                server_decode_ms: 12,
+                client_consume_ms: 3,
             })
             .unwrap(),
-            serde_json::json!({"serverDecodeMs":12.5,"clientConsumeMs":3.0})
+            serde_json::json!({"serverDecodeMs":12,"clientConsumeMs":3})
         );
     }
 
@@ -438,7 +438,7 @@ mod tests {
                     text: "hello".to_owned(),
                 }))]),
                 usage: TokenUsage {
-                    output: 1.0,
+                    output: 1,
                     ..TokenUsage::default()
                 },
             }))
@@ -462,7 +462,7 @@ mod tests {
         let mut stream = provider.generate("system", &[], &[], None).await.unwrap();
         assert_eq!(stream.id(), Some("response-1"));
         assert_eq!(stream.trace_id(), TraceId::Present(Some("trace-1")));
-        assert_eq!(stream.usage().unwrap().output, 1.0);
+        assert_eq!(stream.usage().unwrap().output, 1);
         assert_eq!(stream.finish_reason(), Some(FinishReason::Completed));
         let part = stream.next().await.unwrap().unwrap();
         assert!(matches!(

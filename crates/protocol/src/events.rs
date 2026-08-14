@@ -12,6 +12,10 @@ use super::session::{Session, SessionLastTurnReason, SessionPendingInteraction};
 use super::time::IsoDateTime;
 use super::validation::{optional_non_null, required_nullable};
 use super::workspace::Workspace;
+use crate::lenient::{
+    lenient_i64, lenient_nullable_i32, lenient_nullable_i64, lenient_nullable_u64,
+    lenient_optional_u16, lenient_optional_u64, lenient_u32, lenient_u64,
+};
 
 macro_rules! event_type {
     ($name:ident, $wire:literal) => {
@@ -46,10 +50,14 @@ macro_rules! event_type {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
-    pub input_other: f64,
-    pub output: f64,
-    pub input_cache_read: f64,
-    pub input_cache_creation: f64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub input_other: u64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub output: u64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub input_cache_read: u64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub input_cache_creation: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -213,11 +221,13 @@ pub enum PromptOrigin {
         job_id: String,
         cron: String,
         recurring: bool,
-        coalesced_count: f64,
+        #[serde(deserialize_with = "lenient_u64")]
+        coalesced_count: u64,
         stale: bool,
     },
     CronMissed {
-        count: f64,
+        #[serde(deserialize_with = "lenient_u64")]
+        count: u64,
     },
     HookResult {
         event: String,
@@ -393,7 +403,8 @@ pub struct BackgroundTaskOrigin {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CronMissedOrigin {
     pub kind: CronMissedOriginKind,
-    pub count: f64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -440,29 +451,41 @@ pub enum GoalActor {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GoalBudgetLimits {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_budget: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_budget: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wall_clock_budget_ms: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_nullable_u64"
+    )]
+    pub token_budget: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_nullable_u64"
+    )]
+    pub turn_budget: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_nullable_u64"
+    )]
+    pub wall_clock_budget_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoalBudgetReport {
-    #[serde(deserialize_with = "required_nullable")]
-    pub token_budget: Option<f64>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub turn_budget: Option<f64>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub wall_clock_budget_ms: Option<f64>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub remaining_tokens: Option<f64>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub remaining_turns: Option<f64>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub remaining_wall_clock_ms: Option<f64>,
+    #[serde(deserialize_with = "lenient_nullable_u64")]
+    pub token_budget: Option<u64>,
+    #[serde(deserialize_with = "lenient_nullable_u64")]
+    pub turn_budget: Option<u64>,
+    #[serde(deserialize_with = "lenient_nullable_u64")]
+    pub wall_clock_budget_ms: Option<u64>,
+    #[serde(deserialize_with = "lenient_nullable_u64")]
+    pub remaining_tokens: Option<u64>,
+    #[serde(deserialize_with = "lenient_nullable_u64")]
+    pub remaining_turns: Option<u64>,
+    #[serde(deserialize_with = "lenient_nullable_u64")]
+    pub remaining_wall_clock_ms: Option<u64>,
     pub token_budget_reached: bool,
     pub turn_budget_reached: bool,
     pub wall_clock_budget_reached: bool,
@@ -477,9 +500,12 @@ pub struct GoalSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_criterion: Option<String>,
     pub status: GoalStatus,
-    pub turns_used: f64,
-    pub tokens_used: f64,
-    pub wall_clock_ms: f64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub turns_used: u64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub tokens_used: u64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub wall_clock_ms: u64,
     pub budget: GoalBudgetReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_reason: Option<String>,
@@ -494,9 +520,12 @@ pub struct GoalToolResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoalChangeStats {
-    pub turns_used: f64,
-    pub tokens_used: f64,
-    pub wall_clock_ms: f64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub turns_used: u64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub tokens_used: u64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub wall_clock_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -700,9 +729,10 @@ pub struct TaskInfoBase {
         deserialize_with = "optional_non_null"
     )]
     pub detached: Option<bool>,
-    pub started_at: f64,
-    #[serde(deserialize_with = "required_nullable")]
-    pub ended_at: Option<f64>,
+    #[serde(deserialize_with = "lenient_i64")]
+    pub started_at: i64,
+    #[serde(deserialize_with = "lenient_nullable_i64")]
+    pub ended_at: Option<i64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -718,9 +748,9 @@ pub struct TaskInfoBase {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub timeout_ms: Option<f64>,
+    pub timeout_ms: Option<u64>,
 }
 
 event_type!(ProcessTaskInfoKind, "process");
@@ -734,9 +764,10 @@ pub struct ProcessTaskInfo {
     #[serde(flatten)]
     pub base: TaskInfoBase,
     pub command: String,
-    pub pid: f64,
-    #[serde(deserialize_with = "required_nullable")]
-    pub exit_code: Option<f64>,
+    #[serde(deserialize_with = "lenient_u32")]
+    pub pid: u32,
+    #[serde(deserialize_with = "lenient_nullable_i32")]
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -765,7 +796,8 @@ pub struct QuestionTaskInfo {
     pub kind: QuestionTaskInfoKind,
     #[serde(flatten)]
     pub base: TaskInfoBase,
-    pub question_count: f64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub question_count: u64,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -782,9 +814,10 @@ pub enum TaskInfo {
         #[serde(flatten)]
         base: TaskInfoBase,
         command: String,
-        pid: f64,
-        #[serde(rename = "exitCode", deserialize_with = "required_nullable")]
-        exit_code: Option<f64>,
+        #[serde(deserialize_with = "lenient_u32")]
+        pid: u32,
+        #[serde(rename = "exitCode", deserialize_with = "lenient_nullable_i32")]
+        exit_code: Option<i32>,
     },
     Agent {
         #[serde(flatten)]
@@ -807,8 +840,8 @@ pub enum TaskInfo {
     Question {
         #[serde(flatten)]
         base: TaskInfoBase,
-        #[serde(rename = "questionCount")]
-        question_count: f64,
+        #[serde(rename = "questionCount", deserialize_with = "lenient_u64")]
+        question_count: u64,
         #[serde(
             rename = "toolCallId",
             default,
@@ -823,27 +856,30 @@ pub enum TaskInfo {
 #[serde(rename_all = "camelCase")]
 pub struct CompactionResult {
     pub summary: String,
-    pub compacted_count: f64,
-    pub tokens_before: f64,
-    pub tokens_after: f64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub compacted_count: u64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub tokens_before: u64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub tokens_after: u64,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub kept_user_message_count: Option<f64>,
+    pub kept_user_message_count: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub kept_head_user_message_count: Option<f64>,
+    pub kept_head_user_message_count: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub dropped_count: Option<f64>,
+    pub dropped_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -929,7 +965,8 @@ pub enum AgentPhase {
         turn_id: crate::TurnId,
         step: crate::StepId,
         step_id: String,
-        since: f64,
+        #[serde(deserialize_with = "lenient_i64")]
+        since: i64,
     },
     Streaming {
         turn_id: crate::TurnId,
@@ -948,23 +985,29 @@ pub enum AgentPhase {
             deserialize_with = "optional_non_null"
         )]
         tool_name: Option<String>,
-        since: f64,
+        #[serde(deserialize_with = "lenient_i64")]
+        since: i64,
     },
     ToolCall {
         turn_id: crate::TurnId,
         step: crate::StepId,
         tool_call_id: String,
         name: String,
-        since: f64,
+        #[serde(deserialize_with = "lenient_i64")]
+        since: i64,
     },
     Retrying {
         turn_id: crate::TurnId,
         step: crate::StepId,
         step_id: String,
-        failed_attempt: f64,
-        next_attempt: f64,
-        max_attempts: f64,
-        delay_ms: f64,
+        #[serde(deserialize_with = "lenient_u32")]
+        failed_attempt: u32,
+        #[serde(deserialize_with = "lenient_u32")]
+        next_attempt: u32,
+        #[serde(deserialize_with = "lenient_u32")]
+        max_attempts: u32,
+        #[serde(deserialize_with = "lenient_u64")]
+        delay_ms: u64,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
@@ -974,10 +1017,11 @@ pub enum AgentPhase {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            deserialize_with = "optional_non_null"
+            deserialize_with = "lenient_optional_u16"
         )]
-        status_code: Option<f64>,
-        since: f64,
+        status_code: Option<u16>,
+        #[serde(deserialize_with = "lenient_i64")]
+        since: i64,
     },
     AwaitingApproval {
         turn_id: crate::TurnId,
@@ -989,7 +1033,8 @@ pub enum AgentPhase {
         step: Option<crate::StepId>,
         #[serde(default, skip_serializing_if = "OptionalJsonValue::is_absent")]
         approval: OptionalJsonValue,
-        since: f64,
+        #[serde(deserialize_with = "lenient_i64")]
+        since: i64,
     },
     Interrupted {
         turn_id: crate::TurnId,
@@ -1006,7 +1051,8 @@ pub enum AgentPhase {
             deserialize_with = "optional_non_null"
         )]
         message: Option<String>,
-        at: f64,
+        #[serde(deserialize_with = "lenient_i64")]
+        at: i64,
     },
     Ended {
         turn_id: crate::TurnId,
@@ -1014,10 +1060,11 @@ pub enum AgentPhase {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            deserialize_with = "optional_non_null"
+            deserialize_with = "lenient_optional_u64"
         )]
-        duration_ms: Option<f64>,
-        at: f64,
+        duration_ms: Option<u64>,
+        #[serde(deserialize_with = "lenient_i64")]
+        at: i64,
     },
 }
 
@@ -1043,15 +1090,15 @@ pub struct AgentStatusUpdatedEvent {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub context_tokens: Option<f64>,
+    pub context_tokens: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub max_context_tokens: Option<f64>,
+    pub max_context_tokens: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1386,9 +1433,9 @@ pub struct TurnEndedEvent {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub duration_ms: Option<f64>,
+    pub duration_ms: Option<u64>,
 }
 
 event_type!(TurnStepStartedEventType, "turn.step.started");
@@ -1438,39 +1485,39 @@ pub struct TurnStepCompletedEvent {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub llm_first_token_latency_ms: Option<f64>,
+    pub llm_first_token_latency_ms: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub llm_stream_duration_ms: Option<f64>,
+    pub llm_stream_duration_ms: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub llm_request_build_ms: Option<f64>,
+    pub llm_request_build_ms: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub llm_server_first_token_ms: Option<f64>,
+    pub llm_server_first_token_ms: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub llm_server_decode_ms: Option<f64>,
+    pub llm_server_decode_ms: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub llm_client_consume_ms: Option<f64>,
+    pub llm_client_consume_ms: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1500,18 +1547,22 @@ pub struct TurnStepRetryingEvent {
         deserialize_with = "optional_non_null"
     )]
     pub step_id: Option<String>,
-    pub failed_attempt: f64,
-    pub next_attempt: f64,
-    pub max_attempts: f64,
-    pub delay_ms: f64,
+    #[serde(deserialize_with = "lenient_u32")]
+    pub failed_attempt: u32,
+    #[serde(deserialize_with = "lenient_u32")]
+    pub next_attempt: u32,
+    #[serde(deserialize_with = "lenient_u32")]
+    pub max_attempts: u32,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub delay_ms: u64,
     pub error_name: String,
     pub error_message: String,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u16"
     )]
-    pub status_code: Option<f64>,
+    pub status_code: Option<u16>,
 }
 
 event_type!(TurnStepInterruptedEventType, "turn.step.interrupted");
@@ -1748,9 +1799,9 @@ pub struct SubagentSpawnedEvent {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub swarm_index: Option<f64>,
+    pub swarm_index: Option<u64>,
     pub run_in_background: bool,
 }
 
@@ -1792,9 +1843,9 @@ pub struct SubagentCompletedEvent {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "optional_non_null"
+        deserialize_with = "lenient_optional_u64"
     )]
-    pub context_tokens: Option<f64>,
+    pub context_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1902,7 +1953,8 @@ pub struct CronJobOrigin {
     pub job_id: String,
     pub cron: String,
     pub recurring: bool,
-    pub coalesced_count: f64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub coalesced_count: u64,
     pub stale: bool,
 }
 
@@ -2016,7 +2068,8 @@ pub struct McpServerStatusPayload {
     pub name: String,
     pub transport: McpTransport,
     pub status: McpServerConnectionStatus,
-    pub tool_count: f64,
+    #[serde(deserialize_with = "lenient_u32")]
+    pub tool_count: u32,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

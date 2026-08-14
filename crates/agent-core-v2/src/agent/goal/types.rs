@@ -21,23 +21,59 @@ pub enum GoalActor {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GoalBudgetLimits {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_budget: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_budget: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wall_clock_budget_ms: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub token_budget: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub turn_budget: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub wall_clock_budget_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoalBudgetReport {
-    pub token_budget: Option<f64>,
-    pub turn_budget: Option<f64>,
-    pub wall_clock_budget_ms: Option<f64>,
-    pub remaining_tokens: Option<f64>,
-    pub remaining_turns: Option<f64>,
-    pub remaining_wall_clock_ms: Option<f64>,
+    #[serde(
+        default,
+        deserialize_with = "kimi_code_protocol::lenient::lenient_nullable_u64"
+    )]
+    pub token_budget: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "kimi_code_protocol::lenient::lenient_nullable_u64"
+    )]
+    pub turn_budget: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "kimi_code_protocol::lenient::lenient_nullable_u64"
+    )]
+    pub wall_clock_budget_ms: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "kimi_code_protocol::lenient::lenient_nullable_u64"
+    )]
+    pub remaining_tokens: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "kimi_code_protocol::lenient::lenient_nullable_u64"
+    )]
+    pub remaining_turns: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "kimi_code_protocol::lenient::lenient_nullable_u64"
+    )]
+    pub remaining_wall_clock_ms: Option<u64>,
     pub token_budget_reached: bool,
     pub turn_budget_reached: bool,
     pub wall_clock_budget_reached: bool,
@@ -52,9 +88,12 @@ pub struct GoalSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_criterion: Option<String>,
     pub status: GoalStatus,
-    pub turns_used: f64,
-    pub tokens_used: f64,
-    pub wall_clock_ms: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub turns_used: u64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub tokens_used: u64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub wall_clock_ms: u64,
     pub budget: GoalBudgetReport,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_reason: Option<String>,
@@ -68,9 +107,12 @@ pub struct GoalToolResult {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoalChangeStats {
-    pub turns_used: f64,
-    pub tokens_used: f64,
-    pub wall_clock_ms: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub turns_used: u64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub tokens_used: u64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub wall_clock_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

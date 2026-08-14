@@ -43,7 +43,8 @@ pub struct ContextClearPayload {}
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContextUndoPayload {
-    pub count: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u32")]
+    pub count: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -154,7 +155,7 @@ pub static CONTEXT_UNDO: LazyLock<DefinedOp<ContextMemoryState, ContextUndoPaylo
             .define_op(
                 "context.undo",
                 DefineOpOptions::new(|state: ContextMemoryState, payload: &ContextUndoPayload| {
-                    if payload.count <= 0.0 || state.messages().is_empty() {
+                    if payload.count == 0 || state.messages().is_empty() {
                         return state;
                     }
                     let cut = compute_undo_cut(state.messages(), payload.count);
@@ -198,7 +199,7 @@ pub fn context_clear() -> Result<Op, serde_json::Error> {
     CONTEXT_CLEAR.create(ContextClearPayload {})
 }
 
-pub fn context_undo(count: f64) -> Result<Op, serde_json::Error> {
+pub fn context_undo(count: u32) -> Result<Op, serde_json::Error> {
     CONTEXT_UNDO.create(ContextUndoPayload { count })
 }
 
@@ -230,7 +231,7 @@ pub fn read_context_compaction_shape_input(
         legacy_summary_message: read_legacy_summary_message(record),
         context_summary: read_optional_string(record, "contextSummary"),
         compacted_count: read_context_compacted_count(record)?,
-        tokens_before: read_optional_number(record, "tokensBefore").unwrap_or(0.0),
+        tokens_before: read_optional_number(record, "tokensBefore").unwrap_or(0),
         tokens_after: read_optional_number(record, "tokensAfter"),
         kept_user_message_count,
         kept_head_user_message_count: read_optional_number(record, "keptHeadUserMessageCount"),
@@ -242,11 +243,12 @@ pub fn read_context_compaction_shape_input(
 
 pub fn read_context_compacted_count(
     record: &Map<String, Value>,
-) -> Result<f64, ContextCompactionRecordError> {
+) -> Result<u64, ContextCompactionRecordError> {
     record
         .get("compactedCount")
         .and_then(Value::as_f64)
         .or_else(|| record.get("count").and_then(Value::as_f64))
+        .map(|value| value as u64)
         .ok_or(ContextCompactionRecordError::MissingCompactedCount)
 }
 
@@ -398,8 +400,11 @@ fn read_legacy_summary_message(record: &Map<String, Value>) -> Option<ContextMes
     serde_json::from_value(record.get("summary")?.clone()).ok()
 }
 
-fn read_optional_number(record: &Map<String, Value>, key: &str) -> Option<f64> {
-    record.get(key).and_then(Value::as_f64)
+fn read_optional_number(record: &Map<String, Value>, key: &str) -> Option<u64> {
+    record
+        .get(key)
+        .and_then(Value::as_f64)
+        .map(|value| value as u64)
 }
 
 fn read_optional_string(record: &Map<String, Value>, key: &str) -> Option<String> {
@@ -591,7 +596,7 @@ mod tests {
             .unwrap();
         assert_eq!(state.messages().len(), 1);
 
-        let undo = context_undo(1.0).unwrap();
+        let undo = context_undo(1).unwrap();
         let state = CONTEXT_UNDO
             .descriptor()
             .apply(state, undo.payload())
@@ -611,7 +616,7 @@ mod tests {
         });
         let payload = parse_context_compaction_payload(&current).unwrap();
         assert_eq!(payload.shape.summary, "sum");
-        assert_eq!(payload.shape.compacted_count, 1.5);
+        assert_eq!(payload.shape.compacted_count, 1);
         assert!(!payload.fields.contains_key("unknown"));
 
         let legacy_message = user("old summary");
@@ -621,7 +626,7 @@ mod tests {
         });
         let payload = parse_context_compaction_payload(&legacy).unwrap();
         assert_eq!(payload.shape.summary, "old summary");
-        assert_eq!(payload.shape.compacted_count, 2.0);
+        assert_eq!(payload.shape.compacted_count, 2);
         assert_eq!(payload.shape.legacy_tail, Some(true));
     }
 

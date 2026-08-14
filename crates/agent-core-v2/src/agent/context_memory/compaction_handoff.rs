@@ -26,12 +26,12 @@ pub struct ContextCompactionShapeInput {
     pub summary: String,
     pub legacy_summary_message: Option<ContextMessage>,
     pub context_summary: Option<String>,
-    pub compacted_count: f64,
-    pub tokens_before: f64,
-    pub tokens_after: Option<f64>,
-    pub kept_user_message_count: Option<f64>,
-    pub kept_head_user_message_count: Option<f64>,
-    pub dropped_count: Option<f64>,
+    pub compacted_count: u64,
+    pub tokens_before: u64,
+    pub tokens_after: Option<u64>,
+    pub kept_user_message_count: Option<u64>,
+    pub kept_head_user_message_count: Option<u64>,
+    pub dropped_count: Option<u64>,
     pub legacy_tail: Option<bool>,
 }
 
@@ -39,12 +39,12 @@ pub struct ContextCompactionShapeInput {
 pub struct ContextCompactionShape {
     pub summary: String,
     pub context_summary: String,
-    pub compacted_count: f64,
-    pub tokens_before: f64,
-    pub tokens_after: f64,
-    pub kept_user_message_count: f64,
-    pub kept_head_user_message_count: Option<f64>,
-    pub dropped_count: Option<f64>,
+    pub compacted_count: u64,
+    pub tokens_before: u64,
+    pub tokens_after: u64,
+    pub kept_user_message_count: u64,
+    pub kept_head_user_message_count: Option<u64>,
+    pub dropped_count: Option<u64>,
     pub messages: Vec<ContextMessage>,
 }
 
@@ -73,7 +73,7 @@ pub fn build_context_compaction_shape(
                 .cloned(),
         );
         let tokens_after = input.tokens_after.unwrap_or_else(|| {
-            estimate_tokens_for_messages(messages.iter().map(|message| &message.message)) as f64
+            estimate_tokens_for_messages(messages.iter().map(|message| &message.message)) as u64
         });
         return ContextCompactionShape {
             summary: input.summary,
@@ -81,7 +81,7 @@ pub fn build_context_compaction_shape(
             compacted_count: input.compacted_count,
             tokens_before: input.tokens_before,
             tokens_after,
-            kept_user_message_count: 0.0,
+            kept_user_message_count: 0,
             kept_head_user_message_count: None,
             dropped_count: input.dropped_count,
             messages,
@@ -105,14 +105,14 @@ pub fn build_context_compaction_shape(
     let tokens_after = input.tokens_after.unwrap_or_else(|| {
         (estimate_tokens(&context_summary)
             + estimate_tokens_for_messages(kept_messages.iter().map(|message| &message.message)))
-            as f64
+            as u64
     });
     let kept_user_message_count = input
         .kept_user_message_count
-        .unwrap_or((selection.head.len() + selection.tail.len()) as f64);
+        .unwrap_or((selection.head.len() + selection.tail.len()) as u64);
     let kept_head_user_message_count = input
         .kept_head_user_message_count
-        .or_else(|| selection.elided.then_some(selection.head.len() as f64));
+        .or_else(|| selection.elided.then_some(selection.head.len() as u64));
     kept_messages.push(create_compaction_summary_message(&context_summary));
 
     ContextCompactionShape {
@@ -128,19 +128,8 @@ pub fn build_context_compaction_shape(
     }
 }
 
-fn normalize_slice_start(index: f64, length: usize) -> usize {
-    if index.is_nan() || index == f64::NEG_INFINITY {
-        return 0;
-    }
-    if index == f64::INFINITY {
-        return length;
-    }
-    let integer = index.trunc();
-    if integer < 0.0 {
-        ((length as f64 + integer).max(0.0) as usize).min(length)
-    } else {
-        (integer as usize).min(length)
-    }
+fn normalize_slice_start(index: u64, length: usize) -> usize {
+    (index as usize).min(length)
 }
 
 // Original: compactionHandoff.ts, buildCompactionSummaryText().
@@ -506,12 +495,11 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_legacy_slice_start_like_javascript() {
-        assert_eq!(normalize_slice_start(1.9, 3), 1);
-        assert_eq!(normalize_slice_start(-1.0, 3), 2);
-        assert_eq!(normalize_slice_start(-10.0, 3), 0);
-        assert_eq!(normalize_slice_start(f64::NAN, 3), 0);
-        assert_eq!(normalize_slice_start(f64::INFINITY, 3), 3);
+    fn normalizes_legacy_slice_start() {
+        assert_eq!(normalize_slice_start(1, 3), 1);
+        assert_eq!(normalize_slice_start(2, 3), 2);
+        assert_eq!(normalize_slice_start(10, 3), 3);
+        assert_eq!(normalize_slice_start(0, 3), 0);
     }
 
     #[test]
@@ -523,12 +511,12 @@ mod tests {
                 summary: "summary".into(),
                 legacy_summary_message: None,
                 context_summary: None,
-                compacted_count: 2.0,
-                tokens_before: 10.0,
-                tokens_after: Some(4.0),
+                compacted_count: 2,
+                tokens_before: 10,
+                tokens_after: Some(4),
                 kept_user_message_count: None,
                 kept_head_user_message_count: None,
-                dropped_count: Some(0.0),
+                dropped_count: Some(0),
                 legacy_tail: None,
             },
         );
@@ -536,7 +524,7 @@ mod tests {
         assert!(is_compaction_summary_message(
             current.messages.last().unwrap()
         ));
-        assert_eq!(current.kept_user_message_count, 2.0);
+        assert_eq!(current.kept_user_message_count, 2);
 
         let legacy = build_context_compaction_shape(
             &history,
@@ -544,17 +532,17 @@ mod tests {
                 summary: "legacy".into(),
                 legacy_summary_message: None,
                 context_summary: None,
-                compacted_count: 1.0,
-                tokens_before: 10.0,
-                tokens_after: Some(3.0),
-                kept_user_message_count: Some(99.0),
-                kept_head_user_message_count: Some(99.0),
+                compacted_count: 1,
+                tokens_before: 10,
+                tokens_after: Some(3),
+                kept_user_message_count: Some(99),
+                kept_head_user_message_count: Some(99),
                 dropped_count: None,
                 legacy_tail: Some(true),
             },
         );
         assert_eq!(legacy.messages.len(), 2);
-        assert_eq!(legacy.kept_user_message_count, 0.0);
+        assert_eq!(legacy.kept_user_message_count, 0);
         assert_eq!(text(&legacy.messages[1]), "second");
     }
 }

@@ -31,8 +31,8 @@ pub struct SessionSummary {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_prompt: Option<String>,
-    pub created_at: f64,
-    pub updated_at: f64,
+    pub created_at: i64,
+    pub updated_at: i64,
     pub archived: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom: Option<Map<String, Value>>,
@@ -87,8 +87,8 @@ mod tests {
             cwd: Some("/repo".into()),
             title: None,
             last_prompt: Some("hello".into()),
-            created_at: 1.5,
-            updated_at: 2.0,
+            created_at: 1,
+            updated_at: 2,
             archived: false,
             custom: Some(Map::from_iter([
                 (PARENT_SESSION_ID_KEY.into(), json!("parent-1")),
@@ -103,8 +103,8 @@ mod tests {
                 "workspaceId": "wd_repo",
                 "cwd": "/repo",
                 "lastPrompt": "hello",
-                "createdAt": 1.5,
-                "updatedAt": 2.0,
+                "createdAt": 1,
+                "updatedAt": 2,
                 "archived": false,
                 "custom": {
                     "parent_session_id": "parent-1",

@@ -32,8 +32,12 @@ pub struct TurnModelState {
 pub struct LastEndedTurn {
     pub turn_id: crate::agent::TurnId,
     pub reason: TurnEndReason,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub duration_ms: Option<u64>,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct TurnInputPayload {
@@ -69,8 +73,12 @@ pub struct EndTurnPayload {
     pub reason: TurnEndReason,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<KimiErrorPayload>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub duration_ms: Option<u64>,
 }
 
 pub static TURN_MODEL: LazyLock<ModelDef<TurnModelState>> = LazyLock::new(|| {
@@ -336,7 +344,7 @@ mod tests {
             Some(LastEndedTurn {
                 turn_id: crate::agent::TurnId::new(0),
                 reason: TurnEndReason::Completed,
-                duration_ms: Some(24620.0),
+                duration_ms: Some(24620),
             })
         );
         assert_eq!(op.descriptor.persist(), None);

@@ -443,7 +443,7 @@ impl GrepTool {
                             .await
                             .ok()
                             .and_then(|stat| stat.modified_millis)
-                            .map_or(0, |millis| (millis / 1_000.0).trunc() as i64)
+                            .map_or(0, |millis| millis / 1_000)
                     } else {
                         0
                     };

@@ -23,7 +23,7 @@ use crate::kosong::contract::provider::{
     ResponseFormat, StreamedMessage, ThinkingEffort, TraceId,
 };
 use crate::kosong::contract::tool::Tool;
-use crate::kosong::contract::usage::TokenUsage;
+use crate::kosong::contract::usage::{TokenUsage, counter_from_json};
 use crate::kosong::provider::bases::google_genai::google_genai_transport::{
     GoogleAdcProvider, GoogleGenAiClient, GoogleGenAiHttpResponse, ReqwestGoogleGenAiClient,
 };
@@ -672,22 +672,13 @@ impl GoogleGenAiStreamedMessage {
         let Some(usage) = response.get("usageMetadata") else {
             return;
         };
-        let prompt = usage
-            .get("promptTokenCount")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let cached = usage
-            .get("cachedContentTokenCount")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
+        let prompt = counter_from_json(usage.get("promptTokenCount"));
+        let cached = counter_from_json(usage.get("cachedContentTokenCount"));
         self.usage = Some(TokenUsage {
-            input_other: (prompt - cached).max(0.0),
-            output: usage
-                .get("candidatesTokenCount")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
+            input_other: prompt.saturating_sub(cached),
+            output: counter_from_json(usage.get("candidatesTokenCount")),
             input_cache_read: cached,
-            input_cache_creation: 0.0,
+            input_cache_creation: 0,
         });
     }
 
@@ -1298,7 +1289,7 @@ mod tests {
         assert_eq!(parts.len(), 3);
         assert_eq!(message.id(), Some("response-1"));
         assert_eq!(message.finish_reason(), Some(FinishReason::Completed));
-        assert_eq!(message.usage().unwrap().input_other, 6.0);
+        assert_eq!(message.usage().unwrap().input_other, 6);
         let StreamedMessagePart::ToolCall(call) = parts[2].as_ref().unwrap() else {
             panic!("expected tool call")
         };

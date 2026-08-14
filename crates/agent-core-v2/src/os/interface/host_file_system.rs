@@ -20,7 +20,7 @@ pub struct HostFileStat {
     pub is_directory: bool,
     pub is_symbolic_link: bool,
     pub size: u64,
-    pub modified_millis: Option<f64>,
+    pub modified_millis: Option<i64>,
     pub inode: Option<u64>,
 }
 

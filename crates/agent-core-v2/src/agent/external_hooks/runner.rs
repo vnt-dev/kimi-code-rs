@@ -18,12 +18,12 @@ use crate::{
 
 use super::types::{HookAction, HookResult};
 
-const DEFAULT_TIMEOUT_SECONDS: f64 = 30.0;
+const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 const KILL_GRACE: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
 pub struct RunHookOptions {
-    pub timeout: f64,
+    pub timeout: u64,
     pub cwd: Option<String>,
     pub env: Option<HashMap<String, String>>,
     pub signal: Option<AbortSignal>,
@@ -188,13 +188,13 @@ fn buffer_text(output: &Arc<Mutex<Vec<u8>>>) -> String {
     String::from_utf8_lossy(&output.lock().unwrap()).into_owned()
 }
 
-fn timeout_duration(timeout: f64) -> Duration {
-    let seconds = if timeout.is_finite() && timeout > 0.0 {
+fn timeout_duration(timeout: u64) -> Duration {
+    let seconds = if timeout > 0 {
         timeout
     } else {
         DEFAULT_TIMEOUT_SECONDS
     };
-    Duration::try_from_secs_f64(seconds).unwrap_or(Duration::MAX)
+    Duration::from_secs(seconds)
 }
 
 // Original: runner.ts, resultFromExitCode().
@@ -376,7 +376,7 @@ mod tests {
             "cat",
             &input,
             RunHookOptions {
-                timeout: 5.0,
+                timeout: 5,
                 cwd: None,
                 env: None,
                 signal: None,
@@ -402,7 +402,7 @@ mod tests {
             "sleep 10",
             &Map::new(),
             RunHookOptions {
-                timeout: 0.01,
+                timeout: 1,
                 cwd: None,
                 env: None,
                 signal: None,
@@ -419,7 +419,7 @@ mod tests {
             "sleep 10",
             &Map::new(),
             RunHookOptions {
-                timeout: 5.0,
+                timeout: 5,
                 cwd: None,
                 env: None,
                 signal: Some(controller.signal()),

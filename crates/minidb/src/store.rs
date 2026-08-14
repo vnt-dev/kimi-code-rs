@@ -35,7 +35,7 @@ pub struct StoreRecord {
     pub value_ref: ValueRef,
     pub expire_at: i64,
     pub sequence: u64,
-    pub datetimes: Option<BTreeMap<String, f64>>,
+    pub datetimes: Option<BTreeMap<String, i64>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,7 +43,7 @@ pub struct StoreEntry {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
     pub expire_at: i64,
-    pub datetimes: Option<BTreeMap<String, f64>>,
+    pub datetimes: Option<BTreeMap<String, i64>>,
 }
 
 #[derive(Debug, Error)]
@@ -109,7 +109,7 @@ impl Store {
         self.len() == 0
     }
 
-    fn metadata_bytes(datetimes: Option<&BTreeMap<String, f64>>) -> usize {
+    fn metadata_bytes(datetimes: Option<&BTreeMap<String, i64>>) -> usize {
         datetimes.map_or(0, |datetimes| {
             serde_json::to_vec(&serde_json::json!({ "dt": datetimes }))
                 .map_or(0, |bytes| bytes.len())
@@ -139,7 +139,7 @@ impl Store {
         &self,
         key: &[u8],
         value: &[u8],
-        datetimes: Option<&BTreeMap<String, f64>>,
+        datetimes: Option<&BTreeMap<String, i64>>,
         count_value: bool,
     ) -> usize {
         key.len()
@@ -157,7 +157,7 @@ impl Store {
         key: impl Into<Vec<u8>>,
         value: impl Into<Vec<u8>>,
         expire_at: i64,
-        datetimes: Option<BTreeMap<String, f64>>,
+        datetimes: Option<BTreeMap<String, i64>>,
     ) {
         self.set_ref(key, ValueRef::Memory(value.into()), expire_at, datetimes);
     }
@@ -168,7 +168,7 @@ impl Store {
         key: impl Into<Vec<u8>>,
         value_ref: ValueRef,
         expire_at: i64,
-        datetimes: Option<BTreeMap<String, f64>>,
+        datetimes: Option<BTreeMap<String, i64>>,
     ) {
         let key = key.into();
         let previous = self.records.remove(&key);

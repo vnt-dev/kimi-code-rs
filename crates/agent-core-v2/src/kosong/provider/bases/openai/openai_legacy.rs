@@ -1582,7 +1582,7 @@ mod tests {
                 if call.id == "call-1" && call.arguments.as_deref() == Some("{\"x\":1}")
         ));
         assert_eq!(streamed.id(), Some("chat-1"));
-        assert_eq!(streamed.usage().unwrap().input_other, 8.0);
+        assert_eq!(streamed.usage().unwrap().input_other, 8);
         assert_eq!(streamed.finish_reason(), Some(FinishReason::Completed));
         assert_eq!(streamed.raw_finish_reason(), Some("stop"));
         assert_eq!(streamed.trace_id(), TraceId::Present(Some("trace-1")));

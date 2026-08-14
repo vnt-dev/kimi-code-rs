@@ -577,7 +577,7 @@ struct RetryingEvent {
     failed_attempt: u64,
     next_attempt: u64,
     max_attempts: u64,
-    delay_ms: f64,
+    delay_ms: u64,
     #[serde(default)]
     error_name: Option<String>,
     #[serde(default)]

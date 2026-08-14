@@ -1425,8 +1425,8 @@ pub(super) async fn inject_runtime(
     Ok(Some(assignment.turn))
 }
 
-pub(super) fn undo(runtime: &SchedulerRuntime, count: f64) -> PromptServiceResult<usize> {
-    if count <= 0.0 {
+pub(super) fn undo(runtime: &SchedulerRuntime, count: u32) -> PromptServiceResult<usize> {
+    if count == 0 {
         return Ok(0);
     }
     let check = precheck_undo(&runtime.context.get(), count);
@@ -2347,7 +2347,7 @@ mod tests {
             AbortController::new(),
             future::pending().boxed().shared(),
             CompactionSource::Manual,
-            0.0,
+            0,
             Arc::new(Mutex::new(None)),
         );
         compaction.finished.fire(&task);

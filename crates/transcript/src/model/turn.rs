@@ -117,12 +117,24 @@ pub enum StepState {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptUsage {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_tokens: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cached_tokens: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_utils::lenient_u64::deserialize"
+    )]
+    pub input_tokens: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_utils::lenient_u64::deserialize"
+    )]
+    pub output_tokens: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_utils::lenient_u64::deserialize"
+    )]
+    pub cached_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<f64>,
 }

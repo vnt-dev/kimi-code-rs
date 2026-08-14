@@ -249,7 +249,8 @@ pub struct SystemReminderRecord {
 #[serde(rename_all = "camelCase")]
 pub struct AgentContextData {
     pub history: Vec<ContextMessage>,
-    pub token_count: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub token_count: u64,
 }
 
 #[cfg(test)]

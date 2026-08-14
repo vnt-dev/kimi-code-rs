@@ -143,7 +143,7 @@ struct DeviceCodeEvent {
     user_code: String,
     verification_uri: String,
     verification_uri_complete: String,
-    expires_in: Option<f64>,
+    expires_in: Option<u64>,
 }
 
 impl From<DesktopDeviceCode> for DeviceCodeEvent {

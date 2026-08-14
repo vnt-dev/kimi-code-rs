@@ -48,7 +48,7 @@ pub enum HistoryContentPart {
         file_id: String,
         name: String,
         media_type: String,
-        size: f64,
+        size: u64,
     },
     Other {
         part_type: String,
@@ -646,7 +646,7 @@ mod tests {
                 file_id: "file-9".to_owned(),
                 name: "notes.txt".to_owned(),
                 media_type: "text/plain".to_owned(),
-                size: 128.0,
+                size: 128,
             },
         ]);
         let snapshot = group_messages_into_snapshot(&[opening]);

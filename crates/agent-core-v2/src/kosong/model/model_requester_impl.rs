@@ -480,10 +480,10 @@ pub fn build_stream_timing(
     let output_ended_at = stream_ended_at.unwrap_or_else(Instant::now);
     let first_token_latency_ms = first_chunk_at
         .checked_duration_since(request_started_at)
-        .map_or(0.0, |duration| duration.as_secs_f64() * 1_000.0);
+        .map_or(0, |duration| duration.as_millis() as u64);
     let stream_duration_ms = output_ended_at
         .checked_duration_since(first_chunk_at)
-        .map_or(0.0, |duration| duration.as_secs_f64() * 1_000.0);
+        .map_or(0, |duration| duration.as_millis() as u64);
     let (request_build_ms, server_first_token_ms) = request_sent_at.map_or((None, None), |sent| {
         // Original: min(max(requestSentAt, requestStartedAt), firstChunkAt).
         let clamped_sent_at = sent.clamp(request_started_at, first_chunk_at);
@@ -491,10 +491,9 @@ pub fn build_stream_timing(
             Some(
                 clamped_sent_at
                     .duration_since(request_started_at)
-                    .as_secs_f64()
-                    * 1_000.0,
+                    .as_millis() as u64,
             ),
-            Some(first_chunk_at.duration_since(clamped_sent_at).as_secs_f64() * 1_000.0),
+            Some(first_chunk_at.duration_since(clamped_sent_at).as_millis() as u64),
         )
     });
 
@@ -503,8 +502,8 @@ pub fn build_stream_timing(
         stream_duration_ms,
         request_build_ms,
         server_first_token_ms,
-        server_decode_ms: decode_stats.map(|stats| stats.server_decode_ms.max(0.0)),
-        client_consume_ms: decode_stats.map(|stats| stats.client_consume_ms.max(0.0)),
+        server_decode_ms: decode_stats.map(|stats| stats.server_decode_ms),
+        client_consume_ms: decode_stats.map(|stats| stats.client_consume_ms),
     }
 }
 
@@ -629,10 +628,10 @@ mod tests {
                     text: "hello".to_owned(),
                 }))]),
                 usage: Some(TokenUsage {
-                    input_other: 1.0,
-                    output: 2.0,
-                    input_cache_read: 0.0,
-                    input_cache_creation: 0.0,
+                    input_other: 1,
+                    output: 2,
+                    input_cache_read: 0,
+                    input_cache_creation: 0,
                 }),
             }))
         }
@@ -784,16 +783,16 @@ mod tests {
             first,
             Some(ended),
             Some(StreamDecodeStats {
-                server_decode_ms: -5.0,
-                client_consume_ms: 7.0,
+                server_decode_ms: 5,
+                client_consume_ms: 7,
             }),
         );
-        assert_eq!(timing.first_token_latency_ms, 30.0);
-        assert_eq!(timing.stream_duration_ms, 40.0);
-        assert_eq!(timing.request_build_ms, Some(30.0));
-        assert_eq!(timing.server_first_token_ms, Some(0.0));
-        assert_eq!(timing.server_decode_ms, Some(0.0));
-        assert_eq!(timing.client_consume_ms, Some(7.0));
+        assert_eq!(timing.first_token_latency_ms, 30);
+        assert_eq!(timing.stream_duration_ms, 40);
+        assert_eq!(timing.request_build_ms, Some(30));
+        assert_eq!(timing.server_first_token_ms, Some(0));
+        assert_eq!(timing.server_decode_ms, Some(5));
+        assert_eq!(timing.client_consume_ms, Some(7));
     }
 
     #[test]
@@ -807,8 +806,8 @@ mod tests {
             Some(first),
             None,
         );
-        assert_eq!(timing.request_build_ms, Some(0.0));
-        assert_eq!(timing.server_first_token_ms, Some(20.0));
+        assert_eq!(timing.request_build_ms, Some(0));
+        assert_eq!(timing.server_first_token_ms, Some(20));
         assert_eq!(timing.server_decode_ms, None);
         assert_eq!(timing.client_consume_ms, None);
     }
@@ -850,7 +849,7 @@ mod tests {
         assert!(matches!(
             events[1],
             Ok(ModelRequestEvent::Usage { ref usage, model: Some(ref model) })
-                if usage.output == 2.0 && model == "model"
+                if usage.output == 2 && model == "model"
         ));
         assert!(matches!(events[2], Ok(ModelRequestEvent::Finish { .. })));
         assert!(matches!(events[3], Ok(ModelRequestEvent::Timing(_))));

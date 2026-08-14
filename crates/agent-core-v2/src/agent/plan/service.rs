@@ -490,7 +490,7 @@ mod tests {
             Ok(())
         }
 
-        fn undo(&self, _: f64) -> Result<UndoCut, ContextMemoryServiceError> {
+        fn undo(&self, _: u32) -> Result<UndoCut, ContextMemoryServiceError> {
             unreachable!("plan injection only reads context history")
         }
 

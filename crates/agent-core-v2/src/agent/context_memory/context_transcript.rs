@@ -26,15 +26,15 @@ const TOOL_INTERRUPTED_ON_RESUME_OUTPUT: &str = "Tool execution was interrupted 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContextTranscript {
     pub entries: Vec<ContextMessage>,
-    pub times: Vec<Option<f64>>,
-    pub folded_length: f64,
+    pub times: Vec<Option<i64>>,
+    pub folded_length: u64,
 }
 
 #[derive(Clone, Debug)]
 struct MutableEntry {
     key: u64,
     message: ContextMessage,
-    time: Option<f64>,
+    time: Option<i64>,
 }
 
 // Original:
@@ -47,7 +47,7 @@ struct MutableEntry {
 #[derive(Debug, Default)]
 pub struct ContextTranscriptReducer {
     transcript: Vec<MutableEntry>,
-    folded_length: f64,
+    folded_length: u64,
     clear_floor: usize,
     open_steps: HashMap<String, u64>,
     pending_tool_result_ids: IndexSet<String>,
@@ -84,7 +84,10 @@ impl ContextTranscriptReducer {
                 else {
                     return;
                 };
-                let entry = self.mutable_entry(message, read_number(record, "time"));
+                let entry = self.mutable_entry(
+                    message,
+                    read_number(record, "time").map(|value| value as i64),
+                );
                 if self.pending_tool_result_ids.is_empty() {
                     self.push(entry);
                 } else {
@@ -99,7 +102,7 @@ impl ContextTranscriptReducer {
                 else {
                     return;
                 };
-                self.apply_loop_event(event, read_number(record, "time"));
+                self.apply_loop_event(event, read_number(record, "time").map(|value| value as i64));
             }
             Some("context.apply_compaction") => {
                 let summary = context_message(
@@ -112,7 +115,10 @@ impl ContextTranscriptReducer {
                     None,
                     Some(PromptOrigin::CompactionSummary),
                 );
-                let entry = self.mutable_entry(summary, read_number(record, "time"));
+                let entry = self.mutable_entry(
+                    summary,
+                    read_number(record, "time").map(|value| value as i64),
+                );
                 self.transcript.push(entry);
                 self.folded_length = recover_folded_length(
                     record,
@@ -123,13 +129,13 @@ impl ContextTranscriptReducer {
                 self.reset_open_state();
             }
             Some("context.undo") => {
-                if let Some(count) = read_number(record, "count") {
+                if let Some(count) = read_number(record, "count").map(|value| value as u32) {
                     self.apply_undo(count);
                 }
             }
             Some("context.clear") => {
                 self.clear_floor = self.transcript.len();
-                self.folded_length = 0.0;
+                self.folded_length = 0;
                 self.reset_open_state();
             }
             _ => {}
@@ -149,7 +155,7 @@ impl ContextTranscriptReducer {
         }
     }
 
-    fn mutable_entry(&mut self, message: ContextMessage, time: Option<f64>) -> MutableEntry {
+    fn mutable_entry(&mut self, message: ContextMessage, time: Option<i64>) -> MutableEntry {
         let key = self.next_key;
         self.next_key = self.next_key.wrapping_add(1);
         MutableEntry {
@@ -161,18 +167,18 @@ impl ContextTranscriptReducer {
 
     fn push(&mut self, entry: MutableEntry) {
         self.transcript.push(entry);
-        self.folded_length += 1.0;
+        self.folded_length += 1;
     }
 
     fn flush_deferred_if_tool_exchange_closed(&mut self) {
         if !self.pending_tool_result_ids.is_empty() || self.deferred.is_empty() {
             return;
         }
-        self.folded_length += self.deferred.len() as f64;
+        self.folded_length += self.deferred.len() as u64;
         self.transcript.append(&mut self.deferred);
     }
 
-    fn close_pending_tool_results(&mut self, time: Option<f64>) {
+    fn close_pending_tool_results(&mut self, time: Option<i64>) {
         if self.pending_tool_result_ids.is_empty() {
             return;
         }
@@ -213,10 +219,10 @@ impl ContextTranscriptReducer {
             return;
         }
         self.transcript.remove(index);
-        self.folded_length = (self.folded_length - 1.0).max(0.0);
+        self.folded_length = self.folded_length.saturating_sub(1);
     }
 
-    fn apply_loop_event(&mut self, event: LoopRecordedEvent, time: Option<f64>) {
+    fn apply_loop_event(&mut self, event: LoopRecordedEvent, time: Option<i64>) {
         match event {
             LoopRecordedEvent::StepBegin { uuid, .. } => {
                 self.close_pending_tool_results(time);
@@ -302,11 +308,11 @@ impl ContextTranscriptReducer {
             .map(|entry| &mut entry.message)
     }
 
-    fn apply_undo(&mut self, count: f64) {
-        if count <= 0.0 {
+    fn apply_undo(&mut self, count: u32) {
+        if count == 0 {
             return;
         }
-        let mut removed_user_count = 0.0;
+        let mut removed_user_count = 0u32;
         let mut index = self.transcript.len();
         while index > self.clear_floor {
             index -= 1;
@@ -319,9 +325,9 @@ impl ContextTranscriptReducer {
             }
             let is_user = is_real_user_input(message);
             self.transcript.remove(index);
-            self.folded_length = (self.folded_length - 1.0).max(0.0);
+            self.folded_length = self.folded_length.saturating_sub(1);
             if is_user {
-                removed_user_count += 1.0;
+                removed_user_count += 1;
                 if removed_user_count >= count {
                     break;
                 }
@@ -373,18 +379,18 @@ fn recover_folded_length(
     record: &WireRecord,
     transcript: &[MutableEntry],
     clear_floor: usize,
-    folded_length: f64,
-) -> f64 {
-    let kept = read_number(record, "keptUserMessageCount");
-    let kept_head = read_number(record, "keptHeadUserMessageCount");
-    let compacted = read_number(record, "compactedCount");
+    folded_length: u64,
+) -> u64 {
+    let kept = read_number(record, "keptUserMessageCount").map(|value| value as u64);
+    let kept_head = read_number(record, "keptHeadUserMessageCount").map(|value| value as u64);
+    let compacted = read_number(record, "compactedCount").map(|value| value as u64);
     if let Some(kept) = kept {
-        return kept + if kept_head.is_none() { 1.0 } else { 2.0 };
+        return kept + if kept_head.is_none() { 1 } else { 2 };
     }
     if let Some(compacted) = compacted
         && compacted < folded_length
     {
-        return 1.0 + (folded_length - compacted);
+        return 1 + (folded_length - compacted);
     }
     let messages = transcript[clear_floor..]
         .iter()
@@ -394,8 +400,8 @@ fn recover_folded_length(
         &collect_compactable_user_messages(&messages),
         COMPACT_USER_MESSAGE_MAX_TOKENS,
     )
-    .len() as f64
-        + 1.0
+    .len() as u64
+        + 1
 }
 
 fn read_compaction_summary_text(record: &WireRecord) -> String {
@@ -487,7 +493,7 @@ mod tests {
             result.entries[2].origin,
             Some(PromptOrigin::CompactionSummary)
         );
-        assert_eq!(result.folded_length, 3.0);
+        assert_eq!(result.folded_length, 3);
     }
 
     #[test]
@@ -503,7 +509,7 @@ mod tests {
                 "keptHeadUserMessageCount": 1
             })),
         ];
-        assert_eq!(reduce_context_transcript(&records).folded_length, 4.5);
+        assert_eq!(reduce_context_transcript(&records).folded_length, 4);
     }
 
     #[test]
@@ -534,7 +540,7 @@ mod tests {
         );
         assert_eq!(result.entries[1].message.tool_calls[0].id, "c");
         assert_eq!(result.entries[2].message.tool_call_id.as_deref(), Some("c"));
-        assert_eq!(result.times, [Some(100.0), Some(200.0), Some(220.0)]);
+        assert_eq!(result.times, [Some(100), Some(200), Some(220)]);
     }
 
     #[test]
@@ -553,7 +559,7 @@ mod tests {
         ];
         let result = reduce_context_transcript(&records);
         assert_eq!(texts(&result), ["q", "recovered"]);
-        assert_eq!(result.folded_length, 2.0);
+        assert_eq!(result.folded_length, 2);
     }
 
     #[test]
@@ -597,7 +603,7 @@ mod tests {
         ];
         let result = reduce_context_transcript(&records);
         assert_eq!(texts(&result), ["old", "SUM", "injected"]);
-        assert_eq!(result.folded_length, 3.0);
+        assert_eq!(result.folded_length, 3);
     }
 
     #[test]
@@ -613,7 +619,7 @@ mod tests {
         ];
         let result = reduce_context_transcript(&records);
         assert_eq!(texts(&result), ["u1"]);
-        assert_eq!(result.folded_length, 0.0);
+        assert_eq!(result.folded_length, 0);
     }
 
     #[test]

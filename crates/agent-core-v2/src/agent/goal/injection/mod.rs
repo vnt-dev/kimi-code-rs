@@ -135,8 +135,8 @@ fn build_goal_reminder(goal: &GoalSnapshot) -> String {
                 "progress".into(),
                 Value::String(format!(
                     "{} continuation turns, {} tokens, {} elapsed",
-                    javascript_number(goal.turns_used),
-                    javascript_number(goal.tokens_used),
+                    goal.turns_used,
+                    goal.tokens_used,
                     format_elapsed(goal.wall_clock_ms),
                 )),
             ),
@@ -180,17 +180,17 @@ fn format_budgets(goal: &GoalSnapshot) -> String {
     if let Some(budget) = goal.budget.turn_budget {
         lines.push(format!(
             "turns {}/{} (remaining {})",
-            javascript_number(goal.turns_used),
-            javascript_number(budget),
-            optional_javascript_number(goal.budget.remaining_turns),
+            goal.turns_used,
+            budget,
+            optional_number(goal.budget.remaining_turns),
         ));
     }
     if let Some(budget) = goal.budget.token_budget {
         lines.push(format!(
             "tokens {}/{} (remaining {})",
-            javascript_number(goal.tokens_used),
-            javascript_number(budget),
-            optional_javascript_number(goal.budget.remaining_tokens),
+            goal.tokens_used,
+            budget,
+            optional_number(goal.budget.remaining_tokens),
         ));
     }
     if let Some(budget) = goal.budget.wall_clock_budget_ms {
@@ -198,7 +198,7 @@ fn format_budgets(goal: &GoalSnapshot) -> String {
             "time {}/{} (remaining {})",
             format_elapsed(goal.wall_clock_ms),
             format_elapsed(budget),
-            format_elapsed(goal.budget.remaining_wall_clock_ms.unwrap_or(0.0)),
+            format_elapsed(goal.budget.remaining_wall_clock_ms.unwrap_or(0)),
         ));
     }
     lines.join("; ")
@@ -210,24 +210,24 @@ fn is_nearing_budget(goal: &GoalSnapshot) -> bool {
 
 fn max_budget_fraction(goal: &GoalSnapshot) -> f64 {
     let mut fractions = Vec::new();
-    if let Some(budget) = goal.budget.turn_budget.filter(|budget| *budget > 0.0) {
-        fractions.push(goal.turns_used / budget);
+    if let Some(budget) = goal.budget.turn_budget.filter(|budget| *budget > 0) {
+        fractions.push(goal.turns_used as f64 / budget as f64);
     }
-    if let Some(budget) = goal.budget.token_budget.filter(|budget| *budget > 0.0) {
-        fractions.push(goal.tokens_used / budget);
+    if let Some(budget) = goal.budget.token_budget.filter(|budget| *budget > 0) {
+        fractions.push(goal.tokens_used as f64 / budget as f64);
     }
     if let Some(budget) = goal
         .budget
         .wall_clock_budget_ms
-        .filter(|budget| *budget > 0.0)
+        .filter(|budget| *budget > 0)
     {
-        fractions.push(goal.wall_clock_ms / budget);
+        fractions.push(goal.wall_clock_ms as f64 / budget as f64);
     }
     fractions.into_iter().fold(0.0, f64::max)
 }
 
-fn format_elapsed(milliseconds: f64) -> String {
-    let total_seconds = (milliseconds / 1000.0 + 0.5).floor() as i64;
+fn format_elapsed(milliseconds: u64) -> String {
+    let total_seconds = ((milliseconds + 500) / 1000) as i64;
     if total_seconds < 60 {
         return format!("{total_seconds}s");
     }
@@ -239,24 +239,8 @@ fn format_elapsed(milliseconds: f64) -> String {
     format!("{}h{:02}m", minutes / 60, minutes % 60)
 }
 
-fn javascript_number(value: f64) -> String {
-    if value.is_nan() {
-        "NaN".into()
-    } else if value == f64::INFINITY {
-        "Infinity".into()
-    } else if value == f64::NEG_INFINITY {
-        "-Infinity".into()
-    } else if value == 0.0 {
-        "0".into()
-    } else if value.fract() == 0.0 {
-        format!("{value:.0}")
-    } else {
-        value.to_string()
-    }
-}
-
-fn optional_javascript_number(value: Option<f64>) -> String {
-    value.map_or_else(|| "undefined".into(), javascript_number)
+fn optional_number(value: Option<u64>) -> String {
+    value.map_or_else(|| "undefined".into(), |value| value.to_string())
 }
 
 fn goal_status_name(status: GoalStatus) -> &'static str {
@@ -292,16 +276,16 @@ mod tests {
             objective: "keep <this> & that".into(),
             completion_criterion: Some("finish > verify".into()),
             status,
-            turns_used: 3.0,
-            tokens_used: 750.0,
-            wall_clock_ms: 61_000.0,
+            turns_used: 3,
+            tokens_used: 750,
+            wall_clock_ms: 61_000,
             budget: GoalBudgetReport {
-                token_budget: Some(1_000.0),
-                turn_budget: Some(4.0),
-                wall_clock_budget_ms: Some(120_000.0),
-                remaining_tokens: Some(250.0),
-                remaining_turns: Some(1.0),
-                remaining_wall_clock_ms: Some(59_000.0),
+                token_budget: Some(1_000),
+                turn_budget: Some(4),
+                wall_clock_budget_ms: Some(120_000),
+                remaining_tokens: Some(250),
+                remaining_turns: Some(1),
+                remaining_wall_clock_ms: Some(59_000),
                 token_budget_reached: false,
                 turn_budget_reached: false,
                 wall_clock_budget_reached: false,

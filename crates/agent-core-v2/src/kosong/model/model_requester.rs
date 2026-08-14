@@ -32,12 +32,12 @@ pub struct ModelRequestInput {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ModelRequestTiming {
-    pub first_token_latency_ms: f64,
-    pub stream_duration_ms: f64,
-    pub request_build_ms: Option<f64>,
-    pub server_first_token_ms: Option<f64>,
-    pub server_decode_ms: Option<f64>,
-    pub client_consume_ms: Option<f64>,
+    pub first_token_latency_ms: u64,
+    pub stream_duration_ms: u64,
+    pub request_build_ms: Option<u64>,
+    pub server_first_token_ms: Option<u64>,
+    pub server_decode_ms: Option<u64>,
+    pub client_consume_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -147,15 +147,15 @@ mod tests {
     #[test]
     fn request_timing_keeps_all_optional_metrics_separate() {
         let timing = ModelRequestTiming {
-            first_token_latency_ms: 12.0,
-            stream_duration_ms: 50.0,
-            request_build_ms: Some(1.0),
+            first_token_latency_ms: 12,
+            stream_duration_ms: 50,
+            request_build_ms: Some(1),
             server_first_token_ms: None,
-            server_decode_ms: Some(20.0),
-            client_consume_ms: Some(17.0),
+            server_decode_ms: Some(20),
+            client_consume_ms: Some(17),
         };
-        assert_eq!(timing.first_token_latency_ms, 12.0);
+        assert_eq!(timing.first_token_latency_ms, 12);
         assert_eq!(timing.server_first_token_ms, None);
-        assert_eq!(timing.client_consume_ms, Some(17.0));
+        assert_eq!(timing.client_consume_ms, Some(17));
     }
 }

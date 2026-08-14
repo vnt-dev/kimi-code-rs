@@ -186,13 +186,13 @@ impl AgentStepRetryService {
         }
         let error = underlying_error(&context.error).unwrap_or(&context.error);
         let delay_ms = if failed_attempt >= max_attempts {
-            0.0
+            0
         } else {
             read_retry_after_ms(error).unwrap_or_else(|| {
                 retry_backoff_delays(max_attempts as usize)
                     .get((failed_attempt - 1) as usize)
                     .copied()
-                    .unwrap_or(0.0)
+                    .unwrap_or(0)
             })
         };
         self.publish_retry(
@@ -251,7 +251,7 @@ impl AgentStepRetryService {
         step: crate::agent::StepId,
         failed_attempt: u64,
         max_attempts: u64,
-        delay_ms: f64,
+        delay_ms: u64,
         error: &(dyn std::error::Error + 'static),
     ) -> Result<(), LoopValue> {
         let fields = RetryEvent {
@@ -306,7 +306,7 @@ struct RetryEvent {
     failed_attempt: u64,
     next_attempt: u64,
     max_attempts: u64,
-    delay_ms: f64,
+    delay_ms: u64,
     #[serde(flatten)]
     fields: crate::_base::utils::retry::RetryErrorFields,
 }

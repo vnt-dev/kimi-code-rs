@@ -43,24 +43,24 @@ use super::{
 pub struct ContextCompactionInput {
     pub summary: String,
     pub context_summary: Option<String>,
-    pub compacted_count: f64,
-    pub tokens_before: f64,
-    pub tokens_after: Option<f64>,
-    pub kept_user_message_count: Option<f64>,
-    pub kept_head_user_message_count: Option<f64>,
-    pub dropped_count: Option<f64>,
+    pub compacted_count: u64,
+    pub tokens_before: u64,
+    pub tokens_after: Option<u64>,
+    pub kept_user_message_count: Option<u64>,
+    pub kept_head_user_message_count: Option<u64>,
+    pub dropped_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContextCompactionResult {
     pub summary: String,
     pub context_summary: String,
-    pub compacted_count: f64,
-    pub tokens_before: f64,
-    pub tokens_after: f64,
-    pub kept_user_message_count: f64,
-    pub kept_head_user_message_count: Option<f64>,
-    pub dropped_count: Option<f64>,
+    pub compacted_count: u64,
+    pub tokens_before: u64,
+    pub tokens_after: u64,
+    pub kept_user_message_count: u64,
+    pub kept_head_user_message_count: Option<u64>,
+    pub dropped_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -103,7 +103,7 @@ pub trait AgentContextMemoryServiceContract: Send + Sync {
     fn append(&self, messages: Vec<ContextMessage>) -> Result<(), ContextMemoryServiceError>;
     fn append_loop_event(&self, event: LoopRecordedEvent) -> Result<(), ContextMemoryServiceError>;
     fn clear(&self) -> Result<(), ContextMemoryServiceError>;
-    fn undo(&self, count: f64) -> Result<UndoCut, ContextMemoryServiceError>;
+    fn undo(&self, count: u32) -> Result<UndoCut, ContextMemoryServiceError>;
     fn apply_compaction(
         &self,
         input: ContextCompactionInput,
@@ -161,7 +161,7 @@ impl AgentContextMemoryService {
         start: usize,
         delete_count: usize,
         messages: &[ContextMessage],
-        tokens: Option<f64>,
+        tokens: Option<u64>,
     ) -> Result<(), serde_json::Error> {
         let mut fields = Map::from_iter([
             ("start".into(), Value::from(start as u64)),
@@ -182,14 +182,14 @@ impl AgentContextMemoryService {
         history: &[ContextMessage],
     ) -> Result<Vec<Op>, serde_json::Error> {
         let model = self.wire.get_model(&CONTEXT_SIZE_MODEL);
-        if model.length <= cut_index as f64 {
+        if model.length <= cut_index as u64 {
             return Ok(Vec::new());
         }
         Ok(vec![context_size_measured(ContextSizeMeasuredPayload {
-            length: cut_index as f64,
+            length: cut_index as u64,
             tokens: estimate_tokens_for_messages(
                 history[..cut_index].iter().map(|message| &message.message),
-            ) as f64,
+            ) as u64,
         })?])
     }
 }
@@ -253,8 +253,8 @@ impl AgentContextMemoryServiceContract for AgentContextMemoryService {
         self.wire.dispatch([
             context_clear()?,
             context_size_measured(ContextSizeMeasuredPayload {
-                length: 0.0,
-                tokens: 0.0,
+                length: 0,
+                tokens: 0,
             })?,
         ])?;
         self.publish_splice(0, delete_count, &[], None)?;
@@ -262,7 +262,7 @@ impl AgentContextMemoryServiceContract for AgentContextMemoryService {
     }
 
     // Original: contextMemoryService.ts, undo().
-    fn undo(&self, count: f64) -> Result<UndoCut, ContextMemoryServiceError> {
+    fn undo(&self, count: u32) -> Result<UndoCut, ContextMemoryServiceError> {
         let history = self.get();
         let cut = compute_undo_cut(&history, count);
         if is_fully_undoable(cut, count) {
@@ -309,7 +309,7 @@ impl AgentContextMemoryServiceContract for AgentContextMemoryService {
         self.wire.dispatch([
             context_apply_compaction(persisted_input)?,
             context_size_measured(ContextSizeMeasuredPayload {
-                length: result.messages.len() as f64,
+                length: result.messages.len() as u64,
                 tokens: result.tokens_after,
             })?,
         ])?;
@@ -440,7 +440,7 @@ mod tests {
 
         service.append(vec![user("one"), user("two")]).unwrap();
         assert_eq!(service.get().len(), 2);
-        let cut = service.undo(1.0).unwrap();
+        let cut = service.undo(1).unwrap();
         assert_eq!(cut.cut_index, 1);
         assert_eq!(service.get().len(), 1);
 
@@ -448,16 +448,16 @@ mod tests {
             .apply_compaction(ContextCompactionInput {
                 summary: "summary".into(),
                 context_summary: None,
-                compacted_count: 1.0,
-                tokens_before: 3.0,
-                tokens_after: Some(2.0),
+                compacted_count: 1,
+                tokens_before: 3,
+                tokens_after: Some(2),
                 kept_user_message_count: None,
                 kept_head_user_message_count: None,
                 dropped_count: None,
             })
             .unwrap();
-        assert_eq!(result.tokens_after, 2.0);
-        assert_eq!(service.wire.get_model(&CONTEXT_SIZE_MODEL).tokens, 2.0);
+        assert_eq!(result.tokens_after, 2);
+        assert_eq!(service.wire.get_model(&CONTEXT_SIZE_MODEL).tokens, 2);
         service.clear().unwrap();
         assert!(service.get().is_empty());
         assert_eq!(seen.lock().unwrap().len(), 4);

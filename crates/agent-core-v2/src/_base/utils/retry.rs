@@ -8,9 +8,9 @@ use super::abort::{AbortError, AbortSignal, abortable};
 use crate::_base::errors::errors::Error2;
 
 pub const DEFAULT_MAX_RETRY_ATTEMPTS: usize = 10;
-const BASE_DELAY_MS: f64 = 500.0;
-const MAX_DELAY_MS: f64 = 32_000.0;
-const RETRY_FACTOR: f64 = 2.0;
+const BASE_DELAY_MS: u64 = 500;
+const MAX_DELAY_MS: u64 = 32_000;
+const RETRY_FACTOR: u64 = 2;
 const JITTER_FACTOR: f64 = 0.25;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -22,15 +22,17 @@ pub struct RetryErrorFields {
 }
 
 // Original: packages/agent-core-v2/src/_base/utils/retry.ts, retryBackoffDelays().
-pub fn retry_backoff_delays(max_attempts: usize) -> Vec<f64> {
+pub fn retry_backoff_delays(max_attempts: usize) -> Vec<u64> {
     retry_backoff_delays_with(max_attempts, random_unit)
 }
 
-pub fn retry_backoff_delays_with(max_attempts: usize, mut random: impl FnMut() -> f64) -> Vec<f64> {
+pub fn retry_backoff_delays_with(max_attempts: usize, mut random: impl FnMut() -> f64) -> Vec<u64> {
     (0..max_attempts.saturating_sub(1))
         .map(|attempt| {
-            let base = (BASE_DELAY_MS * RETRY_FACTOR.powi(attempt as i32)).min(MAX_DELAY_MS);
-            base + random().clamp(0.0, 1.0) * JITTER_FACTOR * base
+            let base = BASE_DELAY_MS
+                .saturating_mul(RETRY_FACTOR.saturating_pow(attempt as u32))
+                .min(MAX_DELAY_MS);
+            base + (random().clamp(0.0, 1.0) * JITTER_FACTOR * base as f64).round() as u64
         })
         .collect()
 }
@@ -41,29 +43,24 @@ fn random_unit() -> f64 {
     ((raw >> 11) as f64) / ((1_u64 << 53) as f64)
 }
 
-pub fn read_retry_after_ms(error: &(dyn Error + 'static)) -> Option<f64> {
+pub fn read_retry_after_ms(error: &(dyn Error + 'static)) -> Option<u64> {
     let value = error
         .downcast_ref::<Error2>()?
         .details
         .as_ref()?
         .get("retryAfterMs")?
-        .as_f64()?;
-    (value > 0.0).then_some(value)
+        .as_u64()?;
+    (value > 0).then_some(value)
 }
 
 pub async fn sleep_for_retry(
-    delay_ms: f64,
+    delay_ms: u64,
     signal: Option<&AbortSignal>,
 ) -> Result<(), Arc<AbortError>> {
     if let Some(signal) = signal {
         signal.throw_if_aborted()?;
     }
-    let seconds = if delay_ms.is_finite() {
-        delay_ms.max(0.0) / 1_000.0
-    } else {
-        0.0
-    };
-    let sleep = tokio::time::sleep(Duration::from_secs_f64(seconds));
+    let sleep = tokio::time::sleep(Duration::from_millis(delay_ms));
     match signal {
         Some(signal) => abortable(sleep, signal).await,
         None => {
@@ -116,9 +113,9 @@ mod tests {
         assert!(retry_backoff_delays_with(0, || 0.0).is_empty());
         assert_eq!(
             retry_backoff_delays_with(5, || 0.0),
-            vec![500.0, 1_000.0, 2_000.0, 4_000.0]
+            vec![500, 1_000, 2_000, 4_000]
         );
-        assert_eq!(retry_backoff_delays_with(9, || 1.0)[7], MAX_DELAY_MS * 1.25);
+        assert_eq!(retry_backoff_delays_with(9, || 1.0)[7], 40_000);
     }
 
     #[test]
@@ -135,7 +132,7 @@ mod tests {
                 ..Error2Options::default()
             },
         );
-        assert_eq!(read_retry_after_ms(&error), Some(2500.0));
+        assert_eq!(read_retry_after_ms(&error), Some(2500));
         assert_eq!(
             retry_error_fields(&error),
             RetryErrorFields {
@@ -151,7 +148,7 @@ mod tests {
         let controller = AbortController::new();
         controller.abort(None);
         assert!(
-            sleep_for_retry(10_000.0, Some(&controller.signal()))
+            sleep_for_retry(10_000, Some(&controller.signal()))
                 .await
                 .is_err()
         );

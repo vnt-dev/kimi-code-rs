@@ -9,7 +9,7 @@ use super::{GoalBudgetLimits, GoalBudgetReport, GoalState};
 
 pub const GOAL_BUDGET_BLOCK_PREFIX: &str = "Blocked after goal budget reached";
 
-pub fn compute_budget_report(state: &GoalState, wall_clock_ms: f64) -> GoalBudgetReport {
+pub fn compute_budget_report(state: &GoalState, wall_clock_ms: u64) -> GoalBudgetReport {
     let token_budget = state.budget_limits.token_budget;
     let turn_budget = state.budget_limits.turn_budget;
     let wall_clock_budget_ms = state.budget_limits.wall_clock_budget_ms;
@@ -22,10 +22,10 @@ pub fn compute_budget_report(state: &GoalState, wall_clock_ms: f64) -> GoalBudge
         token_budget,
         turn_budget,
         wall_clock_budget_ms,
-        remaining_tokens: token_budget.map(|budget| (budget - state.tokens_used).max(0.0)),
-        remaining_turns: turn_budget.map(|budget| (budget - state.turns_used).max(0.0)),
+        remaining_tokens: token_budget.map(|budget| budget.saturating_sub(state.tokens_used)),
+        remaining_turns: turn_budget.map(|budget| budget.saturating_sub(state.turns_used)),
         remaining_wall_clock_ms: wall_clock_budget_ms
-            .map(|budget| (budget - wall_clock_ms).max(0.0)),
+            .map(|budget| budget.saturating_sub(wall_clock_ms)),
         token_budget_reached,
         turn_budget_reached,
         wall_clock_budget_reached,
@@ -86,24 +86,8 @@ pub fn has_step_budget_remaining(
     max_steps.is_none_or(|max_steps| max_steps == 0 || current_step.get() < max_steps)
 }
 
-fn number_or_empty(value: Option<f64>) -> String {
-    value.map_or_else(String::new, javascript_number)
-}
-
-fn javascript_number(value: f64) -> String {
-    if value.is_nan() {
-        "NaN".into()
-    } else if value == f64::INFINITY {
-        "Infinity".into()
-    } else if value == f64::NEG_INFINITY {
-        "-Infinity".into()
-    } else if value == 0.0 {
-        "0".into()
-    } else if value.fract() == 0.0 {
-        format!("{value:.0}")
-    } else {
-        value.to_string()
-    }
+fn number_or_empty(value: Option<u64>) -> String {
+    value.map_or_else(String::new, |value| value.to_string())
 }
 
 #[cfg(test)]
@@ -117,14 +101,14 @@ mod tests {
             objective: "ship".into(),
             completion_criterion: None,
             status: GoalStatus::Active,
-            turns_used: 3.0,
-            tokens_used: 12.0,
-            wall_clock_ms: 0.0,
+            turns_used: 3,
+            tokens_used: 12,
+            wall_clock_ms: 0,
             wall_clock_resumed_at: None,
             budget_limits: GoalBudgetLimits {
-                token_budget: Some(10.0),
-                turn_budget: Some(3.0),
-                wall_clock_budget_ms: Some(50.0),
+                token_budget: Some(10),
+                turn_budget: Some(3),
+                wall_clock_budget_ms: Some(50),
             },
             terminal_reason: None,
         }
@@ -132,10 +116,10 @@ mod tests {
 
     #[test]
     fn reports_each_budget_independently_and_formats_the_source_reason_order() {
-        let report = compute_budget_report(&state(), 60.0);
-        assert_eq!(report.remaining_tokens, Some(0.0));
-        assert_eq!(report.remaining_turns, Some(0.0));
-        assert_eq!(report.remaining_wall_clock_ms, Some(0.0));
+        let report = compute_budget_report(&state(), 60);
+        assert_eq!(report.remaining_tokens, Some(0));
+        assert_eq!(report.remaining_turns, Some(0));
+        assert_eq!(report.remaining_wall_clock_ms, Some(0));
         assert!(report.over_budget);
         assert_eq!(
             goal_budget_block_reason(&report).as_deref(),

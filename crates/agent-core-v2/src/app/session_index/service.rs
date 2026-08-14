@@ -414,26 +414,29 @@ impl SessionIndexContract for FileSessionIndex {
 }
 
 // Original: parseTime(). Persisted v1 timestamps are ISO strings; numeric v2
-// timestamps retain their finite floating-point value.
-fn parse_time(value: Option<&Value>) -> f64 {
+// timestamps are milliseconds since the Unix epoch.
+fn parse_time(value: Option<&Value>) -> i64 {
     match value {
-        Some(Value::Number(number)) => number.as_f64().filter(|value| value.is_finite()),
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .map(|value| value.trunc() as i64),
         Some(Value::String(value)) => parse_date(value),
         _ => None,
     }
-    .unwrap_or(0.0)
+    .unwrap_or(0)
 }
 
-fn parse_date(value: &str) -> Option<f64> {
+fn parse_date(value: &str) -> Option<i64> {
     DateTime::parse_from_rfc3339(value)
-        .map(|date| date.timestamp_millis() as f64)
-        .or_else(|_| DateTime::parse_from_rfc2822(value).map(|date| date.timestamp_millis() as f64))
+        .map(|date| date.timestamp_millis())
+        .or_else(|_| DateTime::parse_from_rfc2822(value).map(|date| date.timestamp_millis()))
         .ok()
         .or_else(|| {
             NaiveDate::parse_from_str(value, "%Y-%m-%d")
                 .ok()?
                 .and_hms_opt(0, 0, 0)
-                .map(|date| date.and_utc().timestamp_millis() as f64)
+                .map(|date| date.and_utc().timestamp_millis())
         })
 }
 
@@ -745,12 +748,12 @@ mod tests {
 
     #[test]
     fn pure_metadata_helpers_preserve_legacy_compatibility() {
-        assert_eq!(parse_time(Some(&json!(12.5))), 12.5);
+        assert_eq!(parse_time(Some(&json!(12.5))), 12);
         assert_eq!(
             parse_time(Some(&json!("2024-01-02T03:04:05.006Z"))),
-            1_704_164_645_006.0
+            1_704_164_645_006
         );
-        assert_eq!(parse_time(Some(&json!("invalid"))), 0.0);
+        assert_eq!(parse_time(Some(&json!("invalid"))), 0);
 
         let metadata = json!({
             "cwd": "",
@@ -771,8 +774,8 @@ mod tests {
             cwd: None,
             title: None,
             last_prompt: None,
-            created_at: 0.0,
-            updated_at: 0.0,
+            created_at: 0,
+            updated_at: 0,
             archived: false,
             custom: Some(Map::from_iter([
                 (PARENT_SESSION_ID_KEY.into(), json!("parent-1")),
@@ -797,13 +800,13 @@ mod tests {
             cwd: None,
             title: None,
             last_prompt: None,
-            created_at: 0.0,
+            created_at: 0,
             updated_at,
             archived: false,
             custom: None,
         };
         let page = session_page(
-            vec![make("old", 1.0), make("new", 3.0), make("middle", 2.0)],
+            vec![make("old", 1), make("new", 3), make("middle", 2)],
             Some(2),
         );
         assert_eq!(

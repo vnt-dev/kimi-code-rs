@@ -25,16 +25,15 @@ use super::{
     types::{DeviceAuthorization, OAuthFlowConfig, TokenInfo},
 };
 
-const MIN_REFRESH_THRESHOLD_SECONDS: f64 = 300.0;
-const REFRESH_THRESHOLD_RATIO: f64 = 0.5;
+const MIN_REFRESH_THRESHOLD_SECONDS: u64 = 300;
 const DEFAULT_DEVICE_CODE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 // Original:
 //   packages/oauth/src/oauth-manager.ts
 //   defaultRefreshThreshold()
-pub fn default_refresh_threshold(expires_in: f64) -> f64 {
-    if expires_in > 0.0 {
-        MIN_REFRESH_THRESHOLD_SECONDS.max(expires_in * REFRESH_THRESHOLD_RATIO)
+pub fn default_refresh_threshold(expires_in: u64) -> u64 {
+    if expires_in > 0 {
+        MIN_REFRESH_THRESHOLD_SECONDS.max(expires_in / 2)
     } else {
         MIN_REFRESH_THRESHOLD_SECONDS
     }
@@ -94,7 +93,7 @@ pub enum OAuthRefreshOutcome {
 
 #[async_trait]
 pub trait OAuthManagerRuntime: Send + Sync {
-    fn now_seconds(&self) -> f64;
+    fn now_seconds(&self) -> i64;
 
     async fn sleep(&self, duration: Duration);
 
@@ -169,11 +168,11 @@ impl SystemOAuthManagerRuntime {
 
 #[async_trait]
 impl OAuthManagerRuntime for SystemOAuthManagerRuntime {
-    fn now_seconds(&self) -> f64 {
+    fn now_seconds(&self) -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() as f64
+            .as_secs() as i64
     }
 
     async fn sleep(&self, duration: Duration) {
@@ -244,7 +243,7 @@ pub struct OAuthManager {
     storage: Arc<dyn TokenStorage>,
     runtime: Arc<dyn OAuthManagerRuntime>,
     device_code_timeout: Duration,
-    refresh_threshold: Arc<dyn Fn(f64) -> f64 + Send + Sync>,
+    refresh_threshold: Arc<dyn Fn(u64) -> u64 + Send + Sync>,
     on_refresh: Option<Arc<dyn Fn(OAuthRefreshOutcome) + Send + Sync>>,
     config_dir: Option<PathBuf>,
     in_flight_refresh: AsyncMutex<Option<Arc<RefreshFlight>>>,
@@ -342,7 +341,7 @@ impl OAuthManager {
 
     pub fn with_refresh_threshold(
         mut self,
-        threshold: Arc<dyn Fn(f64) -> f64 + Send + Sync>,
+        threshold: Arc<dyn Fn(u64) -> u64 + Send + Sync>,
     ) -> Self {
         self.refresh_threshold = threshold;
         self
@@ -522,10 +521,11 @@ impl OAuthManager {
         if force {
             return true;
         }
-        if token.expires_at == 0.0 {
+        if token.expires_at == 0 {
             return false;
         }
-        token.expires_at - self.runtime.now_seconds() < (self.refresh_threshold)(token.expires_in)
+        token.expires_at - self.runtime.now_seconds()
+            < (self.refresh_threshold)(token.expires_in) as i64
     }
 
     fn notify_refresh(&self, outcome: OAuthRefreshOutcome) {
@@ -610,7 +610,11 @@ impl OAuthManager {
 
     // Original: OAuthManager.login()
     pub async fn login(&self, options: LoginOptions<'_>) -> Result<TokenInfo, OAuthManagerError> {
-        let timeout_seconds = self.device_code_timeout.as_secs_f64().ceil();
+        let timeout_seconds = self
+            .device_code_timeout
+            .as_secs()
+            .saturating_add(u64::from(self.device_code_timeout.subsec_nanos() > 0))
+            as i64;
         let deadline_at = self.runtime.now_seconds() + timeout_seconds;
 
         loop {
@@ -619,12 +623,12 @@ impl OAuthManager {
                 observer.on_device_code(&authorization).await?;
             }
 
-            let mut current_interval = js_math_max(authorization.interval, 1.0);
+            let mut current_interval = authorization.interval.max(1);
             loop {
                 self.throw_if_aborted(options.signal)?;
                 if self.runtime.now_seconds() >= deadline_at {
                     return Err(OAuthError::device_code_timeout_with_message(format!(
-                        "Device authorization timed out after {timeout_seconds:.0}s"
+                        "Device authorization timed out after {timeout_seconds}s"
                     ))
                     .into());
                 }
@@ -649,10 +653,12 @@ impl OAuthManager {
                     DevicePollResult::Expired => break,
                     DevicePollResult::Pending { error_code, .. } => {
                         if error_code == "slow_down" {
-                            current_interval += 5.0;
+                            current_interval += 5;
                         }
                         self.runtime
-                            .sleep(js_timer_duration(current_interval * 1_000.0))
+                            .sleep(Duration::from_millis(
+                                current_interval.saturating_mul(1_000),
+                            ))
                             .await;
                     }
                 }
@@ -747,22 +753,6 @@ fn test_config_dir_fallback() -> Option<PathBuf> {
         .flatten()
 }
 
-fn js_math_max(left: f64, right: f64) -> f64 {
-    if left.is_nan() || right.is_nan() {
-        f64::NAN
-    } else {
-        left.max(right)
-    }
-}
-
-fn js_timer_duration(milliseconds: f64) -> Duration {
-    if !milliseconds.is_finite() || milliseconds <= 0.0 {
-        Duration::ZERO
-    } else {
-        Duration::try_from_secs_f64(milliseconds / 1_000.0).unwrap_or(Duration::MAX)
-    }
-}
-
 // Original: newInstanceId()
 pub fn new_instance_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -830,7 +820,7 @@ mod tests {
     }
 
     struct FakeRuntime {
-        now: Mutex<f64>,
+        now: Mutex<i64>,
         authorizations: Mutex<VecDeque<DeviceAuthorization>>,
         polls: Mutex<VecDeque<DevicePollResult>>,
         sleeps: Mutex<Vec<Duration>>,
@@ -840,7 +830,7 @@ mod tests {
     impl FakeRuntime {
         fn new(authorizations: Vec<DeviceAuthorization>, polls: Vec<DevicePollResult>) -> Self {
             Self {
-                now: Mutex::new(0.0),
+                now: Mutex::new(0),
                 authorizations: Mutex::new(authorizations.into()),
                 polls: Mutex::new(polls.into()),
                 sleeps: Mutex::new(Vec::new()),
@@ -851,13 +841,13 @@ mod tests {
 
     #[async_trait]
     impl OAuthManagerRuntime for FakeRuntime {
-        fn now_seconds(&self) -> f64 {
+        fn now_seconds(&self) -> i64 {
             *self.now.lock().expect("now lock")
         }
 
         async fn sleep(&self, duration: Duration) {
             self.sleeps.lock().expect("sleeps lock").push(duration);
-            *self.now.lock().expect("now lock") += duration.as_secs_f64();
+            *self.now.lock().expect("now lock") += duration.as_secs() as i64;
         }
 
         async fn refresh_token(
@@ -908,7 +898,7 @@ mod tests {
     }
 
     struct EnsureRuntime {
-        now: f64,
+        now: i64,
         refreshes: AtomicUsize,
         refresh_results: Mutex<VecDeque<Result<TokenInfo, OAuthError>>>,
         gates: Mutex<VecDeque<Option<Arc<Notify>>>>,
@@ -948,7 +938,7 @@ mod tests {
     impl EnsureRuntime {
         fn new(results: Vec<Result<TokenInfo, OAuthError>>) -> Self {
             Self {
-                now: 1_000_000_000.0,
+                now: 1_000_000_000,
                 refreshes: AtomicUsize::new(0),
                 refresh_results: Mutex::new(results.into()),
                 gates: Mutex::new(VecDeque::new()),
@@ -971,7 +961,7 @@ mod tests {
 
     #[async_trait]
     impl OAuthManagerRuntime for EnsureRuntime {
-        fn now_seconds(&self) -> f64 {
+        fn now_seconds(&self) -> i64 {
             self.now
         }
 
@@ -1027,13 +1017,13 @@ mod tests {
         }
     }
 
-    fn authorization(device_code: &str, interval: f64) -> DeviceAuthorization {
+    fn authorization(device_code: &str, interval: u64) -> DeviceAuthorization {
         DeviceAuthorization {
             user_code: "USER".to_owned(),
             device_code: device_code.to_owned(),
             verification_uri: "https://test/verify".to_owned(),
             verification_uri_complete: "https://test/verify?code=USER".to_owned(),
-            expires_in: Some(600.0),
+            expires_in: Some(600),
             interval,
         }
     }
@@ -1042,10 +1032,10 @@ mod tests {
         TokenInfo {
             access_token: access_token.to_owned(),
             refresh_token: "refresh".to_owned(),
-            expires_at: 2_000_000_000.0,
+            expires_at: 2_000_000_000,
             scope: String::new(),
             token_type: "Bearer".to_owned(),
-            expires_in: 3_600.0,
+            expires_in: 3_600,
         }
     }
 
@@ -1053,31 +1043,18 @@ mod tests {
         TokenInfo {
             access_token: access_token.to_owned(),
             refresh_token: refresh_token.to_owned(),
-            expires_at: 1_000_000_100.0,
+            expires_at: 1_000_000_100,
             scope: "scope".to_owned(),
             token_type: "Bearer".to_owned(),
-            expires_in: 3_600.0,
+            expires_in: 3_600,
         }
     }
 
     #[test]
     fn refresh_threshold_uses_half_the_lifetime_with_a_five_minute_floor() {
-        for (expires_in, expected) in [
-            (-1.0, 300.0),
-            (0.0, 300.0),
-            (1.0, 300.0),
-            (600.0, 300.0),
-            (3_600.0, 1_800.0),
-        ] {
+        for (expires_in, expected) in [(0, 300), (1, 300), (600, 300), (3_600, 1_800)] {
             assert_eq!(default_refresh_threshold(expires_in), expected);
         }
-    }
-
-    #[test]
-    fn refresh_threshold_preserves_javascript_nan_and_infinity_edges() {
-        assert_eq!(default_refresh_threshold(f64::NAN), 300.0);
-        assert_eq!(default_refresh_threshold(f64::NEG_INFINITY), 300.0);
-        assert_eq!(default_refresh_threshold(f64::INFINITY), f64::INFINITY);
     }
 
     #[tokio::test]
@@ -1127,7 +1104,7 @@ mod tests {
     async fn login_observes_code_polls_slow_down_and_persists_success() {
         let storage = Arc::new(MemoryStorage::default());
         let runtime = Arc::new(FakeRuntime::new(
-            vec![authorization("device-1", 2.0)],
+            vec![authorization("device-1", 2)],
             vec![
                 DevicePollResult::Pending {
                     error_code: "authorization_pending".to_owned(),
@@ -1174,7 +1151,7 @@ mod tests {
     async fn expired_device_code_restarts_the_outer_flow() {
         let storage = Arc::new(MemoryStorage::default());
         let runtime = Arc::new(FakeRuntime::new(
-            vec![authorization("expired", 1.0), authorization("next", 1.0)],
+            vec![authorization("expired", 1), authorization("next", 1)],
             vec![
                 DevicePollResult::Expired,
                 DevicePollResult::Success(token("second-flow")),
@@ -1205,7 +1182,7 @@ mod tests {
     #[tokio::test]
     async fn denial_timeout_and_abort_preserve_distinct_errors() {
         let denied_runtime = Arc::new(FakeRuntime::new(
-            vec![authorization("d", 1.0)],
+            vec![authorization("d", 1)],
             vec![DevicePollResult::Denied {
                 description: "user declined".to_owned(),
             }],
@@ -1218,7 +1195,7 @@ mod tests {
         assert_eq!(denied.to_string(), "Authorization denied: user declined");
 
         let timeout_runtime = Arc::new(FakeRuntime::new(
-            vec![authorization("d", 1.0)],
+            vec![authorization("d", 1)],
             vec![DevicePollResult::Pending {
                 error_code: "authorization_pending".to_owned(),
                 description: String::new(),
@@ -1242,7 +1219,7 @@ mod tests {
             "Device authorization timed out after 1s"
         );
 
-        let abort_runtime = Arc::new(FakeRuntime::new(vec![authorization("d", 1.0)], Vec::new()));
+        let abort_runtime = Arc::new(FakeRuntime::new(vec![authorization("d", 1)], Vec::new()));
         let signal = AtomicBool::new(true);
         signal.store(true, Ordering::SeqCst);
         let aborted =
@@ -1576,7 +1553,7 @@ mod tests {
     async fn unknown_zero_expiry_never_refreshes_without_force() {
         let storage = Arc::new(MemoryStorage::default());
         let mut unknown_expiry = token("unknown-expiry");
-        unknown_expiry.expires_at = 0.0;
+        unknown_expiry.expires_at = 0;
         storage
             .save("kimi-code", &unknown_expiry)
             .await

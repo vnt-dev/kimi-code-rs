@@ -1,3 +1,6 @@
+use crate::lenient::{
+    lenient_i32, lenient_nullable_u32, lenient_nullable_u64, lenient_u16, lenient_u64,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
@@ -100,8 +103,11 @@ pub enum ToolInputDisplay {
         path: String,
         before: String,
         after: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        hunks: Option<f64>,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "lenient_nullable_u32"
+        )]
+        hunks: Option<u32>,
     },
     Search {
         query: String,
@@ -169,14 +175,17 @@ pub enum CommandLanguage {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileContentRange {
-    pub start: f64,
-    pub end: f64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub start: u64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub end: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchResultMatch {
     pub file: String,
-    pub line: f64,
+    #[serde(deserialize_with = "lenient_u64")]
+    pub line: u64,
     pub text: String,
 }
 
@@ -185,7 +194,8 @@ pub struct SearchResultMatch {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolResultDisplay {
     CommandOutput {
-        exit_code: f64,
+        #[serde(deserialize_with = "lenient_i32")]
+        exit_code: i32,
         #[serde(skip_serializing_if = "Option::is_none")]
         stdout: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -203,8 +213,11 @@ pub enum ToolResultDisplay {
         path: String,
         before: String,
         after: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        hunks: Option<f64>,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "lenient_nullable_u32"
+        )]
+        hunks: Option<u32>,
     },
     SearchResults {
         query: String,
@@ -212,7 +225,8 @@ pub enum ToolResultDisplay {
     },
     UrlContent {
         url: String,
-        status: f64,
+        #[serde(deserialize_with = "lenient_u16")]
+        status: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
         preview: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -222,8 +236,11 @@ pub enum ToolResultDisplay {
         agent_name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        steps: Option<f64>,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "lenient_nullable_u64"
+        )]
+        steps: Option<u64>,
     },
     Task {
         task_id: String,

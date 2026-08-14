@@ -9,22 +9,26 @@ use crate::wire::{
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContextSizeState {
-    pub length: f64,
-    pub tokens: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub length: u64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub tokens: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContextSizeMeasuredPayload {
-    pub length: f64,
-    pub tokens: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub length: u64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub tokens: u64,
 }
 
 pub static CONTEXT_SIZE_MODEL: LazyLock<ModelDef<ContextSizeState>> = LazyLock::new(|| {
     define_model(
         "contextSize",
         || ContextSizeState {
-            length: 0.0,
-            tokens: 0.0,
+            length: 0,
+            tokens: 0,
         },
         ModelOptions::default(),
     )
@@ -58,27 +62,12 @@ fn apply_context_size_measured(
     state: ContextSizeState,
     payload: &ContextSizeMeasuredPayload,
 ) -> ContextSizeState {
-    let length = normalize_measured_length(payload.length);
-    let tokens = js_math_max_zero(payload.tokens);
-    if state.length == length && state.tokens == tokens {
+    if state.length == payload.length && state.tokens == payload.tokens {
         return state;
     }
-    ContextSizeState { length, tokens }
-}
-
-// Original: contextSizeOps.ts, normalizeMeasuredLength().
-fn normalize_measured_length(length: f64) -> f64 {
-    if !length.is_finite() {
-        return 0.0;
-    }
-    length.floor().max(0.0)
-}
-
-fn js_math_max_zero(value: f64) -> f64 {
-    if value.is_nan() {
-        f64::NAN
-    } else {
-        value.max(0.0)
+    ContextSizeState {
+        length: payload.length,
+        tokens: payload.tokens,
     }
 }
 
@@ -96,8 +85,8 @@ mod tests {
         assert_eq!(
             CONTEXT_SIZE_MODEL.initial(),
             ContextSizeState {
-                length: 0.0,
-                tokens: 0.0
+                length: 0,
+                tokens: 0
             }
         );
         assert_eq!(CONTEXT_SIZE_MODEL.name(), "contextSize");
@@ -106,34 +95,44 @@ mod tests {
     }
 
     #[test]
-    fn reducer_floors_and_clamps_measured_values() {
+    fn reducer_passes_values_through_and_deduplicates_equal_state() {
         assert_eq!(
             apply_context_size_measured(
                 ContextSizeState {
-                    length: 1.0,
-                    tokens: 2.0,
+                    length: 1,
+                    tokens: 2,
                 },
                 &ContextSizeMeasuredPayload {
-                    length: 4.9,
-                    tokens: -3.0,
+                    length: 4,
+                    tokens: 7,
                 },
             ),
             ContextSizeState {
-                length: 4.0,
-                tokens: 0.0,
+                length: 4,
+                tokens: 7,
             }
         );
-        assert_eq!(normalize_measured_length(f64::INFINITY), 0.0);
-        assert_eq!(normalize_measured_length(f64::NEG_INFINITY), 0.0);
-        assert_eq!(normalize_measured_length(f64::NAN), 0.0);
-        assert!(js_math_max_zero(f64::NAN).is_nan());
+        let state = ContextSizeState {
+            length: 4,
+            tokens: 7,
+        };
+        assert_eq!(
+            apply_context_size_measured(
+                state,
+                &ContextSizeMeasuredPayload {
+                    length: 4,
+                    tokens: 7,
+                },
+            ),
+            state
+        );
     }
 
     #[test]
     fn op_projects_agent_status_event() {
         let op = context_size_measured(ContextSizeMeasuredPayload {
-            length: 2.0,
-            tokens: 17.0,
+            length: 2,
+            tokens: 17,
         })
         .unwrap();
         let event = CONTEXT_SIZE_MEASURED
@@ -141,8 +140,8 @@ mod tests {
             .to_event(
                 op.payload(),
                 &ContextSizeState {
-                    length: 2.0,
-                    tokens: 17.0,
+                    length: 2,
+                    tokens: 17,
                 },
             )
             .unwrap();
@@ -150,7 +149,7 @@ mod tests {
             event,
             Some(serde_json::json!({
                 "type": "agent.status.updated",
-                "contextTokens": 17.0,
+                "contextTokens": 17,
             }))
         );
     }

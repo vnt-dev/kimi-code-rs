@@ -46,7 +46,7 @@ use super::{
 };
 use crate::home::{HomeDirectoryUnavailable, default_kimi_home};
 
-type RefreshThreshold = dyn Fn(f64) -> f64 + Send + Sync;
+type RefreshThreshold = dyn Fn(u64) -> u64 + Send + Sync;
 type RefreshObserver = dyn Fn(OAuthRefreshOutcome) + Send + Sync;
 
 #[derive(Clone)]
@@ -984,8 +984,8 @@ mod tests {
 
     #[async_trait]
     impl OAuthManagerRuntime for StaticRuntime {
-        fn now_seconds(&self) -> f64 {
-            100.0
+        fn now_seconds(&self) -> i64 {
+            100
         }
 
         async fn sleep(&self, _duration: Duration) {}
@@ -1020,8 +1020,8 @@ mod tests {
 
     #[async_trait]
     impl OAuthManagerRuntime for DeviceRuntime {
-        fn now_seconds(&self) -> f64 {
-            100.0
+        fn now_seconds(&self) -> i64 {
+            100
         }
 
         async fn sleep(&self, _duration: Duration) {}
@@ -1044,8 +1044,8 @@ mod tests {
                 device_code: "device".to_owned(),
                 verification_uri: "https://auth.example/device".to_owned(),
                 verification_uri_complete: "https://auth.example/device?code=CODE".to_owned(),
-                expires_in: Some(600.0),
-                interval: 0.0,
+                expires_in: Some(600),
+                interval: 0,
             })
         }
 
@@ -1065,8 +1065,8 @@ mod tests {
 
     #[async_trait]
     impl OAuthManagerRuntime for RefreshRuntime {
-        fn now_seconds(&self) -> f64 {
-            100.0
+        fn now_seconds(&self) -> i64 {
+            100
         }
 
         async fn sleep(&self, _duration: Duration) {}
@@ -1177,10 +1177,10 @@ mod tests {
         TokenInfo {
             access_token: access_token.to_owned(),
             refresh_token: format!("refresh-{access_token}"),
-            expires_at: 10_000.0,
+            expires_at: 10_000,
             scope: String::new(),
             token_type: "Bearer".to_owned(),
-            expires_in: 3_600.0,
+            expires_in: 3_600,
         }
     }
 
@@ -1449,7 +1449,7 @@ mod tests {
         let AuthManagedUsageResult::Ok { summary, .. } = usage else {
             panic!("expected usage success")
         };
-        assert_eq!(summary.expect("usage summary").used, 40.0);
+        assert_eq!(summary.expect("usage summary").used, 40);
 
         let feedback = toolkit
             .submit_feedback(
@@ -1469,7 +1469,7 @@ mod tests {
                 },
             )
             .await;
-        assert_eq!(feedback, FetchSubmitFeedbackResult::Ok { feedback_id: 7.0 });
+        assert_eq!(feedback, FetchSubmitFeedbackResult::Ok { feedback_id: 7 });
 
         let created = toolkit
             .create_feedback_upload_url(

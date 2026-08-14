@@ -16,8 +16,8 @@ pub struct SessionWireFields {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_prompt: Option<String>,
-    pub created_at: f64,
-    pub updated_at: f64,
+    pub created_at: i64,
+    pub updated_at: i64,
     pub archived: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom: Option<Map<String, Value>>,
@@ -54,14 +54,14 @@ mod tests {
             root: "/r".into(),
             title: None,
             last_prompt: None,
-            created_at: 1.0,
-            updated_at: 2.0,
+            created_at: 1,
+            updated_at: 2,
             archived: false,
             custom: None,
         };
         assert_eq!(
             serde_json::to_value(fields).unwrap(),
-            serde_json::json!({"id":"s","workspaceId":"w","root":"/r","createdAt":1.0,"updatedAt":2.0,"archived":false})
+            serde_json::json!({"id":"s","workspaceId":"w","root":"/r","createdAt":1,"updatedAt":2,"archived":false})
         );
         assert_eq!(
             SESSION_LEGACY_SERVICE_ID.to_string(),

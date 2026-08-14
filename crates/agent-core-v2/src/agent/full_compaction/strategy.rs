@@ -19,11 +19,11 @@ use crate::{
 pub struct CompactionConfig {
     pub trigger_ratio: f64,
     pub block_ratio: f64,
-    pub reserved_context_size: f64,
-    pub max_compaction_per_turn: f64,
-    pub max_overflow_compaction_attempts: f64,
-    pub max_recent_messages: f64,
-    pub max_recent_user_messages: f64,
+    pub reserved_context_size: u64,
+    pub max_compaction_per_turn: Option<u32>,
+    pub max_overflow_compaction_attempts: u32,
+    pub max_recent_messages: u32,
+    pub max_recent_user_messages: Option<u32>,
     pub max_recent_size_ratio: f64,
     pub min_overflow_reduction_ratio: f64,
 }
@@ -31,11 +31,11 @@ pub struct CompactionConfig {
 pub const DEFAULT_COMPACTION_CONFIG: CompactionConfig = CompactionConfig {
     trigger_ratio: 0.85,
     block_ratio: 0.85,
-    reserved_context_size: 50_000.0,
-    max_compaction_per_turn: f64::INFINITY,
-    max_overflow_compaction_attempts: 3.0,
-    max_recent_messages: 4.0,
-    max_recent_user_messages: f64::INFINITY,
+    reserved_context_size: 50_000,
+    max_compaction_per_turn: None,
+    max_overflow_compaction_attempts: 3,
+    max_recent_messages: 4,
+    max_recent_user_messages: None,
     max_recent_size_ratio: 0.2,
     min_overflow_reduction_ratio: 0.05,
 };
@@ -46,8 +46,8 @@ pub trait CompactionStrategy: Send + Sync {
     fn compute_compact_count(&self, messages: &[Message], source: CompactionSource) -> usize;
     fn reduce_compact_on_overflow(&self, messages: &[Message]) -> usize;
     fn check_after_step(&self) -> bool;
-    fn max_compaction_per_turn(&self) -> f64;
-    fn max_overflow_compaction_attempts(&self) -> f64;
+    fn max_compaction_per_turn(&self) -> Option<u32>;
+    fn max_overflow_compaction_attempts(&self) -> u32;
 }
 
 pub type ProfileModelContextProvider = Arc<dyn Fn() -> ProfileModelContext + Send + Sync>;
@@ -71,9 +71,7 @@ impl RuntimeCompactionStrategy {
             block_ratio: trigger_ratio.max(DEFAULT_COMPACTION_CONFIG.block_ratio),
             reserved_context_size: model
                 .reserved_context_size
-                .map_or(DEFAULT_COMPACTION_CONFIG.reserved_context_size, |size| {
-                    size as f64
-                }),
+                .unwrap_or(DEFAULT_COMPACTION_CONFIG.reserved_context_size),
             ..DEFAULT_COMPACTION_CONFIG
         }
     }
@@ -115,11 +113,11 @@ impl CompactionStrategy for RuntimeCompactionStrategy {
         trigger_ratio != block_ratio
     }
 
-    fn max_compaction_per_turn(&self) -> f64 {
+    fn max_compaction_per_turn(&self) -> Option<u32> {
         DEFAULT_COMPACTION_CONFIG.max_compaction_per_turn
     }
 
-    fn max_overflow_compaction_attempts(&self) -> f64 {
+    fn max_overflow_compaction_attempts(&self) -> u32 {
         DEFAULT_COMPACTION_CONFIG.max_overflow_compaction_attempts
     }
 }
@@ -148,7 +146,9 @@ impl DefaultCompactionStrategy {
     fn should_use_reserved_context(&self, used_size: f64) -> bool {
         let max_size = self.max_size();
         let reserved_size = self.config.reserved_context_size;
-        reserved_size > 0.0 && reserved_size < max_size && used_size + reserved_size >= max_size
+        reserved_size > 0
+            && (reserved_size as f64) < max_size
+            && used_size + reserved_size as f64 >= max_size
     }
 
     fn fit_compact_count_to_window(&self, messages: &[Message], compacted_count: usize) -> usize {
@@ -224,8 +224,11 @@ impl CompactionStrategy for DefaultCompactionStrategy {
                 best_count = Some(split_index + 1);
             }
 
-            let reaches_max = recent_messages as f64 >= self.config.max_recent_messages
-                || recent_user_messages as f64 >= self.config.max_recent_user_messages
+            let reaches_max = recent_messages as u32 >= self.config.max_recent_messages
+                || self
+                    .config
+                    .max_recent_user_messages
+                    .is_some_and(|max| recent_user_messages as u32 >= max)
                 || recent_size as f64 >= self.max_size() * self.config.max_recent_size_ratio;
             if reaches_max && best_count.is_some() {
                 break;
@@ -259,11 +262,11 @@ impl CompactionStrategy for DefaultCompactionStrategy {
         self.config.trigger_ratio != self.config.block_ratio
     }
 
-    fn max_compaction_per_turn(&self) -> f64 {
+    fn max_compaction_per_turn(&self) -> Option<u32> {
         self.config.max_compaction_per_turn
     }
 
-    fn max_overflow_compaction_attempts(&self) -> f64 {
+    fn max_overflow_compaction_attempts(&self) -> u32 {
         self.config.max_overflow_compaction_attempts
     }
 }
@@ -334,7 +337,7 @@ mod tests {
         let reserved_context = DefaultCompactionStrategy::with_max_size(
             100.0,
             CompactionConfig {
-                reserved_context_size: 50.0,
+                reserved_context_size: 50,
                 ..DEFAULT_COMPACTION_CONFIG
             },
         );

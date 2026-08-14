@@ -246,12 +246,12 @@ mod tests {
         fn publish(&self, _: Value) {}
     }
 
-    fn usage(value: f64) -> TokenUsage {
+    fn usage(value: u64) -> TokenUsage {
         TokenUsage {
             input_other: value,
-            output: value * 2.0,
-            input_cache_read: value * 3.0,
-            input_cache_creation: value * 4.0,
+            output: value * 2,
+            input_cache_read: value * 3,
+            input_cache_creation: value * 4,
         }
     }
 
@@ -292,41 +292,41 @@ mod tests {
             captured.lock().unwrap().push(record.clone());
         });
 
-        service.record("a".into(), usage(1.0), None).unwrap();
+        service.record("a".into(), usage(1), None).unwrap();
         assert_eq!(service.status().current_turn, None);
         service
             .record(
                 "a".into(),
-                usage(2.0),
+                usage(2),
                 Some(turn(crate::agent::TurnId::new(7))),
             )
             .unwrap();
         service
             .record(
                 "b".into(),
-                usage(3.0),
+                usage(3),
                 Some(turn(crate::agent::TurnId::new(7))),
             )
             .unwrap();
-        assert_eq!(service.status().current_turn, Some(usage(5.0)));
+        assert_eq!(service.status().current_turn, Some(usage(5)));
         service
             .record(
                 "a".into(),
-                usage(4.0),
+                usage(4),
                 Some(turn(crate::agent::TurnId::new(8))),
             )
             .unwrap();
 
         let status = service.status();
-        assert_eq!(status.by_model.as_ref().unwrap()["a"], usage(7.0));
-        assert_eq!(status.by_model.as_ref().unwrap()["b"], usage(3.0));
-        assert_eq!(status.total, Some(usage(10.0)));
-        assert_eq!(status.current_turn, Some(usage(4.0)));
+        assert_eq!(status.by_model.as_ref().unwrap()["a"], usage(7));
+        assert_eq!(status.by_model.as_ref().unwrap()["b"], usage(3));
+        assert_eq!(status.total, Some(usage(10)));
+        assert_eq!(status.current_turn, Some(usage(4)));
         assert_eq!(records.lock().unwrap().len(), 4);
         assert_eq!(events.0.lock().unwrap().len(), 4);
         assert_eq!(
             events.0.lock().unwrap()[3].fields["usage"]["currentTurn"]["output"],
-            8.0
+            8
         );
 
         wire.flush().await.unwrap();
@@ -342,7 +342,7 @@ mod tests {
         service
             .record(
                 "a".into(),
-                usage(1.0),
+                usage(1),
                 Some(turn(crate::agent::TurnId::new(1))),
             )
             .unwrap();
@@ -352,9 +352,9 @@ mod tests {
             log_fields: None,
         };
         service
-            .record("a".into(), usage(2.0), Some(operation))
+            .record("a".into(), usage(2), Some(operation))
             .unwrap();
-        assert_eq!(service.status().current_turn, Some(usage(1.0)));
+        assert_eq!(service.status().current_turn, Some(usage(1)));
     }
 
     #[test]
@@ -366,7 +366,7 @@ mod tests {
             .on_did_record()
             .subscribe(move |_| *captured.lock().unwrap() += 1);
         service.dispose().unwrap();
-        service.record("a".into(), usage(1.0), None).unwrap();
+        service.record("a".into(), usage(1), None).unwrap();
         assert_eq!(*count.lock().unwrap(), 0);
     }
 }

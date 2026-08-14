@@ -314,7 +314,7 @@ fn metadata_to_stat(metadata: &std::fs::Metadata) -> HostFileStat {
             .modified()
             .ok()
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-            .map(|duration| duration.as_secs_f64() * 1000.0),
+            .map(|duration| duration.as_millis() as i64),
         inode: inode(metadata),
     }
 }

@@ -1,16 +1,16 @@
 use std::collections::{BTreeMap, HashMap};
 
-use crate::skiplist::{RangeOptions, SkipList, compare_number, compare_string};
+use crate::skiplist::{RangeOptions, SkipList, compare_string};
 
 struct DateTimeColumn {
-    list: SkipList<f64, String>,
-    by_key: HashMap<String, f64>,
+    list: SkipList<i64, String>,
+    by_key: HashMap<String, i64>,
 }
 
 impl DateTimeColumn {
     fn new() -> Self {
         Self {
-            list: SkipList::with_comparators(compare_number, compare_string),
+            list: SkipList::with_comparators(i64::cmp, compare_string),
             by_key: HashMap::new(),
         }
     }
@@ -19,18 +19,18 @@ impl DateTimeColumn {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DateTimeRangeEntry {
     pub key: String,
-    pub value: f64,
+    pub value: i64,
 }
 
 #[derive(Default)]
 pub struct DateTimeIndex {
     columns: HashMap<String, DateTimeColumn>,
-    by_key: HashMap<String, BTreeMap<String, f64>>,
+    by_key: HashMap<String, BTreeMap<String, i64>>,
 }
 
 impl DateTimeIndex {
     // Original: packages/minidb/src/dt-index.ts, DtIndex.set().
-    pub fn set(&mut self, key: &str, datetimes: Option<&BTreeMap<String, f64>>) {
+    pub fn set(&mut self, key: &str, datetimes: Option<&BTreeMap<String, i64>>) {
         let old = self.by_key.get(key).cloned().unwrap_or_default();
         let next = datetimes.cloned().unwrap_or_default();
         for (column, old_value) in &old {
@@ -45,7 +45,7 @@ impl DateTimeIndex {
             }
         }
         for (column, value) in &next {
-            if !value.is_finite() || old.get(column) == Some(value) {
+            if old.get(column) == Some(value) {
                 continue;
             }
             let index = self
@@ -77,7 +77,7 @@ impl DateTimeIndex {
         }
     }
 
-    pub fn range(&self, column: &str, options: &RangeOptions<f64>) -> Vec<DateTimeRangeEntry> {
+    pub fn range(&self, column: &str, options: &RangeOptions<i64>) -> Vec<DateTimeRangeEntry> {
         self.columns.get(column).map_or_else(Vec::new, |index| {
             index
                 .list
@@ -97,7 +97,7 @@ impl DateTimeIndex {
 
     pub fn rebuild<'a>(
         &mut self,
-        entries: impl IntoIterator<Item = (&'a str, Option<&'a BTreeMap<String, f64>>)>,
+        entries: impl IntoIterator<Item = (&'a str, Option<&'a BTreeMap<String, i64>>)>,
     ) {
         self.columns.clear();
         self.by_key.clear();
@@ -114,25 +114,25 @@ mod tests {
     #[test]
     fn updates_and_ranges_datetime_columns() {
         let mut index = DateTimeIndex::default();
-        index.set("a", Some(&BTreeMap::from([("created".into(), 1.0)])));
-        index.set("b", Some(&BTreeMap::from([("created".into(), 2.0)])));
+        index.set("a", Some(&BTreeMap::from([("created".into(), 1)])));
+        index.set("b", Some(&BTreeMap::from([("created".into(), 2)])));
         assert_eq!(
             index.range(
                 "created",
                 &RangeOptions {
-                    gte: Some(1.0),
-                    lte: Some(2.0),
+                    gte: Some(1),
+                    lte: Some(2),
                     ..RangeOptions::default()
                 }
             ),
             vec![
                 DateTimeRangeEntry {
                     key: "a".into(),
-                    value: 1.0
+                    value: 1
                 },
                 DateTimeRangeEntry {
                     key: "b".into(),
-                    value: 2.0
+                    value: 2
                 }
             ]
         );

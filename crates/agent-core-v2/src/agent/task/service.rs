@@ -75,7 +75,6 @@ use super::{
     should_list_task,
 };
 
-const JAVASCRIPT_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 const SESSION_CLOSED_REASON: &str = "Session closed";
 
 type TaskWriteBarrier = futures_util::future::Shared<BoxFuture<'static, ()>>;
@@ -718,7 +717,7 @@ impl AgentTaskService {
     pub async fn get_output_snapshot(
         &self,
         task_id: &str,
-        max_preview_bytes: f64,
+        max_preview_bytes: u64,
     ) -> AgentTaskServiceResult<AgentTaskOutputSnapshot> {
         let barrier = {
             let state = self.state();
@@ -764,12 +763,9 @@ impl AgentTaskService {
     pub async fn read_output(
         &self,
         task_id: &str,
-        tail: Option<f64>,
+        tail: Option<u64>,
     ) -> AgentTaskServiceResult<String> {
-        let output = self
-            .get_output_snapshot(task_id, JAVASCRIPT_MAX_SAFE_INTEGER)
-            .await?
-            .preview;
+        let output = self.get_output_snapshot(task_id, u64::MAX).await?.preview;
         Ok(tail.map_or(output.clone(), |tail| utf16_tail(&output, tail)))
     }
 
@@ -1407,10 +1403,10 @@ impl AgentTaskService {
     pub async fn wait(
         &self,
         task_id: &str,
-        timeout_ms: Option<f64>,
+        timeout_ms: Option<u64>,
         signal: Option<AbortSignal>,
     ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
-        let timeout_ms = timeout_ms.unwrap_or(30_000.0);
+        let timeout_ms = timeout_ms.unwrap_or(30_000);
         let (mut settled, terminal_barrier) = {
             let state = self.state();
             let Some(entry) = state.tasks.get(task_id) else {
@@ -1418,7 +1414,7 @@ impl AgentTaskService {
             };
             if entry.state.status.is_terminal() {
                 (None, Some(entry.persist_write_queue.clone()))
-            } else if timeout_ms <= 0.0 {
+            } else if timeout_ms == 0 {
                 return Ok(Some(entry.state.to_info()));
             } else {
                 (Some(entry.settled.subscribe()), None)
@@ -1492,7 +1488,7 @@ impl AgentTaskService {
         scheduled: ScheduledTaskNotification,
         info: &AgentTaskInfo,
     ) -> AgentTaskServiceResult<Option<AgentTaskNotificationBuildContext>> {
-        let mut output = self.get_output_snapshot(&info.base.task_id, 0.0).await?;
+        let mut output = self.get_output_snapshot(&info.base.task_id, 0).await?;
         if needs_notification_fallback_preview(&output) {
             output = self
                 .get_output_snapshot(&info.base.task_id, NOTIFICATION_FALLBACK_PREVIEW_BYTES)
@@ -1652,7 +1648,7 @@ impl AgentTaskServiceContract for AgentTaskService {
     async fn get_output_snapshot(
         &self,
         task_id: &str,
-        max_preview_bytes: f64,
+        max_preview_bytes: u64,
     ) -> AgentTaskServiceResult<AgentTaskOutputSnapshot> {
         AgentTaskService::get_output_snapshot(self, task_id, max_preview_bytes).await
     }
@@ -1660,7 +1656,7 @@ impl AgentTaskServiceContract for AgentTaskService {
     async fn read_output(
         &self,
         task_id: &str,
-        tail: Option<f64>,
+        tail: Option<u64>,
     ) -> AgentTaskServiceResult<String> {
         AgentTaskService::read_output(self, task_id, tail).await
     }
@@ -1696,7 +1692,7 @@ impl AgentTaskServiceContract for AgentTaskService {
     async fn wait(
         &self,
         task_id: &str,
-        timeout_ms: Option<f64>,
+        timeout_ms: Option<u64>,
         signal: Option<AbortSignal>,
     ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
         AgentTaskService::wait(self, task_id, timeout_ms, signal).await
@@ -1751,13 +1747,12 @@ pub fn register_agent_task_service() {
     );
 }
 
-fn utf16_tail(value: &str, tail: f64) -> String {
+fn utf16_tail(value: &str, tail: u64) -> String {
     let units = value.encode_utf16().collect::<Vec<_>>();
-    let truncated = tail.trunc();
-    let requested = if truncated.is_nan() || truncated <= 0.0 || truncated >= usize::MAX as f64 {
+    let requested = if tail == 0 {
         units.len()
     } else {
-        (truncated as usize).min(units.len())
+        (tail as usize).min(units.len())
     };
     String::from_utf16_lossy(&units[units.len() - requested..])
 }
@@ -1792,14 +1787,9 @@ async fn wait_until_settled(receiver: &mut tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-fn javascript_timeout_duration(timeout_ms: f64) -> Duration {
-    const MAX_NODE_TIMEOUT_MS: f64 = 2_147_483_647.0;
-    let milliseconds = if !timeout_ms.is_finite() || timeout_ms > MAX_NODE_TIMEOUT_MS {
-        1
-    } else {
-        (timeout_ms.trunc() as u64).max(1)
-    };
-    Duration::from_millis(milliseconds)
+fn javascript_timeout_duration(timeout_ms: u64) -> Duration {
+    const MAX_NODE_TIMEOUT_MS: u64 = 2_147_483_647;
+    Duration::from_millis(timeout_ms.clamp(1, MAX_NODE_TIMEOUT_MS))
 }
 
 fn current_time_millis() -> i64 {
@@ -2242,14 +2232,14 @@ mod tests {
             .unwrap();
         assert!(task_id.starts_with("bash-"));
         let completed = service
-            .wait(&task_id, Some(30_000.0), None)
+            .wait(&task_id, Some(30_000), None)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(completed.base.status, AgentTaskStatus::Completed);
         assert_eq!(
             service
-                .get_output_snapshot(&task_id, 100.0)
+                .get_output_snapshot(&task_id, 100)
                 .await
                 .unwrap()
                 .preview,
@@ -2322,14 +2312,14 @@ mod tests {
         handle.emit_output("tracked output");
         handle.transition(TaskState::Completed);
         let completed = service
-            .wait(&entry.task_id, Some(30_000.0), None)
+            .wait(&entry.task_id, Some(30_000), None)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(completed.base.status, AgentTaskStatus::Completed);
         assert_eq!(
             service
-                .get_output_snapshot(&entry.task_id, 100.0)
+                .get_output_snapshot(&entry.task_id, 100)
                 .await
                 .unwrap()
                 .preview,
@@ -2338,7 +2328,7 @@ mod tests {
         handle.emit_output("ignored after settlement");
         assert_eq!(
             service
-                .get_output_snapshot(&entry.task_id, 100.0)
+                .get_output_snapshot(&entry.task_id, 100)
                 .await
                 .unwrap()
                 .preview,
@@ -2392,7 +2382,7 @@ mod tests {
             );
         }
         let buffered = service
-            .get_output_snapshot("bash-output01", 9.0)
+            .get_output_snapshot("bash-output01", 9)
             .await
             .unwrap();
         assert!(!buffered.full_output_available);
@@ -2400,17 +2390,14 @@ mod tests {
 
         service.persist_output("bash-output01");
         let persisted = service
-            .get_output_snapshot("bash-output01", 5.0)
+            .get_output_snapshot("bash-output01", 5)
             .await
             .unwrap();
         assert!(persisted.full_output_available);
         assert_eq!(persisted.preview, "world");
         assert!(persisted.output_path.unwrap().ends_with("output.log"));
         assert_eq!(
-            service
-                .read_output("bash-output01", Some(5.9))
-                .await
-                .unwrap(),
+            service.read_output("bash-output01", Some(5)).await.unwrap(),
             "world"
         );
         assert_eq!(service.read_output("missing-task", None).await.unwrap(), "");
@@ -2984,7 +2971,7 @@ mod tests {
         );
         assert_eq!(
             service
-                .get_output_snapshot("task-detach01", 100.0)
+                .get_output_snapshot("task-detach01", 100)
                 .await
                 .unwrap()
                 .preview,
@@ -3095,7 +3082,7 @@ mod tests {
         insert_live(&service, "bash-wait0001", true);
         assert_eq!(
             service
-                .wait("bash-wait0001", Some(0.0), None)
+                .wait("bash-wait0001", Some(0), None)
                 .await
                 .unwrap()
                 .unwrap()
@@ -3108,7 +3095,7 @@ mod tests {
         controller.abort(None);
         assert!(
             service
-                .wait("bash-wait0001", Some(30_000.0), Some(controller.signal()))
+                .wait("bash-wait0001", Some(30_000), Some(controller.signal()))
                 .await
                 .is_err()
         );
@@ -3116,7 +3103,7 @@ mod tests {
         let waiting_service = service.clone();
         let waiter = tokio::spawn(async move {
             waiting_service
-                .wait("bash-wait0001", Some(30_000.0), None)
+                .wait("bash-wait0001", Some(30_000), None)
                 .await
         });
         tokio::task::yield_now().await;
@@ -3233,19 +3220,13 @@ mod tests {
 
     #[test]
     fn read_output_tail_matches_javascript_utf16_and_zero_semantics() {
-        assert_eq!(utf16_tail("a😀b", 2.0), "�b");
-        assert_eq!(utf16_tail("a😀b", 3.0), "😀b");
-        assert_eq!(utf16_tail("abc", 0.0), "abc");
-        assert_eq!(utf16_tail("abc", 0.9), "abc");
-        assert_eq!(utf16_tail("abc", f64::NAN), "abc");
-        assert_eq!(utf16_tail("abc", f64::INFINITY), "abc");
+        assert_eq!(utf16_tail("a😀b", 2), "�b");
+        assert_eq!(utf16_tail("a😀b", 3), "😀b");
+        assert_eq!(utf16_tail("abc", 0), "abc");
+        assert_eq!(javascript_timeout_duration(0), Duration::from_millis(1));
+        assert_eq!(javascript_timeout_duration(1), Duration::from_millis(1));
         assert_eq!(
-            javascript_timeout_duration(f64::NAN),
-            Duration::from_millis(1)
-        );
-        assert_eq!(javascript_timeout_duration(1.9), Duration::from_millis(1));
-        assert_eq!(
-            javascript_timeout_duration(30_000.0),
+            javascript_timeout_duration(30_000),
             Duration::from_millis(30_000)
         );
     }

@@ -7,6 +7,7 @@ pub mod events;
 pub mod file;
 pub mod fs;
 pub mod ids;
+pub mod lenient;
 pub mod message;
 pub mod model_catalog;
 pub mod pagination;

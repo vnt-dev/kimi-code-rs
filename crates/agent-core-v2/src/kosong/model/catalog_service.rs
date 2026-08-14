@@ -685,7 +685,7 @@ impl ModelCatalogContract for ModelCatalog {
         match result {
             Ok((text, usage, finish_reason)) => ModelPingResult {
                 ok: true,
-                duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+                duration_ms: started_at.elapsed().as_millis() as u64,
                 text: Some(text.trim().to_owned()),
                 finish_reason,
                 usage,
@@ -693,7 +693,7 @@ impl ModelCatalogContract for ModelCatalog {
             },
             Err(error) => ModelPingResult {
                 ok: false,
-                duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+                duration_ms: started_at.elapsed().as_millis() as u64,
                 text: None,
                 finish_reason: None,
                 usage: None,

@@ -34,8 +34,9 @@ use super::contract::{
 const BLOB_SCOPE: &str = "files";
 const INDEX_SCOPE: &str = "file";
 const INDEX_KEY: &str = "index.json";
+const MAX_JS_DATE_MILLIS: i64 = 8_640_000_000_000_000;
+// Legacy persisted indexes may store integer-valued sizes as JSON floats.
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-const MAX_JS_DATE_MILLIS: f64 = 8_640_000_000_000_000.0;
 
 static FILE_ID_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^f_[A-Za-z0-9][A-Za-z0-9_-]*$").expect("file id regex is valid"));
@@ -130,7 +131,11 @@ impl FileServiceContract for FileService {
         let options = options.unwrap_or_default();
         let expires_at = options
             .expires_in_sec
-            .map(|seconds| js_date_to_iso(now_millis as f64 + seconds * 1000.0))
+            .map(|seconds| {
+                let milliseconds = now_millis
+                    .saturating_add(seconds.saturating_mul(1_000).try_into().unwrap_or(i64::MAX));
+                js_date_to_iso(milliseconds)
+            })
             .transpose()?;
         let meta = FileMeta {
             id: id.clone(),
@@ -237,10 +242,13 @@ fn parse_file_meta(value: &Value) -> Option<FileMeta> {
     }
     let name = meta.get("name")?.as_str()?;
     let media_type = meta.get("media_type")?.as_str()?;
-    let size = meta.get("size")?.as_f64()?;
-    if !size.is_finite() || size.fract() != 0.0 || !(0.0..=MAX_SAFE_INTEGER).contains(&size) {
-        return None;
-    }
+    let size = meta
+        .get("size")?
+        .as_f64()
+        .filter(|value| {
+            value.is_finite() && value.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(value)
+        })
+        .map(|value| value as u64)?;
     let created_at = meta.get("created_at")?.as_str()?;
     let expires_at = match meta.get("expires_at") {
         None => None,
@@ -251,7 +259,7 @@ fn parse_file_meta(value: &Value) -> Option<FileMeta> {
         id: id.into(),
         name: name.into(),
         media_type: media_type.into(),
-        size: size as u64,
+        size,
         created_at: created_at.into(),
         expires_at,
     })
@@ -275,11 +283,10 @@ async fn collect_upload(mut source: FileByteStream, limit: u64) -> FileServiceRe
 #[error("Invalid time value")]
 struct InvalidTimeValue;
 
-fn js_date_to_iso(milliseconds: f64) -> Result<String, InvalidTimeValue> {
-    if !milliseconds.is_finite() || milliseconds.abs() > MAX_JS_DATE_MILLIS {
+fn js_date_to_iso(milliseconds: i64) -> Result<String, InvalidTimeValue> {
+    if milliseconds.abs() > MAX_JS_DATE_MILLIS {
         return Err(InvalidTimeValue);
     }
-    let milliseconds = milliseconds.trunc() as i64;
     DateTime::<Utc>::from_timestamp_millis(milliseconds)
         .map(|date| date.to_rfc3339_opts(SecondsFormat::Millis, true))
         .ok_or(InvalidTimeValue)
@@ -387,7 +394,7 @@ mod tests {
                 "original.bin",
                 Some(SaveOptions {
                     name: Some("renamed.bin".into()),
-                    expires_in_sec: Some(60.0),
+                    expires_in_sec: Some(60),
                     ..SaveOptions::default()
                 }),
             )
@@ -463,7 +470,7 @@ mod tests {
                 input([b"orphan".as_slice()]),
                 "orphan.bin",
                 Some(SaveOptions {
-                    expires_in_sec: Some(f64::NAN),
+                    expires_in_sec: Some(u64::MAX),
                     ..SaveOptions::default()
                 }),
             )

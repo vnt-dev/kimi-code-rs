@@ -50,17 +50,9 @@ impl ImageConfigBridge {
         let image = image
             .and_then(|value| IMAGE_CONFIG_SCHEMA.parse(&value).ok())
             .and_then(|value| serde_json::from_value::<ImageConfig>(value).ok());
-        set_configured_max_image_edge_px(
-            image
-                .as_ref()
-                .and_then(|image| image.max_edge_px)
-                .map(|value| value as f64),
-        );
+        set_configured_max_image_edge_px(image.as_ref().and_then(|image| image.max_edge_px));
         set_configured_read_image_byte_budget(
-            image
-                .as_ref()
-                .and_then(|image| image.read_byte_budget)
-                .map(|value| value as f64),
+            image.as_ref().and_then(|image| image.read_byte_budget),
         );
     }
 }

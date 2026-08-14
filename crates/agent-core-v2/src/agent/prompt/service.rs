@@ -162,7 +162,7 @@ impl AgentPromptServiceContract for AgentPromptService {
             .into())
     }
 
-    fn undo(&self, count: f64) -> PromptServiceResult<usize> {
+    fn undo(&self, count: u32) -> PromptServiceResult<usize> {
         undo(&self.runtime, count)
     }
 

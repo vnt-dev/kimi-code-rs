@@ -76,15 +76,20 @@ pub struct LlmRequestPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
     pub tools_hash: String,
-    pub message_count: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub message_count: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_step: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projection: Option<LlmRequestProjection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dropped_count: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub dropped_count: Option<u64>,
 }
 
 // Legacy wire journals wrote maxTokens as f64 (e.g. `131072.0`); accept
@@ -179,7 +184,7 @@ mod tests {
             system_prompt_hash: "system-hash".into(),
             system_prompt: None,
             tools_hash: "tools-hash".into(),
-            message_count: 3.0,
+            message_count: 3,
             turn_step: None,
             attempt: None,
             projection: None,
@@ -209,7 +214,7 @@ mod tests {
                 "toolSelect": false,
                 "systemPromptHash": "system-hash",
                 "toolsHash": "tools-hash",
-                "messageCount": 3.0
+                "messageCount": 3
             })
         );
     }
@@ -230,7 +235,7 @@ mod tests {
         payload.turn_step = Some("7:2".into());
         payload.attempt = Some("strict".into());
         payload.projection = Some(LlmRequestProjection::MediaStripped);
-        payload.dropped_count = Some(2.0);
+        payload.dropped_count = Some(2);
 
         let value = llm_request(payload).unwrap().payload_value;
         assert_eq!(value["kind"], "compaction");

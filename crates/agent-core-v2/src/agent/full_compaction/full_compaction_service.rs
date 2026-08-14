@@ -162,7 +162,7 @@ struct CompactionState {
     compaction_count_in_turn: u64,
     compacting: Option<Arc<ActiveCompaction>>,
     observed_max_context_tokens_by_model: HashMap<String, u64>,
-    last_compacted_token_count: Option<f64>,
+    last_compacted_token_count: Option<u64>,
     consecutive_overflow_compactions: u64,
     active_turn_id: Option<crate::agent::TurnId>,
 }
@@ -381,12 +381,12 @@ impl AgentFullCompactionService {
         Ok(resolved)
     }
 
-    fn estimate_current_request_tokens(&self) -> f64 {
+    fn estimate_current_request_tokens(&self) -> u64 {
         let context = self.context.get();
         self.estimate_request_tokens(context.iter().map(|message| &message.message))
     }
 
-    fn estimate_request_tokens<'a>(&self, messages: impl IntoIterator<Item = &'a Message>) -> f64 {
+    fn estimate_request_tokens<'a>(&self, messages: impl IntoIterator<Item = &'a Message>) -> u64 {
         (estimate_tokens(&self.profile.get_system_prompt())
             + estimate_tokens_for_tools(
                 &self
@@ -395,7 +395,7 @@ impl AgentFullCompactionService {
                     .filter(|tool| tool.deferred != Some(true))
                     .collect::<Vec<_>>(),
             )
-            + estimate_tokens_for_messages(messages)) as f64
+            + estimate_tokens_for_messages(messages)) as u64
     }
 
     fn default_tools(&self) -> Vec<Tool> {
@@ -414,7 +414,7 @@ impl AgentFullCompactionService {
     fn should_recover_from_context_overflow(
         &self,
         error: &(dyn Error + 'static),
-        estimated_request_tokens: Option<f64>,
+        estimated_request_tokens: Option<u64>,
     ) -> bool {
         if error
             .downcast_ref::<Error2>()
@@ -436,11 +436,12 @@ impl AgentFullCompactionService {
         };
         effective_max > 0
             && estimated_request_tokens.unwrap_or_else(|| self.estimate_current_request_tokens())
+                as f64
                 >= effective_max as f64 * OVERFLOW_STATUS_RECOVERY_RATIO
     }
 
-    fn observe_context_overflow(&self, estimated_request_tokens: f64) {
-        if !estimated_request_tokens.is_finite() || estimated_request_tokens <= 0.0 {
+    fn observe_context_overflow(&self, estimated_request_tokens: u64) {
+        if estimated_request_tokens == 0 {
             return;
         }
         let Ok(data) = self.profile.data() else {
@@ -449,7 +450,7 @@ impl AgentFullCompactionService {
         let Some(model_alias) = data.config.model_alias else {
             return;
         };
-        let observed = (estimated_request_tokens * OVERFLOW_CONTEXT_SAFETY_RATIO)
+        let observed = (estimated_request_tokens as f64 * OVERFLOW_CONTEXT_SAFETY_RATIO)
             .floor()
             .max(1.0) as u64;
         let Ok(current) = self.get_effective_max_context_tokens() else {
@@ -472,13 +473,15 @@ impl AgentFullCompactionService {
         } else {
             state.compaction_count_in_turn += 1;
         }
-        state.compaction_count_in_turn as f64 <= DEFAULT_COMPACTION_CONFIG.max_compaction_per_turn
+        DEFAULT_COMPACTION_CONFIG
+            .max_compaction_per_turn
+            .is_none_or(|max| state.compaction_count_in_turn <= max as u64)
     }
 
     fn validate_compaction_start(
         &self,
         source: CompactionSource,
-    ) -> Result<f64, FullCompactionError> {
+    ) -> Result<u64, FullCompactionError> {
         let history = self.context.get();
         if history.is_empty() {
             return Err(Arc::new(Error2::new(
@@ -494,13 +497,13 @@ impl AgentFullCompactionService {
                 "Cannot compact while a turn is active. Wait for it to finish, then retry.",
             )));
         }
-        Ok(estimate_tokens_for_messages(history.iter().map(|message| &message.message)) as f64)
+        Ok(estimate_tokens_for_messages(history.iter().map(|message| &message.message)) as u64)
     }
 
     fn create_active_compaction(
         &self,
         trigger: CompactionSource,
-        token_count: f64,
+        token_count: u64,
         origin_turn_id: Option<crate::agent::TurnId>,
     ) -> Arc<ActiveCompaction> {
         let abort_controller = AbortController::new();
@@ -646,7 +649,7 @@ impl AgentFullCompactionService {
         self.check_auto_compaction(true)?;
         if self
             .strategy()?
-            .should_block(self.token_count_with_pending())
+            .should_block(self.token_count_with_pending() as f64)
         {
             self.block(Some(signal), turn_id).await?;
         }
@@ -673,7 +676,7 @@ impl AgentFullCompactionService {
         if last_compacted.is_some_and(|last| token_count <= last) {
             return Ok(false);
         }
-        if !self.strategy()?.should_compact(token_count) {
+        if !self.strategy()?.should_compact(token_count as f64) {
             return Ok(false);
         }
         self.begin_auto_compaction(throw_on_limit)
@@ -684,7 +687,10 @@ impl AgentFullCompactionService {
             return Ok(true);
         }
         let max_compactions = self.strategy()?.max_compaction_per_turn();
-        if self.state.lock().unwrap().compaction_count_in_turn as f64 >= max_compactions {
+        let count = self.state.lock().unwrap().compaction_count_in_turn;
+        if let Some(max_compactions) = max_compactions
+            && count >= max_compactions as u64
+        {
             if throw_on_limit {
                 return Err(Arc::new(Error2::with_options(
                     CONTEXT_OVERFLOW,
@@ -845,7 +851,7 @@ impl AgentFullCompactionService {
         let original_history = self.context.get();
         let tokens_before =
             estimate_tokens_for_messages(original_history.iter().map(|message| &message.message))
-                as f64;
+                as u64;
         let mut retry_count = 0usize;
         let mut thinking_effort = self
             .profile
@@ -998,12 +1004,12 @@ impl AgentFullCompactionService {
                 .apply_compaction(ContextCompactionInput {
                     summary: summary.clone(),
                     context_summary: Some(build_compaction_summary_text(&summary)),
-                    compacted_count: original_history.len() as f64,
+                    compacted_count: original_history.len() as u64,
                     tokens_before,
                     tokens_after: None,
                     kept_user_message_count: None,
                     kept_head_user_message_count: None,
-                    dropped_count: (dropped_count > 0).then_some(dropped_count as f64),
+                    dropped_count: (dropped_count > 0).then_some(dropped_count as u64),
                 })
                 .map_err(arc_error)?;
             let result = CompactionResult {
@@ -1071,7 +1077,7 @@ impl AgentFullCompactionService {
         )
     }
 
-    fn token_count_with_pending(&self) -> f64 {
+    fn token_count_with_pending(&self) -> u64 {
         self.context_size.get(None, None).size
     }
 
@@ -1209,7 +1215,7 @@ impl AgentFullCompactionService {
         &self,
         active: &ActiveCompaction,
         data: &CompactionBeginData,
-        tokens_before: f64,
+        tokens_before: u64,
         started_at: Instant,
         retry_count: usize,
         thinking_effort: &ThinkingEffort,

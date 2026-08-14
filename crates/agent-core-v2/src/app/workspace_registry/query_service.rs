@@ -107,14 +107,14 @@ mod tests {
         }
     }
 
-    fn summary(id: &str, workspace_id: &str, updated_at: f64) -> SessionSummary {
+    fn summary(id: &str, workspace_id: &str, updated_at: i64) -> SessionSummary {
         SessionSummary {
             id: id.into(),
             workspace_id: workspace_id.into(),
             cwd: None,
             title: None,
             last_prompt: None,
-            created_at: updated_at - 1.0,
+            created_at: updated_at - 1,
             updated_at,
             archived: false,
             custom: None,
@@ -146,10 +146,7 @@ mod tests {
     #[tokio::test]
     async fn returns_only_the_session_index_items() {
         let index = Arc::new(StubSessionIndex::default());
-        let expected = vec![
-            summary("s2", "wd_abc", 200.0),
-            summary("s1", "wd_abc", 100.0),
-        ];
+        let expected = vec![summary("s2", "wd_abc", 200), summary("s1", "wd_abc", 100)];
         *index.items.lock().unwrap() = expected.clone();
         let service = WorkspaceQueryService::new(SessionIndexHandle(index));
 

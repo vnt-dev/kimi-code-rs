@@ -341,11 +341,11 @@ impl AgentLlmRequesterService {
             system_prompt_hash,
             system_prompt,
             tools_hash: tools_hash.clone(),
-            message_count: input.messages.len() as f64,
+            message_count: input.messages.len() as u64,
             turn_step: string_field(input.fields, "turnStep"),
             attempt: string_field(input.fields, "attempt"),
             projection: projection_field(input.fields),
-            dropped_count: number_field(input.fields, "droppedCount"),
+            dropped_count: number_field(input.fields, "droppedCount").map(|value| value as u64),
         };
         dispatch_request_trace(&self.wire, tools_hash, tools, payload)
     }
@@ -403,12 +403,10 @@ impl AgentLlmRequesterService {
             reserved_context_size: resolved.reserved_context_size,
             max_completion_tokens_cap: model_overrides.max_completion_tokens,
         });
-        // The context-size service tracks token counts as f64 estimates;
-        // convert at this boundary, clamping negative estimates to zero.
         let used_context_tokens = overrides
             .messages
             .is_none()
-            .then(|| self.context_size.get(None, None).measured.max(0.0) as u64);
+            .then(|| self.context_size.get(None, None).measured);
         if let Some(budget_params) = completion_budget_params(
             budget,
             Some(&resolved.model_capabilities),
@@ -1018,7 +1016,7 @@ mod tests {
             system_prompt_hash: fingerprint("system"),
             system_prompt: None,
             tools_hash: tools_hash.into(),
-            message_count: 2.0,
+            message_count: 2,
             turn_step: Some("1.1".into()),
             attempt: None,
             projection: None,

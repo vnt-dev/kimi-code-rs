@@ -31,17 +31,17 @@ fn build_goal_blocked_message(goal: &GoalSnapshot) -> String {
 }
 
 fn goal_worked_stats(goal: &GoalSnapshot) -> String {
-    let plural = if goal.turns_used == 1.0 { "" } else { "s" };
+    let plural = if goal.turns_used == 1 { "" } else { "s" };
     format!(
         "Worked {} turn{plural} over {}, using {} tokens.",
-        javascript_number(goal.turns_used),
+        goal.turns_used,
         format_elapsed(goal.wall_clock_ms),
         format_tokens(goal.tokens_used),
     )
 }
 
-fn format_elapsed(milliseconds: f64) -> String {
-    let seconds = (milliseconds / 1000.0).round() as i64;
+fn format_elapsed(milliseconds: u64) -> String {
+    let seconds = ((milliseconds + 500) / 1000) as i64;
     if seconds < 60 {
         return format!("{seconds}s");
     }
@@ -53,21 +53,13 @@ fn format_elapsed(milliseconds: f64) -> String {
     format!("{}h{:02}m", minutes / 60, minutes % 60)
 }
 
-fn format_tokens(tokens: f64) -> String {
-    if tokens < 1000.0 {
-        javascript_number(tokens)
-    } else if tokens < 1_000_000.0 {
-        format!("{:.1}k", tokens / 1000.0)
+fn format_tokens(tokens: u64) -> String {
+    if tokens < 1000 {
+        tokens.to_string()
+    } else if tokens < 1_000_000 {
+        format!("{:.1}k", tokens as f64 / 1000.0)
     } else {
-        format!("{:.1}M", tokens / 1_000_000.0)
-    }
-}
-
-fn javascript_number(value: f64) -> String {
-    if value.fract() == 0.0 {
-        format!("{value:.0}")
-    } else {
-        value.to_string()
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
     }
 }
 
@@ -82,9 +74,9 @@ mod tests {
             objective: "ship".into(),
             completion_criterion: None,
             status: GoalStatus::Complete,
-            turns_used: 2.0,
-            tokens_used: 1500.0,
-            wall_clock_ms: 61_000.0,
+            turns_used: 2,
+            tokens_used: 1500,
+            wall_clock_ms: 61_000,
             budget: GoalBudgetReport {
                 token_budget: None,
                 turn_budget: None,

@@ -40,13 +40,13 @@ const PNG_RESCALE_FLOOR_PX: u32 = 1000;
 static CONFIGURED_MAX_EDGE: OnceLock<Mutex<Option<u32>>> = OnceLock::new();
 static CONFIGURED_READ_BUDGET: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
 
-pub fn set_configured_max_image_edge_px(value: Option<f64>) {
+pub fn set_configured_max_image_edge_px(value: Option<u64>) {
     *CONFIGURED_MAX_EDGE
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap() = value
-        .filter(|v| v.is_finite() && *v > 0.0 && v.fract() == 0.0)
-        .map(|v| v as u32);
+        .filter(|v| *v > 0)
+        .map(|v| v.min(u32::MAX as u64) as u32);
 }
 pub fn resolve_max_image_edge_px() -> u32 {
     CONFIGURED_MAX_EDGE
@@ -55,13 +55,13 @@ pub fn resolve_max_image_edge_px() -> u32 {
         .unwrap()
         .unwrap_or(MAX_IMAGE_EDGE_PX)
 }
-pub fn set_configured_read_image_byte_budget(value: Option<f64>) {
+pub fn set_configured_read_image_byte_budget(value: Option<u64>) {
     *CONFIGURED_READ_BUDGET
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap() = value
-        .filter(|v| v.is_finite() && *v > 0.0 && v.fract() == 0.0)
-        .map(|v| v as usize);
+        .filter(|v| *v > 0)
+        .map(|v| v.min(usize::MAX as u64) as usize);
 }
 pub fn resolve_read_image_byte_budget() -> usize {
     CONFIGURED_READ_BUDGET
@@ -359,10 +359,10 @@ fn compress_result_view(result: &CompressBase64Result) -> CompressImageResult {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImageCropRegion {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
+    pub x: i64,
+    pub y: i64,
+    pub width: i64,
+    pub height: i64,
 }
 #[derive(Clone, Debug, Default)]
 pub struct CropImageOptions {
@@ -430,21 +430,6 @@ pub fn crop_image_for_model(
             "Cropping is not supported for animated WebP images.".into(),
         );
     }
-    if ![region.x, region.y, region.width, region.height]
-        .iter()
-        .all(|value| value.is_finite())
-    {
-        return fail(
-            "region_invalid",
-            format!(
-                "Region coordinates must be finite numbers; got x={}, y={}, width={}, height={}.",
-                js_number(region.x),
-                js_number(region.y),
-                js_number(region.width),
-                js_number(region.height)
-            ),
-        );
-    }
     if let Some(dimensions) = super::sniff_image_dimensions(bytes)
         && (dimensions.width as u64).saturating_mul(dimensions.height as u64) > MAX_DECODE_PIXELS
     {
@@ -475,37 +460,32 @@ pub fn crop_image_for_model(
         );
     };
     let (original_width, original_height) = (image.width(), image.height());
-    let (x, y) = (region.x.floor(), region.y.floor());
-    if x < 0.0
-        || y < 0.0
-        || x >= original_width as f64
-        || y >= original_height as f64
-        || region.width < 1.0
-        || region.height < 1.0
+    let (x, y) = (region.x, region.y);
+    if x < 0
+        || y < 0
+        || x >= i64::from(original_width)
+        || y >= i64::from(original_height)
+        || region.width < 1
+        || region.height < 1
     {
         return fail(
             "out_of_bounds",
             format!(
                 "Region (x={}, y={}, width={}, height={}) lies outside the {}x{} image.",
-                js_number(region.x),
-                js_number(region.y),
-                js_number(region.width),
-                js_number(region.height),
-                original_width,
-                original_height
+                region.x, region.y, region.width, region.height, original_width, original_height
             ),
         );
     }
     let (x, y) = (x as u32, y as u32);
     let (w, h) = (
-        (region.width.floor() as u32).min(original_width - x),
-        (region.height.floor() as u32).min(original_height - y),
+        (region.width as u32).min(original_width - x),
+        (region.height as u32).min(original_height - y),
     );
     let applied = ImageCropRegion {
-        x: x as f64,
-        y: y as f64,
-        width: w as f64,
-        height: h as f64,
+        x: i64::from(x),
+        y: i64::from(y),
+        width: i64::from(w),
+        height: i64::from(h),
     };
     let cropped = image.crop_imm(x, y, w, h);
     let jpeg_only = normalized == "image/jpeg";
@@ -542,9 +522,9 @@ pub fn crop_image_for_model(
             format!(
                 "The cropped region encodes to {} bytes ({}), over the {}-byte ({}) per-image limit. Choose a smaller region, or allow downscaling.",
                 data.len(),
-                format_byte_size(data.len() as f64),
+                format_byte_size(data.len() as u64),
                 budget,
-                format_byte_size(budget as f64),
+                format_byte_size(budget as u64),
             ),
         );
     }
@@ -583,9 +563,9 @@ fn report_crop_event(
     let original_pixels = result
         .map(|value| value.original_width.saturating_mul(value.original_height))
         .unwrap_or_default();
-    let region_area_ratio = result
-        .filter(|_| original_pixels != 0)
-        .map(|value| value.region.width * value.region.height / original_pixels as f64);
+    let region_area_ratio = result.filter(|_| original_pixels != 0).map(|value| {
+        value.region.width as f64 * value.region.height as f64 / original_pixels as f64
+    });
     let properties = TelemetryProperties::from([
         ("source".into(), Some(serde_json::json!(telemetry.source))),
         ("ok".into(), Some(serde_json::json!(ok))),
@@ -893,15 +873,15 @@ pub async fn compress_image_content_parts(
             captions.push(build_image_compression_caption(
                 &ImageCompressionCaptionInput {
                     original: ImageVariantDescription {
-                        width: result.original_width as f64,
-                        height: result.original_height as f64,
-                        byte_length: result.original_byte_length as f64,
+                        width: result.original_width,
+                        height: result.original_height,
+                        byte_length: result.original_byte_length,
                         mime_type: parsed.mime_type,
                     },
                     final_variant: ImageVariantDescription {
-                        width: result.width as f64,
-                        height: result.height as f64,
-                        byte_length: result.final_byte_length as f64,
+                        width: result.width,
+                        height: result.height,
+                        byte_length: result.final_byte_length,
                         mime_type: result.mime_type.clone(),
                     },
                     original_path,
@@ -923,9 +903,9 @@ pub async fn compress_image_content_parts(
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageVariantDescription {
-    pub width: f64,
-    pub height: f64,
-    pub byte_length: f64,
+    pub width: i64,
+    pub height: i64,
+    pub byte_length: usize,
     pub mime_type: String,
 }
 
@@ -998,37 +978,26 @@ pub fn extract_image_compression_captions(text: &str) -> ImageCompressionCaption
 }
 
 // Original: formatByteSize().
-pub fn format_byte_size(bytes: f64) -> String {
-    if bytes < 1024.0 {
-        return format!("{} B", js_number(bytes));
+pub fn format_byte_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
     }
-    if bytes < 1024.0 * 1024.0 {
-        return format!("{} KB", js_number((bytes / 1024.0).round()));
+    if bytes < 1024 * 1024 {
+        return format!("{} KB", (bytes as f64 / 1024.0).round());
     }
-    format!("{:.1} MB", bytes / (1024.0 * 1024.0))
+    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
 }
 
 fn describe_image_variant(variant: &ImageVariantDescription) -> String {
     let size = format!(
         "{} ({})",
         variant.mime_type,
-        format_byte_size(variant.byte_length)
+        format_byte_size(variant.byte_length as u64)
     );
-    if variant.width > 0.0 && variant.height > 0.0 {
-        format!(
-            "{}x{} {size}",
-            js_number(variant.width),
-            js_number(variant.height)
-        )
+    if variant.width > 0 && variant.height > 0 {
+        format!("{}x{} {size}", variant.width, variant.height)
     } else {
         size
-    }
-}
-fn js_number(value: f64) -> String {
-    if value.fract() == 0.0 {
-        format!("{value:.0}")
-    } else {
-        value.to_string()
     }
 }
 
@@ -1080,15 +1049,15 @@ mod tests {
     fn captions_round_trip_and_byte_sizes_match_source_formatting() {
         let caption = build_image_compression_caption(&ImageCompressionCaptionInput {
             original: ImageVariantDescription {
-                width: 4000.0,
-                height: 3000.0,
-                byte_length: 3.75 * 1024.0 * 1024.0,
+                width: 4000,
+                height: 3000,
+                byte_length: (3.75 * 1024.0 * 1024.0) as usize,
                 mime_type: "image/png".into(),
             },
             final_variant: ImageVariantDescription {
-                width: 2000.0,
-                height: 1500.0,
-                byte_length: 1280.0,
+                width: 2000,
+                height: 1500,
+                byte_length: 1280,
                 mime_type: "image/jpeg".into(),
             },
             original_path: Some("/tmp/original.png".into()),
@@ -1097,8 +1066,8 @@ mod tests {
         assert_eq!(extracted.text, "beforeafter");
         assert_eq!(extracted.captions.len(), 1);
         assert!(extracted.captions[0].contains("4000x3000 image/png (3.8 MB)"));
-        assert_eq!(format_byte_size(1023.0), "1023 B");
-        assert_eq!(format_byte_size(1536.0), "2 KB");
+        assert_eq!(format_byte_size(1023), "1023 B");
+        assert_eq!(format_byte_size(1536), "2 KB");
     }
     #[test]
     fn compresses_oversized_dimensions_and_leaves_small_images_unchanged() {
@@ -1222,10 +1191,10 @@ mod tests {
             &bytes,
             "image/png",
             ImageCropRegion {
-                x: 1.2,
-                y: 1.9,
-                width: 8.0,
-                height: 8.0,
+                x: 1,
+                y: 1,
+                width: 8,
+                height: 8,
             },
             &CropImageOptions {
                 skip_resize: true,
@@ -1245,10 +1214,10 @@ mod tests {
             &bytes,
             "image/png",
             ImageCropRegion {
-                x: 0.0,
-                y: 0.0,
-                width: 4.0,
-                height: 3.0,
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 3,
             },
             &CropImageOptions {
                 compress: CompressImageOptions {
@@ -1266,15 +1235,15 @@ mod tests {
             &bytes,
             "image/png",
             ImageCropRegion {
-                x: f64::NAN,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
+                x: 10,
+                y: 0,
+                width: 1,
+                height: 1,
             },
             &CropImageOptions::default(),
         );
         assert!(
-            matches!(invalid, CropImageOutcome::Failure(CropImageFailure { error }) if error.contains("finite numbers"))
+            matches!(invalid, CropImageOutcome::Failure(CropImageFailure { error }) if error.contains("outside"))
         );
     }
 
@@ -1296,10 +1265,10 @@ mod tests {
             &bytes,
             "image/png",
             ImageCropRegion {
-                x: 1.0,
-                y: 0.0,
-                width: 2.0,
-                height: 2.0,
+                x: 1,
+                y: 0,
+                width: 2,
+                height: 2,
             },
             &CropImageOptions {
                 compress: CompressImageOptions {
@@ -1315,10 +1284,10 @@ mod tests {
             &bytes,
             "image/png",
             ImageCropRegion {
-                x: -1.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
+                x: -1,
+                y: 0,
+                width: 1,
+                height: 1,
             },
             &CropImageOptions {
                 compress: CompressImageOptions {

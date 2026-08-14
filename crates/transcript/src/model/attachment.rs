@@ -22,8 +22,12 @@ pub struct TranscriptAttachment {
     pub media_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_utils::lenient_u64::deserialize"
+    )]
+    pub size: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<AttachmentSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -105,25 +105,23 @@ async fn scan_wire_file(
     }
     Ok(scan)
 }
-pub fn normalize_timestamp_ms(value: f64) -> Option<f64> {
+pub fn normalize_timestamp_ms(value: f64) -> Option<i64> {
     if !value.is_finite() || value <= 0.0 {
         None
+    } else if value > 1e12 {
+        Some(value.floor() as i64)
     } else {
-        Some(if value > 1e12 {
-            value.floor()
-        } else {
-            (value * 1000.0).floor()
-        })
+        Some((value * 1000.0).floor() as i64)
     }
 }
-fn min(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+fn min(a: Option<i64>, b: Option<i64>) -> Option<i64> {
     match (a, b) {
         (None, b) => b,
         (a, None) => a,
         (Some(a), Some(b)) => Some(a.min(b)),
     }
 }
-fn max(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+fn max(a: Option<i64>, b: Option<i64>) -> Option<i64> {
     match (a, b) {
         (None, b) => b,
         (a, None) => a,
@@ -146,10 +144,10 @@ mod tests {
 
     #[test]
     fn normalizes_seconds_and_milliseconds() {
-        assert_eq!(normalize_timestamp_ms(1.25), Some(1250.0));
+        assert_eq!(normalize_timestamp_ms(1.25), Some(1250));
         assert_eq!(
             normalize_timestamp_ms(1_700_000_000_000.9),
-            Some(1_700_000_000_000.0)
+            Some(1_700_000_000_000)
         );
         assert_eq!(normalize_timestamp_ms(0.0), None);
     }
@@ -175,9 +173,9 @@ mod tests {
 
         let scan = scan_session_wire(&session_dir, None).await.unwrap();
 
-        assert_eq!(scan.first_activity_ms, Some(2_000.0));
-        assert_eq!(scan.last_activity_ms, Some(4_000.0));
-        assert_eq!(scan.last_user_message_ms, Some(3_000.0));
+        assert_eq!(scan.first_activity_ms, Some(2_000));
+        assert_eq!(scan.last_activity_ms, Some(4_000));
+        assert_eq!(scan.last_user_message_ms, Some(3_000));
         assert_eq!(scan.first_user_input.as_deref(), Some("first question"));
         fs::remove_dir_all(session_dir).await.unwrap();
     }

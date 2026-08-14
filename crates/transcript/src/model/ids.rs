@@ -89,55 +89,18 @@ pub fn frame_id(step: &StepId, ordinal: i64) -> FrameId {
     FrameId::new(format!("{step}.f{ordinal}"))
 }
 
-/// Extract the numeric portion of a turn id, matching the useful finite
-/// subset of JavaScript's `Number(id.slice(1))`. Invalid and non-finite
-/// values become zero.
-pub fn turn_ordinal(id: &TurnId) -> f64 {
-    let value = id.as_ref().get(1..).unwrap_or_default().trim();
-    if value.is_empty() {
-        return 0.0;
-    }
-
-    let parsed = parse_prefixed_integer(value)
-        .map(|value| value as f64)
-        .or_else(|| value.parse::<f64>().ok())
-        .unwrap_or(0.0);
-    if parsed.is_finite() { parsed } else { 0.0 }
+/// Extract the numeric portion of a turn id. Turn ids are `t{i64}`; ids
+/// without a valid ordinal yield zero.
+pub fn turn_ordinal(id: &TurnId) -> i64 {
+    id.as_ref()
+        .get(1..)
+        .and_then(|rest| rest.trim().parse::<i64>().ok())
+        .unwrap_or(0)
 }
 
 /// Compare turn ids by the ordinal embedded after their leading character.
-pub fn compare_turn_ids(a: &TurnId, b: &TurnId) -> f64 {
-    turn_ordinal(a) - turn_ordinal(b)
-}
-
-fn parse_prefixed_integer(value: &str) -> Option<i128> {
-    let (negative, unsigned) = value
-        .strip_prefix('-')
-        .map_or((false, value), |rest| (true, rest));
-    let (radix, digits) = if let Some(digits) = unsigned
-        .strip_prefix("0x")
-        .or_else(|| unsigned.strip_prefix("0X"))
-    {
-        (16, digits)
-    } else if let Some(digits) = unsigned
-        .strip_prefix("0b")
-        .or_else(|| unsigned.strip_prefix("0B"))
-    {
-        (2, digits)
-    } else {
-        let digits = unsigned
-            .strip_prefix("0o")
-            .or_else(|| unsigned.strip_prefix("0O"))?;
-        (8, digits)
-    };
-
-    i128::from_str_radix(digits, radix).ok().and_then(|number| {
-        if negative {
-            number.checked_neg()
-        } else {
-            Some(number)
-        }
-    })
+pub fn compare_turn_ids(a: &TurnId, b: &TurnId) -> std::cmp::Ordering {
+    turn_ordinal(a).cmp(&turn_ordinal(b))
 }
 
 #[cfg(test)]
@@ -151,7 +114,7 @@ mod tests {
         assert_eq!(turn.as_ref(), "t10");
         assert_eq!(step.as_ref(), "t10.2");
         assert_eq!(frame_id(&step, 4).as_ref(), "t10.2.f4");
-        assert!(compare_turn_ids(&TurnId::from("t2"), &turn) < 0.0);
-        assert_eq!(turn_ordinal(&TurnId::from("bad")), 0.0);
+        assert!(compare_turn_ids(&TurnId::from("t2"), &turn).is_lt());
+        assert_eq!(turn_ordinal(&TurnId::from("bad")), 0);
     }
 }

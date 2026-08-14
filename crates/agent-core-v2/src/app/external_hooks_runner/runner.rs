@@ -20,7 +20,7 @@ use crate::{
 
 use super::contract::ExternalHooksRunnerTriggerArgs;
 
-const DEFAULT_HOOK_TIMEOUT_SECONDS: f64 = 30.0;
+const DEFAULT_HOOK_TIMEOUT_SECONDS: u64 = 30;
 
 pub type HooksByEvent = HashMap<String, Vec<HookDef>>;
 pub type HookTriggeredCallback = Arc<dyn Fn(&str, &str, usize) + Send + Sync>;
@@ -101,10 +101,7 @@ pub async fn run_matched_hooks(
             &hook.command,
             &input,
             RunHookOptions {
-                timeout: hook
-                    .timeout
-                    .map(|timeout| timeout as f64)
-                    .unwrap_or(DEFAULT_HOOK_TIMEOUT_SECONDS),
+                timeout: hook.timeout.unwrap_or(DEFAULT_HOOK_TIMEOUT_SECONDS),
                 cwd: hook
                     .cwd
                     .clone()

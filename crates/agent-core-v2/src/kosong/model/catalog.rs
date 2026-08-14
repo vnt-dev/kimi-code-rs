@@ -108,7 +108,8 @@ pub struct Model {
 #[serde(rename_all = "camelCase")]
 pub struct ModelPingResult {
     pub ok: bool,
-    pub duration_ms: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub duration_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

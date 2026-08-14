@@ -87,8 +87,8 @@ pub async fn generate(
 
     throw_if_aborted(options, Some(stream.as_mut())).await?;
 
-    let mut server_decode_ms = 0.0;
-    let mut client_consume_ms = 0.0;
+    let mut server_decode_ms = 0_u64;
+    let mut client_consume_ms = 0_u64;
     let mut first_part_at: Option<Instant> = None;
     let mut last_resume_at: Option<Instant> = None;
 
@@ -98,7 +98,8 @@ pub async fn generate(
         if first_part_at.is_none() {
             first_part_at = Some(arrived_at);
         } else if let Some(last_resume_at) = last_resume_at {
-            server_decode_ms += arrived_at.duration_since(last_resume_at).as_secs_f64() * 1_000.0;
+            server_decode_ms = server_decode_ms
+                .saturating_add(arrived_at.duration_since(last_resume_at).as_millis() as u64);
         }
 
         let result = consume_part(
@@ -112,7 +113,8 @@ pub async fn generate(
         )
         .await;
         let resumed_at = Instant::now();
-        client_consume_ms += resumed_at.duration_since(arrived_at).as_secs_f64() * 1_000.0;
+        client_consume_ms = client_consume_ms
+            .saturating_add(resumed_at.duration_since(arrived_at).as_millis() as u64);
         last_resume_at = Some(resumed_at);
         result?;
     }
@@ -121,7 +123,8 @@ pub async fn generate(
     if first_part_at.is_some()
         && let Some(last_resume_at) = last_resume_at
     {
-        server_decode_ms += Instant::now().duration_since(last_resume_at).as_secs_f64() * 1_000.0;
+        server_decode_ms = server_decode_ms
+            .saturating_add(Instant::now().duration_since(last_resume_at).as_millis() as u64);
     }
     if let Some(callback) = options.and_then(|options| options.on_stream_end.as_ref()) {
         callback(first_part_at.map(|_| StreamDecodeStats {
@@ -392,10 +395,10 @@ mod tests {
 
         fn usage(&self) -> Option<&TokenUsage> {
             static USAGE: TokenUsage = TokenUsage {
-                input_other: 10.0,
-                output: 5.0,
-                input_cache_read: 2.0,
-                input_cache_creation: 1.0,
+                input_other: 10,
+                output: 5,
+                input_cache_read: 2,
+                input_cache_creation: 1,
             };
             Some(&USAGE)
         }
@@ -537,7 +540,7 @@ mod tests {
             ]
         );
         assert_eq!(result.id.as_deref(), Some("gen-1"));
-        assert_eq!(result.usage.unwrap().output, 5.0);
+        assert_eq!(result.usage.unwrap().output, 5);
         assert_eq!(result.finish_reason, Some(FinishReason::Completed));
         assert_eq!(result.raw_finish_reason.as_deref(), Some("stop"));
     }
@@ -715,9 +718,7 @@ mod tests {
         generate(&provider, "system", &[], &history(), None, Some(&options))
             .await
             .unwrap();
-        let stats = stats.lock().unwrap().unwrap();
-        assert!(stats.server_decode_ms >= 0.0);
-        assert!(stats.client_consume_ms >= 0.0);
+        let _stats = stats.lock().unwrap().unwrap();
     }
 
     #[tokio::test]

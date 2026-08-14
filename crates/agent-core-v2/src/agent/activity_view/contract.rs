@@ -54,7 +54,8 @@ pub struct ActivityRetryState {
     pub failed_attempt: u64,
     pub next_attempt: u64,
     pub max_attempts: u64,
-    pub delay_ms: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub delay_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,7 +177,7 @@ mod tests {
                 failed_attempt: 1,
                 next_attempt: 2,
                 max_attempts: 3,
-                delay_ms: 500.0,
+                delay_ms: 500,
                 error_name: Some("ProviderError".into()),
                 status_code: Some(429),
             })
@@ -185,7 +186,7 @@ mod tests {
                 "failedAttempt": 1,
                 "nextAttempt": 2,
                 "maxAttempts": 3,
-                "delayMs": 500.0,
+                "delayMs": 500,
                 "errorName": "ProviderError",
                 "statusCode": 429
             })

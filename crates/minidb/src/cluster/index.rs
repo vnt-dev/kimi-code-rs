@@ -253,7 +253,7 @@ impl<V: Send + Sync + 'static> ClusterDb<V> {
             .database
             .ttl(key.as_bytes())?)
     }
-    pub async fn expire(&self, key: &str, ttl_millis: f64) -> Result<bool, ClusterError> {
+    pub async fn expire(&self, key: &str, ttl_millis: u64) -> Result<bool, ClusterError> {
         Ok(self
             .writer(self.shard_of(key)?)
             .await?

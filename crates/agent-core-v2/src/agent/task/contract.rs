@@ -243,10 +243,10 @@ pub trait AgentTaskServiceContract: Disposable + Send + Sync {
     async fn get_output_snapshot(
         &self,
         task_id: &str,
-        max_preview_bytes: f64,
+        max_preview_bytes: u64,
     ) -> AgentTaskServiceResult<AgentTaskOutputSnapshot>;
 
-    async fn read_output(&self, task_id: &str, tail: Option<f64>)
+    async fn read_output(&self, task_id: &str, tail: Option<u64>)
     -> AgentTaskServiceResult<String>;
 
     async fn suppress_terminal_notification(&self, task_id: &str) -> AgentTaskServiceResult<()>;
@@ -267,7 +267,7 @@ pub trait AgentTaskServiceContract: Disposable + Send + Sync {
     async fn wait(
         &self,
         task_id: &str,
-        timeout_ms: Option<f64>,
+        timeout_ms: Option<u64>,
         signal: Option<AbortSignal>,
     ) -> AgentTaskServiceResult<Option<AgentTaskInfo>>;
 

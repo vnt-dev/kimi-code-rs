@@ -22,7 +22,7 @@ use crate::kosong::contract::provider::{
     ResponseFormat, StreamedMessage, ThinkingEffort, ToolCallIdPolicy, TraceId,
 };
 use crate::kosong::contract::tool::Tool;
-use crate::kosong::contract::usage::TokenUsage;
+use crate::kosong::contract::usage::{TokenUsage, counter_from_json};
 use crate::kosong::provider::bases::http_client::default_provider_http_client;
 use crate::kosong::provider::bases::openai::openai_common::{
     NormalizedFinishReason, OPENAI_REASONING_CAPABILITY, OPENAI_VISION_TOOL_CAPABILITY,
@@ -737,23 +737,17 @@ impl OpenAiResponsesStreamedMessage {
     }
 
     fn extract_usage(&mut self, usage: &Map<String, Value>) {
-        let input = usage
-            .get("input_tokens")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let output = usage
-            .get("output_tokens")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let cached = read_object_field(usage, "input_tokens_details")
-            .and_then(|details| details.get("cached_tokens"))
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
+        let input = counter_from_json(usage.get("input_tokens"));
+        let output = counter_from_json(usage.get("output_tokens"));
+        let cached = counter_from_json(
+            read_object_field(usage, "input_tokens_details")
+                .and_then(|details| details.get("cached_tokens")),
+        );
         self.usage = Some(TokenUsage {
-            input_other: input - cached,
+            input_other: input.saturating_sub(cached),
             output,
             input_cache_read: cached,
-            input_cache_creation: 0.0,
+            input_cache_creation: 0,
         });
     }
 
@@ -1546,7 +1540,7 @@ mod tests {
         ));
         assert_eq!(response.id(), Some("resp-a"));
         assert_eq!(response.finish_reason(), Some(FinishReason::Completed));
-        assert_eq!(response.usage().unwrap().input_other, 10.0);
+        assert_eq!(response.usage().unwrap().input_other, 10);
 
         let bad_source = futures_util::stream::iter([Ok::<_, ProviderError>(
             serde_json::json!({"type":"response.output_text.delta","delta":7}),

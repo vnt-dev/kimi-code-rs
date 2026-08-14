@@ -12,13 +12,13 @@ pub struct UndoCut {
 // Original:
 //   packages/agent-core-v2/src/agent/contextMemory/contextOps.ts
 //   computeUndoCut()
-pub fn compute_undo_cut(state: &[ContextMessage], count: f64) -> UndoCut {
+pub fn compute_undo_cut(state: &[ContextMessage], count: u32) -> UndoCut {
     let mut remaining = count;
     let mut cut_index = -1;
     let mut removed_count = 0usize;
     let mut stopped_at_compaction = false;
     for (index, message) in state.iter().enumerate().rev() {
-        if remaining <= 0.0 {
+        if remaining == 0 {
             break;
         }
         if matches!(message.origin, Some(PromptOrigin::Injection { .. })) {
@@ -29,7 +29,7 @@ pub fn compute_undo_cut(state: &[ContextMessage], count: f64) -> UndoCut {
             break;
         }
         if is_real_user_prompt(message) {
-            remaining -= 1.0;
+            remaining -= 1;
             removed_count += 1;
             cut_index = i64::try_from(index).unwrap_or(i64::MAX);
         }
@@ -41,8 +41,8 @@ pub fn compute_undo_cut(state: &[ContextMessage], count: f64) -> UndoCut {
     }
 }
 
-pub fn is_fully_undoable(cut: UndoCut, count: f64) -> bool {
-    cut.cut_index >= 0 && cut.removed_count as f64 >= count
+pub fn is_fully_undoable(cut: UndoCut, count: u32) -> bool {
+    cut.cut_index >= 0 && cut.removed_count as u32 >= count
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,13 +57,13 @@ pub enum UndoPrecheck {
     Ok,
     Unavailable {
         reason: UndoUnavailableReason,
-        requested: f64,
+        requested: u32,
         undoable: usize,
     },
 }
 
 // Original: contextOps.ts, precheckUndo().
-pub fn precheck_undo(history: &[ContextMessage], count: f64) -> UndoPrecheck {
+pub fn precheck_undo(history: &[ContextMessage], count: u32) -> UndoPrecheck {
     let cut = compute_undo_cut(history, count);
     if is_fully_undoable(cut, count) {
         return UndoPrecheck::Ok;
@@ -97,27 +97,10 @@ pub fn format_undo_unavailable_message(precheck: UndoPrecheck) -> Option<String>
         UndoUnavailableReason::CompactionBoundary => {
             "Nothing to undo: would cross a compaction boundary".to_owned()
         }
-        UndoUnavailableReason::Insufficient => format!(
-            "Nothing to undo: only {undoable} of {} requested turn(s) available",
-            js_number_to_string(requested)
-        ),
+        UndoUnavailableReason::Insufficient => {
+            format!("Nothing to undo: only {undoable} of {requested} requested turn(s) available")
+        }
     })
-}
-
-fn js_number_to_string(value: f64) -> String {
-    if value.is_nan() {
-        "NaN".to_owned()
-    } else if value == f64::INFINITY {
-        "Infinity".to_owned()
-    } else if value == f64::NEG_INFINITY {
-        "-Infinity".to_owned()
-    } else if value == 0.0 {
-        "0".to_owned()
-    } else if value.fract() == 0.0 {
-        format!("{value:.0}")
-    } else {
-        value.to_string()
-    }
 }
 
 fn is_real_user_prompt(message: &ContextMessage) -> bool {
@@ -165,14 +148,14 @@ mod tests {
             message(Role::Assistant, None),
         ];
         assert_eq!(
-            compute_undo_cut(&history, 1.0),
+            compute_undo_cut(&history, 1),
             UndoCut {
                 cut_index: 0,
                 removed_count: 1,
                 stopped_at_compaction: false,
             }
         );
-        assert_eq!(precheck_undo(&history, 1.0), UndoPrecheck::Ok);
+        assert_eq!(precheck_undo(&history, 1), UndoPrecheck::Ok);
     }
 
     #[test]
@@ -189,10 +172,10 @@ mod tests {
             message(Role::Assistant, None),
         ];
         assert_eq!(
-            precheck_undo(&history, 1.0),
+            precheck_undo(&history, 1),
             UndoPrecheck::Unavailable {
                 reason: UndoUnavailableReason::CompactionBoundary,
-                requested: 1.0,
+                requested: 1,
                 undoable: 0,
             }
         );
@@ -201,20 +184,20 @@ mod tests {
     #[test]
     fn reports_empty_and_insufficient_histories() {
         assert_eq!(
-            precheck_undo(&[], 1.0),
+            precheck_undo(&[], 1),
             UndoPrecheck::Unavailable {
                 reason: UndoUnavailableReason::Empty,
-                requested: 1.0,
+                requested: 1,
                 undoable: 0,
             }
         );
         let history = [message(Role::User, None), message(Role::Assistant, None)];
-        let precheck = precheck_undo(&history, 2.0);
+        let precheck = precheck_undo(&history, 2);
         assert_eq!(
             precheck,
             UndoPrecheck::Unavailable {
                 reason: UndoUnavailableReason::Insufficient,
-                requested: 2.0,
+                requested: 2,
                 undoable: 1,
             }
         );
@@ -222,18 +205,5 @@ mod tests {
             format_undo_unavailable_message(precheck).as_deref(),
             Some("Nothing to undo: only 1 of 2 requested turn(s) available")
         );
-    }
-
-    #[test]
-    fn preserves_fractional_javascript_count_behavior() {
-        let history = [
-            message(Role::User, None),
-            message(Role::Assistant, None),
-            message(Role::User, None),
-        ];
-        let cut = compute_undo_cut(&history, 1.5);
-        assert_eq!(cut.cut_index, 0);
-        assert_eq!(cut.removed_count, 2);
-        assert!(is_fully_undoable(cut, 1.5));
     }
 }

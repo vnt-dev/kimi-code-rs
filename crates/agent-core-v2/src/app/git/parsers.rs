@@ -193,11 +193,10 @@ pub fn parse_pull_request(stdout: &str) -> Option<FsPullRequest> {
     let Value::Object(raw) = serde_json::from_str(stdout).ok()? else {
         return None;
     };
-    let number = raw.get("number")?.as_f64()?;
-    if !number.is_finite() || number.fract() != 0.0 || number <= 0.0 {
+    let number = raw.get("number")?.as_u64()?;
+    if number == 0 {
         return None;
     }
-    let number = number as u64;
     let url = raw.get("url")?.as_str()?;
     if !is_safe_http_url(url) {
         return None;

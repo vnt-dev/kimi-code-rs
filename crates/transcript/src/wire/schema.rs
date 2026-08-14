@@ -716,7 +716,7 @@ mod tests {
                             "agentRefs": [{"agentId": "sub-1", "role": "child"}]
                         }]
                     }],
-                    "usage": {"inputTokens": 1.0, "outputTokens": 2.0}
+                    "usage": {"inputTokens": 1, "outputTokens": 2}
                 },
                 {
                     "kind": "marker",
@@ -747,7 +747,7 @@ mod tests {
                 "attachmentId": "att-1",
                 "mediaType": "text/plain",
                 "name": "a.txt",
-                "size": 4.0,
+                "size": 4,
                 "source": {"kind": "file", "fileId": "file-1"},
                 "placeholder": "[File #1]"
             }],
@@ -761,8 +761,8 @@ mod tests {
                     "objective": "ship",
                     "status": "active",
                     "completionCriterion": "green",
-                    "budgetUsed": 1.0,
-                    "budgetLimit": 2.0
+                    "budgetUsed": 1,
+                    "budgetLimit": 2
                 },
                 "modes": {
                     "plan": {"reviewPath": "/plan"},

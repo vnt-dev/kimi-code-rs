@@ -26,10 +26,10 @@ pub fn revoked_tombstone(prior: &TokenInfo) -> TokenInfo {
     TokenInfo {
         access_token: String::new(),
         refresh_token: String::new(),
-        expires_at: 0.0,
+        expires_at: 0,
         scope: prior.scope.clone(),
         token_type: prior.token_type.clone(),
-        expires_in: 0.0,
+        expires_in: 0,
     }
 }
 
@@ -41,10 +41,10 @@ mod tests {
         TokenInfo {
             access_token: access_token.to_owned(),
             refresh_token: "refresh".to_owned(),
-            expires_at: 10.0,
+            expires_at: 10,
             scope: "scope".to_owned(),
             token_type: "Bearer".to_owned(),
-            expires_in: 10.0,
+            expires_in: 10,
         }
     }
 
@@ -71,10 +71,10 @@ mod tests {
             TokenInfo {
                 access_token: String::new(),
                 refresh_token: String::new(),
-                expires_at: 0.0,
+                expires_at: 0,
                 scope: "scope".to_owned(),
                 token_type: "Bearer".to_owned(),
-                expires_in: 0.0,
+                expires_in: 0,
             }
         );
     }

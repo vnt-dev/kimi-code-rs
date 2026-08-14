@@ -168,13 +168,13 @@ pub trait TaskOutputProvider: Send + Sync {
     async fn wait(
         &self,
         task_id: &str,
-        timeout_ms: f64,
+        timeout_ms: u64,
         signal: AbortSignal,
     ) -> AgentTaskServiceResult<Option<AgentTaskInfo>>;
     async fn get_output_snapshot(
         &self,
         task_id: &str,
-        max_preview_bytes: f64,
+        max_preview_bytes: u64,
     ) -> AgentTaskServiceResult<AgentTaskOutputSnapshot>;
 }
 
@@ -187,7 +187,7 @@ impl TaskOutputProvider for AgentTaskServiceHandle {
     async fn wait(
         &self,
         task_id: &str,
-        timeout_ms: f64,
+        timeout_ms: u64,
         signal: AbortSignal,
     ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
         (**self).wait(task_id, Some(timeout_ms), Some(signal)).await
@@ -196,7 +196,7 @@ impl TaskOutputProvider for AgentTaskServiceHandle {
     async fn get_output_snapshot(
         &self,
         task_id: &str,
-        max_preview_bytes: f64,
+        max_preview_bytes: u64,
     ) -> AgentTaskServiceResult<AgentTaskOutputSnapshot> {
         (**self)
             .get_output_snapshot(task_id, max_preview_bytes)
@@ -266,11 +266,7 @@ async fn execute_output(
     if args.block == Some(true)
         && !info.base.status.is_terminal()
         && let Err(error) = tasks
-            .wait(
-                &args.task_id,
-                args.timeout.unwrap_or(30) as f64 * 1000.0,
-                signal,
-            )
+            .wait(&args.task_id, args.timeout.unwrap_or(30) * 1000, signal)
             .await
     {
         return ExecutableToolResult::error(error.to_string());
@@ -279,7 +275,7 @@ async fn execute_output(
         return ExecutableToolResult::error(format!("Task not found: {}", args.task_id));
     };
     let output = match tasks
-        .get_output_snapshot(&args.task_id, OUTPUT_PREVIEW_BYTES as f64)
+        .get_output_snapshot(&args.task_id, OUTPUT_PREVIEW_BYTES as u64)
         .await
     {
         Ok(output) => output,
@@ -411,7 +407,7 @@ mod tests {
         async fn wait(
             &self,
             _task_id: &str,
-            timeout_ms: f64,
+            timeout_ms: u64,
             _signal: AbortSignal,
         ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
             self.calls
@@ -423,7 +419,7 @@ mod tests {
         async fn get_output_snapshot(
             &self,
             _task_id: &str,
-            max_preview_bytes: f64,
+            max_preview_bytes: u64,
         ) -> AgentTaskServiceResult<AgentTaskOutputSnapshot> {
             self.calls
                 .lock()

@@ -264,8 +264,10 @@ pub struct SessionSummary {
     pub last_prompt: Option<String>,
     pub work_dir: String,
     pub session_dir: String,
-    pub created_at: f64,
-    pub updated_at: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_i64")]
+    pub created_at: i64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_i64")]
+    pub updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -376,7 +378,8 @@ pub struct BeginCompactionPayload {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct UndoHistoryPayload {
-    pub count: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u32")]
+    pub count: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -414,8 +417,12 @@ pub struct DetachTaskPayload {
 #[serde(rename_all = "camelCase")]
 pub struct GetTaskOutputPayload {
     pub task_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tail: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub tail: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -423,8 +430,12 @@ pub struct GetTaskOutputPayload {
 pub struct GetTasksPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_only: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64"
+    )]
+    pub limit: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -499,7 +510,8 @@ pub struct McpServerInfo {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpStartupMetrics {
-    pub duration_ms: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_u64")]
+    pub duration_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -708,7 +720,8 @@ pub enum AgentReplayRecordPayload {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AgentReplayRecord {
-    pub time: f64,
+    #[serde(deserialize_with = "kimi_code_protocol::lenient::lenient_i64")]
+    pub time: i64,
     #[serde(flatten)]
     pub payload: AgentReplayRecordPayload,
 }
@@ -1087,7 +1100,7 @@ mod tests {
     fn replay_union_preserves_source_discriminants() {
         let records = vec![
             AgentReplayRecord {
-                time: 1.0,
+                time: 1,
                 payload: AgentReplayRecordPayload::Compaction {
                     result: Some(CompactionReplayResult::Status(
                         CompactionReplayStatus::Cancelled,
@@ -1096,7 +1109,7 @@ mod tests {
                 },
             },
             AgentReplayRecord {
-                time: 2.0,
+                time: 2,
                 payload: AgentReplayRecordPayload::PlanUpdated { enabled: true },
             },
         ];
@@ -1105,13 +1118,13 @@ mod tests {
             serde_json::to_value(records).unwrap(),
             json!([
                 {
-                    "time": 1.0,
+                    "time": 1,
                     "type": "compaction",
                     "result": "cancelled",
                     "instruction": "keep decisions"
                 },
                 {
-                    "time": 2.0,
+                    "time": 2,
                     "type": "plan_updated",
                     "enabled": true
                 }

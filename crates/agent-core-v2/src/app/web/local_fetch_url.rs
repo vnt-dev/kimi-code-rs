@@ -149,10 +149,10 @@ impl LocalFetchUrlProvider {
             .headers()
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value > self.max_bytes as f64)
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > self.max_bytes)
         {
-            return Err(body_too_large(length as u64, self.max_bytes));
+            return Err(body_too_large(length, self.max_bytes));
         }
 
         let content_type = response

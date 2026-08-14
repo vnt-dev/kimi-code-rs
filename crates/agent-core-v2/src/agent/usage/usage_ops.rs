@@ -107,12 +107,12 @@ fn total_usage(by_model: &IndexMap<String, TokenUsage>) -> Option<TokenUsage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn usage(value: f64) -> TokenUsage {
+    fn usage(value: u64) -> TokenUsage {
         TokenUsage {
             input_other: value,
-            output: value * 2.0,
-            input_cache_read: value * 3.0,
-            input_cache_creation: value * 4.0,
+            output: value * 2,
+            input_cache_read: value * 3,
+            input_cache_creation: value * 4,
         }
     }
 
@@ -123,7 +123,7 @@ mod tests {
         assert_eq!(RECORD_USAGE.op_type(), "usage.record");
         let op = record_usage(RecordUsagePayload {
             model: "kimi".into(),
-            usage: usage(1.0),
+            usage: usage(1),
             usage_scope: Some(UsageRecordScope::Turn),
         })
         .unwrap();
@@ -137,7 +137,7 @@ mod tests {
             UsageModelState::default(),
             &RecordUsagePayload {
                 model: "a".into(),
-                usage: usage(1.0),
+                usage: usage(1),
                 usage_scope: None,
             },
         );
@@ -145,16 +145,16 @@ mod tests {
             first,
             &RecordUsagePayload {
                 model: "a".into(),
-                usage: usage(2.0),
+                usage: usage(2),
                 usage_scope: Some(UsageRecordScope::Session),
             },
         );
-        assert_eq!(second.by_model["a"], usage(3.0));
+        assert_eq!(second.by_model["a"], usage(3));
     }
 
     #[test]
     fn status_returns_empty_or_defensive_totals_and_current_turn() {
-        let current = usage(4.0);
+        let current = usage(4);
         assert_eq!(
             usage_status_from_state(&UsageModelState::default(), Some(&current)),
             UsageStatus {
@@ -164,10 +164,10 @@ mod tests {
             }
         );
         let model = UsageModelState {
-            by_model: IndexMap::from([("a".into(), usage(1.0)), ("b".into(), usage(2.0))]),
+            by_model: IndexMap::from([("a".into(), usage(1)), ("b".into(), usage(2))]),
         };
         let mut status = usage_status_from_state(&model, None);
-        assert_eq!(status.total, Some(usage(3.0)));
+        assert_eq!(status.total, Some(usage(3)));
         status.by_model.as_mut().unwrap().clear();
         assert_eq!(model.by_model.len(), 2);
     }

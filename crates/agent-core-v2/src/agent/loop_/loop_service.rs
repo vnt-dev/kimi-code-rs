@@ -729,14 +729,14 @@ impl AgentLoopService {
             turn_id,
             reason: end_reason,
             error: error.clone(),
-            duration_ms: Some(duration_ms as f64),
+            duration_ms: Some(duration_ms),
         })
         .expect("turn completion is serializable")]);
         self.event_bus.publish_typed(super::TurnEndedEvent {
             turn_id,
             reason: end_reason,
             error: error.clone(),
-            duration_ms: Some(duration_ms as f64),
+            duration_ms: Some(duration_ms),
         });
         if let Some(error) = error {
             self.publish_error(error);

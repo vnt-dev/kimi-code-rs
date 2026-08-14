@@ -143,9 +143,9 @@ mod tests {
                 objective: "ship".into(),
                 completion_criterion: None,
                 status: GoalStatus::Active,
-                turns_used: 0.0,
-                tokens_used: 0.0,
-                wall_clock_ms: 0.0,
+                turns_used: 0,
+                tokens_used: 0,
+                wall_clock_ms: 0,
                 budget: GoalBudgetReport {
                     token_budget: None,
                     turn_budget: None,

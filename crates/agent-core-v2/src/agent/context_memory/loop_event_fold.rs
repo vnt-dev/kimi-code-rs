@@ -66,18 +66,42 @@ pub enum LoopRecordedEvent {
         finish_reason: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<TokenUsage>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        llm_first_token_latency_ms: Option<f64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        llm_stream_duration_ms: Option<f64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        llm_request_build_ms: Option<f64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        llm_server_first_token_ms: Option<f64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        llm_server_decode_ms: Option<f64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        llm_client_consume_ms: Option<f64>,
+        #[serde(
+            default,
+            deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64",
+            skip_serializing_if = "Option::is_none"
+        )]
+        llm_first_token_latency_ms: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64",
+            skip_serializing_if = "Option::is_none"
+        )]
+        llm_stream_duration_ms: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64",
+            skip_serializing_if = "Option::is_none"
+        )]
+        llm_request_build_ms: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64",
+            skip_serializing_if = "Option::is_none"
+        )]
+        llm_server_first_token_ms: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64",
+            skip_serializing_if = "Option::is_none"
+        )]
+        llm_server_decode_ms: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "kimi_code_protocol::lenient::lenient_optional_u64",
+            skip_serializing_if = "Option::is_none"
+        )]
+        llm_client_consume_ms: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         message_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]

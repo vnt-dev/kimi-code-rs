@@ -131,7 +131,7 @@ mod tests {
             Ok(())
         }
 
-        fn undo(&self, count: f64) -> Result<UndoCut, ContextMemoryServiceError> {
+        fn undo(&self, count: u32) -> Result<UndoCut, ContextMemoryServiceError> {
             Ok(compute_undo_cut(&self.get(), count))
         }
 
@@ -144,8 +144,8 @@ mod tests {
                 context_summary: input.context_summary.unwrap_or(input.summary),
                 compacted_count: input.compacted_count,
                 tokens_before: input.tokens_before,
-                tokens_after: input.tokens_after.unwrap_or(0.0),
-                kept_user_message_count: input.kept_user_message_count.unwrap_or(0.0),
+                tokens_after: input.tokens_after.unwrap_or(0),
+                kept_user_message_count: input.kept_user_message_count.unwrap_or(0),
                 kept_head_user_message_count: input.kept_head_user_message_count,
                 dropped_count: input.dropped_count,
             })

@@ -195,8 +195,8 @@ impl AgentTaskPersistence {
     pub async fn read_task_output_bytes(
         &self,
         task_id: &str,
-        offset: f64,
-        max_bytes: f64,
+        offset: u64,
+        max_bytes: u64,
     ) -> Result<String, TaskPersistenceError> {
         let start = nonnegative_truncating_index(offset);
         let limit = nonnegative_truncating_index(max_bytes);
@@ -216,7 +216,7 @@ impl AgentTaskPersistence {
     pub async fn read_task_output_snapshot(
         &self,
         task_id: &str,
-        max_preview_bytes: f64,
+        max_preview_bytes: u64,
     ) -> Result<Option<AgentTaskStoredOutputSnapshot>, TaskPersistenceError> {
         let Some(output) = self.read_task_output_data(task_id).await? else {
             return Ok(None);
@@ -329,14 +329,8 @@ fn validate_task_id(task_id: &str) -> Result<(), TaskPersistenceError> {
     }
 }
 
-fn nonnegative_truncating_index(value: f64) -> usize {
-    if value.is_nan() || value <= 0.0 {
-        0
-    } else if value.is_infinite() || value >= usize::MAX as f64 {
-        usize::MAX
-    } else {
-        value.trunc() as usize
-    }
+fn nonnegative_truncating_index(value: u64) -> usize {
+    value.min(usize::MAX as u64) as usize
 }
 
 fn normalize_persisted_task(value: &Value) -> Option<AgentTaskInfo> {
@@ -568,21 +562,21 @@ mod tests {
         assert!(service.task_output_exists("bash-page0000").await.unwrap());
         assert_eq!(
             service
-                .read_task_output_bytes("bash-page0000", 5.9, 10.8)
+                .read_task_output_bytes("bash-page0000", 5, 10)
                 .await
                 .unwrap(),
             "fghijklmno"
         );
         assert_eq!(
             service
-                .read_task_output_bytes("bash-page0000", f64::NAN, 3.0)
+                .read_task_output_bytes("bash-page0000", 0, 3)
                 .await
                 .unwrap(),
             "abc"
         );
         assert_eq!(
             service
-                .read_task_output_snapshot("bash-page0000", 6.9)
+                .read_task_output_snapshot("bash-page0000", 6)
                 .await
                 .unwrap(),
             Some(AgentTaskStoredOutputSnapshot {
@@ -595,7 +589,7 @@ mod tests {
         );
         assert_eq!(
             service
-                .read_task_output_bytes("bash-none0001", 0.0, 100.0)
+                .read_task_output_bytes("bash-none0001", 0, 100)
                 .await
                 .unwrap(),
             ""
@@ -646,7 +640,7 @@ mod tests {
         assert!(primary.list_tasks().await.unwrap().is_empty());
         assert_eq!(
             primary
-                .read_task_output_snapshot(task_id, 100.0)
+                .read_task_output_snapshot(task_id, 100)
                 .await
                 .unwrap(),
             Some(AgentTaskStoredOutputSnapshot {

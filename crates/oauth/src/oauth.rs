@@ -99,8 +99,12 @@ pub async fn request_device_authorization(
             "verification_uri_complete",
             "Device authorization response missing verification_uri_complete",
         )?,
-        expires_in: response.data.get("expires_in").map(js_number),
-        interval: response.data.get("interval").map_or(5.0, js_number),
+        expires_in: response.data.get("expires_in").and_then(js_number),
+        interval: response
+            .data
+            .get("interval")
+            .and_then(js_number)
+            .unwrap_or(5),
     })
 }
 
@@ -267,20 +271,20 @@ fn token_from_response(payload: &Map<String, Value>) -> Result<TokenInfo, OAuthE
         "refresh_token",
         "OAuth response missing refresh_token",
     )?;
-    let expires_in = payload.get("expires_in").map(js_number).unwrap_or(f64::NAN);
-    if !expires_in.is_finite() || expires_in <= 0.0 {
+    let expires_in = payload.get("expires_in").and_then(js_number);
+    let Some(expires_in) = expires_in.filter(|value| *value > 0) else {
         return Err(OAuthError::new(
             "OAuth response missing or invalid expires_in",
         ));
-    }
+    };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as f64;
+        .as_secs();
     Ok(TokenInfo {
         access_token,
         refresh_token,
-        expires_at: now + expires_in,
+        expires_at: i64::try_from(now.saturating_add(expires_in)).unwrap_or(i64::MAX),
         scope: string_value(payload, "scope").unwrap_or_default(),
         token_type: string_value(payload, "token_type").unwrap_or_else(|| "Bearer".to_owned()),
         expires_in,
@@ -305,15 +309,25 @@ fn pick_error_detail(data: &Map<String, Value>) -> String {
     extract_api_error_message(&Value::Object(data.clone())).unwrap_or_else(|| "unknown".to_owned())
 }
 
-fn js_number(value: &Value) -> f64 {
+fn js_number(value: &Value) -> Option<u64> {
     match value {
-        Value::Number(number) => number.as_f64().unwrap_or(f64::NAN),
-        Value::String(text) => text.trim().parse().unwrap_or(f64::NAN),
-        Value::Bool(value) => u8::from(*value) as f64,
-        Value::Null => 0.0,
-        Value::Array(values) if values.is_empty() => 0.0,
+        Value::Number(number) => number.as_u64().or_else(|| {
+            number
+                .as_f64()
+                .filter(|number| number.is_finite() && *number >= 0.0)
+                .map(|number| number.trunc() as u64)
+        }),
+        Value::String(text) => text
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|number| number.is_finite() && *number >= 0.0)
+            .map(|number| number.trunc() as u64),
+        Value::Bool(value) => Some(u8::from(*value) as u64),
+        Value::Null => Some(0),
+        Value::Array(values) if values.is_empty() => Some(0),
         Value::Array(values) if values.len() == 1 => js_number(&values[0]),
-        Value::Array(_) | Value::Object(_) => f64::NAN,
+        Value::Array(_) | Value::Object(_) => None,
     }
 }
 
@@ -447,7 +461,7 @@ mod tests {
             .expect("device authorization");
         handle.join().expect("fake server thread");
         assert_eq!(auth.user_code, "WDJB-MJHT");
-        assert_eq!(auth.interval, 5.0);
+        assert_eq!(auth.interval, 5);
         let request = recorded.lock().expect("recorded lock")[0].to_ascii_lowercase();
         assert!(request.starts_with("post /api/oauth/device_authorization "));
         assert!(request.contains("content-type: application/x-www-form-urlencoded"));
@@ -533,7 +547,7 @@ mod tests {
         let DevicePollResult::Success(token) = result else {
             panic!("expected successful token")
         };
-        assert_eq!(token.expires_in, 60.0);
+        assert_eq!(token.expires_in, 60);
         assert_eq!(token.token_type, "Bearer");
         let request = &recorded.lock().expect("recorded lock")[0];
         assert!(request.contains("device_code=device+code"));

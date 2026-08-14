@@ -60,10 +60,10 @@ pub struct ReadMediaRegion {
 impl From<ReadMediaRegion> for ImageCropRegion {
     fn from(region: ReadMediaRegion) -> Self {
         Self {
-            x: region.x as f64,
-            y: region.y as f64,
-            width: region.width as f64,
-            height: region.height as f64,
+            x: region.x,
+            y: region.y,
+            width: region.width,
+            height: region.height,
         }
     }
 }
@@ -624,7 +624,7 @@ fn build_media_note(
                 delivery.width,
                 delivery.height,
                 delivery.mime_type,
-                format_byte_size(delivery.byte_length as f64)
+                format_byte_size(delivery.byte_length as u64)
             ));
             parts.push(
                 "To inspect fine detail, call ReadMediaFile again with the region parameter (original-image pixel coordinates) to view a crop at full fidelity.".into(),
@@ -642,15 +642,15 @@ fn build_media_note(
             };
             parts.push(format!(
                 "Showing region (x={}, y={}, width={}, height={}) of the original image{resolution}.",
-                number(region.x),
-                number(region.y),
-                number(region.width),
-                number(region.height)
+                region.x,
+                region.y,
+                region.width,
+                region.height
             ));
             parts.push(format!(
                 "To output coordinates in original-image pixels, locate them within this crop and add the region offset (x={}, y={}).",
-                number(region.x),
-                number(region.y)
+                region.x,
+                region.y
             ));
         }
         Some(delivery) if delivery.kind == ImageDeliveryKind::Full => {
@@ -691,17 +691,9 @@ fn build_image_decode_limit_error(final_bytes: u64) -> String {
 fn build_full_resolution_limit_error(path: &str, final_bytes: u64) -> String {
     format!(
         "\"{path}\" is {final_bytes} bytes ({}), over the {IMAGE_BYTE_BUDGET}-byte ({}) per-image limit, so full_resolution cannot be honored. Use region to view a crop at full fidelity instead.",
-        format_byte_size(final_bytes as f64),
-        format_byte_size(IMAGE_BYTE_BUDGET as f64)
+        format_byte_size(final_bytes),
+        format_byte_size(IMAGE_BYTE_BUDGET as u64)
     )
-}
-
-fn number(value: f64) -> String {
-    if value.fract() == 0.0 {
-        format!("{value:.0}")
-    } else {
-        value.to_string()
-    }
 }
 
 #[cfg(test)]
@@ -928,10 +920,10 @@ mod tests {
             byte_length: 100,
             mime_type: "image/png".into(),
             region: Some(ImageCropRegion {
-                x: 12.0,
-                y: 34.0,
-                width: 200.0,
-                height: 100.0,
+                x: 12,
+                y: 34,
+                width: 200,
+                height: 100,
             }),
             resized: Some(false),
         };
