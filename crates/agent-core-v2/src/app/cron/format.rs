@@ -2,9 +2,13 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/cron/format.ts`.
 
-use chrono::{DateTime, Local, Utc};
+use std::io::Write;
 
-use crate::{_base::utils::xml_escape::escape_xml_attribute, agent::context_memory::PromptOrigin};
+use chrono::{DateTime, Local, Utc};
+use quick_xml::Writer;
+use quick_xml::events::{BytesStart, BytesText, Event};
+
+use crate::agent::context_memory::PromptOrigin;
 
 pub fn format_local_iso_with_offset(ms: f64) -> String {
     let Some(utc) = DateTime::<Utc>::from_timestamp(
@@ -39,22 +43,36 @@ fn render(
     stale: bool,
     prompt: &str,
 ) -> String {
-    format!(
-        "<cron-fire jobId=\"{}\" cron=\"{}\" recurring=\"{}\" coalescedCount=\"{}\" stale=\"{}\">\n<prompt>\n{}\n</prompt>\n</cron-fire>",
-        attr(job_id),
-        attr(cron),
-        recurring,
-        coalesced_count,
-        stale,
-        prompt
-    )
+    let mut writer = Writer::new(Vec::new());
+    let mut start = BytesStart::new("cron-fire");
+    start.push_attribute(("jobId", attr(job_id)));
+    start.push_attribute(("cron", attr(cron)));
+    start.push_attribute(("recurring", flag(recurring)));
+    start.push_attribute(("coalescedCount", coalesced_count.to_string().as_str()));
+    start.push_attribute(("stale", flag(stale)));
+    writer
+        .write_event(Event::Start(start))
+        .expect("writing to Vec cannot fail");
+    writer
+        .get_mut()
+        .write_all(b"\n<prompt>\n")
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_event(Event::Text(BytesText::from_escaped(prompt)))
+        .expect("writing to Vec cannot fail");
+    writer
+        .get_mut()
+        .write_all(b"\n</prompt>\n</cron-fire>")
+        .expect("writing to Vec cannot fail");
+    String::from_utf8(writer.into_inner()).expect("render output is UTF-8")
 }
-fn attr(value: &str) -> String {
-    if value.is_empty() {
-        "unknown".into()
-    } else {
-        escape_xml_attribute(value)
-    }
+
+fn attr(value: &str) -> &str {
+    if value.is_empty() { "unknown" } else { value }
+}
+
+fn flag(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
 }
 
 #[cfg(test)]

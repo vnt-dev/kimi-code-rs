@@ -27,37 +27,26 @@ use crate::{
 const TASK_STOP_DESCRIPTION: &str = include_str!("task-stop.md");
 const DEFAULT_STOP_REASON: &str = "Stopped by TaskStop";
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TaskStopInput {
     pub task_id: String,
+    #[serde(default, deserialize_with = "deserialize_reason")]
     pub reason: Option<String>,
 }
 
-impl<'de> Deserialize<'de> for TaskStopInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        parse_task_stop_input(&value).map_err(serde::de::Error::custom)
+fn deserialize_reason<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::String(value) => Ok(Some(value)),
+        _ => Err(serde::de::Error::custom("reason must be a string")),
     }
 }
 
 pub fn parse_task_stop_input(value: &Value) -> Result<TaskStopInput, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "TaskStop input must be an object".to_owned())?;
-    let task_id = object
-        .get("task_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "task_id must be a string".to_owned())?
-        .to_owned();
-    let reason = match object.get("reason") {
-        None => None,
-        Some(Value::String(value)) => Some(value.clone()),
-        Some(_) => return Err("reason must be a string".into()),
-    };
-    Ok(TaskStopInput { task_id, reason })
+    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
 }
 
 pub static TASK_STOP_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(|| {

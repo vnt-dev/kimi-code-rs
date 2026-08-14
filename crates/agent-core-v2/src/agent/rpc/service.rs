@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
@@ -92,12 +92,12 @@ use super::{
     CreateGoalPayload, DetachTaskPayload, EmptyPayload, EnterSwarmPayload,
     GenerateConversationTitlePayload, GetTaskOutputPayload, GetTasksPayload,
     PromptMetadataUpdateTarget, PromptPayload, PromptSubmitResult, PromptSubmitStatus,
-    RegisterToolPayload, RenameSessionPayload, RunShellCommandPayload, SetActiveToolsPayload,
-    SetModelPayload, SetModelResult, SetPermissionPayload, SetThinkingPayload, ShellCommandResult,
-    SteerPayload, StopTaskPayload, UndoHistoryPayload, UnregisterToolPayload,
-    apply_prompt_metadata_update, prompt_metadata_text_from_content_parts,
-    prompt_metadata_text_from_plugin_command, prompt_metadata_text_from_skill,
-    resolve_prompt_attachments,
+    RegisterToolPayload, RenameSessionPayload, RunShellCommandPayload, SessionMetaPatchPayload,
+    SessionMetaUpdatedPayload, SetActiveToolsPayload, SetModelPayload, SetModelResult,
+    SetPermissionPayload, SetThinkingPayload, ShellCommandResult, SteerPayload, StopTaskPayload,
+    UndoHistoryPayload, UnregisterToolPayload, apply_prompt_metadata_update,
+    prompt_metadata_text_from_content_parts, prompt_metadata_text_from_plugin_command,
+    prompt_metadata_text_from_skill, resolve_prompt_attachments,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -528,21 +528,17 @@ impl AgentRpcServiceContract for AgentRpcService {
             .await?;
         self.event_service.publish(GlobalDomainEvent {
             event_type: "session.meta.updated".into(),
-            payload: Value::Object(Map::from_iter([
-                ("agentId".into(), Value::String(MAIN_AGENT_ID.into())),
-                (
-                    "sessionId".into(),
-                    Value::String(self.session_context.session_id.clone()),
-                ),
-                ("title".into(), Value::String(title.clone())),
-                (
-                    "patch".into(),
-                    Value::Object(Map::from_iter([
-                        ("title".into(), Value::String(title.clone())),
-                        ("isCustomTitle".into(), Value::Bool(false)),
-                    ])),
-                ),
-            ])),
+            payload: serde_json::to_value(SessionMetaUpdatedPayload {
+                agent_id: MAIN_AGENT_ID.into(),
+                session_id: self.session_context.session_id.clone(),
+                title: Some(title.clone()),
+                patch: SessionMetaPatchPayload {
+                    title: Some(title.clone()),
+                    is_custom_title: Some(false),
+                    last_prompt: None,
+                },
+            })
+            .expect("session metadata payload is serializable"),
         });
         Ok(Some(title))
     }

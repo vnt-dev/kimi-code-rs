@@ -30,42 +30,34 @@ in the system context — fold them in order to get the current list. \
 Pass the exact name(s) you need; their full definitions become available immediately, \
 so you can call them directly in your next tool call.";
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct SelectToolsInput {
+    #[serde(deserialize_with = "deserialize_names")]
     pub names: Vec<String>,
 }
 
-impl<'de> Deserialize<'de> for SelectToolsInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        parse_select_tools_input(&value).map_err(serde::de::Error::custom)
+fn deserialize_names<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values = Vec::<Value>::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("names must be a non-empty array"))?;
+    let mut names = Vec::with_capacity(values.len());
+    for value in values {
+        match value {
+            Value::String(name) => names.push(name),
+            _ => return Err(serde::de::Error::custom("names must contain only strings")),
+        }
     }
+    if names.is_empty() {
+        return Err(serde::de::Error::custom("names must be a non-empty array"));
+    }
+    Ok(names)
 }
 
 pub fn parse_select_tools_input(value: &Value) -> Result<SelectToolsInput, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "select_tools input must be an object".to_owned())?;
-    if object.len() != 1 || !object.contains_key("names") {
-        return Err("select_tools input must contain only names".into());
-    }
-    let names = object
-        .get("names")
-        .and_then(Value::as_array)
-        .filter(|names| !names.is_empty())
-        .ok_or_else(|| "names must be a non-empty array".to_owned())?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| "names must contain only strings".to_owned())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(SelectToolsInput { names })
+    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
 }
 
 pub static SELECT_TOOLS_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(|| {

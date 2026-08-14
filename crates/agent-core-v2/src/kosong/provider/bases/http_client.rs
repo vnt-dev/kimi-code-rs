@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use url::Url;
+
 pub const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 pub fn default_provider_http_client() -> reqwest::Client {
@@ -14,6 +16,21 @@ fn provider_http_client(timeout: Duration) -> reqwest::Client {
         .read_timeout(timeout)
         .build()
         .expect("the built-in provider HTTP client configuration must be valid")
+}
+
+/// Append path segments to a base URL, preserving any existing path prefix.
+///
+/// Equivalent to the former `format!("{}/{}", base.trim_end_matches('/'),
+/// segments.join("/"))` string building, but performs correct percent-encoding
+/// and is fallible on malformed bases. `Url::join` is *not* used here because
+/// its RFC 3986 merge semantics would replace the base path.
+pub fn append_url_path_segments(base: &str, segments: &[&str]) -> Result<Url, String> {
+    let mut url = Url::parse(base).map_err(|error| error.to_string())?;
+    url.path_segments_mut()
+        .map_err(|_| "URL cannot be used as a base".to_owned())?
+        .pop_if_empty()
+        .extend(segments.iter().copied());
+    Ok(url)
 }
 
 #[cfg(test)]

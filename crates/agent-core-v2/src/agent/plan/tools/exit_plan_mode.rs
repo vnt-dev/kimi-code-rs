@@ -35,10 +35,32 @@ use crate::{
 const EXIT_PLAN_MODE_DESCRIPTION: &str = include_str!("exit-plan-mode.md");
 const RESERVED_OPTION_LABELS: &[&str] = &["approve", "reject", "reject and exit", "revise"];
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ExitPlanModeOption {
+    #[serde(deserialize_with = "deserialize_option_label")]
     pub label: String,
+    #[serde(default)]
     pub description: String,
+}
+
+fn deserialize_option_label<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let label = String::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("option label must be a non-empty string"))?;
+    if label.is_empty() {
+        return Err(serde::de::Error::custom(
+            "option label must be a non-empty string",
+        ));
+    }
+    if label.chars().count() > 80 {
+        return Err(serde::de::Error::custom(
+            "option label must contain at most 80 characters",
+        ));
+    }
+    Ok(label)
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -51,73 +73,39 @@ impl<'de> Deserialize<'de> for ExitPlanModeInput {
     where
         D: Deserializer<'de>,
     {
-        parse_exit_plan_mode_input(&Value::deserialize(deserializer)?)
-            .map_err(serde::de::Error::custom)
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            #[serde(default)]
+            options: Option<Vec<ExitPlanModeOption>>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let options = raw.options;
+        if let Some(options) = &options {
+            if !(1..=3).contains(&options.len()) {
+                return Err(serde::de::Error::custom(
+                    "options must contain 1 to 3 options",
+                ));
+            }
+            let mut labels = HashSet::new();
+            for option in options {
+                let label = normalize_option_label(&option.label);
+                if !labels.insert(label.clone()) {
+                    return Err(serde::de::Error::custom("Option labels must be unique."));
+                }
+                if RESERVED_OPTION_LABELS.contains(&label.as_str()) {
+                    return Err(serde::de::Error::custom(
+                        "Option labels must not use reserved approval labels.",
+                    ));
+                }
+            }
+        }
+        Ok(ExitPlanModeInput { options })
     }
 }
 
 pub fn parse_exit_plan_mode_input(value: &Value) -> Result<ExitPlanModeInput, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "ExitPlanMode input must be an object".to_owned())?;
-    if object.keys().any(|key| key != "options") {
-        return Err("ExitPlanMode input contains an unknown property".into());
-    }
-    let Some(options) = object.get("options") else {
-        return Ok(ExitPlanModeInput::default());
-    };
-    let options = options
-        .as_array()
-        .ok_or_else(|| "options must be an array".to_owned())?;
-    if !(1..=3).contains(&options.len()) {
-        return Err("options must contain 1 to 3 options".into());
-    }
-
-    let options = options
-        .iter()
-        .map(|value| {
-            let option = value
-                .as_object()
-                .ok_or_else(|| "each option must be an object".to_owned())?;
-            if option
-                .keys()
-                .any(|key| !matches!(key.as_str(), "label" | "description"))
-            {
-                return Err("an option contains an unknown property".into());
-            }
-            let label = option
-                .get("label")
-                .and_then(Value::as_str)
-                .filter(|label| !label.is_empty())
-                .ok_or_else(|| "option label must be a non-empty string".to_owned())?;
-            if label.chars().count() > 80 {
-                return Err("option label must contain at most 80 characters".into());
-            }
-            let description = match option.get("description") {
-                None => String::new(),
-                Some(Value::String(description)) => description.clone(),
-                Some(_) => return Err("option description must be a string".into()),
-            };
-            Ok(ExitPlanModeOption {
-                label: label.into(),
-                description,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-
-    let mut labels = HashSet::new();
-    for option in &options {
-        let label = normalize_option_label(&option.label);
-        if !labels.insert(label.clone()) {
-            return Err("Option labels must be unique.".into());
-        }
-        if RESERVED_OPTION_LABELS.contains(&label.as_str()) {
-            return Err("Option labels must not use reserved approval labels.".into());
-        }
-    }
-    Ok(ExitPlanModeInput {
-        options: Some(options),
-    })
+    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
 }
 
 pub static EXIT_PLAN_MODE_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(|| {

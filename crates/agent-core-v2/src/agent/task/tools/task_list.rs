@@ -26,44 +26,48 @@ use super::format_plain_object;
 
 const TASK_LIST_DESCRIPTION: &str = include_str!("task-list.md");
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TaskListInput {
+    #[serde(
+        default = "default_active_only",
+        deserialize_with = "deserialize_active_only"
+    )]
     pub active_only: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_limit")]
     pub limit: Option<usize>,
 }
 
-impl<'de> Deserialize<'de> for TaskListInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        parse_task_list_input(&value).map_err(serde::de::Error::custom)
+fn default_active_only() -> Option<bool> {
+    Some(true)
+}
+
+fn deserialize_active_only<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::Bool(value) => Ok(Some(value)),
+        _ => Err(serde::de::Error::custom("active_only must be a boolean")),
     }
 }
 
+fn deserialize_limit<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("limit must be an integer from 1 through 100"))?;
+    if !(1..=100).contains(&value) {
+        return Err(serde::de::Error::custom(
+            "limit must be an integer from 1 through 100",
+        ));
+    }
+    Ok(Some(value as usize))
+}
+
 pub fn parse_task_list_input(value: &Value) -> Result<TaskListInput, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "TaskList input must be an object".to_owned())?;
-    let active_only = match object.get("active_only") {
-        None => Some(true),
-        Some(Value::Bool(value)) => Some(*value),
-        Some(_) => return Err("active_only must be a boolean".into()),
-    };
-    let limit = match object.get("limit") {
-        None => None,
-        Some(value) => {
-            let value = value
-                .as_u64()
-                .ok_or_else(|| "limit must be an integer from 1 through 100".to_owned())?;
-            if !(1..=100).contains(&value) {
-                return Err("limit must be an integer from 1 through 100".into());
-            }
-            Some(value as usize)
-        }
-    };
-    Ok(TaskListInput { active_only, limit })
+    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
 }
 
 pub static TASK_LIST_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(|| {

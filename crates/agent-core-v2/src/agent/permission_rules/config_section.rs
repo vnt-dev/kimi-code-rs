@@ -56,10 +56,18 @@ pub static PERMISSION_CONFIG_SCHEMA: LazyLock<ConfigSchema> = LazyLock::new(|| {
 });
 
 pub fn parse_permission_rule(value: &Value) -> Result<PermissionRule, ConfigValidationError> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| ConfigValidationError::new("permission rule must be an object"))?;
-    let decision = match required_string(object, "decision")? {
+    #[derive(Deserialize)]
+    struct Raw {
+        decision: String,
+        #[serde(default = "default_permission_rule_scope")]
+        scope: String,
+        pattern: String,
+        #[serde(default, deserialize_with = "deserialize_permission_rule_reason")]
+        reason: Option<String>,
+    }
+    let raw = serde_json::from_value::<Raw>(value.clone())
+        .map_err(|error| ConfigValidationError::new(error.to_string()))?;
+    let decision = match raw.decision.as_str() {
         "allow" => PermissionRuleDecision::Allow,
         "deny" => PermissionRuleDecision::Deny,
         "ask" => PermissionRuleDecision::Ask,
@@ -69,17 +77,17 @@ pub fn parse_permission_rule(value: &Value) -> Result<PermissionRule, ConfigVali
             ));
         }
     };
-    let scope = match optional_string(object, "scope")? {
-        None | Some("user") => PermissionRuleScope::User,
-        Some("turn-override") => PermissionRuleScope::TurnOverride,
-        Some("session-runtime") => PermissionRuleScope::SessionRuntime,
-        Some("project") => PermissionRuleScope::Project,
-        Some(_) => {
+    let scope = match raw.scope.as_str() {
+        "user" => PermissionRuleScope::User,
+        "turn-override" => PermissionRuleScope::TurnOverride,
+        "session-runtime" => PermissionRuleScope::SessionRuntime,
+        "project" => PermissionRuleScope::Project,
+        _ => {
             return Err(ConfigValidationError::new("invalid permission rule scope"));
         }
     };
-    let pattern = required_string(object, "pattern")?;
-    if pattern.is_empty() || parse_permission_pattern(pattern).is_err() {
+    let pattern = raw.pattern;
+    if pattern.is_empty() || parse_permission_pattern(&pattern).is_err() {
         return Err(ConfigValidationError::new(
             "Invalid permission rule pattern",
         ));
@@ -87,29 +95,25 @@ pub fn parse_permission_rule(value: &Value) -> Result<PermissionRule, ConfigVali
     Ok(PermissionRule {
         decision,
         scope,
-        pattern: pattern.to_owned(),
-        reason: optional_string(object, "reason")?.map(str::to_owned),
+        pattern,
+        reason: raw.reason,
     })
 }
 
-fn required_string<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-) -> Result<&'a str, ConfigValidationError> {
-    object.get(key).and_then(Value::as_str).ok_or_else(|| {
-        ConfigValidationError::new(format!("permission rule {key} must be a string"))
-    })
+fn default_permission_rule_scope() -> String {
+    "user".into()
 }
 
-fn optional_string<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-) -> Result<Option<&'a str>, ConfigValidationError> {
-    object.get(key).map_or(Ok(None), |value| {
-        value.as_str().map(Some).ok_or_else(|| {
-            ConfigValidationError::new(format!("permission rule {key} must be a string"))
-        })
-    })
+fn deserialize_permission_rule_reason<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Option::<String>::deserialize(deserializer)? {
+        Some(value) => Ok(Some(value)),
+        None => Err(serde::de::Error::custom(
+            "permission rule reason must be a string",
+        )),
+    }
 }
 
 // Original: configSection.ts, permissionFromToml().

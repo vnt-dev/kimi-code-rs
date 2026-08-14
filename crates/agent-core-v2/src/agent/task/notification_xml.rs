@@ -1,6 +1,8 @@
-use serde_json::{Map, Value};
+use std::io::Write;
 
-use crate::_base::utils::xml_escape::escape_xml_attribute;
+use quick_xml::Writer;
+use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use serde_json::{Map, Value};
 
 // Original: task/notificationXml.ts, renderNotificationXml(). Attribute
 // values alone are escaped; model-visible text and child XML stay verbatim.
@@ -19,24 +21,56 @@ pub fn render_notification_xml(data: &Map<String, Value>) -> String {
         value => value,
     };
 
-    let agent_id_attr =
-        agent_id.map_or_else(String::new, |agent_id| format!(" agent_id=\"{agent_id}\""));
-    let mut lines = vec![format!(
-        "<notification id=\"{id}\" category=\"{category}\" type=\"{notification_type}\" \
-         source_kind=\"{source_kind}\" source_id=\"{source_id}\"{agent_id_attr}>"
-    )];
+    let mut writer = Writer::new(Vec::new());
+    let mut start = BytesStart::new("notification");
+    start.push_attribute(("id", id.as_str()));
+    start.push_attribute(("category", category.as_str()));
+    start.push_attribute(("type", notification_type.as_str()));
+    start.push_attribute(("source_kind", source_kind.as_str()));
+    start.push_attribute(("source_id", source_id.as_str()));
+    if let Some(agent_id) = agent_id {
+        start.push_attribute(("agent_id", agent_id.as_str()));
+    }
+    writer
+        .write_event(Event::Start(start))
+        .expect("writing to Vec cannot fail");
+    writer
+        .get_mut()
+        .write_all(b"\n")
+        .expect("writing to Vec cannot fail");
+
+    let mut blocks: Vec<String> = Vec::new();
     if !title.is_empty() {
-        lines.push(format!("Title: {title}"));
+        blocks.push(format!("Title: {title}"));
     }
     if !severity.is_empty() {
-        lines.push(format!("Severity: {severity}"));
+        blocks.push(format!("Severity: {severity}"));
     }
     if !body.is_empty() {
-        lines.push(body.into());
+        blocks.push(body.into());
     }
-    lines.extend(child_blocks(children_value));
-    lines.push("</notification>".into());
-    lines.join("\n")
+    blocks.extend(child_blocks(children_value));
+    for (index, block) in blocks.iter().enumerate() {
+        if index > 0 {
+            writer
+                .get_mut()
+                .write_all(b"\n")
+                .expect("writing to Vec cannot fail");
+        }
+        writer
+            .write_event(Event::Text(BytesText::from_escaped(block.as_str())))
+            .expect("writing to Vec cannot fail");
+    }
+    if !blocks.is_empty() {
+        writer
+            .get_mut()
+            .write_all(b"\n")
+            .expect("writing to Vec cannot fail");
+    }
+    writer
+        .write_event(Event::End(BytesEnd::new("notification")))
+        .expect("writing to Vec cannot fail");
+    String::from_utf8(writer.into_inner()).expect("render output is UTF-8")
 }
 
 fn string_attr(value: Option<&Value>, fallback: &str) -> String {
@@ -47,7 +81,7 @@ fn optional_string_attr(value: Option<&Value>) -> Option<String> {
     value
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .map(escape_xml_attribute)
+        .map(str::to_owned)
 }
 
 fn string_value(value: Option<&Value>) -> &str {

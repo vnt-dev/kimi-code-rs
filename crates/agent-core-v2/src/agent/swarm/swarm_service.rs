@@ -4,7 +4,8 @@
 
 use std::{ops::Deref, sync::Arc};
 
-use serde_json::{Map, Value};
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::{
     _base::di::{
@@ -34,6 +35,14 @@ use super::{SWARM_MODEL, SwarmModeTrigger, ensure_swarm_wire_registered, swarm_e
 
 const SWARM_MODE_ENTER_REMINDER: &str = include_str!("enter-reminder.md");
 const SWARM_MODE_EXIT_REMINDER: &str = include_str!("exit-reminder.md");
+
+#[derive(Serialize)]
+struct ContextSplicedPayload {
+    start: u64,
+    #[serde(rename = "deleteCount")]
+    delete_count: u64,
+    messages: Vec<Value>,
+}
 
 pub trait AgentSwarmServiceContract: Disposable + Send + Sync {
     fn is_active(&self) -> bool;
@@ -159,17 +168,17 @@ impl AgentSwarmServiceContract for AgentSwarmService {
             return Ok(());
         }
         if will_pop {
-            self.event_bus.publish(DomainEvent::new(
-                "context.spliced",
-                Map::from_iter([
-                    (
-                        "start".into(),
-                        Value::from(history.len().saturating_sub(1) as u64),
-                    ),
-                    ("deleteCount".into(), Value::from(1_u64)),
-                    ("messages".into(), Value::Array(Vec::new())),
-                ]),
-            ));
+            let payload = serde_json::to_value(ContextSplicedPayload {
+                start: history.len().saturating_sub(1) as u64,
+                delete_count: 1,
+                messages: Vec::new(),
+            })
+            .expect("context spliced payload is serializable")
+            .as_object()
+            .cloned()
+            .expect("context spliced payload is an object");
+            self.event_bus
+                .publish(DomainEvent::new("context.spliced", payload));
         } else {
             self.reminders.append_system_reminder(
                 SWARM_MODE_EXIT_REMINDER,

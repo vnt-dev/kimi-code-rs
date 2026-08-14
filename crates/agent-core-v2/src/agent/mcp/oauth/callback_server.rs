@@ -244,21 +244,28 @@ async fn read_request_target(stream: &mut TcpStream) -> Option<String> {
 }
 
 async fn write_response(stream: &mut TcpStream, status: u16, content_type: &str, body: &str) {
-    let reason = match status {
-        200 => "OK",
-        400 => "Bad Request",
-        _ => "Not Found",
-    };
-    let content_type = if content_type.is_empty() {
-        String::new()
-    } else {
-        format!("Content-Type: {content_type}\r\n")
-    };
-    let response = format!(
-        "HTTP/1.1 {status} {reason}\r\n{content_type}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
+    let mut builder = http::Response::builder()
+        .status(status)
+        .header("Content-Length", body.len())
+        .header("Connection", "close");
+    if !content_type.is_empty() {
+        builder = builder.header("Content-Type", content_type);
+    }
+    let response = builder.body(body).expect("valid response");
+    let mut rendered = format!(
+        "HTTP/1.1 {} {}\r\n",
+        response.status().as_u16(),
+        response.status().canonical_reason().unwrap_or("")
     );
-    let _ = stream.write_all(response.as_bytes()).await;
+    for (name, value) in response.headers() {
+        rendered.push_str(&format!(
+            "{name}: {}\r\n",
+            value.to_str().unwrap_or_default()
+        ));
+    }
+    rendered.push_str("\r\n");
+    rendered.push_str(body);
+    let _ = stream.write_all(rendered.as_bytes()).await;
     let _ = stream.shutdown().await;
 }
 

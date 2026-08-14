@@ -12,6 +12,7 @@ use crate::kosong::contract::message::{ContentPart, MediaUrl};
 use crate::kosong::contract::provider::{
     GenerateOptions, ProviderError, ProviderRequestAuth, VideoUploadInput, VideoUploadSource,
 };
+use crate::kosong::provider::bases::http_client::append_url_path_segments;
 use crate::kosong::provider::bases::openai::openai_common::{
     convert_openai_error, convert_openai_status_error,
 };
@@ -232,9 +233,14 @@ impl KimiFilesClient for ReqwestKimiFilesClient {
         let form = Form::new()
             .part("file", part)
             .text("purpose", "video".to_owned());
+        let url = append_url_path_segments(&self.base_url, &["files"]).map_err(|error| {
+            boxed(ChatProviderError::ChatProvider {
+                message: format!("KimiFilesClient: invalid base URL: {error}"),
+            })
+        })?;
         let request = self
             .client
-            .post(format!("{}/files", self.base_url.trim_end_matches('/')))
+            .post(url)
             .headers(build_headers(&self.api_key, self.headers.as_ref())?)
             .multipart(form)
             .send();

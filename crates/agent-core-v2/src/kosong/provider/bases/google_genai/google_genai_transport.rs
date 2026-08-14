@@ -12,6 +12,8 @@ use crate::kosong::contract::provider::ProviderError;
 use crate::kosong::provider::bases::google_genai::google_genai::{
     convert_google_gen_ai_error, convert_google_gen_ai_status_error,
 };
+use crate::kosong::provider::bases::http_client::append_url_path_segments;
+use crate::kosong::provider::bases::sse::{SseFrameDecoder, extract_data};
 
 pub type GoogleGenAiEventStream = Pin<Box<dyn Stream<Item = Result<Value, ProviderError>> + Send>>;
 
@@ -203,27 +205,51 @@ fn endpoint(
     model: &str,
     stream: bool,
     vertex: Option<(&str, &str)>,
-) -> String {
+) -> Result<String, ProviderError> {
     let method = if stream {
-        "streamGenerateContent?alt=sse"
+        "streamGenerateContent"
     } else {
         "generateContent"
     };
-    if let Some((project, location)) = vertex {
-        let base = base_url
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("https://{location}-aiplatform.googleapis.com"));
-        format!(
-            "{}/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:{method}",
-            base.trim_end_matches('/')
+    let (base, segments): (String, Vec<String>) = if let Some((project, location)) = vertex {
+        (
+            base_url
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("https://{location}-aiplatform.googleapis.com")),
+            vec![
+                "v1".into(),
+                "projects".into(),
+                project.into(),
+                "locations".into(),
+                location.into(),
+                "publishers".into(),
+                "google".into(),
+                "models".into(),
+                format!("{model}:{method}"),
+            ],
         )
     } else {
-        let base = base_url.unwrap_or("https://generativelanguage.googleapis.com");
-        format!(
-            "{}/v1beta/models/{model}:{method}",
-            base.trim_end_matches('/')
+        (
+            base_url
+                .map(str::to_owned)
+                .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_owned()),
+            vec![
+                "v1beta".into(),
+                "models".into(),
+                format!("{model}:{method}"),
+            ],
         )
+    };
+    let segment_refs = segments.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut url = append_url_path_segments(&base, &segment_refs).map_err(|error| {
+        boxed(ChatProviderError::ChatProvider {
+            message: format!("GoogleGenAIChatProvider: invalid base URL: {error}"),
+        })
+    })?;
+    if stream {
+        url.set_query(Some("alt=sse"));
     }
+    Ok(url.to_string())
 }
 
 // Original: google-genai.ts, models.generateContent[Stream]() SDK boundary.
@@ -243,7 +269,7 @@ pub async fn send_google_gen_ai_request(
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let url = endpoint(base_url, model, stream, vertex);
+    let url = endpoint(base_url, model, stream, vertex)?;
     let response = await_or_cancel(
         signal,
         client
@@ -278,7 +304,7 @@ pub async fn send_google_gen_ai_request(
         });
         let state = SseState {
             source: Box::pin(source),
-            buffer: Vec::new(),
+            decoder: SseFrameDecoder::new(),
             pending: VecDeque::new(),
             done: false,
             signal: signal.cloned(),
@@ -302,7 +328,7 @@ pub async fn send_google_gen_ai_request(
 
 struct SseState {
     source: Pin<Box<dyn Stream<Item = Result<Vec<u8>, ProviderError>> + Send>>,
-    buffer: Vec<u8>,
+    decoder: SseFrameDecoder,
     pending: VecDeque<Value>,
     done: bool,
     signal: Option<CancellationToken>,
@@ -319,6 +345,12 @@ impl SseState {
                 return Ok(Some(event));
             }
             if self.done {
+                // The stream ended without a trailing blank line; drain the
+                // final unterminated frame if one is buffered.
+                if let Some(frame) = self.decoder.finish() {
+                    self.parse_frame(&frame)?;
+                    continue;
+                }
                 return Ok(None);
             }
             let next = if let Some(signal) = self.signal.as_ref() {
@@ -331,56 +363,36 @@ impl SseState {
                 self.source.next().await
             };
             match next {
-                Some(Ok(bytes)) => self.buffer.extend(bytes),
+                Some(Ok(bytes)) => self.decoder.push(&bytes),
                 Some(Err(error)) => return Err(error),
-                None => {
-                    self.done = true;
-                    if !self.buffer.is_empty() {
-                        self.buffer.extend_from_slice(b"\n\n");
-                    }
-                }
+                None => self.done = true,
             }
         }
     }
 
     fn parse_events(&mut self) -> Result<(), ProviderError> {
-        while let Some((at, delimiter)) = find_boundary(&self.buffer) {
-            let event = self.buffer.drain(..at).collect::<Vec<_>>();
-            self.buffer.drain(..delimiter);
-            let text = std::str::from_utf8(&event).map_err(|error| {
-                boxed(ChatProviderError::ChatProvider {
-                    message: format!("GoogleGenAI error: invalid UTF-8 in SSE response: {error}"),
-                })
-            })?;
-            let data = text
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim_start)
-                .collect::<Vec<_>>()
-                .join("\n");
-            if data.is_empty() {
-                continue;
-            }
-            let value = serde_json::from_str(&data).map_err(|error| {
-                boxed(ChatProviderError::ChatProvider {
-                    message: format!("GoogleGenAI error: invalid SSE event: {error}"),
-                })
-            })?;
-            self.pending.push_back(value);
+        while let Some(frame) = self.decoder.next_frame() {
+            self.parse_frame(&frame)?;
         }
         Ok(())
     }
-}
 
-fn find_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
-    let lf = buffer.windows(2).position(|window| window == b"\n\n");
-    let crlf = buffer.windows(4).position(|window| window == b"\r\n\r\n");
-    match (lf, crlf) {
-        (Some(lf), Some(crlf)) if lf < crlf => Some((lf, 2)),
-        (Some(_), Some(crlf)) => Some((crlf, 4)),
-        (Some(lf), None) => Some((lf, 2)),
-        (None, Some(crlf)) => Some((crlf, 4)),
-        (None, None) => None,
+    fn parse_frame(&mut self, frame: &[u8]) -> Result<(), ProviderError> {
+        let data = extract_data(frame).map_err(|error| {
+            boxed(ChatProviderError::ChatProvider {
+                message: format!("GoogleGenAI error: invalid UTF-8 in SSE response: {error}"),
+            })
+        })?;
+        if data.is_empty() {
+            return Ok(());
+        }
+        let value = serde_json::from_str(&data).map_err(|error| {
+            boxed(ChatProviderError::ChatProvider {
+                message: format!("GoogleGenAI error: invalid SSE event: {error}"),
+            })
+        })?;
+        self.pending.push_back(value);
+        Ok(())
     }
 }
 
@@ -475,7 +487,7 @@ mod tests {
         ]);
         let mut state = SseState {
             source: Box::pin(source),
-            buffer: Vec::new(),
+            decoder: SseFrameDecoder::new(),
             pending: VecDeque::new(),
             done: false,
             signal: None,

@@ -27,54 +27,46 @@ pub const MAX_CRON_JOBS_PER_SESSION: usize = 50;
 pub const MAX_CRON_PROMPT_BYTES: usize = 8 * 1024;
 pub const ONE_SHOT_MAX_FUTURE_MS: f64 = 350.0 * 24.0 * 60.0 * 60.0 * 1_000.0;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct CronCreateInput {
     pub cron: String,
+    #[serde(deserialize_with = "deserialize_prompt")]
     pub prompt: String,
+    #[serde(default = "default_true", deserialize_with = "deserialize_recurring")]
     pub recurring: bool,
 }
 
-impl<'de> Deserialize<'de> for CronCreateInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        parse_cron_create_input(&value).map_err(serde::de::Error::custom)
+fn default_true() -> bool {
+    true
+}
+
+fn deserialize_prompt<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let prompt = String::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("prompt must be a non-empty string"))?;
+    if prompt.is_empty() {
+        return Err(serde::de::Error::custom(
+            "prompt must be a non-empty string",
+        ));
+    }
+    Ok(prompt)
+}
+
+fn deserialize_recurring<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::Bool(value) => Ok(value),
+        _ => Err(serde::de::Error::custom("recurring must be a boolean")),
     }
 }
 
 pub fn parse_cron_create_input(value: &Value) -> Result<CronCreateInput, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "CronCreate input must be an object".to_owned())?;
-    if object
-        .keys()
-        .any(|key| !matches!(key.as_str(), "cron" | "prompt" | "recurring"))
-    {
-        return Err("CronCreate input contains an unknown property".into());
-    }
-    let cron = object
-        .get("cron")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "cron must be a string".to_owned())?
-        .to_owned();
-    let prompt = object
-        .get("prompt")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "prompt must be a non-empty string".to_owned())?
-        .to_owned();
-    let recurring = match object.get("recurring") {
-        None => true,
-        Some(Value::Bool(value)) => *value,
-        Some(_) => return Err("recurring must be a boolean".into()),
-    };
-    Ok(CronCreateInput {
-        cron,
-        prompt,
-        recurring,
-    })
+    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
 }
 
 pub static CRON_CREATE_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(|| {

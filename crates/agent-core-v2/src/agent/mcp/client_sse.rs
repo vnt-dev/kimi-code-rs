@@ -36,6 +36,9 @@ pub fn resolve_sse_message_endpoint(
 #[derive(Default)]
 pub struct McpSseDecoder {
     pending: String,
+    /// Offset of the first unread line; consumed bytes are compacted lazily
+    /// at the end of each `push`.
+    read: usize,
     event: Option<String>,
     data: Vec<String>,
     id: Option<String>,
@@ -554,9 +557,9 @@ impl McpSseDecoder {
     pub fn push(&mut self, chunk: &str) -> Vec<McpSseEvent> {
         self.pending.push_str(chunk);
         let mut events = Vec::new();
-        while let Some(newline) = self.pending.find('\n') {
-            let mut line = self.pending[..newline].to_owned();
-            self.pending.drain(..=newline);
+        while let Some(newline) = self.pending[self.read..].find('\n') {
+            let mut line = self.pending[self.read..self.read + newline].to_owned();
+            self.read += newline + 1;
             if line.ends_with('\r') {
                 line.pop();
             }
@@ -578,14 +581,20 @@ impl McpSseDecoder {
                 _ => {}
             }
         }
+        if self.read > 0 {
+            self.pending.drain(..self.read);
+            self.read = 0;
+        }
         events
     }
 
     pub fn finish(&mut self) -> Option<McpSseEvent> {
-        if !self.pending.is_empty() {
-            let line = std::mem::take(&mut self.pending);
+        if self.read < self.pending.len() {
+            let line = self.pending[self.read..].to_owned();
             self.apply_line(&line);
         }
+        self.pending.clear();
+        self.read = 0;
         self.dispatch()
     }
 

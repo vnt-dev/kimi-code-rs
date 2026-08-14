@@ -5,7 +5,7 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serde_json::{Map, Value};
+use serde::Serialize;
 
 use crate::{
     agent::media::extract_image_compression_captions,
@@ -21,6 +21,28 @@ use super::core_api::{
 
 pub const MAX_TITLE_LENGTH: usize = 200;
 pub const MAX_LAST_PROMPT_LENGTH: usize = 4000;
+
+/// Payload shared by every `session.meta.updated` event publisher.
+#[derive(Serialize)]
+pub struct SessionMetaUpdatedPayload {
+    #[serde(rename = "agentId")]
+    pub agent_id: String,
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub patch: SessionMetaPatchPayload,
+}
+
+#[derive(Serialize)]
+pub struct SessionMetaPatchPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(rename = "isCustomTitle", skip_serializing_if = "Option::is_none")]
+    pub is_custom_title: Option<bool>,
+    #[serde(rename = "lastPrompt", skip_serializing_if = "Option::is_none")]
+    pub last_prompt: Option<String>,
+}
 
 pub struct PromptMetadataUpdateTarget<'a> {
     pub metadata: &'a dyn SessionMetadataContract,
@@ -136,24 +158,19 @@ pub async fn apply_prompt_metadata_update(
         })
         .await?;
 
-    let mut patch = Map::from_iter([("lastPrompt".into(), Value::String(text.into()))]);
-    if let Some(title) = &auto_title {
-        patch.insert("title".into(), Value::String(title.clone()));
-    }
-    if let Some(is_custom_title) = is_custom_title {
-        patch.insert("isCustomTitle".into(), Value::Bool(is_custom_title));
-    }
-    let mut payload = Map::from_iter([
-        ("agentId".into(), Value::String("main".into())),
-        ("sessionId".into(), Value::String(target.session_id.into())),
-        ("patch".into(), Value::Object(patch)),
-    ]);
-    if let Some(title) = auto_title {
-        payload.insert("title".into(), Value::String(title));
-    }
     target.event_service.publish(GlobalDomainEvent {
         event_type: "session.meta.updated".into(),
-        payload: Value::Object(payload),
+        payload: serde_json::to_value(SessionMetaUpdatedPayload {
+            agent_id: "main".into(),
+            session_id: target.session_id.into(),
+            title: auto_title.clone(),
+            patch: SessionMetaPatchPayload {
+                title: auto_title,
+                is_custom_title,
+                last_prompt: Some(text.into()),
+            },
+        })
+        .expect("session metadata payload is serializable"),
     });
     Ok(())
 }

@@ -12,6 +12,8 @@ use crate::kosong::contract::provider::ProviderError;
 use crate::kosong::provider::bases::anthropic::anthropic::{
     convert_anthropic_error, convert_anthropic_status_error,
 };
+use crate::kosong::provider::bases::http_client::append_url_path_segments;
+use crate::kosong::provider::bases::sse::{SseFrameDecoder, extract_data};
 
 pub type AnthropicEventStream = Pin<Box<dyn Stream<Item = Result<Value, ProviderError>> + Send>>;
 
@@ -169,7 +171,11 @@ pub async fn send_anthropic_request(
         }
     }
     params.insert("stream".to_owned(), Value::Bool(stream));
-    let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+    let url = append_url_path_segments(base_url, &["v1", "messages"]).map_err(|error| {
+        boxed(ChatProviderError::ChatProvider {
+            message: format!("AnthropicChatProvider: invalid base URL: {error}"),
+        })
+    })?;
     let response = await_or_cancel(
         signal,
         client
@@ -206,7 +212,7 @@ pub async fn send_anthropic_request(
         });
         let state = SseState {
             source: Box::pin(source),
-            buffer: Vec::new(),
+            decoder: SseFrameDecoder::new(),
             pending: VecDeque::new(),
             done: false,
             signal: signal.cloned(),
@@ -230,7 +236,7 @@ pub async fn send_anthropic_request(
 
 struct SseState {
     source: Pin<Box<dyn Stream<Item = Result<Vec<u8>, ProviderError>> + Send>>,
-    buffer: Vec<u8>,
+    decoder: SseFrameDecoder,
     pending: VecDeque<Value>,
     done: bool,
     signal: Option<CancellationToken>,
@@ -247,6 +253,12 @@ impl SseState {
                 return Ok(Some(event));
             }
             if self.done {
+                // The stream ended without a trailing blank line; drain the
+                // final unterminated frame if one is buffered.
+                if let Some(frame) = self.decoder.finish() {
+                    self.parse_frame(&frame)?;
+                    continue;
+                }
                 return Ok(None);
             }
             let next = if let Some(signal) = self.signal.as_ref() {
@@ -259,66 +271,46 @@ impl SseState {
                 self.source.next().await
             };
             match next {
-                Some(Ok(bytes)) => self.buffer.extend(bytes),
+                Some(Ok(bytes)) => self.decoder.push(&bytes),
                 Some(Err(error)) => return Err(error),
-                None => {
-                    self.done = true;
-                    if !self.buffer.is_empty() {
-                        self.buffer.extend_from_slice(b"\n\n");
-                    }
-                }
+                None => self.done = true,
             }
         }
     }
 
     fn parse_complete_events(&mut self) -> Result<(), ProviderError> {
-        while let Some((at, delimiter_len)) = find_event_boundary(&self.buffer) {
-            let event = self.buffer.drain(..at).collect::<Vec<_>>();
-            self.buffer.drain(..delimiter_len);
-            let text = std::str::from_utf8(&event).map_err(|error| {
-                boxed(ChatProviderError::ChatProvider {
-                    message: format!("Anthropic error: invalid UTF-8 in SSE response: {error}"),
-                })
-            })?;
-            let data = text
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim_start)
-                .collect::<Vec<_>>()
-                .join("\n");
-            if data.is_empty() {
-                continue;
-            }
-            let value: Value = serde_json::from_str(&data).map_err(|error| {
-                boxed(ChatProviderError::ChatProvider {
-                    message: format!("Anthropic error: invalid SSE event: {error}"),
-                })
-            })?;
-            if value.get("type").and_then(Value::as_str) == Some("error") {
-                let message = value
-                    .get("error")
-                    .and_then(|error| error.get("message"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("stream error");
-                return Err(boxed(ChatProviderError::ChatProvider {
-                    message: format!("Anthropic error: {message}"),
-                }));
-            }
-            self.pending.push_back(value);
+        while let Some(frame) = self.decoder.next_frame() {
+            self.parse_frame(&frame)?;
         }
         Ok(())
     }
-}
 
-fn find_event_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
-    let lf = buffer.windows(2).position(|window| window == b"\n\n");
-    let crlf = buffer.windows(4).position(|window| window == b"\r\n\r\n");
-    match (lf, crlf) {
-        (Some(lf), Some(crlf)) if lf < crlf => Some((lf, 2)),
-        (Some(_), Some(crlf)) => Some((crlf, 4)),
-        (Some(lf), None) => Some((lf, 2)),
-        (None, Some(crlf)) => Some((crlf, 4)),
-        (None, None) => None,
+    fn parse_frame(&mut self, frame: &[u8]) -> Result<(), ProviderError> {
+        let data = extract_data(frame).map_err(|error| {
+            boxed(ChatProviderError::ChatProvider {
+                message: format!("Anthropic error: invalid UTF-8 in SSE response: {error}"),
+            })
+        })?;
+        if data.is_empty() {
+            return Ok(());
+        }
+        let value: Value = serde_json::from_str(&data).map_err(|error| {
+            boxed(ChatProviderError::ChatProvider {
+                message: format!("Anthropic error: invalid SSE event: {error}"),
+            })
+        })?;
+        if value.get("type").and_then(Value::as_str) == Some("error") {
+            let message = value
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("stream error");
+            return Err(boxed(ChatProviderError::ChatProvider {
+                message: format!("Anthropic error: {message}"),
+            }));
+        }
+        self.pending.push_back(value);
+        Ok(())
     }
 }
 
@@ -334,7 +326,7 @@ mod tests {
         ]);
         let mut state = SseState {
             source: Box::pin(source),
-            buffer: Vec::new(),
+            decoder: SseFrameDecoder::new(),
             pending: VecDeque::new(),
             done: false,
             signal: None,

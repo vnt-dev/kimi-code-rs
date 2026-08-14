@@ -42,43 +42,26 @@ pub const MAX_SKILL_QUERY_DEPTH: usize = 3;
 
 const SKILL_DESCRIPTION_TEMPLATE: &str = include_str!("skill.md");
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct SkillToolInput {
     pub skill: String,
+    #[serde(default, deserialize_with = "deserialize_args")]
     pub args: Option<String>,
 }
 
-impl<'de> Deserialize<'de> for SkillToolInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        parse_skill_tool_input(&value).map_err(serde::de::Error::custom)
+fn deserialize_args<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::String(value) => Ok(Some(value)),
+        _ => Err(serde::de::Error::custom("args must be a string")),
     }
 }
 
 pub fn parse_skill_tool_input(value: &Value) -> Result<SkillToolInput, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "Skill input must be an object".to_owned())?;
-    if object.keys().any(|key| key != "skill" && key != "args") {
-        return Err("Skill input contains unknown properties".into());
-    }
-    let skill = object
-        .get("skill")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "skill must be a string".to_owned())?
-        .to_owned();
-    let args = object
-        .get("args")
-        .map(|args| {
-            args.as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| "args must be a string".to_owned())
-        })
-        .transpose()?;
-    Ok(SkillToolInput { skill, args })
+    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
 }
 
 pub static SKILL_TOOL_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(|| {

@@ -9,9 +9,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::kosong::contract::errors::ChatProviderError;
 use crate::kosong::contract::provider::ProviderError;
+use crate::kosong::provider::bases::http_client::append_url_path_segments;
 use crate::kosong::provider::bases::openai::openai_common::{
     convert_openai_error, convert_openai_status_error,
 };
+use crate::kosong::provider::bases::sse::{SseFrameDecoder, extract_data};
 
 pub type OpenAiResponsesValueStream =
     Pin<Box<dyn Stream<Item = Result<Value, ProviderError>> + Send>>;
@@ -147,8 +149,13 @@ pub async fn send_openai_responses_request(
     stream: bool,
     signal: Option<&CancellationToken>,
 ) -> Result<OpenAiResponsesHttpResponse, ProviderError> {
+    let url = append_url_path_segments(base_url, &["responses"]).map_err(|error| {
+        boxed(ChatProviderError::ChatProvider {
+            message: format!("OpenAIResponsesChatProvider: invalid base URL: {error}"),
+        })
+    })?;
     let request = client
-        .post(format!("{}/responses", base_url.trim_end_matches('/')))
+        .post(url)
         .headers(build_headers(api_key, headers).map_err(boxed)?)
         .json(&params);
     let response = await_or_cancel(signal, request.send())
@@ -189,7 +196,7 @@ pub async fn send_openai_responses_request(
     });
     let state = ResponsesSseState {
         source: Box::pin(bytes),
-        buffer: Vec::new(),
+        decoder: SseFrameDecoder::new(),
         pending: VecDeque::new(),
         done: false,
         signal: signal.cloned(),
@@ -205,7 +212,7 @@ pub async fn send_openai_responses_request(
 
 struct ResponsesSseState {
     source: Pin<Box<dyn Stream<Item = Result<Vec<u8>, ProviderError>> + Send>>,
-    buffer: Vec<u8>,
+    decoder: SseFrameDecoder,
     pending: VecDeque<Value>,
     done: bool,
     signal: Option<CancellationToken>,
@@ -222,6 +229,12 @@ impl ResponsesSseState {
                 return Ok(Some(event));
             }
             if self.done {
+                // The stream ended without a trailing blank line; drain the
+                // final unterminated frame if one is buffered.
+                if let Some(frame) = self.decoder.finish() {
+                    self.parse_frame(&frame)?;
+                    continue;
+                }
                 return Ok(None);
             }
             let next = if let Some(signal) = self.signal.as_ref() {
@@ -234,61 +247,41 @@ impl ResponsesSseState {
                 self.source.next().await
             };
             match next {
-                Some(Ok(bytes)) => self.buffer.extend(bytes),
+                Some(Ok(bytes)) => self.decoder.push(&bytes),
                 Some(Err(error)) => return Err(error),
-                None => {
-                    self.done = true;
-                    if !self.buffer.is_empty() {
-                        self.buffer.extend_from_slice(b"\n\n");
-                    }
-                }
+                None => self.done = true,
             }
         }
     }
 
     fn parse_complete_events(&mut self) -> Result<(), ProviderError> {
-        while let Some((at, delimiter_len)) = find_event_boundary(&self.buffer) {
-            let event = self.buffer.drain(..at).collect::<Vec<_>>();
-            self.buffer.drain(..delimiter_len);
-            let text = std::str::from_utf8(&event).map_err(|error| {
-                boxed(ChatProviderError::ChatProvider {
-                    message: format!("Error: invalid UTF-8 in OpenAI SSE response: {error}"),
-                })
-            })?;
-            let data = text
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim_start)
-                .collect::<Vec<_>>()
-                .join("\n");
-            if data.is_empty() {
-                continue;
-            }
-            if data.trim() == "[DONE]" {
-                self.done = true;
-                self.buffer.clear();
-                break;
-            }
-            let value = serde_json::from_str(&data).map_err(|error| {
-                boxed(ChatProviderError::ChatProvider {
-                    message: format!("Error: invalid OpenAI SSE event: {error}"),
-                })
-            })?;
-            self.pending.push_back(value);
+        while let Some(frame) = self.decoder.next_frame() {
+            self.parse_frame(&frame)?;
         }
         Ok(())
     }
-}
 
-fn find_event_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
-    let lf = buffer.windows(2).position(|window| window == b"\n\n");
-    let crlf = buffer.windows(4).position(|window| window == b"\r\n\r\n");
-    match (lf, crlf) {
-        (Some(lf), Some(crlf)) if lf < crlf => Some((lf, 2)),
-        (Some(_), Some(crlf)) => Some((crlf, 4)),
-        (Some(lf), None) => Some((lf, 2)),
-        (None, Some(crlf)) => Some((crlf, 4)),
-        (None, None) => None,
+    fn parse_frame(&mut self, frame: &[u8]) -> Result<(), ProviderError> {
+        let data = extract_data(frame).map_err(|error| {
+            boxed(ChatProviderError::ChatProvider {
+                message: format!("Error: invalid UTF-8 in OpenAI SSE response: {error}"),
+            })
+        })?;
+        if data.is_empty() {
+            return Ok(());
+        }
+        if data.trim() == "[DONE]" {
+            self.done = true;
+            self.decoder.clear();
+            return Ok(());
+        }
+        let value = serde_json::from_str(&data).map_err(|error| {
+            boxed(ChatProviderError::ChatProvider {
+                message: format!("Error: invalid OpenAI SSE event: {error}"),
+            })
+        })?;
+        self.pending.push_back(value);
+        Ok(())
     }
 }
 
@@ -305,7 +298,7 @@ mod tests {
         ]);
         let mut state = ResponsesSseState {
             source: Box::pin(source),
-            buffer: Vec::new(),
+            decoder: SseFrameDecoder::new(),
             pending: VecDeque::new(),
             done: false,
             signal: None,

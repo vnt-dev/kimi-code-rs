@@ -5,10 +5,13 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::io::Write;
 
+use quick_xml::Writer;
+use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use serde::{Deserialize, Serialize};
 
-use crate::_base::utils::xml_escape::{escape_xml_attribute, escape_xml_text};
+use crate::_base::utils::xml_escape::escape_xml_text;
 
 pub const DEFAULT_SUBAGENT_TYPE: &str = "coder";
 pub const PROMPT_TEMPLATE_PLACEHOLDER: &str = "{{item}}";
@@ -190,52 +193,93 @@ pub fn render_swarm_results(results: &[AgentSwarmResult]) -> String {
         .filter(|result| result.status == AgentSwarmStatus::Aborted)
         .count();
 
-    let mut lines = vec![
-        "<agent_swarm_result>".to_owned(),
-        format!(
-            "<summary>{}</summary>",
-            render_swarm_summary(completed, failed, aborted)
-        ),
-    ];
+    let mut writer = Writer::new(Vec::new());
+    writer
+        .write_event(Event::Start(BytesStart::new("agent_swarm_result")))
+        .expect("writing to Vec cannot fail");
+    writer
+        .get_mut()
+        .write_all(b"\n")
+        .expect("writing to Vec cannot fail");
+
+    writer
+        .write_event(Event::Start(BytesStart::new("summary")))
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_event(Event::Text(BytesText::from_escaped(render_swarm_summary(
+            completed, failed, aborted,
+        ))))
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_event(Event::End(BytesEnd::new("summary")))
+        .expect("writing to Vec cannot fail");
 
     let should_render_resume_hint = results
         .iter()
         .any(|result| result.status != AgentSwarmStatus::Completed)
         && results.iter().any(|result| result.agent_id.is_some());
     if should_render_resume_hint {
-        lines.push("<resume_hint>Call AgentSwarm with resume_agent_ids using the agent_id values in this result to continue unfinished work.</resume_hint>".to_owned());
+        writer
+            .get_mut()
+            .write_all(b"\n")
+            .expect("writing to Vec cannot fail");
+        writer
+            .write_event(Event::Start(BytesStart::new("resume_hint")))
+            .expect("writing to Vec cannot fail");
+        writer
+            .write_event(Event::Text(BytesText::from_escaped(
+                "Call AgentSwarm with resume_agent_ids using the agent_id values in this result to continue unfinished work.",
+            )))
+            .expect("writing to Vec cannot fail");
+        writer
+            .write_event(Event::End(BytesEnd::new("resume_hint")))
+            .expect("writing to Vec cannot fail");
     }
 
     for result in results {
-        let agent_id = result
-            .agent_id
-            .as_ref()
-            .map_or_else(String::new, |agent_id| {
-                format!(" agent_id=\"{}\"", escape_xml_attribute(agent_id))
-            });
-        let mode = matches!(result.spec, AgentSwarmSpec::Resume { .. })
-            .then_some(" mode=\"resume\"")
-            .unwrap_or_default();
-        let item = result.spec.item().map_or_else(String::new, |item| {
-            format!(" item=\"{}\"", escape_xml_attribute(item))
-        });
-        let state = result.state.map_or_else(String::new, |state| {
-            format!(" state=\"{}\"", agent_swarm_state_name(state))
-        });
-        let status = agent_swarm_status_name(result.status);
+        writer
+            .get_mut()
+            .write_all(b"\n")
+            .expect("writing to Vec cannot fail");
+        let mut subagent = BytesStart::new("subagent");
+        if matches!(result.spec, AgentSwarmSpec::Resume { .. }) {
+            subagent.push_attribute(("mode", "resume"));
+        }
+        if let Some(agent_id) = result.agent_id.as_deref() {
+            subagent.push_attribute(("agent_id", agent_id));
+        }
+        if let Some(item) = result.spec.item() {
+            subagent.push_attribute(("item", item));
+        }
+        if let Some(state) = result.state {
+            subagent.push_attribute(("state", agent_swarm_state_name(state)));
+        }
+        subagent.push_attribute(("outcome", agent_swarm_status_name(result.status)));
         let body = if result.status == AgentSwarmStatus::Completed {
             result.result.as_deref().unwrap_or_default()
         } else {
             result.error.as_deref().unwrap_or("unknown error")
         };
         let body = escape_xml_text(body);
-        lines.push(format!(
-            "<subagent{mode}{agent_id}{item}{state} outcome=\"{status}\">{body}</subagent>"
-        ));
+        writer
+            .write_event(Event::Start(subagent))
+            .expect("writing to Vec cannot fail");
+        writer
+            .write_event(Event::Text(BytesText::from_escaped(body.as_str())))
+            .expect("writing to Vec cannot fail");
+        writer
+            .write_event(Event::End(BytesEnd::new("subagent")))
+            .expect("writing to Vec cannot fail");
     }
 
-    lines.push("</agent_swarm_result>".to_owned());
-    lines.join("\n")
+    writer
+        .get_mut()
+        .write_all(b"\n")
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_event(Event::End(BytesEnd::new("agent_swarm_result")))
+        .expect("writing to Vec cannot fail");
+    String::from_utf8(writer.into_inner()).expect("render output is UTF-8")
 }
 
 pub fn render_swarm_summary(completed: usize, failed: usize, aborted: usize) -> String {

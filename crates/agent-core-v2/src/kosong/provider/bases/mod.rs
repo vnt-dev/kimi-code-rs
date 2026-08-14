@@ -4,4 +4,5 @@ pub mod http_client;
 pub mod merge_user_messages;
 pub mod openai;
 pub mod request_auth;
+pub mod sse;
 pub mod tool_call_id;

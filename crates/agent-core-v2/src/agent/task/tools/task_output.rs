@@ -31,54 +31,42 @@ const TASK_OUTPUT_DESCRIPTION: &str = include_str!("task-output.md");
 const OUTPUT_PREVIEW_BYTES: usize = 32 * 1024;
 const PAGING_HINT_LINES: usize = 300;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TaskOutputInput {
     pub task_id: String,
+    #[serde(default, deserialize_with = "deserialize_block")]
     pub block: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_timeout")]
     pub timeout: Option<u64>,
 }
 
-impl<'de> Deserialize<'de> for TaskOutputInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        parse_task_output_input(&value).map_err(serde::de::Error::custom)
+fn deserialize_block<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::Bool(value) => Ok(Some(value)),
+        _ => Err(serde::de::Error::custom("block must be a boolean")),
     }
 }
 
+fn deserialize_timeout<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("timeout must be an integer from 0 through 3600"))?;
+    if value > 3600 {
+        return Err(serde::de::Error::custom(
+            "timeout must be an integer from 0 through 3600",
+        ));
+    }
+    Ok(Some(value))
+}
+
 pub fn parse_task_output_input(value: &Value) -> Result<TaskOutputInput, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "TaskOutput input must be an object".to_owned())?;
-    let task_id = object
-        .get("task_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "task_id must be a string".to_owned())?
-        .to_owned();
-    let block = match object.get("block") {
-        None => None,
-        Some(Value::Bool(value)) => Some(*value),
-        Some(_) => return Err("block must be a boolean".into()),
-    };
-    let timeout = match object.get("timeout") {
-        None => None,
-        Some(value) => {
-            let value = value
-                .as_u64()
-                .ok_or_else(|| "timeout must be an integer from 0 through 3600".to_owned())?;
-            if value > 3600 {
-                return Err("timeout must be an integer from 0 through 3600".into());
-            }
-            Some(value)
-        }
-    };
-    Ok(TaskOutputInput {
-        task_id,
-        block,
-        timeout,
-    })
+    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
 }
 
 pub static TASK_OUTPUT_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(|| {

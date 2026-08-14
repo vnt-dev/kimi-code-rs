@@ -36,50 +36,40 @@ const EDIT_DESCRIPTION: &str = include_str!("edit.md");
 const NO_CHANGES_MESSAGE: &str =
     "No changes to make: old_string and new_string are exactly the same.";
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct EditInput {
     pub path: String,
+    #[serde(deserialize_with = "deserialize_old_string")]
     pub old_string: String,
     pub new_string: String,
+    #[serde(default, deserialize_with = "deserialize_replace_all")]
     pub replace_all: Option<bool>,
 }
 
-impl<'de> Deserialize<'de> for EditInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        parse_edit_input(&value).map_err(serde::de::Error::custom)
+fn deserialize_old_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("old_string must be a string"))?;
+    if value.is_empty() {
+        return Err(serde::de::Error::custom("old_string must not be empty"));
+    }
+    Ok(value)
+}
+
+fn deserialize_replace_all<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::Bool(value) => Ok(Some(value)),
+        _ => Err(serde::de::Error::custom("replace_all must be a boolean")),
     }
 }
 
 pub fn parse_edit_input(value: &Value) -> Result<EditInput, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "Edit input must be an object".to_owned())?;
-    let string = |name: &str| {
-        object
-            .get(name)
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or_else(|| format!("{name} must be a string"))
-    };
-    let old_string = string("old_string")?;
-    if old_string.is_empty() {
-        return Err("old_string must not be empty".into());
-    }
-    let replace_all = match object.get("replace_all") {
-        None => None,
-        Some(Value::Bool(value)) => Some(*value),
-        Some(_) => return Err("replace_all must be a boolean".into()),
-    };
-    Ok(EditInput {
-        path: string("path")?,
-        old_string,
-        new_string: string("new_string")?,
-        replace_all,
-    })
+    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
 }
 
 pub fn edit_parameters() -> Map<String, Value> {

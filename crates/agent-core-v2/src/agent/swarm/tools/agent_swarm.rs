@@ -47,117 +47,107 @@ use super::super::{
 
 const AGENT_SWARM_DESCRIPTION: &str = include_str!("agent-swarm.md");
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentSwarmToolInput {
+    #[serde(deserialize_with = "deserialize_required_string")]
     pub description: String,
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
     pub subagent_type: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
     pub prompt_template: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_items")]
     pub items: Vec<String>,
     /// Ordered pairs preserve the model-provided object order.
+    #[serde(default, deserialize_with = "deserialize_resume_agent_ids")]
     pub resume_agent_ids: Vec<(String, String)>,
 }
 
-impl<'de> Deserialize<'de> for AgentSwarmToolInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        parse_agent_swarm_tool_input(&value).map_err(serde::de::Error::custom)
+fn deserialize_required_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("description must be a string"))?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(serde::de::Error::custom("description must not be empty"));
     }
+    Ok(trimmed.to_owned())
+}
+
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("must be a string"))?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(serde::de::Error::custom("must not be empty"));
+    }
+    Ok(Some(trimmed.to_owned()))
+}
+
+fn deserialize_items<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values = Vec::<Value>::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("items must be an array"))?;
+    if values.len() > MAX_AGENT_SWARM_SUBAGENTS {
+        return Err(serde::de::Error::custom(format!(
+            "items must contain at most {MAX_AGENT_SWARM_SUBAGENTS} entries"
+        )));
+    }
+    let mut items = Vec::with_capacity(values.len());
+    for value in values {
+        let Value::String(item) = value else {
+            return Err(serde::de::Error::custom("items must contain only strings"));
+        };
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            return Err(serde::de::Error::custom(
+                "items must not contain empty strings",
+            ));
+        }
+        items.push(trimmed.to_owned());
+    }
+    Ok(items)
+}
+
+fn deserialize_resume_agent_ids<'de, D>(deserializer: D) -> Result<Vec<(String, String)>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let entries = Map::<String, Value>::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("resume_agent_ids must be an object"))?;
+    let mut pairs = Vec::with_capacity(entries.len());
+    for (agent_id, prompt) in entries {
+        let agent_id = agent_id.trim();
+        if agent_id.is_empty() {
+            return Err(serde::de::Error::custom(
+                "resume_agent_ids keys must not be empty",
+            ));
+        }
+        let Value::String(prompt) = prompt else {
+            return Err(serde::de::Error::custom(
+                "resume_agent_ids values must be strings",
+            ));
+        };
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            return Err(serde::de::Error::custom(
+                "resume_agent_ids values must not be empty",
+            ));
+        }
+        pairs.push((agent_id.to_owned(), prompt.to_owned()));
+    }
+    Ok(pairs)
 }
 
 pub fn parse_agent_swarm_tool_input(value: &Value) -> Result<AgentSwarmToolInput, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "AgentSwarm input must be an object".to_owned())?;
-    if object.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "description" | "subagent_type" | "prompt_template" | "items" | "resume_agent_ids"
-        )
-    }) {
-        return Err("AgentSwarm input contains unknown properties".into());
-    }
-
-    let description = required_non_empty_string(object, "description")?;
-    let subagent_type = optional_non_empty_string(object, "subagent_type")?;
-    let prompt_template = optional_non_empty_string(object, "prompt_template")?;
-    let items = match object.get("items") {
-        None => Vec::new(),
-        Some(Value::Array(items)) if items.len() <= MAX_AGENT_SWARM_SUBAGENTS => items
-            .iter()
-            .map(|item| {
-                item.as_str()
-                    .ok_or_else(|| "items must contain only strings".to_owned())
-                    .and_then(|item| {
-                        non_empty_trimmed(item, "items must not contain empty strings")
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-        Some(Value::Array(_)) => {
-            return Err(format!(
-                "items must contain at most {MAX_AGENT_SWARM_SUBAGENTS} entries"
-            ));
-        }
-        Some(_) => return Err("items must be an array".into()),
-    };
-    let resume_agent_ids = match object.get("resume_agent_ids") {
-        None => Vec::new(),
-        Some(Value::Object(entries)) => entries
-            .iter()
-            .map(|(agent_id, prompt)| {
-                let agent_id =
-                    non_empty_trimmed(agent_id, "resume_agent_ids keys must not be empty")?;
-                let prompt = prompt
-                    .as_str()
-                    .ok_or_else(|| "resume_agent_ids values must be strings".to_owned())
-                    .and_then(|prompt| {
-                        non_empty_trimmed(prompt, "resume_agent_ids values must not be empty")
-                    })?;
-                Ok((agent_id, prompt))
-            })
-            .collect::<Result<Vec<_>, String>>()?,
-        Some(_) => return Err("resume_agent_ids must be an object".into()),
-    };
-
-    Ok(AgentSwarmToolInput {
-        description,
-        subagent_type,
-        prompt_template,
-        items,
-        resume_agent_ids,
-    })
-}
-
-fn required_non_empty_string(object: &Map<String, Value>, name: &str) -> Result<String, String> {
-    object
-        .get(name)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("{name} must be a string"))
-        .and_then(|value| non_empty_trimmed(value, &format!("{name} must not be empty")))
-}
-
-fn optional_non_empty_string(
-    object: &Map<String, Value>,
-    name: &str,
-) -> Result<Option<String>, String> {
-    match object.get(name) {
-        None => Ok(None),
-        Some(Value::String(value)) => {
-            non_empty_trimmed(value, &format!("{name} must not be empty")).map(Some)
-        }
-        Some(_) => Err(format!("{name} must be a string")),
-    }
-}
-
-fn non_empty_trimmed(value: &str, error: &str) -> Result<String, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        Err(error.into())
-    } else {
-        Ok(value.into())
-    }
+    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
 }
 
 pub fn agent_swarm_parameters() -> Map<String, Value> {

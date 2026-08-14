@@ -1,3 +1,8 @@
+use std::io::Write;
+
+use quick_xml::Writer;
+use quick_xml::events::{BytesStart, BytesText, Event};
+
 use super::types::{HookAction, HookResult};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -11,7 +16,25 @@ pub struct RenderedHookResult {
 //   packages/agent-core-v2/src/agent/externalHooks/user-prompt.ts
 //   renderHookResult()
 pub fn render_hook_result(event: &str, message: &str) -> String {
-    format!("<hook_result hook_event=\"{event}\">\n{message}\n</hook_result>")
+    let mut writer = Writer::new(Vec::new());
+    let mut start = BytesStart::new("hook_result");
+    // Attribute values are escaped by quick-xml; text stays verbatim.
+    start.push_attribute(("hook_event", event));
+    writer
+        .write_event(Event::Start(start))
+        .expect("writing to Vec cannot fail");
+    writer
+        .get_mut()
+        .write_all(b"\n")
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_event(Event::Text(BytesText::from_escaped(message)))
+        .expect("writing to Vec cannot fail");
+    writer
+        .get_mut()
+        .write_all(b"\n</hook_result>")
+        .expect("writing to Vec cannot fail");
+    String::from_utf8(writer.into_inner()).expect("render output is UTF-8")
 }
 
 // Original: user-prompt.ts, renderUserPromptHookResult().

@@ -11,7 +11,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use futures_util::StreamExt;
 use indexmap::IndexMap;
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -227,36 +227,48 @@ fn is_file_id(value: &str) -> bool {
 }
 
 fn parse_file_meta(value: &Value) -> Option<FileMeta> {
-    let Value::Object(meta) = value else {
-        return None;
-    };
-    let id = meta.get("id")?.as_str()?;
-    if !is_file_id(id) {
+    #[derive(Deserialize)]
+    struct Raw {
+        id: String,
+        name: String,
+        media_type: String,
+        size: f64,
+        created_at: String,
+        #[serde(default, deserialize_with = "deserialize_expires_at")]
+        expires_at: Option<String>,
+    }
+
+    let raw = serde_json::from_value::<Raw>(value.clone()).ok()?;
+    if !is_file_id(&raw.id) {
         return None;
     }
-    let name = meta.get("name")?.as_str()?;
-    let media_type = meta.get("media_type")?.as_str()?;
-    let size = meta
-        .get("size")?
-        .as_f64()
-        .filter(|value| {
-            value.is_finite() && value.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(value)
-        })
-        .map(|value| value as u64)?;
-    let created_at = meta.get("created_at")?.as_str()?;
-    let expires_at = match meta.get("expires_at") {
-        None => None,
-        Some(Value::String(value)) => Some(value.clone()),
-        Some(_) => return None,
-    };
+    if !raw.size.is_finite()
+        || raw.size.fract() != 0.0
+        || !(0.0..=MAX_SAFE_INTEGER).contains(&raw.size)
+    {
+        return None;
+    }
     Some(FileMeta {
-        id: id.into(),
-        name: name.into(),
-        media_type: media_type.into(),
-        size,
-        created_at: created_at.into(),
-        expires_at,
+        id: raw.id,
+        name: raw.name,
+        media_type: raw.media_type,
+        size: raw.size as u64,
+        created_at: raw.created_at,
+        expires_at: raw.expires_at,
     })
+}
+
+fn deserialize_expires_at<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // The legacy hand-rolled parser rejected `expires_at: null` (only a
+    // present string was accepted); keep that behavior instead of letting
+    // `Option` treat null as absent.
+    match Value::deserialize(deserializer)? {
+        Value::String(value) => Ok(Some(value)),
+        _ => Err(serde::de::Error::custom("expires_at must be a string")),
+    }
 }
 
 async fn collect_upload(mut source: FileByteStream, limit: u64) -> FileServiceResult<Vec<u8>> {
