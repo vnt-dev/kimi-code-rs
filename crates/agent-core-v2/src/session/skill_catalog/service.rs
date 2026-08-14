@@ -2,7 +2,10 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/sessionSkillCatalog/skillCatalogService.ts`.
 
-use std::sync::{Arc, Mutex, RwLock};
+
+use parking_lot::RwLock;
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -146,7 +149,7 @@ impl SessionSkillCatalogService {
 
     async fn ensure_ready(&self) -> SkillSourceResult<()> {
         let _gate = self.ready_gate.lock().await;
-        match &*self.ready_state.lock().unwrap() {
+        match &*self.ready_state.lock() {
             ReadyState::Ready => return Ok(()),
             ReadyState::Failed(error) => {
                 return Err(SkillSourceError::Cached(Box::new(InitialLoadError(
@@ -156,7 +159,7 @@ impl SessionSkillCatalogService {
             ReadyState::Pending => {}
         }
         let result = self.load_all().await;
-        *self.ready_state.lock().unwrap() = match &result {
+        *self.ready_state.lock() = match &result {
             Ok(()) => ReadyState::Ready,
             Err(error) => ReadyState::Failed(error.to_string()),
         };
@@ -181,7 +184,7 @@ impl SessionSkillCatalogService {
     async fn load_source(&self, slot: &SourceSlot, fire_change: bool) -> SkillSourceResult<()> {
         let _gate = slot.gate.lock().await;
         let contribution = slot.source.load().await?;
-        self.contributions.write().unwrap().insert(
+        self.contributions.write().insert(
             slot.source.id().to_owned(),
             ContributionWithPriority {
                 contribution,
@@ -200,7 +203,6 @@ impl SessionSkillCatalogService {
         let mut contributions = self
             .contributions
             .read()
-            .unwrap()
             .values()
             .cloned()
             .collect::<Vec<_>>();
@@ -221,14 +223,14 @@ impl SessionSkillCatalogService {
             );
             merged.record_skipped(entry.contribution.skipped.as_deref().unwrap_or_default());
         }
-        *self.merged.write().unwrap() = Arc::new(merged);
+        *self.merged.write() = Arc::new(merged);
     }
 }
 
 #[async_trait]
 impl SessionSkillCatalogContract for SessionSkillCatalogService {
     fn catalog(&self) -> Arc<dyn SkillCatalogContract> {
-        self.merged.read().unwrap().clone()
+        self.merged.read().clone()
     }
 
     fn on_did_change(&self) -> Event<String> {
@@ -252,7 +254,7 @@ impl SessionSkillCatalogContract for SessionSkillCatalogService {
 
 impl SkillCatalogSinkContract for SessionSkillCatalogService {
     fn set(&self, id: &str, contribution: SkillContribution, options: SkillCatalogSinkOptions) {
-        self.contributions.write().unwrap().insert(
+        self.contributions.write().insert(
             id.to_owned(),
             ContributionWithPriority {
                 contribution,
@@ -264,7 +266,7 @@ impl SkillCatalogSinkContract for SessionSkillCatalogService {
     }
 
     fn remove(&self, id: &str) {
-        self.contributions.write().unwrap().shift_remove(id);
+        self.contributions.write().shift_remove(id);
         self.remerge();
         self.on_did_change_emitter.fire(&id.to_owned());
     }
@@ -308,7 +310,7 @@ mod tests {
     use std::{
         io,
         sync::{
-            Arc, RwLock,
+            Arc,
             atomic::{AtomicBool, Ordering},
         },
     };
@@ -338,7 +340,7 @@ mod tests {
             None
         }
         async fn load(&self) -> SkillSourceResult<SkillContribution> {
-            Ok(self.contribution.read().unwrap().clone())
+            Ok(self.contribution.read().clone())
         }
     }
 

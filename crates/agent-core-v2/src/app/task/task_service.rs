@@ -2,13 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/task/taskService.ts`.
 
-use std::{
-    future::Future,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-};
+use std::future::Future;
+use std::sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -51,7 +47,7 @@ where
         &self.id
     }
     fn state(&self) -> TaskState {
-        *self.state.lock().unwrap()
+        *self.state.lock()
     }
 
     async fn result(&self) -> TaskResult<T> {
@@ -96,7 +92,7 @@ where
 impl<T> Drop for RunHandle<T> {
     fn drop(&mut self) {
         if !self.disposed.swap(true, Ordering::AcqRel) {
-            if !self.state.lock().unwrap().is_terminal() {
+            if !self.state.lock().is_terminal() {
                 self.abort_controller.abort(Some(AbortError::new(
                     TaskCancelledError {
                         task_id: self.id.clone(),
@@ -126,7 +122,7 @@ impl<T> DeferHandle<T> {
     }
 
     fn cancel_inner(&self) {
-        if self.state.lock().unwrap().is_terminal() {
+        if self.state.lock().is_terminal() {
             return;
         }
         self.transition(TaskState::Cancelled);
@@ -146,7 +142,7 @@ where
         &self.id
     }
     fn state(&self) -> TaskState {
-        *self.state.lock().unwrap()
+        *self.state.lock()
     }
     async fn result(&self) -> TaskResult<T> {
         await_result(self.result.clone(), &self.id).await
@@ -200,7 +196,7 @@ where
 impl<T> Drop for DeferHandle<T> {
     fn drop(&mut self) {
         if !self.disposed.swap(true, Ordering::AcqRel) {
-            if !self.state.lock().unwrap().is_terminal() {
+            if !self.state.lock().is_terminal() {
                 self.result_sender
                     .send_replace(Some(Err(Arc::new(TaskCancelledError {
                         task_id: self.id.clone(),
@@ -251,7 +247,7 @@ impl TaskService {
         let output_disposed = Arc::clone(&disposed);
         let output_events = Arc::clone(&output_emitter);
         let output: TaskOutput = Arc::new(move |data| {
-            if !output_state.lock().unwrap().is_terminal()
+            if !output_state.lock().is_terminal()
                 && !output_disposed.load(Ordering::Acquire)
             {
                 output_events.fire(&data.to_owned());
@@ -316,7 +312,7 @@ fn transition(
     disposed: &AtomicBool,
     to: TaskState,
 ) {
-    let mut state = state.lock().unwrap();
+    let mut state = state.lock();
     if state.is_terminal() {
         return;
     }
@@ -366,13 +362,13 @@ mod tests {
         let output = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&output);
         let _subscription = handle.on_did_output().subscribe(move |value| {
-            captured.lock().unwrap().push(value.clone());
+            captured.lock().push(value.clone());
         });
         release.notify_one();
         assert_eq!(*handle.result().await.unwrap(), 7);
         assert_eq!(*handle.result().await.unwrap(), 7);
         assert_eq!(handle.state(), TaskState::Completed);
-        assert_eq!(*output.lock().unwrap(), ["hello"]);
+        assert_eq!(*output.lock(), ["hello"]);
     }
 
     #[tokio::test]

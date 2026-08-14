@@ -6,10 +6,8 @@
 //! `next`. Passing a different mutable value provides the original override
 //! behavior while avoiding aliased mutable borrows across `await`.
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
-};
+use parking_lot::Mutex;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 use futures_util::future::BoxFuture;
 
@@ -98,7 +96,7 @@ where
             handler,
         };
         {
-            let mut entries = self.entries.lock().unwrap();
+            let mut entries = self.entries.lock();
             if let Some(index) = entries.iter().position(|entry| entry.id == id) {
                 entries.remove(index);
             }
@@ -121,7 +119,7 @@ where
         }
         let entries = Arc::clone(&self.entries);
         Ok(to_disposable(move || {
-            let mut entries = entries.lock().unwrap();
+            let mut entries = entries.lock();
             if let Some(index) = entries.iter().position(|entry| entry.token == token) {
                 entries.remove(index);
             }
@@ -129,7 +127,7 @@ where
     }
 
     pub fn delete(&self, id: &str) -> bool {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock();
         let Some(index) = entries.iter().position(|entry| entry.id == id) else {
             return false;
         };
@@ -143,7 +141,7 @@ where
         let id = id.into();
         let entries = Arc::clone(&self.entries);
         to_disposable(move || {
-            let mut entries = entries.lock().unwrap();
+            let mut entries = entries.lock();
             if let Some(index) = entries.iter().position(|entry| entry.id == id) {
                 entries.remove(index);
             }
@@ -153,7 +151,7 @@ where
     // Original: OrderedHookSlot.run(). Entries are snapshotted before the
     // first handler so registration changes affect only later runs.
     pub async fn run(&self, context: &mut C, terminal: Option<HookTerminal<C>>) -> HookResult {
-        let entries = Arc::new(self.entries.lock().unwrap().clone());
+        let entries = Arc::new(self.entries.lock().clone());
         let terminal = terminal.unwrap_or_else(|| Arc::new(|_| Box::pin(async { Ok(()) })));
         dispatch(entries, 0, context, terminal).await
     }

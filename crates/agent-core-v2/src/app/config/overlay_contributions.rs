@@ -2,7 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/config/configOverlayContributions.ts`.
 
-use std::sync::{Arc, LazyLock, RwLock};
+
+use parking_lot::RwLock;
+use std::sync::{Arc, LazyLock};
 
 use super::contract::ConfigEffectiveOverlay;
 
@@ -11,15 +13,15 @@ static OVERLAYS: LazyLock<RwLock<Vec<Arc<dyn ConfigEffectiveOverlay>>>> =
 
 // Original: registerConfigOverlay().
 pub fn register_config_overlay(overlay: Arc<dyn ConfigEffectiveOverlay>) {
-    OVERLAYS.write().unwrap().push(overlay);
+    OVERLAYS.write().push(overlay);
 }
 
 // Original: getConfigOverlayContributions().
 pub fn get_config_overlay_contributions() -> Vec<Arc<dyn ConfigEffectiveOverlay>> {
-    OVERLAYS.read().unwrap().clone()
+    OVERLAYS.read().clone()
 }
 
 // Original: _clearConfigOverlayContributionsForTests().
 pub fn clear_config_overlay_contributions_for_tests() {
-    OVERLAYS.write().unwrap().clear();
+    OVERLAYS.write().clear();
 }

@@ -356,10 +356,8 @@ pub fn register_file_skill_discovery() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    };
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
     use crate::app::skill_catalog::types::{SkillPluginContext, SkillSource};
@@ -510,7 +508,7 @@ mod tests {
         .await;
         let warnings = Mutex::new(Vec::new());
         let warn = |message: &str, _payload: Option<LogPayload>| {
-            warnings.lock().unwrap().push(message.to_owned());
+            warnings.lock().push(message.to_owned());
         };
         let plain = root(&directory);
         let plugin = SkillRoot {
@@ -538,7 +536,7 @@ mod tests {
                 .as_ref()
                 .is_some_and(|plugin| plugin.id == "plugin-a")
         }));
-        assert_eq!(warnings.lock().unwrap().len(), 2);
+        assert_eq!(warnings.lock().len(), 2);
 
         tokio::fs::remove_dir_all(directory).await.unwrap();
     }

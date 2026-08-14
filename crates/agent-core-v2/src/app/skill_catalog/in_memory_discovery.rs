@@ -2,7 +2,8 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/skillCatalog/inMemorySkillDiscovery.ts`.
 
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -53,10 +54,9 @@ impl InMemorySkillDiscovery {
         self.presets_write().extra = skills.to_vec();
     }
 
-    fn presets_write(&self) -> std::sync::RwLockWriteGuard<'_, PresetSkills> {
+    fn presets_write(&self) -> parking_lot::RwLockWriteGuard<'_, PresetSkills> {
         self.presets
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -66,8 +66,7 @@ impl SkillDiscoveryContract for InMemorySkillDiscovery {
     async fn discover(&self, roots: &[SkillRoot]) -> SkillDiscoveryResult {
         let presets = self
             .presets
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .read();
         let mut skills = Vec::new();
         if roots.is_empty() {
             skills.extend(presets.user.clone());

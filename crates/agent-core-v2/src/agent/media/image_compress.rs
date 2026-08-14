@@ -7,9 +7,10 @@
 use std::{
     fmt,
     io::Cursor,
-    sync::{Arc, Mutex, OnceLock},
     time::Instant,
 };
+use std::sync::{Arc, OnceLock};
+use parking_lot::Mutex;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::future::BoxFuture;
@@ -43,8 +44,7 @@ static CONFIGURED_READ_BUDGET: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
 pub fn set_configured_max_image_edge_px(value: Option<u64>) {
     *CONFIGURED_MAX_EDGE
         .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap() = value
+        .lock() = value
         .filter(|v| *v > 0)
         .map(|v| v.min(u32::MAX as u64) as u32);
 }
@@ -52,14 +52,12 @@ pub fn resolve_max_image_edge_px() -> u32 {
     CONFIGURED_MAX_EDGE
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap()
         .unwrap_or(MAX_IMAGE_EDGE_PX)
 }
 pub fn set_configured_read_image_byte_budget(value: Option<u64>) {
     *CONFIGURED_READ_BUDGET
         .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap() = value
+        .lock() = value
         .filter(|v| *v > 0)
         .map(|v| v.min(usize::MAX as u64) as usize);
 }
@@ -67,7 +65,6 @@ pub fn resolve_read_image_byte_budget() -> usize {
     CONFIGURED_READ_BUDGET
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap()
         .unwrap_or(READ_IMAGE_BYTE_BUDGET)
 }
 
@@ -1015,7 +1012,6 @@ mod tests {
         fn track(&self, event: &str, properties: Option<&TelemetryProperties>) {
             self.0
                 .lock()
-                .unwrap()
                 .push((event.into(), properties.cloned().unwrap_or_default()));
         }
     }
@@ -1112,7 +1108,7 @@ mod tests {
             },
         );
         assert!(result.changed);
-        let records = records.lock().unwrap();
+        let records = records.lock();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].0, "image_compress");
         assert_eq!(
@@ -1299,7 +1295,7 @@ mod tests {
         );
         assert!(matches!(failure, CropImageOutcome::Failure(_)));
 
-        let records = records.lock().unwrap();
+        let records = records.lock();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].0, "image_crop");
         assert_eq!(

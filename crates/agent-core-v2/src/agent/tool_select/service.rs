@@ -5,8 +5,9 @@
 use std::{
     collections::BTreeSet,
     ops::Deref,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use crate::{
     _base::di::{
@@ -142,7 +143,7 @@ impl AgentToolSelectService {
             "compaction.completed",
             Arc::new(move |_| {
                 if let Some(pending) = pending_compaction.upgrade() {
-                    pending.lock().unwrap().clear();
+                    pending.lock().clear();
                 }
             }),
         ));
@@ -162,11 +163,11 @@ impl AgentToolSelectService {
                 let Some(pending) = pending_splice.upgrade() else {
                     return;
                 };
-                if pending.lock().unwrap().is_empty() {
+                if pending.lock().is_empty() {
                     return;
                 }
                 let landed = collect_loaded_dynamic_tool_names(&context_splice.get());
-                pending.lock().unwrap().retain(|name| landed.contains(name));
+                pending.lock().retain(|name| landed.contains(name));
             }),
         ));
         Self {
@@ -307,7 +308,6 @@ impl AgentToolSelectServiceContract for AgentToolSelectService {
             }]);
             self.pending
                 .lock()
-                .unwrap()
                 .extend(result.to_load.iter().cloned());
         }
         result
@@ -351,7 +351,7 @@ fn loaded_names(
 ) -> BTreeSet<String> {
     let mut names = collect_loaded_dynamic_tool_names(&context.get());
     if let Some(pending) = pending {
-        names.extend(pending.lock().unwrap().iter().cloned());
+        names.extend(pending.lock().iter().cloned());
     }
     names
 }

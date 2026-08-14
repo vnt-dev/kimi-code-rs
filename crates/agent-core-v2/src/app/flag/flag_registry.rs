@@ -2,9 +2,10 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/flag/flagRegistry.ts`.
 
+use parking_lot::RwLock;
 use std::{
     ops::Deref,
-    sync::{Arc, LazyLock, RwLock},
+    sync::{Arc, LazyLock},
 };
 
 use serde::{Deserialize, Serialize};
@@ -37,13 +38,13 @@ static CONTRIBUTED_FLAGS: LazyLock<RwLock<Vec<FlagDefinitionInput>>> =
 // Original: registerFlagDefinition(). As in TypeScript, duplicate contributions
 // are accepted here and rejected when a registry drains the contribution list.
 pub fn register_flag_definition(definition: FlagDefinitionInput) {
-    CONTRIBUTED_FLAGS.write().unwrap().push(definition);
+    CONTRIBUTED_FLAGS.write().push(definition);
 }
 
 // Original: getContributedFlags(). The clone is the Rust ownership adaptation
 // of returning the process-wide array as a readonly view.
 pub fn get_contributed_flags() -> Vec<FlagDefinitionInput> {
-    CONTRIBUTED_FLAGS.read().unwrap().clone()
+    CONTRIBUTED_FLAGS.read().clone()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]

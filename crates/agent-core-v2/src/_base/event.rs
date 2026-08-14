@@ -1,10 +1,6 @@
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc, Mutex, Weak,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Weak, atomic::{AtomicBool, AtomicU64, Ordering}};
+use parking_lot::Mutex;
 
 use futures_util::future::{BoxFuture, join_all};
 use tokio::sync::Mutex as AsyncMutex;
@@ -65,12 +61,12 @@ impl<T> Event<T> {
                 let subscription = Arc::new(Mutex::new(None::<DisposableHandle>));
                 let subscription_for_listener = Arc::clone(&subscription);
                 let handle = source.subscribe(move |value| {
-                    if let Some(subscription) = subscription_for_listener.lock().unwrap().take() {
+                    if let Some(subscription) = subscription_for_listener.lock().take() {
                         let _ = subscription.dispose();
                         listener(value);
                     }
                 });
-                *subscription.lock().unwrap() = Some(Arc::clone(&handle));
+                *subscription.lock() = Some(Arc::clone(&handle));
                 handle
             }),
         }
@@ -180,7 +176,6 @@ impl<T: Send + Sync + 'static> Emitter<T> {
             .inner
             .listeners
             .lock()
-            .unwrap()
             .values()
             .cloned()
             .collect::<Vec<_>>();
@@ -200,7 +195,7 @@ where
 {
     fn dispose(&self) -> super::di::lifecycle::DisposeResult {
         if !self.inner.disposed.swap(true, Ordering::AcqRel) {
-            self.inner.listeners.lock().unwrap().clear();
+            self.inner.listeners.lock().clear();
         }
         Ok(())
     }
@@ -217,13 +212,13 @@ fn subscribe<T: Send + Sync + 'static>(
         return disposable_none();
     }
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
-    inner.listeners.lock().unwrap().insert(id, listener);
+    inner.listeners.lock().insert(id, listener);
     let weak = Arc::downgrade(&inner);
     to_disposable(move || {
         if let Some(inner) = weak.upgrade()
             && !inner.disposed.load(Ordering::Acquire)
         {
-            inner.listeners.lock().unwrap().remove(&id);
+            inner.listeners.lock().remove(&id);
         }
     })
 }
@@ -268,7 +263,7 @@ pub struct AsyncEvent<T> {
 
 impl<T> AsyncEvent<T> {
     pub fn wait_until(&self, future: WaitUntilFuture) -> Result<(), &'static str> {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.lock();
         match pending.as_mut() {
             Some(pending) => {
                 pending.push(future);
@@ -319,7 +314,6 @@ where
             .inner
             .listeners
             .lock()
-            .unwrap()
             .values()
             .cloned()
             .collect::<Vec<_>>();
@@ -334,7 +328,7 @@ where
                 pending: Arc::clone(&pending),
             };
             safely_call_listener(|| listener(&event));
-            let futures = pending.lock().unwrap().take().unwrap_or_default();
+            let futures = pending.lock().take().unwrap_or_default();
             for result in join_all(futures).await {
                 if let Err(error) = result {
                     on_unexpected_error(error.as_ref());
@@ -355,7 +349,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex as StdMutex;
+    use parking_lot::Mutex as StdMutex;
 
     use super::*;
 
@@ -368,25 +362,25 @@ mod tests {
         let seen_first = Arc::clone(&seen);
         let subscription_first = Arc::clone(&subscription);
         let handle = emitter.event().subscribe(move |_| {
-            seen_first.lock().unwrap().push("first");
-            if let Some(handle) = subscription_first.lock().unwrap().take() {
+            seen_first.lock().push("first");
+            if let Some(handle) = subscription_first.lock().take() {
                 handle.dispose().unwrap();
             }
             let seen_late = Arc::clone(&seen_first);
             emitter_for_listener
                 .event()
-                .subscribe(move |_| seen_late.lock().unwrap().push("late"));
+                .subscribe(move |_| seen_late.lock().push("late"));
         });
-        *subscription.lock().unwrap() = Some(handle);
+        *subscription.lock() = Some(handle);
         let seen_second = Arc::clone(&seen);
         emitter
             .event()
-            .subscribe(move |_| seen_second.lock().unwrap().push("second"));
+            .subscribe(move |_| seen_second.lock().push("second"));
 
         emitter.fire(&1);
         emitter.fire(&2);
         assert_eq!(
-            *seen.lock().unwrap(),
+            *seen.lock(),
             vec!["first", "second", "second", "late"]
         );
     }
@@ -401,11 +395,11 @@ mod tests {
             .map(|value| value * 2)
             .once();
         let captured = Arc::clone(&seen);
-        output.subscribe(move |value| captured.lock().unwrap().push(*value));
+        output.subscribe(move |value| captured.lock().push(*value));
         first.fire(&1);
         second.fire(&2);
         first.fire(&4);
-        assert_eq!(*seen.lock().unwrap(), vec![4]);
+        assert_eq!(*seen.lock(), vec![4]);
     }
 
     #[tokio::test]
@@ -414,12 +408,12 @@ mod tests {
         let order = Arc::new(StdMutex::new(Vec::new()));
         let first = Arc::clone(&order);
         emitter.event().subscribe(move |event| {
-            first.lock().unwrap().push("listener-1");
+            first.lock().push("listener-1");
             let first = Arc::clone(&first);
             event
                 .wait_until(Box::pin(async move {
                     tokio::task::yield_now().await;
-                    first.lock().unwrap().push("wait-1");
+                    first.lock().push("wait-1");
                     Ok(())
                 }))
                 .unwrap();
@@ -427,10 +421,10 @@ mod tests {
         let second = Arc::clone(&order);
         emitter
             .event()
-            .subscribe(move |_| second.lock().unwrap().push("listener-2"));
+            .subscribe(move |_| second.lock().push("listener-2"));
         emitter.fire_async((), CancellationToken::new()).await;
         assert_eq!(
-            *order.lock().unwrap(),
+            *order.lock(),
             vec!["listener-1", "wait-1", "listener-2"]
         );
     }

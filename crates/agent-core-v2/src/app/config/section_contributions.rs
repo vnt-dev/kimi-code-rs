@@ -2,7 +2,8 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/config/configSectionContributions.ts`.
 
-use std::sync::{LazyLock, RwLock};
+use parking_lot::RwLock;
+use std::sync::LazyLock;
 
 use super::contract::{ConfigSchema, RegisterSectionOptions};
 
@@ -24,7 +25,6 @@ pub fn register_config_section(
 ) {
     CONTRIBUTIONS
         .write()
-        .unwrap()
         .push(ConfigSectionContribution {
             domain: domain.into(),
             schema,
@@ -34,10 +34,10 @@ pub fn register_config_section(
 
 // Original: getConfigSectionContributions().
 pub fn get_config_section_contributions() -> Vec<ConfigSectionContribution> {
-    CONTRIBUTIONS.read().unwrap().clone()
+    CONTRIBUTIONS.read().clone()
 }
 
 // Original: _clearConfigSectionContributionsForTests().
 pub fn clear_config_section_contributions_for_tests() {
-    CONTRIBUTIONS.write().unwrap().clear();
+    CONTRIBUTIONS.write().clear();
 }

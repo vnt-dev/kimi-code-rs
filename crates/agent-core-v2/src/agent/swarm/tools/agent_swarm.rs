@@ -516,13 +516,9 @@ pub fn register_agent_swarm_tool() {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        sync::{
-            Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
-    };
+    use std::collections::HashMap;
+    use std::sync::{atomic::{AtomicUsize, Ordering}};
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::{
@@ -576,9 +572,8 @@ mod tests {
         async fn ensure_profile_allowed(&self, profile_name: &str) -> Result<(), BoxError> {
             self.profile_checks
                 .lock()
-                .unwrap()
                 .push(profile_name.into());
-            if let Some(error) = self.profile_error.lock().unwrap().clone() {
+            if let Some(error) = self.profile_error.lock().clone() {
                 Err(other_error(error))
             } else {
                 Ok(())
@@ -596,7 +591,6 @@ mod tests {
         ) -> Result<Option<String>, BoxError> {
             self.item_calls
                 .lock()
-                .unwrap()
                 .push((caller_agent_id.into(), agent_id.into()));
             Ok(self.items.get(agent_id).cloned())
         }
@@ -605,8 +599,8 @@ mod tests {
             &self,
             args: SessionSwarmRunArgs<Value>,
         ) -> Result<Vec<SessionSwarmRunResult<Value>>, BoxError> {
-            self.run_calls.lock().unwrap().push(args.clone());
-            let outcomes = self.outcomes.lock().unwrap().clone();
+            self.run_calls.lock().push(args.clone());
+            let outcomes = self.outcomes.lock().clone();
             Ok(args
                 .tasks
                 .into_iter()
@@ -774,10 +768,10 @@ mod tests {
         assert!(!result.is_error);
         assert_eq!(services.enter_calls.load(Ordering::Relaxed), 1);
         assert_eq!(
-            services.profile_checks.lock().unwrap().as_slice(),
+            services.profile_checks.lock().as_slice(),
             ["explore"]
         );
-        let calls = services.run_calls.lock().unwrap();
+        let calls = services.run_calls.lock();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].caller_agent_id, "main");
         assert_eq!(calls[0].tasks.len(), 2);
@@ -840,13 +834,13 @@ mod tests {
         let result = execution.execute(context()).await;
         assert!(!result.is_error);
         assert_eq!(
-            services.item_calls.lock().unwrap().as_slice(),
+            services.item_calls.lock().as_slice(),
             [
                 ("main".into(), "agent-old-1".into()),
                 ("main".into(), "agent-old-2".into())
             ]
         );
-        let calls = services.run_calls.lock().unwrap();
+        let calls = services.run_calls.lock();
         assert_eq!(calls[0].tasks.len(), 3);
         let SessionSwarmTask::Resume {
             base,
@@ -913,7 +907,7 @@ mod tests {
             assert!(result.is_error);
             assert_eq!(text_output(&result), expected);
         }
-        assert!(services.run_calls.lock().unwrap().is_empty());
+        assert!(services.run_calls.lock().is_empty());
 
         let ToolExecution::Runnable(execution) = tool
             .resolve_execution(AgentSwarmToolInput {
@@ -930,9 +924,9 @@ mod tests {
             text_output(&result),
             "AgentSwarm supports at most 128 subagents."
         );
-        assert!(services.run_calls.lock().unwrap().is_empty());
+        assert!(services.run_calls.lock().is_empty());
 
-        *services.profile_error.lock().unwrap() =
+        *services.profile_error.lock() =
             Some("Subagent type \"coder\" is not allowed for this agent.".into());
         let ToolExecution::Runnable(execution) = tool.resolve_execution(input(&["a", "b"])).await
         else {
@@ -944,13 +938,13 @@ mod tests {
             text_output(&result),
             "Subagent type \"coder\" is not allowed for this agent."
         );
-        assert!(services.run_calls.lock().unwrap().is_empty());
+        assert!(services.run_calls.lock().is_empty());
     }
 
     #[tokio::test]
     async fn maps_failed_and_aborted_children_without_failing_the_tool() {
         let services = Arc::new(StubServices::new(Duration::from_secs(1)));
-        *services.outcomes.lock().unwrap() = vec![
+        *services.outcomes.lock() = vec![
             StubOutcome {
                 agent_id: Some("agent-1".into()),
                 status: SessionSwarmRunStatus::Completed,

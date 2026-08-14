@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use parking_lot::Mutex;
+use std::sync::{Arc, OnceLock, Weak};
 
 use indexmap::IndexMap;
 
@@ -55,7 +56,7 @@ pub fn register_scoped_service<T>(
         InstantiationType::Eager => descriptor,
         InstantiationType::Delayed => descriptor.delayed(),
     };
-    scoped_registry().lock().unwrap().push(ScopedEntry {
+    scoped_registry().lock().push(ScopedEntry {
         scope,
         id: id.erase(),
         descriptor: descriptor.erase(),
@@ -68,7 +69,6 @@ pub fn register_scoped_service<T>(
 pub fn get_scoped_service_descriptors(scope: LifecycleScope) -> Vec<ScopedEntry> {
     scoped_registry()
         .lock()
-        .unwrap()
         .iter()
         .filter(|entry| entry.scope == scope)
         .cloned()
@@ -85,7 +85,6 @@ pub fn clear_scoped_registry_for_tests() {
     let owner = std::thread::current().id();
     scoped_registry()
         .lock()
-        .unwrap()
         .retain(|entry| entry.test_owner != owner);
 }
 
@@ -218,7 +217,7 @@ impl Scope {
                 kind as u8, self.inner.kind, self.inner.kind as u8
             )));
         }
-        let mut children = self.inner.children.lock().unwrap();
+        let mut children = self.inner.children.lock();
         if children.contains_key(&id) {
             return Err(DiError::Factory(format!(
                 "Scope '{}' already has a child with id '{id}'",
@@ -252,7 +251,6 @@ impl Scope {
         self.inner
             .children
             .lock()
-            .unwrap()
             .keys()
             .cloned()
             .collect()
@@ -284,14 +282,14 @@ impl Disposable for Scope {
         {
             return Ok(());
         }
-        let children = std::mem::take(&mut *self.inner.children.lock().unwrap())
+        let children = std::mem::take(&mut *self.inner.children.lock())
             .into_values()
             .map(|child| Arc::new(child) as super::lifecycle::DisposableHandle)
             .collect::<Vec<_>>();
         let child_result = dispose_all(children);
         let own_result = self.inner.instantiation.dispose();
         if let Some(parent) = self.inner.parent.as_ref().and_then(Weak::upgrade) {
-            parent.children.lock().unwrap().shift_remove(self.id());
+            parent.children.lock().shift_remove(self.id());
         }
         child_result.and(own_result)
     }
@@ -335,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_preserves_other_threads_registrations() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.lock();
         clear_scoped_registry_for_tests();
         register_scoped_service(
             LifecycleScope::App,
@@ -385,7 +383,7 @@ mod tests {
 
     #[test]
     fn registry_builds_scopes_and_children_inherit_parent_services() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.lock();
         clear_scoped_registry_for_tests();
         register_scoped_service(
             LifecycleScope::App,
@@ -415,7 +413,7 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_and_non_descending_children() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.lock();
         clear_scoped_registry_for_tests();
         let app = Scope::create_app(ScopeOptions::default());
         let _session = app
@@ -433,7 +431,7 @@ mod tests {
 
     #[test]
     fn scoped_child_handle_inherits_parent_and_applies_extra_last() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.lock();
         clear_scoped_registry_for_tests();
         register_scoped_service(
             LifecycleScope::App,
@@ -478,7 +476,7 @@ mod tests {
 
     #[test]
     fn scoped_child_handle_disposes_its_child_service_once() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.lock();
         clear_scoped_registry_for_tests();
         let disposed = Arc::new(AtomicBool::new(false));
         let factory_flag = Arc::clone(&disposed);

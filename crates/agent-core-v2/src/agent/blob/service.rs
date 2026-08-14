@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use crate::{
     _base::{
@@ -87,7 +88,7 @@ impl AgentBlobService {
     // Original: AgentBlobServiceImpl.readBlob(). Storage failures are
     // intentionally indistinguishable from missing blobs.
     async fn read_blob(&self, hash: &str) -> Option<Arc<[u8]>> {
-        if let Some(cached) = self.cache.lock().unwrap().get(hash) {
+        if let Some(cached) = self.cache.lock().get(hash) {
             return Some(cached);
         }
         let payload: Arc<[u8]> = self
@@ -98,7 +99,6 @@ impl AgentBlobService {
             .into();
         self.cache
             .lock()
-            .unwrap()
             .set(hash.into(), Arc::clone(&payload));
         Some(payload)
     }
@@ -128,7 +128,7 @@ impl AgentBlobService {
         let hash = sha256_hex(base64_payload.as_bytes());
         let binary: Arc<[u8]> = decode_node_base64(base64_payload).into();
         self.blobs.put(&self.storage_scope, &hash, &binary).await?;
-        self.cache.lock().unwrap().set(hash.clone(), binary);
+        self.cache.lock().set(hash.clone(), binary);
         Ok(format_blob_ref(mime_type, &hash))
     }
 

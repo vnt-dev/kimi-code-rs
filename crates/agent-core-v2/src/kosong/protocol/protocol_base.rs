@@ -1,7 +1,8 @@
+use parking_lot::RwLock;
 use indexmap::IndexMap;
 use std::error::Error;
 use std::fmt;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
 
 use crate::kosong::contract::capability::ModelCapability;
 use crate::kosong::contract::provider::{ChatProvider, ProviderError};
@@ -96,7 +97,7 @@ pub fn register_protocol_base(
 ) -> Result<(), ProtocolBaseRegistryError> {
     PROTOCOL_BASES
         .write()
-        .map_err(|_| ProtocolBaseRegistryError::Poisoned)?
+
         .register(definition)
 }
 
@@ -105,7 +106,7 @@ pub fn get_protocol_base(
 ) -> Result<Option<Arc<ProtocolBaseDefinition>>, ProtocolBaseRegistryError> {
     Ok(PROTOCOL_BASES
         .read()
-        .map_err(|_| ProtocolBaseRegistryError::Poisoned)?
+
         .get(id))
 }
 
@@ -113,7 +114,7 @@ pub fn list_protocol_bases() -> Result<Vec<Arc<ProtocolBaseDefinition>>, Protoco
 {
     Ok(PROTOCOL_BASES
         .read()
-        .map_err(|_| ProtocolBaseRegistryError::Poisoned)?
+
         .list())
 }
 
@@ -125,7 +126,7 @@ mod tests {
     use crate::kosong::contract::tool::Tool;
     use async_trait::async_trait;
     use std::io;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     struct FakeChatProvider;
 
@@ -229,7 +230,6 @@ mod tests {
             create_chat_provider: Arc::new(move |context| {
                 seen_by_factory
                     .lock()
-                    .unwrap()
                     .push(context.config.model_name.clone());
                 Ok(Arc::new(FakeChatProvider))
             }),
@@ -246,6 +246,6 @@ mod tests {
             .create_chat_provider)(&context)
         .unwrap();
         assert_eq!(provider.name(), "fake");
-        assert_eq!(*seen.lock().unwrap(), vec!["test-model".to_owned()]);
+        assert_eq!(*seen.lock(), vec!["test-model".to_owned()]);
     }
 }

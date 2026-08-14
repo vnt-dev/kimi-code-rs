@@ -1,9 +1,10 @@
 use std::{
     collections::HashMap,
     future::pending,
-    sync::{Arc, Mutex},
     time::Duration,
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use serde_json::{Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -180,12 +181,12 @@ async fn collect_stream(
         if count == 0 {
             return Ok(());
         }
-        output.lock().unwrap().extend_from_slice(&buffer[..count]);
+        output.lock().extend_from_slice(&buffer[..count]);
     }
 }
 
 fn buffer_text(output: &Arc<Mutex<Vec<u8>>>) -> String {
-    String::from_utf8_lossy(&output.lock().unwrap()).into_owned()
+    String::from_utf8_lossy(&output.lock()).into_owned()
 }
 
 fn timeout_duration(timeout: u64) -> Duration {

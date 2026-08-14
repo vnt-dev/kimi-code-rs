@@ -2,10 +2,9 @@
 //!
 //! Original: `stepRetryService.ts`.
 
-use std::{
-    ops::Deref,
-    sync::{Arc, Mutex, Weak},
-};
+use std::ops::Deref;
+use std::sync::{Arc, Weak};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -137,7 +136,7 @@ impl AgentStepRetryService {
     }
 
     fn reset_attempts(&self) {
-        *self.state.lock().unwrap() = RetryState::default();
+        *self.state.lock() = RetryState::default();
     }
 
     fn max_attempts(&self) -> u64 {
@@ -157,7 +156,7 @@ impl AgentStepRetryService {
             return Ok(Some(false));
         };
         let failed_attempt = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             if state.last_failed_driver_id.as_deref() != Some(driver.id()) {
                 state.last_failed_driver_id = Some(driver.id().into());
                 state.failed_attempts = 0;

@@ -130,10 +130,9 @@ impl McpOAuthStore for AtomicMcpOAuthStore {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
+    use std::collections::HashMap;
+    use std::sync::{Arc};
+    use parking_lot::Mutex;
 
     use async_trait::async_trait;
 
@@ -154,7 +153,7 @@ mod tests {
     #[async_trait]
     impl AtomicDocumentStoreService for Documents {
         async fn get_value(&self, _scope: &str, key: &str) -> Result<Option<Value>, StorageError> {
-            Ok(self.0.lock().unwrap().get(key).cloned())
+            Ok(self.0.lock().get(key).cloned())
         }
 
         async fn set_value(
@@ -163,12 +162,12 @@ mod tests {
             key: &str,
             value: Value,
         ) -> Result<(), StorageError> {
-            self.0.lock().unwrap().insert(key.into(), value);
+            self.0.lock().insert(key.into(), value);
             Ok(())
         }
 
         async fn delete(&self, _scope: &str, key: &str) -> Result<(), StorageError> {
-            self.0.lock().unwrap().remove(key);
+            self.0.lock().remove(key);
             Ok(())
         }
 

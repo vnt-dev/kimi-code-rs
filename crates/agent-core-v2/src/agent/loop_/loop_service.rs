@@ -8,9 +8,10 @@ use std::{
     collections::{HashMap, VecDeque},
     error::Error,
     panic::AssertUnwindSafe,
-    sync::{Arc, Mutex, Weak},
     time::Instant,
 };
+use std::sync::{Arc, Weak};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{
@@ -130,7 +131,6 @@ impl<T: Clone + Send + 'static> Promise<T> {
     fn settle(&self, value: T) -> bool {
         self.sender
             .lock()
-            .unwrap()
             .take()
             .is_some_and(|sender| sender.send(value).is_ok())
     }
@@ -155,14 +155,14 @@ struct StepHandleImpl {
 
 impl StepHandleImpl {
     fn set_running(&self) -> AbortSignal {
-        let mut mutable = self.mutable.lock().unwrap();
+        let mut mutable = self.mutable.lock();
         mutable.state = StepState::Running;
         mutable.controller = AbortController::new();
         mutable.controller.signal()
     }
 
     fn complete(&self) {
-        self.mutable.lock().unwrap().state = StepState::Completed;
+        self.mutable.lock().state = StepState::Completed;
         self.result.settle(StepResult::Completed);
     }
 }
@@ -177,11 +177,11 @@ impl StepHandleContract for StepHandleImpl {
     }
 
     fn state(&self) -> StepState {
-        self.mutable.lock().unwrap().state
+        self.mutable.lock().state
     }
 
     fn signal(&self) -> AbortSignal {
-        self.mutable.lock().unwrap().controller.signal()
+        self.mutable.lock().controller.signal()
     }
 
     fn result(&self) -> StepResultFuture {
@@ -190,7 +190,7 @@ impl StepHandleContract for StepHandleImpl {
 
     fn cancel(&self, reason: Option<LoopValue>) -> bool {
         let cancellation = reason.unwrap_or_else(user_cancellation_value);
-        let mut mutable = self.mutable.lock().unwrap();
+        let mut mutable = self.mutable.lock();
         if matches!(
             mutable.state,
             StepState::Completed | StepState::Failed | StepState::Cancelled
@@ -229,7 +229,7 @@ impl TurnHandleContract for TurnHandleImpl {
     }
 
     fn state(&self) -> Option<TurnState> {
-        Some(self.mutable.lock().unwrap().state)
+        Some(self.mutable.lock().state)
     }
 
     fn signal(&self) -> AbortSignal {
@@ -348,7 +348,7 @@ impl AgentLoopService {
                         service.record_file_changes(event);
                     }
                 });
-            *service.fs_watch_subscription.lock().unwrap() = Some(subscription);
+            *service.fs_watch_subscription.lock() = Some(subscription);
         }
         service
     }
@@ -356,13 +356,13 @@ impl AgentLoopService {
     async fn begin_turn_file_tracking(&self, turn_id: crate::agent::TurnId) {
         // Drain an older debounce window before opening the turn boundary.
         self.fs_watch.flush_pending().await;
-        let mut tracking = self.turn_files.lock().unwrap();
+        let mut tracking = self.turn_files.lock();
         tracking.active_turn_id = Some(turn_id);
         tracking.files.clear();
     }
 
     fn record_file_changes(&self, event: &FsChangeEvent) {
-        let mut tracking = self.turn_files.lock().unwrap();
+        let mut tracking = self.turn_files.lock();
         if tracking.active_turn_id.is_none() || event.truncated == Some(true) {
             return;
         }
@@ -379,7 +379,7 @@ impl AgentLoopService {
         turn_id: crate::agent::TurnId,
     ) -> Vec<super::TurnFileChange> {
         self.fs_watch.flush_pending().await;
-        let mut tracking = self.turn_files.lock().unwrap();
+        let mut tracking = self.turn_files.lock();
         if tracking.active_turn_id != Some(turn_id) {
             return Vec::new();
         }
@@ -435,7 +435,7 @@ impl AgentLoopService {
             ))))
         })?;
         let job = self.create_pending_turn(request, seed);
-        self.state.lock().unwrap().pending_turns.push_back(job);
+        self.state.lock().pending_turns.push_back(job);
         self.pump_turns();
         Ok(())
     }
@@ -468,7 +468,7 @@ impl AgentLoopService {
             turn,
         });
         self.assign_step(&job, request, None);
-        let pending = self.state.lock().unwrap().standalone_step_queue.drain();
+        let pending = self.state.lock().standalone_step_queue.drain();
         for request in pending {
             if !request.aborted() {
                 self.assign_step(&job, request, None);
@@ -479,7 +479,7 @@ impl AgentLoopService {
 
     fn reserve_turn_id(&self) -> crate::agent::TurnId {
         let model_next = self.wire.get_model(&TURN_MODEL).next_turn_id;
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let id = model_next.max(state.next_reserved_turn_id.unwrap_or(model_next));
         state.next_reserved_turn_id = Some(id + 1);
         id
@@ -495,7 +495,6 @@ impl AgentLoopService {
         if let Some(assignment) = self
             .state
             .lock()
-            .unwrap()
             .pending_assignments
             .remove(request.id())
         {
@@ -513,14 +512,14 @@ impl AgentLoopService {
         request: Arc<dyn StepRequest>,
         options: Option<StepEnqueueOptions>,
     ) -> StepHandle {
-        if let Some(existing) = job.steps.lock().unwrap().get(request.id()).cloned()
+        if let Some(existing) = job.steps.lock().get(request.id()).cloned()
             && existing.state() != StepState::Cancelled
         {
-            job.queue.lock().unwrap().enqueue(
+            job.queue.lock().enqueue(
                 request,
                 options.and_then(|value| value.at).unwrap_or_default(),
             );
-            existing.mutable.lock().unwrap().state = StepState::Queued;
+            existing.mutable.lock().state = StepState::Queued;
             return StepHandle(existing);
         }
         let step = Arc::new(StepHandleImpl {
@@ -535,9 +534,8 @@ impl AgentLoopService {
         });
         job.steps
             .lock()
-            .unwrap()
             .insert(request.id().to_owned(), Arc::clone(&step));
-        job.queue.lock().unwrap().enqueue(
+        job.queue.lock().enqueue(
             request,
             options.and_then(|value| value.at).unwrap_or_default(),
         );
@@ -548,7 +546,6 @@ impl AgentLoopService {
         if let Some(assignment) = self
             .state
             .lock()
-            .unwrap()
             .pending_assignments
             .remove(request.id())
         {
@@ -558,7 +555,7 @@ impl AgentLoopService {
 
     fn abort_request(&self, request: &Arc<dyn StepRequest>, reason: Option<LoopValue>) -> bool {
         let jobs = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             state
                 .active_turn_job
                 .iter()
@@ -570,7 +567,7 @@ impl AgentLoopService {
             if job.turn.0.state() == Some(TurnState::Queued) && Arc::ptr_eq(&job.request, request) {
                 return self.cancel(Some(job.turn.0.id()), reason);
             }
-            if let Some(step) = job.steps.lock().unwrap().get(request.id()).cloned() {
+            if let Some(step) = job.steps.lock().get(request.id()).cloned() {
                 return step.cancel(reason);
             }
         }
@@ -583,7 +580,7 @@ impl AgentLoopService {
 
     fn pump_turns(&self) {
         let (job, start_worker) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             if state.disposing || state.active_turn_job.is_some() {
                 return;
             }
@@ -622,10 +619,10 @@ impl AgentLoopService {
             });
             (job, start_worker)
         };
-        let _ = self
-            .wire
-            .dispatch([prompt_turn(job.seed.clone()).expect("turn seed is serializable")]);
-        job.turn_impl.mutable.lock().unwrap().state = TurnState::Running;
+        if let Ok(record) = prompt_turn(job.seed.clone()) {
+            let _ = self.wire.dispatch([record]);
+        }
+        job.turn_impl.mutable.lock().state = TurnState::Running;
         let _ = start_worker.send(());
     }
 
@@ -645,7 +642,6 @@ impl AgentLoopService {
         let is_active = self
             .state
             .lock()
-            .unwrap()
             .active_turn_job
             .as_ref()
             .is_some_and(|active| Arc::ptr_eq(active, job));
@@ -654,13 +650,14 @@ impl AgentLoopService {
             self.release_active_turn(job, &result);
             self.publish_turn_file_changes(job.turn.0.id()).await;
             let payload = error_payload(&error);
-            let _ = self.wire.dispatch([end_turn(EndTurnPayload {
+            if let Ok(record) = end_turn(EndTurnPayload {
                 turn_id: job.turn.0.id(),
                 reason: super::TurnEndReason::Failed,
                 error: Some(payload.clone()),
                 duration_ms: None,
-            })
-            .expect("turn completion is serializable")]);
+            }) {
+                let _ = self.wire.dispatch([record]);
+            }
             self.event_bus.publish_typed(super::TurnEndedEvent {
                 turn_id: job.turn.0.id(),
                 reason: super::TurnEndReason::Failed,
@@ -710,7 +707,7 @@ impl AgentLoopService {
 
         let duration_ms = started_at.elapsed().as_millis() as u64;
         let trace_id = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             match result {
                 LoopRunResult::Completed { .. } => state.last_request_trace_id.clone(),
                 _ => state
@@ -725,13 +722,14 @@ impl AgentLoopService {
         };
         self.publish_turn_file_changes_with_stats(turn_id).await;
         let end_reason = turn_end_reason(&result);
-        let _ = self.wire.dispatch([end_turn(EndTurnPayload {
+        if let Ok(record) = end_turn(EndTurnPayload {
             turn_id,
             reason: end_reason,
             error: error.clone(),
             duration_ms: Some(duration_ms),
-        })
-        .expect("turn completion is serializable")]);
+        }) {
+            let _ = self.wire.dispatch([record]);
+        }
         self.event_bus.publish_typed(super::TurnEndedEvent {
             turn_id,
             reason: end_reason,
@@ -764,7 +762,7 @@ impl AgentLoopService {
             trace_id,
         });
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.active_request_trace = None;
             state.last_request_trace_id = None;
         }
@@ -785,7 +783,7 @@ impl AgentLoopService {
     }
 
     fn release_active_turn(&self, job: &Arc<TurnJob>, result: &LoopRunResult) {
-        job.turn_impl.mutable.lock().unwrap().state = match result {
+        job.turn_impl.mutable.lock().state = match result {
             LoopRunResult::Completed { .. } => TurnState::Completed,
             LoopRunResult::Failed { .. } => TurnState::Failed,
             LoopRunResult::Cancelled { .. } => TurnState::Cancelled,
@@ -794,12 +792,12 @@ impl AgentLoopService {
             LoopRunResult::Cancelled { reason, .. } => reason.clone(),
             _ => loop_error(abort_error(Some("Turn ended"))),
         };
-        for step in job.steps.lock().unwrap().values() {
+        for step in job.steps.lock().values() {
             if matches!(step.state(), StepState::Queued | StepState::Running) {
                 step.cancel(Some(cancellation.clone()));
             }
         }
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if state
             .active_turn_job
             .as_ref()
@@ -824,26 +822,27 @@ impl AgentLoopService {
         turn_id: Option<crate::agent::TurnId>,
         cancellation: &LoopValue,
     ) -> bool {
-        let job = self.state.lock().unwrap().active_turn_job.clone();
+        let job = self.state.lock().active_turn_job.clone();
         let Some(job) = job else {
             return false;
         };
         if turn_id.is_some_and(|turn_id| turn_id != job.turn.0.id()) {
             return false;
         }
-        let _ = self.wire.dispatch([cancel_turn(CancelTurnPayload {
+        if let Ok(record) = cancel_turn(CancelTurnPayload {
             turn_id: Some(job.turn.0.id()),
             target: Some(CancelTurnTarget::Active),
             reason: Some(cancel_reason_for(cancellation)),
-        })
-        .expect("turn cancellation is serializable")]);
+        }) {
+            let _ = self.wire.dispatch([record]);
+        }
         job.controller.abort(Some(abort_from_value(cancellation)));
         true
     }
 
     fn cancel_queued_turn(&self, turn_id: crate::agent::TurnId, cancellation: LoopValue) -> bool {
         let job = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let Some(index) = state
                 .pending_turns
                 .iter()
@@ -856,23 +855,24 @@ impl AgentLoopService {
         if job.turn.0.state() != Some(TurnState::Queued) {
             return false;
         }
-        let _ = self.wire.dispatch([cancel_turn(CancelTurnPayload {
+        if let Ok(record) = cancel_turn(CancelTurnPayload {
             turn_id: Some(turn_id),
             target: Some(CancelTurnTarget::Queued),
             reason: Some(cancel_reason_for(&cancellation)),
-        })
-        .expect("turn cancellation is serializable")]);
-        for step in job.steps.lock().unwrap().values() {
+        }) {
+            let _ = self.wire.dispatch([record]);
+        }
+        for step in job.steps.lock().values() {
             step.cancel(Some(cancellation.clone()));
         }
         job.controller.abort(Some(abort_from_value(&cancellation)));
-        job.turn_impl.mutable.lock().unwrap().state = TurnState::Cancelled;
+        job.turn_impl.mutable.lock().state = TurnState::Cancelled;
         job.ready.settle(Err(cancellation.clone()));
         job.result.settle(LoopRunResult::Cancelled {
             steps: 0,
             reason: cancellation,
         });
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         Self::settle_waiters(&mut state);
         true
     }
@@ -881,7 +881,6 @@ impl AgentLoopService {
         let job = self
             .state
             .lock()
-            .unwrap()
             .active_turn_job
             .clone()
             .filter(|job| job.turn.0.id() == options.turn_id);
@@ -950,9 +949,9 @@ impl AgentLoopService {
         operation: impl FnOnce(&mut StepRequestQueue) -> T,
     ) -> T {
         if let Some(job) = &runtime.job {
-            operation(&mut job.queue.lock().unwrap())
+            operation(&mut job.queue.lock())
         } else {
-            operation(&mut self.state.lock().unwrap().standalone_step_queue)
+            operation(&mut self.state.lock().standalone_step_queue)
         }
     }
 
@@ -985,7 +984,7 @@ impl AgentLoopService {
         let mutable_step = runtime
             .job
             .as_ref()
-            .and_then(|job| job.steps.lock().unwrap().get(batch.driver.id()).cloned());
+            .and_then(|job| job.steps.lock().get(batch.driver.id()).cloned());
         let (signal, links) = if let Some(step) = &mutable_step {
             let step_signal = step.set_running();
             combined_signal(&runtime.turn_signal, &step_signal)
@@ -1147,7 +1146,7 @@ impl AgentLoopService {
                 if let Some(job) = job.as_ref() {
                     return service.enqueue_step(job, request, options);
                 }
-                service.state.lock().unwrap().standalone_step_queue.enqueue(
+                service.state.lock().standalone_step_queue.enqueue(
                     Arc::clone(&request),
                     options.and_then(|value| value.at).unwrap_or_default(),
                 );
@@ -1172,7 +1171,6 @@ impl AgentLoopService {
         let handler = self
             .state
             .lock()
-            .unwrap()
             .error_handlers
             .iter()
             .find(|handler| handler.matches(&context))
@@ -1219,7 +1217,7 @@ impl AgentLoopService {
         step_uuid: String,
         on_started: Option<Arc<dyn Fn(crate::agent::StepId) + Send + Sync>>,
     ) -> Result<StepExecutionResult, LoopValue> {
-        self.state.lock().unwrap().active_request_trace = None;
+        self.state.lock().active_request_trace = None;
         let mut before = BeforeStepContext {
             turn_id,
             step: current_step,
@@ -1235,7 +1233,7 @@ impl AgentLoopService {
         let mark_started: Arc<dyn Fn() + Send + Sync> = {
             let started = Arc::clone(&started);
             Arc::new(move || {
-                let mut started = started.lock().unwrap();
+                let mut started = started.lock();
                 if !*started {
                     *started = true;
                     if let Some(callback) = &on_started {
@@ -1256,9 +1254,9 @@ impl AgentLoopService {
             Some(self.create_stream_part_handler(turn_id, Arc::clone(&mark_started))),
             Some(signal.clone()),
         );
-        self.state.lock().unwrap().active_request_trace = Some(request.trace.clone());
+        self.state.lock().active_request_trace = Some(request.trace.clone());
         let response = request.result.await.map_err(LoopValue::Error)?;
-        self.state.lock().unwrap().last_request_trace_id = request.trace.trace_id();
+        self.state.lock().last_request_trace_id = request.trace.trace_id();
         self.append_response_content(turn_id, current_step, &step_uuid, &response)?;
         let finish_reason = self
             .execute_step_tools(
@@ -1360,7 +1358,6 @@ impl AgentLoopService {
             let uuid = uuid::Uuid::new_v4().to_string();
             calls_for_callback
                 .lock()
-                .unwrap()
                 .insert(call.tool_call_id.clone(), uuid.clone());
             let _ = context.append_loop_event(LoopRecordedEvent::ToolCall {
                 step_uuid: step_uuid_owned.clone(),
@@ -1401,7 +1398,6 @@ impl AgentLoopService {
                     parent_uuid: Some(
                         call_uuids
                             .lock()
-                            .unwrap()
                             .get(&tool_result.tool_call_id)
                             .cloned()
                             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
@@ -1548,7 +1544,6 @@ impl AgentLoopService {
                         on_response_event();
                         calls
                             .lock()
-                            .unwrap()
                             .insert(call.stream_index, (call.id.clone(), call.name.clone()));
                         event_bus.publish_typed(super::ToolCallDeltaEvent {
                             turn_id,
@@ -1561,7 +1556,7 @@ impl AgentLoopService {
                         let Some(arguments) = part.arguments_part else {
                             return Ok(());
                         };
-                        let call = calls.lock().unwrap().get(&part.index).cloned();
+                        let call = calls.lock().get(&part.index).cloned();
                         if let Some((id, name)) = call {
                             on_response_event();
                             event_bus.publish_typed(super::ToolCallDeltaEvent {
@@ -1586,7 +1581,7 @@ impl AgentLoopService {
     }
 
     fn delete_error_handler(&self, id: &str) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let Some(index) = state
             .error_handlers
             .iter()
@@ -1608,7 +1603,7 @@ impl AgentLoopServiceContract for AgentLoopService {
     ) -> Result<EnqueueReceipt, LoopValue> {
         let assignment = Arc::new(AssignmentPromise::new());
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             if state.disposing {
                 return Err(loop_error(abort_error(Some("Agent loop disposed"))));
             }
@@ -1616,7 +1611,7 @@ impl AgentLoopServiceContract for AgentLoopService {
                 .pending_assignments
                 .insert(request.id().to_owned(), Arc::clone(&assignment));
         }
-        let active = self.state.lock().unwrap().active_turn_job.clone();
+        let active = self.state.lock().active_turn_job.clone();
         let admission_result = match request.admission() {
             StepRequestAdmission::NewTurn => self.create_and_queue_turn(Arc::clone(&request)),
             StepRequestAdmission::ActiveOrNewTurn => {
@@ -1631,7 +1626,7 @@ impl AgentLoopServiceContract for AgentLoopService {
                 if let Some(active) = active {
                     self.assign_step(&active, Arc::clone(&request), options);
                 } else {
-                    self.state.lock().unwrap().standalone_step_queue.enqueue(
+                    self.state.lock().standalone_step_queue.enqueue(
                         Arc::clone(&request),
                         options.and_then(|value| value.at).unwrap_or_default(),
                     );
@@ -1671,7 +1666,7 @@ impl AgentLoopServiceContract for AgentLoopService {
     }
 
     fn status(&self) -> AgentLoopStatus {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         AgentLoopStatus {
             state: if state.active_turn_job.is_some() {
                 AgentLoopState::Running
@@ -1687,7 +1682,7 @@ impl AgentLoopServiceContract for AgentLoopService {
             has_pending_requests: state
                 .active_turn_job
                 .as_ref()
-                .is_some_and(|job| job.queue.lock().unwrap().has_pending_requests())
+                .is_some_and(|job| job.queue.lock().has_pending_requests())
                 || state.standalone_step_queue.has_pending_requests()
                 || !state.pending_turns.is_empty(),
             active_trace_id: state
@@ -1705,7 +1700,7 @@ impl AgentLoopServiceContract for AgentLoopService {
 
     async fn settled(&self) {
         let receiver = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             if state.active_turn_job.is_none() && state.pending_turns.is_empty() {
                 return;
             }
@@ -1738,7 +1733,7 @@ impl AgentLoopServiceContract for AgentLoopService {
         }
         self.delete_error_handler(handler.id());
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let target = options.before.or(options.after);
             let insert_at = if let Some(target) = target {
                 let index = state
@@ -1777,11 +1772,11 @@ impl AgentLoopServiceContract for AgentLoopService {
 impl Disposable for AgentLoopService {
     fn dispose(&self) -> DisposeResult {
         self.tasks.close();
-        if let Some(subscription) = self.fs_watch_subscription.lock().unwrap().take() {
+        if let Some(subscription) = self.fs_watch_subscription.lock().take() {
             let _ = subscription.dispose();
         }
         let (turn_ids, active, standalone) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             if state.disposing {
                 return Ok(());
             }
@@ -1807,7 +1802,7 @@ impl Disposable for AgentLoopService {
             request.abort();
             self.reject_assignment(&request, reason.clone());
         }
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         Self::settle_waiters(&mut state);
         Ok(())
     }

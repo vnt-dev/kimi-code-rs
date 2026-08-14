@@ -2,10 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/telemetry/cloudAppender.ts`.
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::time::Duration;
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -185,7 +184,7 @@ impl CloudAppender {
 
     // Original: CloudAppender.startPeriodicFlush().
     pub fn start_periodic_flush(&self) {
-        let mut task = self.inner.flush_task.lock().unwrap();
+        let mut task = self.inner.flush_task.lock();
         if task.is_some() {
             return;
         }
@@ -210,7 +209,7 @@ impl CloudAppender {
 
     // Original: CloudAppender.stopPeriodicFlush().
     pub fn stop_periodic_flush(&self) {
-        if let Some(task) = self.inner.flush_task.lock().unwrap().take() {
+        if let Some(task) = self.inner.flush_task.lock().take() {
             task.abort();
         }
     }
@@ -234,7 +233,7 @@ impl TelemetryAppender for CloudAppender {
     fn track(&self, event: &str, properties: Option<&TelemetryProperties>) {
         let properties = clean_properties(sanitize_properties(properties));
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.inner.state.lock();
             let enriched = enriched_event(&state, event, properties);
             state.buffer.push(enriched);
             if state.buffer.len() >= self.inner.flush_threshold {
@@ -245,7 +244,7 @@ impl TelemetryAppender for CloudAppender {
             return;
         };
         let events = {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.inner.state.lock();
             let enriched = enriched_event(&state, event, properties);
             state.buffer.push(enriched);
             (state.buffer.len() >= self.inner.flush_threshold)
@@ -261,7 +260,7 @@ impl TelemetryAppender for CloudAppender {
 
     // Original: CloudAppender.setContext().
     fn set_context(&self, patch: &TelemetryContextPatch) {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.state.lock();
         if let Some(Value::String(device_id)) = patch.get("deviceId").and_then(Option::as_ref) {
             state.device_id.clone_from(device_id);
         }
@@ -292,7 +291,7 @@ impl TelemetryAppender for CloudAppender {
 }
 
 async fn flush_inner(inner: &CloudAppenderInner) -> Result<(), CloudTransportError> {
-    let events = std::mem::take(&mut inner.state.lock().unwrap().buffer);
+    let events = std::mem::take(&mut inner.state.lock().buffer);
     if events.is_empty() {
         return Ok(());
     }
@@ -481,7 +480,6 @@ mod tests {
         ) -> Result<u16, super::super::CloudHttpError> {
             self.bodies
                 .lock()
-                .unwrap()
                 .push(serde_json::from_str(body).unwrap());
             self.sent.notify_one();
             Ok(200)
@@ -538,7 +536,7 @@ mod tests {
         );
         appender.flush().await.unwrap();
 
-        let bodies = http.bodies.lock().unwrap();
+        let bodies = http.bodies.lock();
         let body = &bodies[0];
         assert_eq!(body["user_id"], "kfc_device_id_dev");
         let event = &body["events"][0];
@@ -570,7 +568,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            threshold_http.bodies.lock().unwrap()[0]["events"]
+            threshold_http.bodies.lock()[0]["events"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -590,6 +588,6 @@ mod tests {
             .unwrap();
         periodic.stop_periodic_flush();
         periodic.shutdown().await.unwrap();
-        assert_eq!(periodic_http.bodies.lock().unwrap().len(), 1);
+        assert_eq!(periodic_http.bodies.lock().len(), 1);
     }
 }

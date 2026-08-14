@@ -6,8 +6,9 @@
 use std::{
     collections::HashMap,
     error::Error,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::stream;
@@ -163,7 +164,7 @@ impl HostProcessService for ScriptedHostProcessService {
         _: HostProcessOptions,
     ) -> Result<Arc<dyn HostProcess>, HostProcessError> {
         let key = format!("{} {}", command, args.join(" "));
-        self.calls.lock().unwrap().push(key.clone());
+        self.calls.lock().push(key.clone());
         let hit = self
             .scripts
             .iter()
@@ -275,7 +276,6 @@ impl PluginServiceContract for FakePluginService {
         Ok(self
             .installed
             .lock()
-            .unwrap()
             .iter()
             .map(summary_of)
             .collect())
@@ -285,7 +285,7 @@ impl PluginServiceContract for FakePluginService {
         &self,
         input: InstallPluginInput,
     ) -> PluginServiceResult<PluginSummary> {
-        self.installs.lock().unwrap().push(input.source.clone());
+        self.installs.lock().push(input.source.clone());
         if let Some(on_install) = &self.on_install {
             on_install();
         }
@@ -296,7 +296,7 @@ impl PluginServiceContract for FakePluginService {
         } else {
             "kimi-webbridge"
         };
-        let mut installed = self.installed.lock().unwrap();
+        let mut installed = self.installed.lock();
         match installed.iter_mut().find(|plugin| plugin.id == id) {
             None => {
                 let plugin = FakePlugin {
@@ -322,12 +322,10 @@ impl PluginServiceContract for FakePluginService {
     async fn set_plugin_enabled(&self, input: SetPluginEnabledInput) -> PluginServiceResult<()> {
         self.enabled_calls
             .lock()
-            .unwrap()
             .push((input.id.clone(), input.enabled));
         if let Some(existing) = self
             .installed
             .lock()
-            .unwrap()
             .iter_mut()
             .find(|plugin| plugin.id == input.id)
         {
@@ -340,7 +338,7 @@ impl PluginServiceContract for FakePluginService {
         &self,
         input: SetPluginMcpServerEnabledInput,
     ) -> PluginServiceResult<()> {
-        self.mcp_enabled_calls.lock().unwrap().push((
+        self.mcp_enabled_calls.lock().push((
             input.id.clone(),
             input.server.clone(),
             input.enabled,
@@ -348,7 +346,6 @@ impl PluginServiceContract for FakePluginService {
         if let Some(existing) = self
             .installed
             .lock()
-            .unwrap()
             .iter_mut()
             .find(|plugin| plugin.id == input.id)
         {
@@ -358,7 +355,7 @@ impl PluginServiceContract for FakePluginService {
     }
 
     async fn get_plugin_info(&self, input: GetPluginInfoInput) -> PluginServiceResult<PluginInfo> {
-        let installed = self.installed.lock().unwrap();
+        let installed = self.installed.lock();
         let existing = installed
             .iter()
             .find(|plugin| plugin.id == input.id)
@@ -519,7 +516,7 @@ impl WebbridgeFetch {
 impl FetchLike for WebbridgeFetch {
     async fn fetch(&self, url: &str) -> Result<FetchResponse, Box<dyn Error + Send + Sync>> {
         if url.ends_with("/status") {
-            let mut calls = self.status_calls.lock().unwrap();
+            let mut calls = self.status_calls.lock();
             let step = self
                 .status_sequence
                 .get(*calls)

@@ -1,6 +1,7 @@
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use parking_lot::Mutex;
+use std::sync::{Arc, OnceLock};
 
 use crate::kosong::contract::capability::UNKNOWN_CAPABILITY;
 use crate::kosong::contract::message::{ContentPart, Message, Role};
@@ -147,8 +148,7 @@ fn resolve_files(
             .unwrap_or_default(),
     };
     let mut cache = cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .lock();
     Arc::clone(cache.entry(key).or_insert_with(|| {
         Arc::new(KimiFiles::new(KimiFilesOptions {
             api_key,

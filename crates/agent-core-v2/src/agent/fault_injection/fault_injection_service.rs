@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use crate::{
     _base::{
@@ -69,14 +70,14 @@ impl FaultInjectionServiceContract for FaultInjectionService {
         if !self.flags.enabled(FAULT_INJECTION_FLAG_ID) {
             return Err(Box::new(Error2::new(REQUEST_INVALID, DISABLED_MESSAGE)));
         }
-        self.state.lock().unwrap().armed = Some(kind);
+        self.state.lock().armed = Some(kind);
         Ok(())
     }
 
     // Original: FaultInjectionService.status(). Cloning `fired` preserves the
     // original defensive-array snapshot rather than exposing mutable state.
     fn status(&self) -> FaultInjectionStatus {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         FaultInjectionStatus {
             armed: state.armed,
             fired: state.fired.clone(),
@@ -85,7 +86,7 @@ impl FaultInjectionServiceContract for FaultInjectionService {
 
     // Original: FaultInjectionService.clear().
     fn clear(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         state.armed = None;
         state.fired.clear();
     }
@@ -93,7 +94,7 @@ impl FaultInjectionServiceContract for FaultInjectionService {
     // Original: FaultInjectionService.take(). The state transition is kept in
     // one critical section so concurrent request attempts cannot fire twice.
     fn take(&self) -> Option<FaultKind> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let kind = state.armed.take()?;
         state.fired.push(kind);
         Some(kind)

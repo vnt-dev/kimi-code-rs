@@ -334,10 +334,9 @@ pub fn register_message_legacy_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        sync::{Arc, Mutex},
-    };
+    use std::collections::BTreeMap;
+    use std::sync::{Arc};
+    use parking_lot::Mutex;
 
     use futures_util::{FutureExt, future::BoxFuture, stream};
     use serde_json::{Value, json};
@@ -410,12 +409,12 @@ mod tests {
     #[async_trait]
     impl AppendLogStoreService for MemoryLog {
         fn append_value(&self, _: &str, _: &str, record: Value, _: AppendLogOptions) {
-            self.records.lock().unwrap().push(record);
+            self.records.lock().push(record);
         }
 
         fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
             Box::pin(stream::iter(
-                self.records.lock().unwrap().clone().into_iter().map(Ok),
+                self.records.lock().clone().into_iter().map(Ok),
             ))
         }
 
@@ -425,7 +424,7 @@ mod tests {
             _: &str,
             records: Vec<Value>,
         ) -> Result<(), AppendLogError> {
-            *self.records.lock().unwrap() = records;
+            *self.records.lock() = records;
             Ok(())
         }
 
@@ -559,12 +558,11 @@ mod tests {
             options: CreateAgentOptions,
         ) -> BoxFuture<'static, Result<AgentScopeHandle, BoxError>> {
             if let Some(agent_id) = options.agent_id {
-                self.created.lock().unwrap().push(agent_id);
+                self.created.lock().push(agent_id);
             }
             futures_util::future::ready(Ok(self
                 .agent
                 .lock()
-                .unwrap()
                 .clone()
                 .expect("test agent is installed")))
             .boxed()
@@ -580,12 +578,12 @@ mod tests {
 
         fn get(&self, id: &str) -> Option<AgentScopeHandle> {
             (id == MAIN_AGENT_ID)
-                .then(|| self.agent.lock().unwrap().clone())
+                .then(|| self.agent.lock().clone())
                 .flatten()
         }
 
         fn list(&self, _: Option<&AgentListFilter>) -> Vec<AgentScopeHandle> {
-            self.agent.lock().unwrap().iter().cloned().collect()
+            self.agent.lock().iter().cloned().collect()
         }
 
         fn broadcast_permission_mode(&self, _: PermissionMode) -> Result<(), BoxError> {
@@ -898,7 +896,7 @@ mod tests {
                 },
             )
             .unwrap();
-        *agent_lifecycle.agent.lock().unwrap() = Some(agent.to_handle());
+        *agent_lifecycle.agent.lock() = Some(agent.to_handle());
 
         let lifecycle: Arc<dyn SessionLifecycleServiceContract> = Arc::new(Lifecycle {
             session_id: "s1".into(),
@@ -990,7 +988,7 @@ mod tests {
             .unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(
-            fixture.agent_lifecycle.created.lock().unwrap().as_slice(),
+            fixture.agent_lifecycle.created.lock().as_slice(),
             ["agent-1"]
         );
 

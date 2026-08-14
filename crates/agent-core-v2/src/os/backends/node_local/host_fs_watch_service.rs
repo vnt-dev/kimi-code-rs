@@ -2,10 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/os/backends/node-local/hostFsWatchService.ts`.
 
-use std::{
-    path::{Component, Path},
-    sync::{Arc, Mutex},
-};
+use std::path::{Component, Path};
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
@@ -45,7 +44,7 @@ impl HostFsWatchHandle for LocalHostFsWatchHandle {
 
 impl Disposable for LocalHostFsWatchHandle {
     fn dispose(&self) -> DisposeResult {
-        self.watcher.lock().unwrap().take();
+        self.watcher.lock().take();
         self.emitter.dispose()
     }
 }

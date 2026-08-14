@@ -106,7 +106,7 @@ pub const ATOMIC_TOML_DOCUMENT_STORE_SERVICE_ID: ServiceIdentifier<AtomicDocumen
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use serde::{Deserialize, Serialize};
 
@@ -121,7 +121,7 @@ mod tests {
     #[async_trait]
     impl AtomicDocumentStoreService for StubAtomicDocumentStore {
         async fn get_value(&self, _scope: &str, _key: &str) -> Result<Option<Value>, StorageError> {
-            Ok(self.value.lock().unwrap().clone())
+            Ok(self.value.lock().clone())
         }
 
         async fn set_value(
@@ -130,12 +130,12 @@ mod tests {
             _key: &str,
             value: Value,
         ) -> Result<(), StorageError> {
-            *self.value.lock().unwrap() = Some(value);
+            *self.value.lock() = Some(value);
             Ok(())
         }
 
         async fn delete(&self, _scope: &str, _key: &str) -> Result<(), StorageError> {
-            *self.value.lock().unwrap() = None;
+            *self.value.lock() = None;
             Ok(())
         }
 

@@ -210,7 +210,7 @@ fn path_to_string(path: impl AsRef<Path>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use zip::write::SimpleFileOptions;
@@ -248,7 +248,7 @@ mod tests {
 
         let events = Mutex::new(Vec::new());
         let progress = |downloaded_bytes, total_bytes| {
-            events.lock().unwrap().push((downloaded_bytes, total_bytes));
+            events.lock().push((downloaded_bytes, total_bytes));
         };
         let downloaded =
             download_zip_with_progress(&format!("http://{address}/plugin.zip"), Some(&progress))
@@ -257,7 +257,7 @@ mod tests {
         server.await.unwrap();
 
         assert_eq!(downloaded, body);
-        let events = events.into_inner().unwrap();
+        let events = events.into_inner();
         assert_eq!(events.first(), Some(&(0, Some(body.len() as u64))));
         assert_eq!(
             events.last(),

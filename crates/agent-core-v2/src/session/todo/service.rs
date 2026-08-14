@@ -2,10 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/todo/sessionTodoService.ts`.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, Weak},
-};
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
+use parking_lot::Mutex;
 
 use futures_util::FutureExt;
 
@@ -110,7 +109,6 @@ impl SessionTodoService {
         let binding = injector.register(TODO_LIST_REMINDER_VARIANT.into(), provider);
         self.agent_bindings
             .lock()
-            .unwrap()
             .entry(handle.id().to_owned())
             .or_default()
             .push(binding);
@@ -138,7 +136,7 @@ impl SessionTodoService {
     }
 
     fn dispose_agent_bindings(&self, agent_id: &str) {
-        let bindings = self.agent_bindings.lock().unwrap().remove(agent_id);
+        let bindings = self.agent_bindings.lock().remove(agent_id);
         if let Some(bindings) = bindings {
             for binding in bindings {
                 let _ = binding.dispose();
@@ -175,7 +173,6 @@ impl Disposable for SessionTodoService {
         let agent_ids = self
             .agent_bindings
             .lock()
-            .unwrap()
             .keys()
             .cloned()
             .collect::<Vec<_>>();

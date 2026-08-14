@@ -7,10 +7,8 @@
 //! only installs adapters, owns their registrations, and cancels detached
 //! notification tasks when the agent scope is disposed.
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use parking_lot::Mutex;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -381,7 +379,7 @@ impl AgentExternalHooksService {
                 )
                 .await;
         });
-        self.tasks.lock().unwrap().push(task);
+        self.tasks.lock().push(task);
     }
 
     async fn run_pre_tool_use(
@@ -629,7 +627,7 @@ impl AgentExternalHooksService {
                 notify_post_compact(&runner, &session_id, context.trigger, &result).await;
             }
         });
-        self.tasks.lock().unwrap().push(task);
+        self.tasks.lock().push(task);
     }
 
     fn notify_task_notification(&self, event: &DomainEvent) {
@@ -652,7 +650,7 @@ impl AgentExternalHooksServiceContract for AgentExternalHooksService {}
 impl Disposable for AgentExternalHooksService {
     fn dispose(&self) -> DisposeResult {
         let result = self.disposables.dispose();
-        for task in self.tasks.lock().unwrap().drain(..) {
+        for task in self.tasks.lock().drain(..) {
             task.abort();
         }
         result
@@ -821,11 +819,11 @@ mod tests {
             event: &str,
             args: ExternalHooksRunnerTriggerArgs,
         ) -> Vec<HookResult> {
-            self.calls.lock().unwrap().push(RunnerCall {
+            self.calls.lock().push(RunnerCall {
                 event: event.into(),
                 args,
             });
-            self.results.lock().unwrap().clone()
+            self.results.lock().clone()
         }
 
         async fn trigger_block(
@@ -833,11 +831,11 @@ mod tests {
             event: &str,
             args: ExternalHooksRunnerTriggerArgs,
         ) -> Option<HookBlockDecision> {
-            self.calls.lock().unwrap().push(RunnerCall {
+            self.calls.lock().push(RunnerCall {
                 event: event.into(),
                 args,
             });
-            self.block.lock().unwrap().clone()
+            self.block.lock().clone()
         }
 
         async fn fire_and_forget_trigger(
@@ -845,7 +843,7 @@ mod tests {
             event: &str,
             args: ExternalHooksRunnerTriggerArgs,
         ) -> Vec<HookResult> {
-            self.calls.lock().unwrap().push(RunnerCall {
+            self.calls.lock().push(RunnerCall {
                 event: event.into(),
                 args,
             });
@@ -866,11 +864,11 @@ mod tests {
 
     impl AgentContextMemoryServiceContract for RecordingContext {
         fn get(&self) -> crate::agent::context_memory::ContextMemorySnapshot {
-            self.messages.lock().unwrap().clone().into()
+            self.messages.lock().clone().into()
         }
 
         fn append(&self, messages: Vec<ContextMessage>) -> Result<(), ContextMemoryServiceError> {
-            self.messages.lock().unwrap().extend(messages);
+            self.messages.lock().extend(messages);
             Ok(())
         }
 
@@ -882,7 +880,7 @@ mod tests {
         }
 
         fn clear(&self) -> Result<(), ContextMemoryServiceError> {
-            self.messages.lock().unwrap().clear();
+            self.messages.lock().clear();
             Ok(())
         }
 
@@ -1036,7 +1034,6 @@ mod tests {
         runner
             .results
             .lock()
-            .unwrap()
             .push(hook_result(HookAction::Allow, Some("remember this")));
         let context = Arc::new(RecordingContext::default());
         let event_bus = Arc::new(EventBusService::new());
@@ -1044,7 +1041,7 @@ mod tests {
         let event_sink = Arc::clone(&events);
         let _subscription = event_bus.subscribe_type(
             "hook.result",
-            Arc::new(move |event| event_sink.lock().unwrap().push(event.clone())),
+            Arc::new(move |event| event_sink.lock().push(event.clone())),
         );
         let service = test_service(
             Arc::clone(&runner),
@@ -1063,7 +1060,7 @@ mod tests {
             .unwrap();
 
         assert!(!blocked);
-        let messages = context.messages.lock().unwrap();
+        let messages = context.messages.lock();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message.role, Role::User);
         assert_eq!(
@@ -1078,12 +1075,12 @@ mod tests {
         );
         drop(messages);
 
-        let events = events.lock().unwrap();
+        let events = events.lock();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].fields["content"], "remember this");
         drop(events);
 
-        let calls = runner.calls.lock().unwrap();
+        let calls = runner.calls.lock();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].event, "UserPromptSubmit");
         assert_eq!(calls[0].args.session_id.as_deref(), Some("session-1"));
@@ -1100,7 +1097,7 @@ mod tests {
     #[tokio::test]
     async fn stop_hook_is_one_shot_until_turn_end_and_checks_cancellation() {
         let runner = Arc::new(RecordingRunner::default());
-        *runner.block.lock().unwrap() = Some(HookBlockDecision::new("continue"));
+        *runner.block.lock() = Some(HookBlockDecision::new("continue"));
         let context = Arc::new(RecordingContext::default());
         let event_bus = Arc::new(EventBusService::new());
         let service = test_service(Arc::clone(&runner), context, Arc::clone(&event_bus));
@@ -1135,6 +1132,6 @@ mod tests {
 
         controller.abort(None);
         assert!(service.run_stop(&after_step).await.is_err());
-        assert_eq!(runner.calls.lock().unwrap().len(), 2);
+        assert_eq!(runner.calls.lock().len(), 2);
     }
 }

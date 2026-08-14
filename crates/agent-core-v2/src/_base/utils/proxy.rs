@@ -287,7 +287,8 @@ pub fn reconcile_child_no_proxy(child_env: &mut Env, config_env: Option<&Env>) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use super::*;
 
@@ -359,9 +360,9 @@ mod tests {
         let installed = Arc::new(Mutex::new(None));
         let installed_for_callback = Arc::clone(&installed);
         assert!(install_global_proxy_dispatcher(&http_env, move |config| {
-            *installed_for_callback.lock().unwrap() = Some(config);
+            *installed_for_callback.lock() = Some(config);
         }));
-        assert!(installed.lock().unwrap().is_some());
+        assert!(installed.lock().is_some());
         assert!(!install_global_proxy_dispatcher(&Env::new(), |_| {}));
     }
 

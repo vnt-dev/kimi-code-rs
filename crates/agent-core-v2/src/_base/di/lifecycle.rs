@@ -3,8 +3,9 @@ use std::{
     error::Error,
     fmt,
     hash::Hash,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 pub type DisposableHandle = Arc<dyn Disposable>;
 pub type DisposeResult = Result<(), DisposeError>;
@@ -65,7 +66,7 @@ struct FunctionDisposableState {
 impl Disposable for FunctionDisposable {
     fn dispose(&self) -> DisposeResult {
         let function = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             if inner.disposed {
                 return Ok(());
             }
@@ -135,7 +136,7 @@ impl DisposableStore {
 
     pub fn add(&self, disposable: DisposableHandle) -> DisposableHandle {
         let should_dispose = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             if inner.disposed {
                 true
             } else {
@@ -157,7 +158,7 @@ impl DisposableStore {
 
     pub fn delete(&self, disposable: &DisposableHandle) -> DisposeResult {
         let removed = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             if inner.disposed {
                 return Ok(());
             }
@@ -171,7 +172,7 @@ impl DisposableStore {
     }
 
     pub fn delete_and_leak(&self, disposable: &DisposableHandle) -> bool {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         if inner.disposed {
             return false;
         }
@@ -187,19 +188,19 @@ impl DisposableStore {
     }
 
     pub fn clear(&self) -> DisposeResult {
-        let disposables = std::mem::take(&mut self.inner.lock().unwrap().disposables);
+        let disposables = std::mem::take(&mut self.inner.lock().disposables);
         dispose_all(disposables)
     }
 
     pub fn is_disposed(&self) -> bool {
-        self.inner.lock().unwrap().disposed
+        self.inner.lock().disposed
     }
 }
 
 impl Disposable for DisposableStore {
     fn dispose(&self) -> DisposeResult {
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             if inner.disposed {
                 return Ok(());
             }
@@ -235,13 +236,13 @@ impl Default for MutableDisposable {
 
 impl MutableDisposable {
     pub fn value(&self) -> Option<DisposableHandle> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         (!inner.disposed).then(|| inner.value.clone()).flatten()
     }
 
     pub fn set(&self, value: Option<DisposableHandle>) -> DisposeResult {
         let previous = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             if inner.disposed {
                 drop(inner);
                 return value.map_or(Ok(()), |value| value.dispose());
@@ -260,7 +261,7 @@ impl MutableDisposable {
     }
 
     pub fn clear_and_leak(&self) -> Option<DisposableHandle> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         if inner.disposed {
             None
         } else {
@@ -272,7 +273,7 @@ impl MutableDisposable {
 impl Disposable for MutableDisposable {
     fn dispose(&self) -> DisposeResult {
         let previous = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             if inner.disposed {
                 return Ok(());
             }
@@ -339,7 +340,7 @@ where
     K: Eq + Hash,
 {
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().values.len()
+        self.inner.lock().values.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -347,11 +348,11 @@ where
     }
 
     pub fn has(&self, key: &K) -> bool {
-        self.inner.lock().unwrap().values.contains_key(key)
+        self.inner.lock().values.contains_key(key)
     }
 
     pub fn get(&self, key: &K) -> Option<DisposableHandle> {
-        self.inner.lock().unwrap().values.get(key).cloned()
+        self.inner.lock().values.get(key).cloned()
     }
 
     pub fn set(
@@ -361,7 +362,7 @@ where
         skip_dispose_on_overwrite: bool,
     ) -> DisposeResult {
         let previous = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             if inner.disposed {
                 // Source deliberately warns and leaks values added after disposal.
                 return Ok(());
@@ -383,18 +384,17 @@ where
     pub fn delete_and_dispose(&self, key: &K) -> DisposeResult {
         self.inner
             .lock()
-            .unwrap()
             .values
             .remove(key)
             .map_or(Ok(()), |value| value.dispose())
     }
 
     pub fn delete_and_leak(&self, key: &K) -> Option<DisposableHandle> {
-        self.inner.lock().unwrap().values.remove(key)
+        self.inner.lock().values.remove(key)
     }
 
     pub fn clear_and_dispose_all(&self) -> DisposeResult {
-        let values = std::mem::take(&mut self.inner.lock().unwrap().values).into_values();
+        let values = std::mem::take(&mut self.inner.lock().values).into_values();
         dispose_all(values)
     }
 }
@@ -405,7 +405,7 @@ where
 {
     fn dispose(&self) -> DisposeResult {
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             if inner.disposed {
                 return Ok(());
             }
@@ -428,7 +428,7 @@ struct DisposableSetState {
 
 impl DisposableSet {
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().values.len()
+        self.inner.lock().values.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -436,7 +436,7 @@ impl DisposableSet {
     }
 
     pub fn add(&self, value: DisposableHandle) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         if inner.disposed {
             return;
         }
@@ -451,7 +451,7 @@ impl DisposableSet {
 
     pub fn delete_and_dispose(&self, value: &DisposableHandle) -> DisposeResult {
         let removed = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             inner
                 .values
                 .iter()
@@ -462,7 +462,7 @@ impl DisposableSet {
     }
 
     pub fn delete_and_leak(&self, value: &DisposableHandle) -> Option<DisposableHandle> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         let index = inner
             .values
             .iter()
@@ -471,14 +471,14 @@ impl DisposableSet {
     }
 
     pub fn clear_and_dispose_all(&self) -> DisposeResult {
-        dispose_all(std::mem::take(&mut self.inner.lock().unwrap().values))
+        dispose_all(std::mem::take(&mut self.inner.lock().values))
     }
 }
 
 impl Disposable for DisposableSet {
     fn dispose(&self) -> DisposeResult {
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             if inner.disposed {
                 return Ok(());
             }
@@ -530,7 +530,7 @@ where
     ) -> Result<Reference<T>, Box<dyn Error + Send + Sync>> {
         let key = key.into();
         let object = {
-            let mut values = self.state.values.lock().unwrap();
+            let mut values = self.state.values.lock();
             if let Some(reference) = values.get_mut(&key) {
                 reference.count += 1;
                 Arc::clone(&reference.object)
@@ -553,7 +553,7 @@ where
                 return Ok(());
             };
             let removed = {
-                let mut values = state.values.lock().unwrap();
+                let mut values = state.values.lock();
                 let Some(reference) = values.get_mut(&release_key) else {
                     return Ok(());
                 };
@@ -619,12 +619,12 @@ impl RefCountedDisposable {
     }
 
     pub fn acquire(&self) {
-        self.inner.lock().unwrap().count += 1;
+        self.inner.lock().count += 1;
     }
 
     pub fn release(&self) -> DisposeResult {
         let disposable = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             if inner.count == 0 {
                 return Ok(());
             }
@@ -649,11 +649,11 @@ mod tests {
         let store = DisposableStore::new();
         for label in ["first", "second"] {
             let order = Arc::clone(&order);
-            store.add(to_disposable(move || order.lock().unwrap().push(label)));
+            store.add(to_disposable(move || order.lock().push(label)));
         }
         store.dispose().unwrap();
         store.dispose().unwrap();
-        assert_eq!(*order.lock().unwrap(), vec!["first", "second"]);
+        assert_eq!(*order.lock(), vec!["first", "second"]);
     }
 
     #[test]

@@ -286,15 +286,15 @@ mod tests {
                 ("agent-two".into(), "resume second".into()),
             ],
         };
-        let lookups = std::sync::Mutex::new(Vec::new());
+        let lookups = parking_lot::Mutex::new(Vec::new());
         let specs = create_agent_swarm_specs(&input, |agent_id| {
-            lookups.lock().unwrap().push(agent_id.to_owned());
+            lookups.lock().push(agent_id.to_owned());
             std::future::ready(Ok(Some(format!("item for {agent_id}"))))
         })
         .await
         .unwrap();
 
-        assert_eq!(*lookups.lock().unwrap(), ["agent-one", "agent-two"]);
+        assert_eq!(*lookups.lock(), ["agent-one", "agent-two"]);
         assert_eq!(
             specs,
             vec![

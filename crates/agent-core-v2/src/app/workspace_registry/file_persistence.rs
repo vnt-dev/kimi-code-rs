@@ -223,7 +223,7 @@ pub fn register_workspace_persistence() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use crate::{
         _base::{di::lifecycle::DisposableHandle, event::Event},
@@ -242,7 +242,7 @@ mod tests {
     #[async_trait]
     impl AtomicDocumentStoreService for StubDocuments {
         async fn get_value(&self, _scope: &str, _key: &str) -> Result<Option<Value>, StorageError> {
-            Ok(self.value.lock().unwrap().clone())
+            Ok(self.value.lock().clone())
         }
 
         async fn set_value(
@@ -251,7 +251,7 @@ mod tests {
             _key: &str,
             value: Value,
         ) -> Result<(), StorageError> {
-            *self.value.lock().unwrap() = Some(value);
+            *self.value.lock() = Some(value);
             Ok(())
         }
 
@@ -362,7 +362,7 @@ mod tests {
         };
         persistence.save(&catalog).await.unwrap();
         assert_eq!(
-            documents.value.lock().unwrap().clone().unwrap(),
+            documents.value.lock().clone().unwrap(),
             serde_json::json!({
                 "version": 1,
                 "workspaces": {

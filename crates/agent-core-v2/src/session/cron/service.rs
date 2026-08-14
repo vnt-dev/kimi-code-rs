@@ -4,12 +4,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Arc, Mutex, OnceLock, Weak,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
     time::Duration,
 };
+use std::sync::{Arc, OnceLock, Weak, atomic::{AtomicBool, AtomicU64, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{
@@ -221,7 +219,7 @@ impl SessionCronService {
                             if let Some(main) = service.agent_lifecycle.get(MAIN_AGENT_ID)
                                 && let Ok(wire) = main.get(WIRE_SERVICE_ID)
                             {
-                                service.runtime.lock().unwrap().tasks = wire.get_model(&CRON_MODEL);
+                                service.runtime.lock().tasks = wire.get_model(&CRON_MODEL);
                             }
                             service
                                 .load_from_store(CronLoadOptions {
@@ -275,7 +273,7 @@ impl SessionCronService {
 
     fn resolve_clocks(&self) {
         let config = self.cron_config();
-        self.runtime.lock().unwrap().clocks =
+        self.runtime.lock().clocks =
             resolve_clock_sources(config.clock.as_deref(), config.debug);
     }
 
@@ -321,7 +319,7 @@ impl SessionCronService {
 
     async fn process_due(&self, task: CronTask, now: f64) {
         let parsed = {
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             if let Some(parsed) = runtime.parsed_cache.get(&task.cron) {
                 parsed.clone()
             } else {
@@ -343,7 +341,7 @@ impl SessionCronService {
             }
         };
         {
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             if runtime.in_flight.contains(&task.id) {
                 return;
             }
@@ -361,7 +359,7 @@ impl SessionCronService {
             }
         }
         let base = {
-            let runtime = self.runtime.lock().unwrap();
+            let runtime = self.runtime.lock();
             runtime
                 .last_seen_at
                 .get(&task.id)
@@ -386,24 +384,22 @@ impl SessionCronService {
         };
         self.runtime
             .lock()
-            .unwrap()
             .in_flight
             .insert(task.id.clone());
         let delivered = self.deliver_due(&task, coalesced).await;
-        self.runtime.lock().unwrap().in_flight.remove(&task.id);
+        self.runtime.lock().in_flight.remove(&task.id);
         if !delivered {
             return;
         }
         if task.recurring == Some(false) {
             let _ = self.remove_tasks(std::slice::from_ref(&task.id));
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             runtime.last_seen_at.remove(&task.id);
             runtime.seeded_from_store.remove(&task.id);
         } else {
             let advanced = last_due.unwrap_or(now);
             self.runtime
                 .lock()
-                .unwrap()
                 .last_seen_at
                 .insert(task.id.clone(), advanced);
             self.advance_cursor(&task.id, advanced);
@@ -483,7 +479,7 @@ impl SessionCronService {
 
     fn advance_cursor(&self, id: &str, last_fired_at: f64) {
         let updated = {
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             let Some(task) = runtime.tasks.get_mut(id) else {
                 return;
             };
@@ -526,7 +522,6 @@ impl SessionCronService {
         let previous = self
             .persist_queues
             .lock()
-            .unwrap()
             .get(&id)
             .map(|(_, future)| future.clone());
         let future = async move {
@@ -540,12 +535,11 @@ impl SessionCronService {
         let generation = self.persist_generation.fetch_add(1, Ordering::Relaxed);
         self.persist_queues
             .lock()
-            .unwrap()
             .insert(id.clone(), (generation, future.clone()));
         let queues = Arc::clone(&self.persist_queues);
         tokio::spawn(async move {
             future.await;
-            let mut queues = queues.lock().unwrap();
+            let mut queues = queues.lock();
             if queues
                 .get(&id)
                 .is_some_and(|(current_generation, _)| *current_generation == generation)
@@ -557,7 +551,7 @@ impl SessionCronService {
 
     fn next_fire_for(&self, task: &CronTask) -> Option<f64> {
         let parsed = {
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             if let Some(parsed) = runtime.parsed_cache.get(&task.cron) {
                 parsed.clone()
             } else {
@@ -576,7 +570,7 @@ impl SessionCronService {
                 }
             }
         };
-        let runtime = self.runtime.lock().unwrap();
+        let runtime = self.runtime.lock();
         let persisted = task
             .last_fired_at
             .filter(|value| value.is_finite() && *value <= runtime.clocks.wall_now_ms());
@@ -607,7 +601,7 @@ impl SessionCronService {
 
     #[cfg(unix)]
     fn bind_sigusr1(self: &Arc<Self>) {
-        if !self.cron_config().manual_tick || self.sigusr1.lock().unwrap().is_some() {
+        if !self.cron_config().manual_tick || self.sigusr1.lock().is_some() {
             return;
         }
         let weak = Arc::downgrade(self);
@@ -627,7 +621,7 @@ impl SessionCronService {
                 }
             }
         });
-        *self.sigusr1.lock().unwrap() = Some(task);
+        *self.sigusr1.lock() = Some(task);
     }
 
     #[cfg(not(unix))]
@@ -635,7 +629,7 @@ impl SessionCronService {
 
     fn unbind_sigusr1(&self) {
         #[cfg(unix)]
-        if let Some(task) = self.sigusr1.lock().unwrap().take() {
+        if let Some(task) = self.sigusr1.lock().take() {
             task.abort();
         }
     }
@@ -656,7 +650,7 @@ impl SessionCronServiceContract for SessionCronService {
             .map(|_| Ulid::new().to_string())
             .find(|id| {
                 CRON_ID_REGEX.is_match(id)
-                    && !self.runtime.lock().unwrap().tasks.contains_key(id)
+                    && !self.runtime.lock().tasks.contains_key(id)
             })
             .ok_or_else(|| {
                 format!(
@@ -676,7 +670,6 @@ impl SessionCronServiceContract for SessionCronService {
         };
         self.runtime
             .lock()
-            .unwrap()
             .tasks
             .insert(task.id.clone(), task.clone());
         if let Ok(op) = cron_add(task.clone()) {
@@ -688,7 +681,7 @@ impl SessionCronServiceContract for SessionCronService {
 
     fn remove_tasks(&self, ids: &[String]) -> SessionCronResult<Vec<String>> {
         let removed = {
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             ids.iter()
                 .filter(|id| runtime.tasks.shift_remove(*id).is_some())
                 .cloned()
@@ -707,13 +700,12 @@ impl SessionCronServiceContract for SessionCronService {
     }
 
     fn get_task(&self, id: &str) -> Option<CronTask> {
-        self.runtime.lock().unwrap().tasks.get(id).cloned()
+        self.runtime.lock().tasks.get(id).cloned()
     }
 
     fn list(&self) -> Vec<CronTask> {
         self.runtime
             .lock()
-            .unwrap()
             .tasks
             .values()
             .cloned()
@@ -721,7 +713,7 @@ impl SessionCronServiceContract for SessionCronService {
     }
 
     fn now(&self) -> f64 {
-        self.runtime.lock().unwrap().clocks.wall_now_ms()
+        self.runtime.lock().clocks.wall_now_ms()
     }
 
     fn is_stale(&self, task: &CronTask) -> bool {
@@ -769,7 +761,7 @@ impl SessionCronServiceContract for SessionCronService {
 
     async fn load_from_store(&self, options: CronLoadOptions) -> SessionCronResult<()> {
         if options.replace != Some(false) {
-            self.runtime.lock().unwrap().tasks.clear();
+            self.runtime.lock().tasks.clear();
         }
         let tasks = self
             .store
@@ -793,7 +785,6 @@ impl SessionCronServiceContract for SessionCronService {
             }
             self.runtime
                 .lock()
-                .unwrap()
                 .tasks
                 .insert(task.id.clone(), task);
         }
@@ -815,7 +806,7 @@ impl SessionCronServiceContract for SessionCronService {
         };
         if let Some(interval) = interval.filter(|interval| *interval != 0) {
             let weak = self.self_weak.get().cloned();
-            self.timer.lock().unwrap().cancel_and_set(
+            self.timer.lock().cancel_and_set(
                 move || {
                     if let Some(service) = weak.as_ref().and_then(std::sync::Weak::upgrade) {
                         tokio::spawn(async move {
@@ -834,9 +825,9 @@ impl SessionCronServiceContract for SessionCronService {
 
     async fn stop(&self) -> SessionCronResult<()> {
         self.unbind_sigusr1();
-        self.timer.lock().unwrap().cancel();
+        self.timer.lock().cancel();
         {
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             runtime.in_flight.clear();
             runtime.last_seen_at.clear();
             runtime.seeded_from_store.clear();
@@ -872,7 +863,6 @@ impl SessionCronServiceContract for SessionCronService {
         let pending = self
             .persist_queues
             .lock()
-            .unwrap()
             .values()
             .map(|(_, future)| future.clone())
             .collect::<Vec<_>>();
@@ -922,9 +912,9 @@ impl SessionCronServiceContract for SessionCronService {
 impl Disposable for SessionCronService {
     fn dispose(&self) -> DisposeResult {
         self.unbind_sigusr1();
-        self.timer.lock().unwrap().cancel();
+        self.timer.lock().cancel();
         {
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             runtime.in_flight.clear();
             runtime.last_seen_at.clear();
             runtime.seeded_from_store.clear();
@@ -934,7 +924,6 @@ impl Disposable for SessionCronService {
         let pending = self
             .persist_queues
             .lock()
-            .unwrap()
             .values()
             .map(|(_, future)| future.clone())
             .collect::<Vec<_>>();

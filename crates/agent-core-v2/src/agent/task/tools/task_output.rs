@@ -365,7 +365,7 @@ pub fn register_task_output_tool() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::{
@@ -401,7 +401,7 @@ mod tests {
     #[async_trait]
     impl TaskOutputProvider for StubTasks {
         fn get_task(&self, _task_id: &str) -> Option<AgentTaskInfo> {
-            self.calls.lock().unwrap().push("get".into());
+            self.calls.lock().push("get".into());
             Some(self.current.clone())
         }
         async fn wait(
@@ -412,7 +412,6 @@ mod tests {
         ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
             self.calls
                 .lock()
-                .unwrap()
                 .push(format!("wait:{timeout_ms}"));
             Ok(Some(self.current.clone()))
         }
@@ -423,7 +422,6 @@ mod tests {
         ) -> AgentTaskServiceResult<AgentTaskOutputSnapshot> {
             self.calls
                 .lock()
-                .unwrap()
                 .push(format!("snapshot:{max_preview_bytes}"));
             Ok(self.output.clone())
         }
@@ -510,7 +508,7 @@ mod tests {
         assert!(text.contains("[Truncated. Full output: /tmp/output.log]\n[output]\ntail"));
         assert!(text.contains("Do not block on it again"));
         assert_eq!(
-            *tasks.calls.lock().unwrap(),
+            *tasks.calls.lock(),
             ["get", "wait:30000", "get", "snapshot:32768"]
         );
     }

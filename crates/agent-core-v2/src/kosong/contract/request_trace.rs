@@ -2,10 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/kosong/contract/requestTrace.ts`.
 
-use std::{
-    fmt,
-    sync::{Arc, Mutex},
-};
+use std::fmt;
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -22,11 +21,11 @@ impl LlmRequestTrace {
     }
 
     pub fn trace_id(&self) -> Option<String> {
-        self.trace_id.lock().unwrap().clone()
+        self.trace_id.lock().clone()
     }
 
     pub(crate) fn set_trace_id(&self, trace_id: Option<String>) {
-        *self.trace_id.lock().unwrap() = trace_id;
+        *self.trace_id.lock() = trace_id;
     }
 }
 

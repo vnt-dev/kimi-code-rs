@@ -76,7 +76,8 @@ pub async fn apply_login_shell_path(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use super::*;
 
@@ -86,7 +87,7 @@ mod tests {
         let exec: ExecFileText = Arc::new({
             let calls = Arc::clone(&calls);
             move |file, args, timeout| {
-                calls.lock().unwrap().push((file, args, timeout));
+                calls.lock().push((file, args, timeout));
                 Box::pin(async { Some("PATH=/noise\nbanner\nPATH=/real:/usr/bin\n".into()) })
             }
         });
@@ -94,8 +95,8 @@ mod tests {
             probe_login_shell_path("darwin", &HashMap::new(), || Some("/bin/zsh".into()), &exec)
                 .await;
         assert_eq!(path.as_deref(), Some("/real:/usr/bin"));
-        assert_eq!(calls.lock().unwrap()[0].0, "/bin/zsh");
-        assert_eq!(calls.lock().unwrap()[0].2, Duration::from_secs(5));
+        assert_eq!(calls.lock()[0].0, "/bin/zsh");
+        assert_eq!(calls.lock()[0].2, Duration::from_secs(5));
     }
 
     #[test]

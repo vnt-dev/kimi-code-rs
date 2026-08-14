@@ -2,9 +2,10 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/workspaceContext/workspaceContextService.ts`.
 
+use parking_lot::RwLock;
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
 use crate::{
@@ -42,16 +43,14 @@ impl SessionWorkspaceContextService {
         })
     }
 
-    fn read_state(&self) -> std::sync::RwLockReadGuard<'_, WorkspaceState> {
+    fn read_state(&self) -> parking_lot::RwLockReadGuard<'_, WorkspaceState> {
         self.state
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn write_state(&self) -> std::sync::RwLockWriteGuard<'_, WorkspaceState> {
+    fn write_state(&self) -> parking_lot::RwLockWriteGuard<'_, WorkspaceState> {
         self.state
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

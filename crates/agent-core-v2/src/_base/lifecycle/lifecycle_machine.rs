@@ -3,8 +3,10 @@ use std::{
     fmt,
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex, MutexGuard},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
+use parking_lot::MutexGuard;
 
 pub type BoxError = Box<dyn Error + Send + Sync>;
 pub type ActionFuture = Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>>;
@@ -221,7 +223,6 @@ where
     fn lock(&self) -> MutexGuard<'_, MachineState<S>> {
         self.inner
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -320,7 +321,6 @@ where
             state: self
                 .machine
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .state
                 .clone(),
             expected: None,
@@ -352,7 +352,6 @@ where
         self.lock().finished = true;
         self.machine
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .active_operation = None;
     }
 
@@ -363,7 +362,6 @@ where
     fn lock(&self) -> MutexGuard<'_, TransactionState<S>> {
         self.inner
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -374,15 +372,13 @@ impl<S> Drop for LifecycleTransaction<S> {
         }
         let mut transaction = self
             .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         if transaction.finished {
             return;
         }
         let mut machine = self
             .machine
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         if let Some(rollback) = transaction.rollback_state.take() {
             machine.state = rollback;
         }
@@ -478,7 +474,8 @@ fn aggregate_errors(mut errors: Vec<BoxError>, message: String) -> BoxError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{convert::Infallible, sync::Mutex as StdMutex};
+    use std::convert::Infallible;
+    use parking_lot::Mutex as StdMutex;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum State {
@@ -539,14 +536,14 @@ mod tests {
         let seen = Arc::clone(&observed);
         let result = machine
             .transaction(options(), |_| async move {
-                seen.lock().unwrap().push(State::Running);
+                seen.lock().push(State::Running);
                 Ok::<_, Infallible>(42)
             })
             .await
             .unwrap();
         assert_eq!(result, 42);
         assert_eq!(machine.state(), State::Completed);
-        assert_eq!(*observed.lock().unwrap(), vec![State::Running]);
+        assert_eq!(*observed.lock(), vec![State::Running]);
     }
 
     #[tokio::test]
@@ -557,11 +554,11 @@ mod tests {
             .transaction(options(), |transaction| {
                 for label in ["rollback-1", "rollback-2"] {
                     let order = Arc::clone(&order);
-                    transaction.rollback(action(move || order.lock().unwrap().push(label)));
+                    transaction.rollback(action(move || order.lock().push(label)));
                 }
                 for label in ["defer-1", "defer-2"] {
                     let order = Arc::clone(&order);
-                    transaction.defer(action(move || order.lock().unwrap().push(label)));
+                    transaction.defer(action(move || order.lock().push(label)));
                 }
                 async { Err::<(), _>(std::io::Error::other("boom")) }
             })
@@ -569,7 +566,7 @@ mod tests {
         assert_eq!(result.unwrap_err().to_string(), "boom");
         assert_eq!(machine.state(), State::Failed);
         assert_eq!(
-            *order.lock().unwrap(),
+            *order.lock(),
             vec!["rollback-2", "rollback-1", "defer-2", "defer-1"]
         );
     }

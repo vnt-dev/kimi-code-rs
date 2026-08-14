@@ -1,4 +1,5 @@
-use std::sync::{Arc, LazyLock, RwLock};
+use parking_lot::RwLock;
+use std::sync::{Arc, LazyLock};
 
 use crate::_base::di::{
     descriptors::SyncDescriptor,
@@ -85,7 +86,7 @@ impl<'a> ProtocolAdapterRegistry<'a> {
         provider_type.and_then(|provider_type| {
             self.provider_definitions
                 .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+
                 .get(provider_type, Some(protocol))
         })
     }
@@ -95,7 +96,7 @@ impl ProtocolAdapterRegistryContract for ProtocolAdapterRegistry<'_> {
     fn supported_protocols(&self) -> Vec<Protocol> {
         self.protocol_bases
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+
             .list()
             .iter()
             .map(|base| base.id)
@@ -204,7 +205,7 @@ impl ProtocolAdapterRegistryContract for ProtocolAdapterRegistry<'_> {
         let base_capability = self
             .protocol_bases
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+
             .get(identity.base_id)
             .and_then(|base| base.capability.as_ref().and_then(|hook| hook(model_name)));
         base_capability.map_or_else(
@@ -245,7 +246,7 @@ impl ProtocolAdapterRegistryContract for ProtocolAdapterRegistry<'_> {
         let base = self
             .protocol_bases
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+
             .get(identity.base_id)
             .ok_or_else(|| {
                 Box::new(ChatProviderError::ChatProvider {
@@ -266,7 +267,7 @@ mod tests {
     use crate::kosong::provider::provider_definition::ProviderDefinition;
     use indexmap::IndexMap;
     use std::io;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     fn registries() -> (
         RwLock<ProviderDefinitionRegistry>,
@@ -283,7 +284,6 @@ mod tests {
         let (definitions, bases) = registries();
         definitions
             .write()
-            .unwrap()
             .register(ProviderDefinition {
                 id: "vendor".to_owned(),
                 base_protocol: Protocol::OpenAi,
@@ -339,7 +339,6 @@ mod tests {
         };
         definitions
             .write()
-            .unwrap()
             .register(ProviderDefinition {
                 id: "vendor".to_owned(),
                 base_protocol: Protocol::OpenAi,
@@ -360,7 +359,6 @@ mod tests {
             .unwrap();
         definitions
             .write()
-            .unwrap()
             .register(ProviderDefinition {
                 id: "trait-vendor".to_owned(),
                 base_protocol: Protocol::OpenAi,
@@ -392,7 +390,6 @@ mod tests {
             .unwrap();
         bases
             .write()
-            .unwrap()
             .register(ProtocolBaseDefinition {
                 id: Protocol::OpenAi,
                 capability: Some(Arc::new(|_| {
@@ -429,7 +426,6 @@ mod tests {
         let (definitions, bases) = registries();
         definitions
             .write()
-            .unwrap()
             .register(ProviderDefinition {
                 id: "vendor".to_owned(),
                 base_protocol: Protocol::OpenAi,
@@ -444,12 +440,11 @@ mod tests {
         let seen_by_factory = Arc::clone(&seen);
         bases
             .write()
-            .unwrap()
             .register(ProtocolBaseDefinition {
                 id: Protocol::OpenAi,
                 capability: None,
                 create_chat_provider: Arc::new(move |context| {
-                    seen_by_factory.lock().unwrap().push((
+                    seen_by_factory.lock().push((
                         context.config.model_name.clone(),
                         context
                             .traits
@@ -473,7 +468,7 @@ mod tests {
         });
         assert_eq!(result.err().unwrap().to_string(), "factory called");
         assert_eq!(
-            *seen.lock().unwrap(),
+            *seen.lock(),
             vec![(
                 "real-model".to_owned(),
                 vec!["real-model".to_owned(), "real-model".to_owned()]

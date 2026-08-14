@@ -512,7 +512,7 @@ pub fn register_workspace_registry_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex as StdMutex;
+    use parking_lot::Mutex as StdMutex;
 
     use crate::{
         os::backends::node_local::host_fs_service::HostFileSystem,
@@ -533,15 +533,15 @@ mod tests {
     #[async_trait]
     impl WorkspacePersistenceContract for MemoryWorkspaceStore {
         async fn load(&self) -> super::super::WorkspacePersistenceResult<Option<WorkspaceCatalog>> {
-            Ok(self.catalog.lock().unwrap().clone())
+            Ok(self.catalog.lock().clone())
         }
 
         async fn save(
             &self,
             catalog: &WorkspaceCatalog,
         ) -> super::super::WorkspacePersistenceResult<()> {
-            *self.catalog.lock().unwrap() = Some(catalog.clone());
-            self.saves.lock().unwrap().push(catalog.clone());
+            *self.catalog.lock() = Some(catalog.clone());
+            self.saves.lock().push(catalog.clone());
             Ok(())
         }
     }
@@ -629,7 +629,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].root, "/repo/a");
         assert_eq!(listed[0].created_at_millis, 42);
-        assert_eq!(store.saves.lock().unwrap().len(), 1);
+        assert_eq!(store.saves.lock().len(), 1);
     }
 
     #[tokio::test]
@@ -657,7 +657,7 @@ mod tests {
             aliases,
             [primary.id.clone(), encode_work_dir_key("c:/repo")]
         );
-        let catalog = store.catalog.lock().unwrap().clone().unwrap();
+        let catalog = store.catalog.lock().clone().unwrap();
         assert!(catalog.workspaces.iter().any(|item| item.root == "/new"));
         assert!(
             !catalog
@@ -691,7 +691,7 @@ mod tests {
             .unwrap();
         assert_eq!(updated.name, "renamed");
         registry.delete(&created.id).await.unwrap();
-        let catalog = store.catalog.lock().unwrap().clone().unwrap();
+        let catalog = store.catalog.lock().clone().unwrap();
         assert!(catalog.workspaces.is_empty());
         assert_eq!(catalog.deleted_ids, [created.id]);
         tokio::fs::remove_dir_all(root).await.unwrap();

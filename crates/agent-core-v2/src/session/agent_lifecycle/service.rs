@@ -5,11 +5,9 @@
 use std::{
     collections::HashMap,
     fmt,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
 };
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use parking_lot::Mutex;
 
 use futures_util::{
     FutureExt,
@@ -121,7 +119,7 @@ struct AgentLifecycleInner {
 
 impl Drop for AgentLifecycleInner {
     fn drop(&mut self) {
-        let subscriptions = std::mem::take(self.interaction_subscriptions.get_mut().unwrap());
+        let subscriptions = std::mem::take(self.interaction_subscriptions.get_mut());
         for disposable in subscriptions.into_values() {
             let _ = disposable.dispose();
         }
@@ -169,7 +167,7 @@ impl AgentLifecycleService {
     ) -> Result<ScopeHandle, LifecycleError> {
         if let Some(agent_id) = options.agent_id.as_deref() {
             let (creation, handle) = {
-                let state = self.inner.state.lock().unwrap();
+                let state = self.inner.state.lock();
                 (
                     state.creating.get(agent_id).cloned(),
                     state.handles.get(agent_id).cloned(),
@@ -188,7 +186,7 @@ impl AgentLifecycleService {
             None => self.next_available_agent_id().await?,
         };
         let (creation, should_drive) = {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.inner.state.lock();
             if let Some(creation) = state.creating.get(&agent_id) {
                 (creation.clone(), false)
             } else if let Some(handle) = state.handles.get(&agent_id) {
@@ -204,7 +202,6 @@ impl AgentLifecycleService {
                         .inner
                         .state
                         .lock()
-                        .unwrap()
                         .creating
                         .remove(&cleanup_id);
                     result
@@ -231,7 +228,7 @@ impl AgentLifecycleService {
     async fn next_available_agent_id(&self) -> Result<String, LifecycleError> {
         let mut maximum = None;
         {
-            let state = self.inner.state.lock().unwrap();
+            let state = self.inner.state.lock();
             for id in state.handles.keys() {
                 maximum = maximum.max(agent_suffix(id));
             }
@@ -308,7 +305,6 @@ impl AgentLifecycleService {
         self.inner
             .state
             .lock()
-            .unwrap()
             .handles
             .insert(agent_id.clone(), handle.clone());
 
@@ -358,7 +354,6 @@ impl AgentLifecycleService {
                 .inner
                 .state
                 .lock()
-                .unwrap()
                 .handles
                 .get(&agent_id)
                 .is_some_and(|candidate| candidate.id() == handle.id());
@@ -366,7 +361,6 @@ impl AgentLifecycleService {
                 self.inner
                     .state
                     .lock()
-                    .unwrap()
                     .handles
                     .shift_remove(&agent_id);
             }
@@ -380,7 +374,7 @@ impl AgentLifecycleService {
 
     fn subscribe_interaction_bus(&self, handle: &ScopeHandle) -> Result<(), LifecycleError> {
         let agent_id = handle.id().to_owned();
-        let mut subscriptions = self.inner.interaction_subscriptions.lock().unwrap();
+        let mut subscriptions = self.inner.interaction_subscriptions.lock();
         if subscriptions.contains_key(&agent_id) {
             return Ok(());
         }
@@ -404,7 +398,6 @@ impl AgentLifecycleService {
             .inner
             .interaction_subscriptions
             .lock()
-            .unwrap()
             .remove(agent_id)
         {
             let _ = disposable.dispose();
@@ -595,7 +588,6 @@ impl AgentLifecycleService {
             .inner
             .state
             .lock()
-            .unwrap()
             .handles
             .shift_remove(&agent_id);
         let Some(handle) = handle else {
@@ -685,7 +677,6 @@ impl AgentLifecycleServiceContract for AgentLifecycleService {
         self.inner
             .state
             .lock()
-            .unwrap()
             .handles
             .get(agent_id)
             .cloned()
@@ -695,7 +686,6 @@ impl AgentLifecycleServiceContract for AgentLifecycleService {
         self.inner
             .state
             .lock()
-            .unwrap()
             .handles
             .iter()
             .filter(|(id, _)| {
@@ -732,7 +722,7 @@ impl AgentLifecycleServiceContract for AgentLifecycleService {
 impl Disposable for AgentLifecycleService {
     fn dispose(&self) -> DisposeResult {
         let subscriptions =
-            std::mem::take(&mut *self.inner.interaction_subscriptions.lock().unwrap());
+            std::mem::take(&mut *self.inner.interaction_subscriptions.lock());
         for disposable in subscriptions.into_values() {
             disposable.dispose()?;
         }

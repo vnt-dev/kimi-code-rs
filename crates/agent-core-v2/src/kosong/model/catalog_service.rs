@@ -10,9 +10,10 @@
 use std::{
     error::Error,
     ops::Deref,
-    sync::{Arc, Mutex},
     time::Instant,
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -162,7 +163,6 @@ impl ModelCatalog {
             disposables.add(event.subscribe(move |_| {
                 cache
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clear();
             }));
         }
@@ -182,7 +182,6 @@ impl ModelCatalog {
     pub fn notify_config_changed(&self) {
         self.cache
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
     }
 
@@ -190,7 +189,6 @@ impl ModelCatalog {
         if let Some(entry) = self
             .cache
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
             .cloned()
         {
@@ -209,8 +207,7 @@ impl ModelCatalog {
         });
         let mut cache = self
             .cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         Ok(cache
             .entry(id.to_owned())
             .or_insert_with(|| Arc::clone(&entry))
@@ -318,7 +315,7 @@ impl ModelCatalog {
             context.provider_config.as_ref(),
             wire_name,
         )?;
-        attribute_effective_fields(trace, &configured_model, &model, profile, inferred);
+        attribute_effective_fields(trace, &configured_model, &model, profile, inferred)?;
 
         let auth = resolve_model_auth_material(
             ResolveModelAuthArgs {
@@ -386,7 +383,7 @@ impl ModelCatalog {
                     .provider_config
                     .as_ref()
                     .and_then(|provider| provider.env.as_ref()),
-            );
+            )?;
         }
         let always_thinking = model
             .capabilities
@@ -959,7 +956,7 @@ mod tests {
             self.events.event()
         }
         fn get(&self, domain: &str) -> Option<Value> {
-            self.values.lock().unwrap().get(domain).cloned()
+            self.values.lock().get(domain).cloned()
         }
         fn inspect(&self, domain: &str) -> ConfigInspectValue {
             ConfigInspectValue {
@@ -968,7 +965,7 @@ mod tests {
             }
         }
         fn get_all(&self) -> ResolvedConfig {
-            self.values.lock().unwrap().clone()
+            self.values.lock().clone()
         }
         async fn set(
             &self,
@@ -979,7 +976,6 @@ mod tests {
             let previous_value = self
                 .values
                 .lock()
-                .unwrap()
                 .insert(domain.into(), value.clone().unwrap_or(Value::Null));
             self.events.fire(&ConfigChangedEvent {
                 domain: domain.into(),

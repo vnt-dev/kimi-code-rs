@@ -7,12 +7,10 @@ use std::{
     error::Error,
     fmt,
     panic::AssertUnwindSafe,
-    sync::{
-        Arc, Mutex, OnceLock, Weak,
-        atomic::{AtomicBool, Ordering},
-    },
     time::Instant,
 };
+use std::sync::{Arc, OnceLock, Weak, atomic::{AtomicBool, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{FutureExt, future::Shared};
@@ -151,7 +149,7 @@ struct ActiveCompaction {
 
 impl ActiveCompaction {
     fn settle(&self, result: Result<CompactionResult, FullCompactionError>) {
-        if let Some(sender) = self.settlement.lock().unwrap().take() {
+        if let Some(sender) = self.settlement.lock().take() {
             let _ = sender.send(result);
         }
     }
@@ -280,7 +278,7 @@ impl AgentFullCompactionService {
             "turn.ended",
             Arc::new(move |_| {
                 if let Some(service) = weak.upgrade() {
-                    service.state.lock().unwrap().active_turn_id = None;
+                    service.state.lock().active_turn_id = None;
                 }
             }),
         ));
@@ -358,7 +356,6 @@ impl AgentFullCompactionService {
         let observed = data.config.model_alias.as_ref().and_then(|model_alias| {
             self.state
                 .lock()
-                .unwrap()
                 .observed_max_context_tokens_by_model
                 .get(model_alias)
                 .copied()
@@ -461,13 +458,12 @@ impl AgentFullCompactionService {
         }
         self.state
             .lock()
-            .unwrap()
             .observed_max_context_tokens_by_model
             .insert(model_alias, observed);
     }
 
     fn reserve_compaction_slot(&self, source: CompactionSource) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if source == CompactionSource::Manual {
             state.compaction_count_in_turn = 0;
         } else {
@@ -528,7 +524,7 @@ impl AgentFullCompactionService {
 
     fn cancel_active(&self, active: &Arc<ActiveCompaction>) -> bool {
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             if state
                 .compacting
                 .as_ref()
@@ -550,7 +546,7 @@ impl AgentFullCompactionService {
     }
 
     fn mark_completed(&self, active: &Arc<ActiveCompaction>) -> Result<bool, FullCompactionError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if state
             .compacting
             .as_ref()
@@ -575,7 +571,7 @@ impl AgentFullCompactionService {
     }
 
     fn reset_for_turn(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         state.compaction_count_in_turn = 0;
         state.last_compacted_token_count = None;
         state.consecutive_overflow_compactions = 0;
@@ -617,7 +613,7 @@ impl AgentFullCompactionService {
         self.observe_context_overflow(self.estimate_current_request_tokens());
         let max_attempts = self.strategy()?.max_overflow_compaction_attempts() as u64;
         let attempts = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.consecutive_overflow_compactions += 1;
             state.consecutive_overflow_compactions
         };
@@ -645,7 +641,7 @@ impl AgentFullCompactionService {
         signal: AbortSignal,
         turn_id: Option<crate::agent::TurnId>,
     ) -> Result<(), FullCompactionError> {
-        self.state.lock().unwrap().active_turn_id = turn_id;
+        self.state.lock().active_turn_id = turn_id;
         self.check_auto_compaction(true)?;
         if self
             .strategy()?
@@ -657,7 +653,7 @@ impl AgentFullCompactionService {
     }
 
     fn after_step(&self) -> Result<(), FullCompactionError> {
-        self.state.lock().unwrap().consecutive_overflow_compactions = 0;
+        self.state.lock().consecutive_overflow_compactions = 0;
         if self.strategy()?.check_after_step() {
             self.check_auto_compaction(false)?;
         }
@@ -666,7 +662,7 @@ impl AgentFullCompactionService {
 
     fn check_auto_compaction(&self, throw_on_limit: bool) -> Result<bool, FullCompactionError> {
         let (active, last_compacted) = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             (state.compacting.is_some(), state.last_compacted_token_count)
         };
         if active {
@@ -683,11 +679,11 @@ impl AgentFullCompactionService {
     }
 
     fn begin_auto_compaction(&self, throw_on_limit: bool) -> Result<bool, FullCompactionError> {
-        if self.state.lock().unwrap().compacting.is_some() {
+        if self.state.lock().compacting.is_some() {
             return Ok(true);
         }
         let max_compactions = self.strategy()?.max_compaction_per_turn();
-        let count = self.state.lock().unwrap().compaction_count_in_turn;
+        let count = self.state.lock().compaction_count_in_turn;
         if let Some(max_compactions) = max_compactions
             && count >= max_compactions as u64
         {
@@ -717,7 +713,7 @@ impl AgentFullCompactionService {
         signal: Option<AbortSignal>,
         turn_id: Option<crate::agent::TurnId>,
     ) -> Result<(), FullCompactionError> {
-        let Some(active) = self.state.lock().unwrap().compacting.clone() else {
+        let Some(active) = self.state.lock().compacting.clone() else {
             return Ok(());
         };
         active.blocked_by_turn.store(true, Ordering::Release);
@@ -780,10 +776,10 @@ impl AgentFullCompactionService {
     }
 
     fn request_shutdown(&self) {
-        let _begin_guard = self.begin_lock.lock().unwrap();
+        let _begin_guard = self.begin_lock.lock();
         self.shutdown.cancel();
         self.tasks.close();
-        if let Some(active) = self.state.lock().unwrap().compacting.clone()
+        if let Some(active) = self.state.lock().compacting.clone()
             && !active.task.abort_controller.signal().aborted()
         {
             active
@@ -804,12 +800,12 @@ impl AgentFullCompactionService {
                 return Err(compaction_cancelled_reason(active));
             }
             self.profile.refresh_system_prompt().await;
-            self.state.lock().unwrap().last_compacted_token_count = Some(result.tokens_after);
+            self.state.lock().last_compacted_token_count = Some(result.tokens_after);
             self.context_injector()?
                 .inject_after_compaction()
                 .await
                 .map_err(FullCompactionError::from)?;
-            self.state.lock().unwrap().last_compacted_token_count =
+            self.state.lock().last_compacted_token_count =
                 Some(self.token_count_with_pending());
             if !self.mark_completed(active)? {
                 return Err(compaction_cancelled_reason(active));
@@ -1082,7 +1078,7 @@ impl AgentFullCompactionService {
     }
 
     fn context_injector(&self) -> Result<AgentContextInjectorServiceHandle, FullCompactionError> {
-        if let Some(service) = self.context_injector.lock().unwrap().clone() {
+        if let Some(service) = self.context_injector.lock().clone() {
             return Ok(service);
         }
         let service = self
@@ -1090,14 +1086,13 @@ impl AgentFullCompactionService {
             .get(AGENT_CONTEXT_INJECTOR_SERVICE_ID)
             .map_err(arc_error)?;
         let service = (*service).clone();
-        *self.context_injector.lock().unwrap() = Some(service.clone());
+        *self.context_injector.lock() = Some(service.clone());
         Ok(service)
     }
 
     fn is_active(&self, active: &Arc<ActiveCompaction>) -> bool {
         self.state
             .lock()
-            .unwrap()
             .compacting
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, active))
@@ -1273,20 +1268,19 @@ impl AgentFullCompactionServiceContract for AgentFullCompactionService {
     fn compacting(&self) -> Option<FullCompactionTask> {
         self.state
             .lock()
-            .unwrap()
             .compacting
             .as_ref()
             .map(|active| active.task.clone())
     }
 
     fn begin(&self, input: FullCompactionInput) -> Result<bool, FullCompactionError> {
-        let _begin_guard = self.begin_lock.lock().unwrap();
+        let _begin_guard = self.begin_lock.lock();
         if self.shutdown.is_cancelled() {
             return Err(Arc::new(AbortError::new(
                 "Full compaction service was disposed.",
             )));
         }
-        if self.state.lock().unwrap().compacting.is_some() {
+        if self.state.lock().compacting.is_some() {
             return Ok(false);
         }
         if !self.reserve_compaction_slot(input.source) {
@@ -1301,10 +1295,10 @@ impl AgentFullCompactionServiceContract for AgentFullCompactionService {
             .dispatch([full_compaction_begin(data.clone()).map_err(arc_error)?])
             .map_err(arc_error)?;
         let origin_turn_id = (input.source == CompactionSource::Auto)
-            .then(|| self.state.lock().unwrap().active_turn_id)
+            .then(|| self.state.lock().active_turn_id)
             .flatten();
         let active = self.create_active_compaction(input.source, token_count, origin_turn_id);
-        self.state.lock().unwrap().compacting = Some(Arc::clone(&active));
+        self.state.lock().compacting = Some(Arc::clone(&active));
 
         let weak = self.self_weak.get().cloned().unwrap_or_default();
         let abort_active = Arc::clone(&active);

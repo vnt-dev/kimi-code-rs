@@ -4,10 +4,11 @@
 
 use std::{
     pin::Pin,
-    sync::{Arc, Mutex},
     task::{Context, Poll},
     time::Instant,
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use futures_util::{Stream, future::BoxFuture};
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -60,8 +61,7 @@ impl ModelRequesterImpl {
     fn resolve_chat_provider(&self) -> Result<Arc<dyn ChatProvider>, ProviderError> {
         let mut cached = self
             .cached_chat_provider
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         if let Some(provider) = cached.as_ref() {
             return Ok(Arc::clone(provider));
         }
@@ -190,19 +190,16 @@ impl ModelRequesterImpl {
             on_request_start: Some(Arc::new(move || {
                 on_start_timing
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .request_started_at = Instant::now();
             })),
             on_request_sent: Some(Arc::new(move || {
                 on_sent_timing
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .request_sent_at = Some(Instant::now());
             })),
             on_stream_end: Some(Arc::new(move |stats| {
                 let mut state = on_end_timing
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    .lock();
                 state.stream_ended_at = Some(Instant::now());
                 state.decode_stats = stats;
             })),
@@ -264,8 +261,7 @@ impl ModelRequesterImpl {
             trace_id: result.trace_id.flatten(),
         }));
         let timing = timing
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         if let Some(first_chunk_at) = timing.first_chunk_at {
             let _ = events.send(Ok(ModelRequestEvent::Timing(build_stream_timing(
                 timing.request_started_at,
@@ -434,7 +430,6 @@ fn callbacks_for(
             Box::pin(async move {
                 timing
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .first_chunk_at
                     .get_or_insert_with(Instant::now);
                 if events.send(Ok(ModelRequestEvent::Part(part))).is_err() {
@@ -511,13 +506,11 @@ pub fn build_stream_timing(
 mod tests {
     use std::{
         collections::VecDeque,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
         task::{Context, Poll},
         time::Duration,
     };
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use parking_lot::Mutex;
 
     use async_trait::async_trait;
     use futures_util::StreamExt;
@@ -613,7 +606,6 @@ mod tests {
             if let Some(message) = _history.first() {
                 self.observed_token_estimates
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(estimate_tokens_for_message(message));
             }
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
@@ -689,7 +681,6 @@ mod tests {
             self.create_calls.fetch_add(1, Ordering::SeqCst);
             self.configurations
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(config);
             Ok(Arc::clone(&self.provider))
         }
@@ -711,7 +702,6 @@ mod tests {
         ) -> Result<Option<ProviderRequestAuth>, Box<dyn std::error::Error + Send + Sync>> {
             self.requests
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(options.is_some_and(|options| options.force));
             Ok(Some(ProviderRequestAuth {
                 api_key: Some("token".to_owned()),
@@ -857,8 +847,7 @@ mod tests {
         assert_eq!(registry.create_calls.load(Ordering::SeqCst), 1);
         let configurations = registry
             .configurations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         assert_eq!(configurations[0].model_name, "model");
         assert_eq!(
             configurations[0].base_url.as_deref(),
@@ -900,15 +889,13 @@ mod tests {
         assert_eq!(
             *provider
                 .observed_token_estimates
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                .lock(),
             vec![123_456, 123_456]
         );
         assert_eq!(
             *auth
                 .requests
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                .lock(),
             vec![false, true]
         );
     }

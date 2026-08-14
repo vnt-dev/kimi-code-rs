@@ -7,11 +7,9 @@ use std::{
     collections::HashSet,
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
 };
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -1844,7 +1842,6 @@ impl KimiCodeDesktopClient {
                     .subscribe(move |disposed_agent_id| {
                         attached_for_dispose
                             .lock()
-                            .unwrap()
                             .remove(disposed_agent_id);
                     }),
             );
@@ -2537,7 +2534,7 @@ fn attach_desktop_agent_events(
 ) -> Result<(), String> {
     let agent_id = agent.id().to_owned();
     {
-        let mut attached = attached.lock().unwrap();
+        let mut attached = attached.lock();
         if !attached.insert(agent_id.clone()) {
             return Ok(());
         }
@@ -2545,7 +2542,7 @@ fn attach_desktop_agent_events(
     let event_bus = match agent.get(EVENT_BUS_SERVICE_ID) {
         Ok(event_bus) => event_bus,
         Err(error) => {
-            attached.lock().unwrap().remove(&agent_id);
+            attached.lock().remove(&agent_id);
             return Err(error.to_string());
         }
     };
@@ -2604,7 +2601,8 @@ fn map_desktop_interactions(interactions: Vec<Interaction>) -> Vec<DesktopIntera
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use indexmap::IndexMap;
     use serde_json::json;
@@ -3193,7 +3191,7 @@ mod tests {
                 &prepared.session_id,
                 MAIN_AGENT_ID,
                 Arc::new(move |agent_id, event| {
-                    received_for_events.lock().unwrap().push((agent_id, event));
+                    received_for_events.lock().push((agent_id, event));
                 }),
                 Arc::new(|_| {}),
             )
@@ -3215,7 +3213,7 @@ mod tests {
             .unwrap()
             .publish(DomainEvent::new("test.child-live", serde_json::Map::new()));
 
-        assert!(received.lock().unwrap().iter().any(|(agent_id, event)| {
+        assert!(received.lock().iter().any(|(agent_id, event)| {
             agent_id == "child-live" && event["type"] == "test.child-live"
         }));
 
@@ -3291,7 +3289,7 @@ mod tests {
                 &prepared.session_id,
                 MAIN_AGENT_ID,
                 Arc::new(move |agent_id, event| {
-                    received_for_events.lock().unwrap().push((agent_id, event));
+                    received_for_events.lock().push((agent_id, event));
                 }),
                 Arc::new(|_| {}),
             )
@@ -3304,7 +3302,6 @@ mod tests {
         ] {
             let types = received
                 .lock()
-                .unwrap()
                 .iter()
                 .filter(|(id, _)| id == agent_id)
                 .map(|(_, event)| event["type"].as_str().unwrap().to_owned())
@@ -3313,7 +3310,6 @@ mod tests {
             assert!(
                 received
                     .lock()
-                    .unwrap()
                     .iter()
                     .any(|(id, event)| { id == agent_id && event["delta"] == expected_delta })
             );
@@ -3330,7 +3326,6 @@ mod tests {
         assert_eq!(
             received
                 .lock()
-                .unwrap()
                 .iter()
                 .filter(|(agent_id, event)| {
                     agent_id == MAIN_AGENT_ID && event["delta"] == "main-live"

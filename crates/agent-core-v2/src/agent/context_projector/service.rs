@@ -2,10 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/contextProjector/contextProjectorService.ts`.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
-};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use sha2::{Digest, Sha256};
 
@@ -99,13 +98,13 @@ impl AgentContextProjectorService {
             .filter(|a| !matches!(a, ProjectionAnomaly::ToolResultSynthesized(_, true)))
             .collect();
         if notable.is_empty() {
-            *self.last_repair_signature.lock().unwrap() = None;
+            *self.last_repair_signature.lock() = None;
             return;
         }
         let mut signature: Vec<_> = notable.iter().map(|a| format!("{a:?}")).collect();
         signature.sort();
         let signature = signature.join("|");
-        let mut last = self.last_repair_signature.lock().unwrap();
+        let mut last = self.last_repair_signature.lock();
         if last.as_deref() == Some(&signature) {
             return;
         }

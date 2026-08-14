@@ -1,7 +1,8 @@
+use parking_lot::RwLock;
 use std::{
     error::Error,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, LazyLock, RwLock},
+    sync::{Arc, LazyLock},
 };
 
 type UnexpectedErrorHandler = Arc<dyn Fn(&(dyn Error + 'static)) + Send + Sync>;
@@ -16,17 +17,17 @@ static CURRENT_HANDLER: LazyLock<RwLock<UnexpectedErrorHandler>> =
 pub fn set_unexpected_error_handler(
     handler: impl Fn(&(dyn Error + 'static)) + Send + Sync + 'static,
 ) {
-    *CURRENT_HANDLER.write().unwrap() = Arc::new(handler);
+    *CURRENT_HANDLER.write() = Arc::new(handler);
 }
 
 pub fn reset_unexpected_error_handler() {
-    *CURRENT_HANDLER.write().unwrap() = Arc::new(default_handler);
+    *CURRENT_HANDLER.write() = Arc::new(default_handler);
 }
 
 // Original: packages/agent-core-v2/src/_base/errors/unexpectedError.ts,
 // onUnexpectedError(). A panicking reporting hook is contained like a thrown JS hook.
 pub fn on_unexpected_error(error: &(dyn Error + 'static)) {
-    let handler = Arc::clone(&CURRENT_HANDLER.read().unwrap());
+    let handler = Arc::clone(&CURRENT_HANDLER.read());
     if catch_unwind(AssertUnwindSafe(|| handler(error))).is_err() {
         eprintln!("[unexpected] handler panicked while reporting {error}");
     }
@@ -45,7 +46,7 @@ pub fn safely_call_listener(listener: impl FnOnce()) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
 
@@ -54,10 +55,10 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&seen);
         set_unexpected_error_handler(move |error| {
-            captured.lock().unwrap().push(error.to_string());
+            captured.lock().push(error.to_string());
         });
         safely_call_listener(|| panic!("listener-boom"));
-        assert_eq!(*seen.lock().unwrap(), vec!["listener-boom"]);
+        assert_eq!(*seen.lock(), vec!["listener-boom"]);
 
         set_unexpected_error_handler(|_| panic!("handler-boom"));
         on_unexpected_error(&std::io::Error::other("original"));

@@ -5,8 +5,9 @@
 use std::{
     any::Any,
     panic::AssertUnwindSafe,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{FutureExt, future::join_all};
@@ -60,7 +61,7 @@ impl TelemetryServiceContract for TelemetryService {
     // held while user-provided appenders run.
     fn track(&self, event: &str, properties: Option<&TelemetryProperties>) {
         let (appenders, mut merged) = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             if !state.enabled {
                 return;
             }
@@ -85,7 +86,7 @@ impl TelemetryServiceContract for TelemetryService {
     // Original: TelemetryService.setContext().
     fn set_context(&self, patch: &TelemetryContextPatch) {
         let appenders = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.context.extend(patch.clone());
             state.appenders.clone()
         };
@@ -98,7 +99,6 @@ impl TelemetryServiceContract for TelemetryService {
     fn add_appender(&self, appender: Arc<dyn TelemetryAppender>) -> DisposableHandle {
         self.state
             .lock()
-            .unwrap()
             .appenders
             .push(Arc::clone(&appender));
         let state = Arc::clone(&self.state);
@@ -113,19 +113,19 @@ impl TelemetryServiceContract for TelemetryService {
 
     // Original: TelemetryService.setAppender().
     fn set_appender(&self, appender: Arc<dyn TelemetryAppender>) {
-        self.state.lock().unwrap().appenders = vec![appender];
+        self.state.lock().appenders = vec![appender];
     }
 
     // Original: TelemetryService.setEnabled().
     fn set_enabled(&self, enabled: bool) {
-        self.state.lock().unwrap().enabled = enabled;
+        self.state.lock().enabled = enabled;
     }
 
     // Original: TelemetryService.flush(). Appenders start together like
     // Promise.all; one panicking appender is reported without rejecting the
     // service-level operation or preventing other appenders from completing.
     async fn flush(&self) {
-        let appenders = self.state.lock().unwrap().appenders.clone();
+        let appenders = self.state.lock().appenders.clone();
         join_all(appenders.into_iter().map(|appender| async move {
             match AssertUnwindSafe(appender.flush()).catch_unwind().await {
                 Ok(Ok(())) => {}
@@ -140,7 +140,7 @@ impl TelemetryServiceContract for TelemetryService {
 
     // Original: TelemetryService.shutdown().
     async fn shutdown(&self) {
-        let appenders = self.state.lock().unwrap().appenders.clone();
+        let appenders = self.state.lock().appenders.clone();
         join_all(appenders.into_iter().map(|appender| async move {
             match AssertUnwindSafe(appender.shutdown()).catch_unwind().await {
                 Ok(Ok(())) => {}
@@ -157,7 +157,6 @@ impl TelemetryServiceContract for TelemetryService {
 fn remove_from_state(state: &Mutex<TelemetryState>, appender: &Arc<dyn TelemetryAppender>) {
     state
         .lock()
-        .unwrap()
         .appenders
         .retain(|current| !Arc::ptr_eq(current, appender));
 }
@@ -190,7 +189,7 @@ impl TelemetryContextView {
 impl TelemetryServiceContract for TelemetryContextView {
     // Original: TelemetryContextView.track().
     fn track(&self, event: &str, properties: Option<&TelemetryProperties>) {
-        let mut merged = self.context.lock().unwrap().clone();
+        let mut merged = self.context.lock().clone();
         if let Some(properties) = properties {
             merged.extend(properties.clone());
         }
@@ -199,14 +198,14 @@ impl TelemetryServiceContract for TelemetryContextView {
 
     // Original: TelemetryContextView.withContext().
     fn with_context(&self, patch: &TelemetryContextPatch) -> TelemetryServiceHandle {
-        let mut merged = self.context.lock().unwrap().clone();
+        let mut merged = self.context.lock().clone();
         merged.extend(patch.clone());
         TelemetryServiceHandle(Arc::new(Self::new(self.root.clone(), merged)))
     }
 
     // Original: TelemetryContextView.setContext().
     fn set_context(&self, patch: &TelemetryContextPatch) {
-        self.context.lock().unwrap().extend(patch.clone());
+        self.context.lock().extend(patch.clone());
     }
 
     fn add_appender(&self, appender: Arc<dyn TelemetryAppender>) -> DisposableHandle {
@@ -268,7 +267,6 @@ mod tests {
         fn track(&self, event: &str, properties: Option<&TelemetryProperties>) {
             self.events
                 .lock()
-                .unwrap()
                 .push((event.into(), properties.cloned().unwrap_or_default()));
         }
 
@@ -310,7 +308,7 @@ mod tests {
             ])),
         );
         assert_eq!(
-            appender.events.lock().unwrap()[0].1,
+            appender.events.lock()[0].1,
             properties(&[
                 ("sessionId", Value::from("s1")),
                 ("agentId", Value::from("main")),
@@ -328,8 +326,8 @@ mod tests {
         child.track("both", None);
         disposable.dispose().unwrap();
         child.track("first-only", None);
-        assert_eq!(appender.events.lock().unwrap().len(), 3);
-        assert_eq!(second.events.lock().unwrap().len(), 1);
+        assert_eq!(appender.events.lock().len(), 3);
+        assert_eq!(second.events.lock().len(), 1);
 
         child.flush().await;
         child.shutdown().await;
@@ -366,7 +364,7 @@ mod tests {
         root.flush().await;
         root.shutdown().await;
 
-        assert_eq!(good.events.lock().unwrap().len(), 1);
+        assert_eq!(good.events.lock().len(), 1);
         assert_eq!(good.flushes.load(Ordering::Relaxed), 1);
         assert_eq!(good.shutdowns.load(Ordering::Relaxed), 1);
     }

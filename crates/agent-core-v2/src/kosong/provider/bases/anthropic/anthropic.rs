@@ -1335,7 +1335,7 @@ impl ChatProvider for AnthropicChatProvider {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::kosong::contract::message::{MediaUrl, ToolCall, ToolCallType};
@@ -1665,7 +1665,7 @@ mod tests {
         let factory_received = Arc::clone(&received);
         let mut factory_options = AnthropicOptions::new("claude-sonnet-4-6");
         factory_options.client_factory = Some(Arc::new(move |auth| {
-            factory_received.lock().unwrap().push(auth);
+            factory_received.lock().push(auth);
             Ok(Arc::new(StubAnthropicClient))
         }));
         let factory_provider = AnthropicChatProvider::new(factory_options);
@@ -1676,7 +1676,7 @@ mod tests {
         };
         factory_provider.create_client(Some(&auth)).unwrap();
         assert_eq!(
-            *received.lock().unwrap(),
+            *received.lock(),
             vec![ProviderRequestAuth::default(), auth.clone()]
         );
 

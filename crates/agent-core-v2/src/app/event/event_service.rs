@@ -79,7 +79,7 @@ pub fn register_event_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
 
@@ -91,14 +91,12 @@ mod tests {
         let subscription = service.subscribe(Arc::new(move |event| {
             first
                 .lock()
-                .unwrap()
                 .push(format!("sub:{}", event.event_type));
         }));
         let second = Arc::clone(&received);
         let event_subscription = service.on_did_publish().subscribe(move |event| {
             second
                 .lock()
-                .unwrap()
                 .push(format!("event:{}", event.event_type));
         });
         service.publish(GlobalDomainEvent {
@@ -111,6 +109,6 @@ mod tests {
             event_type: "b".into(),
             payload: serde_json::Value::Null,
         });
-        assert_eq!(*received.lock().unwrap(), ["sub:a", "event:a"]);
+        assert_eq!(*received.lock(), ["sub:a", "event:a"]);
     }
 }

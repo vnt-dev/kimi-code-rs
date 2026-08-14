@@ -2,7 +2,8 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/flag/flagService.ts`.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 
@@ -65,7 +66,7 @@ impl FlagService {
                 if event.domain == EXPERIMENTAL_SECTION
                     && let Some(service) = weak.upgrade()
                 {
-                    *service.config_overrides.lock().unwrap() = read_config(&service.config);
+                    *service.config_overrides.lock() = read_config(&service.config);
                 }
             });
         service.disposables.add(subscription);
@@ -131,7 +132,6 @@ impl FlagServiceContract for FlagService {
         let config_value = self
             .config_overrides
             .lock()
-            .unwrap()
             .get(&definition.id)
             .copied();
         if parse_boolean_env(self.bootstrap.get_env(MASTER_ENV)) == Some(true) {
@@ -178,7 +178,7 @@ impl FlagServiceContract for FlagService {
 
     // Original: FlagService.setConfigOverrides().
     fn set_config_overrides(&self, overrides: Option<ExperimentalFlagConfig>) {
-        *self.config_overrides.lock().unwrap() = overrides.unwrap_or_default();
+        *self.config_overrides.lock() = overrides.unwrap_or_default();
     }
 }
 
@@ -263,9 +263,8 @@ mod tests {
             let previous_value = self
                 .value
                 .lock()
-                .unwrap()
                 .replace(value.clone().unwrap_or(Value::Null));
-            *self.value.lock().unwrap() = value.clone();
+            *self.value.lock() = value.clone();
             self.changed.fire(&ConfigChangedEvent {
                 domain: EXPERIMENTAL_SECTION.into(),
                 source: ConfigChangeSource::Set,
@@ -297,7 +296,7 @@ mod tests {
 
         fn get(&self, domain: &str) -> Option<Value> {
             (domain == EXPERIMENTAL_SECTION)
-                .then(|| self.value.lock().unwrap().clone())
+                .then(|| self.value.lock().clone())
                 .flatten()
         }
 

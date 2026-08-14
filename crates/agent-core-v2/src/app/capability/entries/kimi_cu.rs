@@ -1019,7 +1019,12 @@ mod tests {
     //!
     //! Original: `packages/agent-core-v2/test/app/capability/kimiCu.test.ts`.
 
-    use std::{collections::VecDeque, path::PathBuf, sync::Mutex, time::Duration};
+    use std::{
+        collections::VecDeque,
+        path::PathBuf,
+        time::Duration,
+    };
+    use parking_lot::Mutex;
 
     use serde_json::json;
 
@@ -1111,7 +1116,7 @@ mod tests {
         let recording = Arc::clone(&reports);
         (
             Box::new(move |step, percent| {
-                recording.lock().unwrap().push((step.to_owned(), percent));
+                recording.lock().push((step.to_owned(), percent));
             }),
             reports,
         )
@@ -1283,7 +1288,7 @@ mod tests {
                 ],
             }
         );
-        let calls = calls.lock().unwrap().clone();
+        let calls = calls.lock().clone();
         assert_eq!(calls.len(), 1);
         assert!(
             calls[0].starts_with(&format!(
@@ -1312,12 +1317,11 @@ mod tests {
             _: HostProcessOptions,
         ) -> Result<Arc<dyn HostProcess>, HostProcessError> {
             let key = format!("{} {}", command, args.join(" "));
-            self.calls.lock().unwrap().push(key);
+            self.calls.lock().push(key);
             if args.iter().any(|arg| arg == "-Command") {
                 let (code, stdout, stderr) = self
                     .doctor_results
                     .lock()
-                    .unwrap()
                     .pop_front()
                     .unwrap_or((1, String::new(), "unexpected doctor".to_owned()));
                 return Ok(Arc::new(FakeHostProcess {
@@ -1372,15 +1376,15 @@ mod tests {
         entry.install(report).await.unwrap();
 
         assert_eq!(
-            plugins.installs.lock().unwrap().as_slice(),
+            plugins.installs.lock().as_slice(),
             ["https://cdn.kimi.com/kimi-computer-use-windows/latest/kimi-cu-win-plugin.zip"]
         );
-        let reports = reports.lock().unwrap().clone();
+        let reports = reports.lock().clone();
         assert!(reports.contains(&("plugin".to_owned(), None)));
         assert!(reports.contains(&("download".to_owned(), Some(0))));
         assert!(reports.contains(&("download".to_owned(), Some(100))));
         assert!(reports.contains(&("runtime".to_owned(), None)));
-        let calls = calls.lock().unwrap().clone();
+        let calls = calls.lock().clone();
         assert!(
             calls
                 .iter()
@@ -1388,7 +1392,7 @@ mod tests {
         );
         let powershell = windows_power_shell_path();
         assert!(calls.iter().all(|call| call.starts_with(&powershell)));
-        assert!(doctor_results.lock().unwrap().is_empty());
+        assert!(doctor_results.lock().is_empty());
         rm_force(&root).await.unwrap();
     }
 
@@ -1413,8 +1417,8 @@ mod tests {
 
         entry.install(report).await.unwrap();
 
-        assert_eq!(step_names(&reports.lock().unwrap()), vec!["plugin"]);
-        assert_eq!(calls.lock().unwrap().len(), 1);
+        assert_eq!(step_names(&reports.lock()), vec!["plugin"]);
+        assert_eq!(calls.lock().len(), 1);
         rm_force(&root).await.unwrap();
     }
 
@@ -1462,7 +1466,7 @@ mod tests {
                 },
             ]
         );
-        let calls = calls.lock().unwrap().clone();
+        let calls = calls.lock().clone();
         assert!(calls.iter().any(|call| call.ends_with(" xpc-ping")));
         assert!(
             !calls
@@ -1514,7 +1518,7 @@ mod tests {
             error.to_string().contains("only supported on macOS"),
             "{error}"
         );
-        assert!(plugins.installs.lock().unwrap().is_empty());
+        assert!(plugins.installs.lock().is_empty());
         rm_force(&root).await.unwrap();
     }
 
@@ -1540,9 +1544,9 @@ mod tests {
 
         entry.install(report).await.unwrap();
 
-        assert_eq!(plugins.installs.lock().unwrap().len(), 1);
-        assert_eq!(step_names(&reports.lock().unwrap()), vec!["plugin"]);
-        let calls = calls.lock().unwrap().clone();
+        assert_eq!(plugins.installs.lock().len(), 1);
+        assert_eq!(step_names(&reports.lock()), vec!["plugin"]);
+        let calls = calls.lock().clone();
         assert!(
             calls
                 .iter()
@@ -1618,7 +1622,7 @@ mod tests {
             json!({ "command": "custom-mcp", "args": [] })
         );
         assert_eq!(
-            step_names(&reports.lock().unwrap()),
+            step_names(&reports.lock()),
             vec!["plugin", "mcp-config"]
         );
         rm_force(&root).await.unwrap();
@@ -1684,7 +1688,7 @@ mod tests {
         let current: serde_json::Value =
             serde_json::from_str(&tokio::fs::read_to_string(&config_path).await.unwrap()).unwrap();
         assert_eq!(current, concurrent);
-        assert_eq!(step_names(&reports.lock().unwrap()), vec!["plugin"]);
+        assert_eq!(step_names(&reports.lock()), vec!["plugin"]);
         rm_force(&root).await.unwrap();
     }
 
@@ -1785,7 +1789,7 @@ mod tests {
             error.to_string().contains("not running after install"),
             "{error}"
         );
-        assert_eq!(plugins.installs.lock().unwrap().len(), 1);
+        assert_eq!(plugins.installs.lock().len(), 1);
         rm_force(&root).await.unwrap();
     }
 
@@ -1810,7 +1814,7 @@ mod tests {
         // setup must not strand the capability at partial by leaving it off.
         entry.install(noop_reporter()).await.unwrap();
         assert_eq!(
-            plugins.enabled_calls.lock().unwrap().as_slice(),
+            plugins.enabled_calls.lock().as_slice(),
             [("kimi-cu".to_owned(), true)]
         );
         rm_force(&root).await.unwrap();
@@ -1836,7 +1840,7 @@ mod tests {
         entry.install(noop_reporter()).await.unwrap();
 
         assert_eq!(
-            plugins.installs.lock().unwrap().as_slice(),
+            plugins.installs.lock().as_slice(),
             ["https://cdn.kimi.com/kimi-computer-use/latest/kimi-cu-plugin.zip"]
         );
         rm_force(&root).await.unwrap();
@@ -1906,7 +1910,7 @@ mod tests {
 
         // Fully ready → explicit reinstall exercises the cleanup path.
         entry.install(noop_reporter()).await.unwrap();
-        let calls = calls.lock().unwrap().clone();
+        let calls = calls.lock().clone();
         assert!(calls.iter().any(|call| call.contains("ditto")), "{calls:?}");
         assert!(
             !calls
@@ -1972,7 +1976,7 @@ mod tests {
         // explicitly — the plugin toggle alone is not enough.
         entry.install(noop_reporter()).await.unwrap();
         assert_eq!(
-            plugins.mcp_enabled_calls.lock().unwrap().as_slice(),
+            plugins.mcp_enabled_calls.lock().as_slice(),
             [("kimi-cu".to_owned(), "mac".to_owned(), true)]
         );
         rm_force(&root).await.unwrap();
@@ -1998,7 +2002,7 @@ mod tests {
         // never breaks a previously working setup.
         let error = entry.install(noop_reporter()).await.unwrap_err();
         assert!(error.to_string().contains("Failed to unzip"), "{error}");
-        let calls = calls.lock().unwrap().clone();
+        let calls = calls.lock().clone();
         assert!(!calls.iter().any(|call| call.contains("uninstall")));
         assert!(!calls.iter().any(|call| call.contains("bootout")));
         assert!(!calls.iter().any(|call| call.contains("pkill")));

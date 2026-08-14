@@ -194,6 +194,8 @@ pub enum InspectionAssemblyError {
     MissingCapture(&'static str),
     #[error(transparent)]
     ProviderDefinition(#[from] ProviderDefinitionRegistryError),
+    #[error(transparent)]
+    Serialization(#[from] serde_json::Error),
 }
 
 const CAPABILITY_KEYS: [&str; 6] = [
@@ -260,11 +262,9 @@ pub fn attribute_effective_fields(
         super::super::provider::bases::anthropic::anthropic_profile::AnthropicModelProfile,
     >,
     profile_inferred: bool,
-) {
-    let mut configured = serde_json::to_value(configured)
-        .expect("ModelRecord serialization is required for config inspection");
-    let effective = serde_json::to_value(effective)
-        .expect("ModelRecord serialization is required for config inspection");
+) -> Result<(), serde_json::Error> {
+    let mut configured = serde_json::to_value(configured)?;
+    let effective = serde_json::to_value(effective)?;
     let overrides = configured
         .as_object_mut()
         .and_then(|record| record.remove("overrides"))
@@ -327,6 +327,7 @@ pub fn attribute_effective_fields(
             );
         }
     }
+    Ok(())
 }
 
 // Original: inspection.ts, attributeProviderOptions().
@@ -334,11 +335,10 @@ pub fn attribute_provider_options(
     trace: &mut ResolutionTraceCollector,
     options: &ProtocolProviderOptions,
     provider_env: Option<&IndexMap<String, String>>,
-) {
-    let values = serde_json::to_value(options)
-        .expect("ProtocolProviderOptions serialization is required for inspection");
+) -> Result<(), serde_json::Error> {
+    let values = serde_json::to_value(options)?;
     let Some(values) = values.as_object() else {
-        return;
+        return Ok(());
     };
     for key in values.keys() {
         let path = format!("resolved.providerOptions.{key}");
@@ -392,6 +392,7 @@ pub fn attribute_provider_options(
         };
         trace.record(&path, value);
     }
+    Ok(())
 }
 
 // Original: inspection.ts, assembleModelInspection().
@@ -452,8 +453,7 @@ pub fn assemble_model_inspection(
             sources.insert(format!("resolved.{field}"), value);
         }
     }
-    let effective_value = serde_json::to_value(&effective)
-        .expect("ModelRecord serialization is required for config inspection");
+    let effective_value = serde_json::to_value(&effective)?;
     let wire_name_field = if effective_value
         .as_object()
         .is_some_and(|record| record.contains_key("name"))
@@ -609,25 +609,21 @@ pub fn assemble_model_inspection(
         }
     };
 
+    let provider_config_value = provider_config
+        .map(|config| serde_json::to_value(config))
+        .transpose()?;
+
     Ok(ModelInspection {
         id: id.to_owned(),
         model: InspectedModel {
             id: id.to_owned(),
-            record: redact_secrets(
-                &serde_json::to_value(configured).expect("ModelRecord is serializable"),
-            ),
-            effective: redact_secrets(
-                &serde_json::to_value(effective).expect("ModelRecord is serializable"),
-            ),
+            record: redact_secrets(&serde_json::to_value(configured)?),
+            effective: redact_secrets(&serde_json::to_value(effective)?),
         },
         provider: InspectedProvider {
             id: provider_name,
             synthesized: provider_synthesized,
-            config: provider_config.map(|config| {
-                redact_secrets(
-                    &serde_json::to_value(config).expect("ProviderConfig is serializable"),
-                )
-            }),
+            config: provider_config_value.map(|value| redact_secrets(&value)),
             definition,
         },
         resolved: InspectedResolvedModel {
@@ -852,7 +848,7 @@ mod tests {
             ..Default::default()
         };
         let mut trace = ResolutionTraceCollector::default();
-        attribute_effective_fields(&mut trace, &configured, &effective, None, false);
+        attribute_effective_fields(&mut trace, &configured, &effective, None, false).unwrap();
         attribute_provider_options(
             &mut trace,
             &ProtocolProviderOptions {
@@ -864,7 +860,8 @@ mod tests {
                 "GOOGLE_CLOUD_LOCATION".into(),
                 "us-central1".into(),
             )])),
-        );
+        )
+        .unwrap();
         assert_eq!(
             trace.sources()["model.effective.supportEfforts"].kind,
             InspectionSourceKind::Override
@@ -919,7 +916,7 @@ mod tests {
             "resolved.baseUrl",
             source(InspectionSourceKind::Config, "model.baseUrl (flat)"),
         );
-        attribute_effective_fields(&mut trace, &configured, &configured, None, false);
+        attribute_effective_fields(&mut trace, &configured, &configured, None, false).unwrap();
         let model = Model {
             id: "model-id".into(),
             name: "model-wire".into(),

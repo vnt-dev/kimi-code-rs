@@ -1,7 +1,8 @@
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
-use std::sync::{LazyLock, RwLock};
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErrorInfo {
@@ -110,7 +111,7 @@ static ERROR_REGISTRY: LazyLock<RwLock<ErrorRegistry>> = LazyLock::new(|| {
 pub fn register_error_domain(
     domain: &'static ErrorDomain,
 ) -> Result<(), ErrorDomainRegistrationError> {
-    register_inner(&mut ERROR_REGISTRY.write().unwrap(), domain)
+    register_inner(&mut ERROR_REGISTRY.write(), domain)
 }
 
 fn register_inner(
@@ -139,14 +140,13 @@ fn register_inner(
 pub fn is_error_code(code: &str) -> bool {
     ERROR_REGISTRY
         .read()
-        .unwrap()
         .registered_codes
         .contains_key(code)
 }
 
 // Original: codes.ts, errorInfo()
 pub fn error_info(code: &str) -> ResolvedErrorInfo {
-    let registry = ERROR_REGISTRY.read().unwrap();
+    let registry = ERROR_REGISTRY.read();
     if let Some(info) = registry.info_overrides.get(code) {
         return ResolvedErrorInfo {
             title: info.title.to_owned(),

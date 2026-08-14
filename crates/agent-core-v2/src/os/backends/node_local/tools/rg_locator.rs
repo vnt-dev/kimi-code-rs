@@ -7,9 +7,10 @@ use std::{
     error::Error,
     fmt,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex},
     time::Duration,
 };
+use std::sync::{Arc, LazyLock};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -178,7 +179,7 @@ async fn download_rg_with_lock(
     share_dir: PathBuf,
     process_path: Option<String>,
 ) -> DownloadReceiver {
-    let mut active = DOWNLOAD.lock().unwrap();
+    let mut active = DOWNLOAD.lock();
     if let Some(receiver) = active.as_ref() {
         return receiver.clone();
     }
@@ -209,7 +210,7 @@ async fn download_rg_with_lock(
             }
         };
         sender.send_replace(Some(result));
-        *DOWNLOAD.lock().unwrap() = None;
+        *DOWNLOAD.lock() = None;
     });
     receiver
 }

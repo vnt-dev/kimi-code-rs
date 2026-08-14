@@ -744,7 +744,8 @@ pub fn register_agent_tool_executor_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use async_trait::async_trait;
     use futures_util::StreamExt;
@@ -810,7 +811,6 @@ mod tests {
         let _subscription = events.subscribe(Arc::new(move |event| {
             observed_events
                 .lock()
-                .unwrap()
                 .push(event.event_type.clone());
         }));
         let service = AgentToolExecutorService::new(
@@ -843,7 +843,7 @@ mod tests {
             ExecutableToolOutput::Text("Tool \"Missing\" not found".into())
         );
         assert_eq!(
-            *observed.lock().unwrap(),
+            *observed.lock(),
             ["tool.call.started", "tool.result"]
         );
         assert!(stream.next().await.is_none());

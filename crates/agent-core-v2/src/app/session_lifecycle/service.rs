@@ -6,12 +6,10 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
     time::{SystemTime, UNIX_EPOCH},
 };
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{
@@ -127,7 +125,7 @@ struct DeleteSessionGuard {
 
 impl Drop for DeleteSessionGuard {
     fn drop(&mut self) {
-        self.inner.deleting.lock().unwrap().remove(&self.session_id);
+        self.inner.deleting.lock().remove(&self.session_id);
     }
 }
 
@@ -206,7 +204,8 @@ impl SessionLifecycleService {
         }
     }
 
-    async fn materialize_session(&self, options: MaterializeSessionOptions) -> ResumeResult {
+    async fn materialize_session(&self, options: MaterializeSessionOptions)
+    -> Result<SessionScopeHandle, SessionLifecycleError> {
         let workspace = self
             .inner
             .workspace_registry
@@ -324,9 +323,8 @@ impl SessionLifecycleService {
         self.inner
             .sessions
             .lock()
-            .unwrap()
             .insert(options.session_id, handle.clone());
-        Ok(Some(handle))
+        Ok(handle)
     }
 
     async fn append_session_index_entry(
@@ -392,7 +390,7 @@ impl SessionLifecycleService {
     }
 
     async fn do_resume(&self, session_id: &str) -> ResumeResult {
-        if let Some(handle) = self.inner.sessions.lock().unwrap().get(session_id).cloned() {
+        if let Some(handle) = self.inner.sessions.lock().get(session_id).cloned() {
             return Ok(Some(handle));
         }
         let Some(summary) = self
@@ -425,8 +423,7 @@ impl SessionLifecycleService {
                 mcp_servers: None,
                 workspace_id: Some(summary.workspace_id),
             })
-            .await?
-            .expect("materialize always returns a handle");
+            .await?;
         let agents = handle
             .get(AGENT_LIFECYCLE_SERVICE_ID)
             .map_err(shared_error)?;
@@ -462,7 +459,7 @@ impl SessionLifecycleService {
         &self,
         source_id: &str,
     ) -> Result<Option<String>, SessionLifecycleError> {
-        let live = { self.inner.sessions.lock().unwrap().get(source_id).cloned() };
+        let live = { self.inner.sessions.lock().get(source_id).cloned() };
         if let Some(live) = live {
             return Ok(live
                 .get(SESSION_METADATA_ID)
@@ -724,8 +721,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
                 mcp_servers: options.mcp_servers,
                 workspace_id: None,
             })
-            .await?
-            .expect("materialize always returns a handle");
+            .await?;
         let initialized = async {
             let main = if let Some(binding) = options.main_agent_binding {
                 Some(
@@ -768,7 +764,6 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
             self.inner
                 .sessions
                 .lock()
-                .unwrap()
                 .shift_remove(&session_id);
             let _ = self.drain_agents(&handle).await;
             let _ = handle.dispose();
@@ -787,18 +782,17 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
     }
 
     fn get(&self, session_id: &str) -> Option<SessionScopeHandle> {
-        if self.inner.resuming.lock().unwrap().contains_key(session_id) {
+        if self.inner.resuming.lock().contains_key(session_id) {
             return None;
         }
-        self.inner.sessions.lock().unwrap().get(session_id).cloned()
+        self.inner.sessions.lock().get(session_id).cloned()
     }
 
     fn list(&self) -> Vec<SessionScopeHandle> {
-        let resuming = self.inner.resuming.lock().unwrap();
+        let resuming = self.inner.resuming.lock();
         self.inner
             .sessions
             .lock()
-            .unwrap()
             .iter()
             .filter(|(id, _)| !resuming.contains_key(id.as_str()))
             .map(|(_, handle)| handle.clone())
@@ -829,7 +823,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
                         reason: error_reason(error.as_ref()),
                     });
             }
-            let mut resuming = lifecycle.inner.resuming.lock().unwrap();
+            let mut resuming = lifecycle.inner.resuming.lock();
             if resuming
                 .get(&id)
                 .is_some_and(|entry| entry.generation == generation)
@@ -847,17 +841,17 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
             Started,
         }
         let state = {
-            let deleting = self.inner.deleting.lock().unwrap();
+            let deleting = self.inner.deleting.lock();
             if deleting.contains(session_id) {
                 return Err(Arc::new(Error2::new(
                     SESSION_BUSY,
                     format!("session {session_id} is being deleted"),
                 )));
             }
-            let mut resuming = self.inner.resuming.lock().unwrap();
+            let mut resuming = self.inner.resuming.lock();
             if let Some(entry) = resuming.get(session_id) {
                 ResumeState::Existing(entry.future.clone())
-            } else if let Some(live) = self.inner.sessions.lock().unwrap().get(session_id).cloned()
+            } else if let Some(live) = self.inner.sessions.lock().get(session_id).cloned()
             {
                 ResumeState::Live(live)
             } else {
@@ -879,7 +873,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
     }
 
     async fn close(&self, session_id: &str) -> Result<(), SessionLifecycleError> {
-        let handle = { self.inner.sessions.lock().unwrap().get(session_id).cloned() };
+        let handle = { self.inner.sessions.lock().get(session_id).cloned() };
         let Some(handle) = handle else {
             return Ok(());
         };
@@ -889,7 +883,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
             reason: SessionCloseReason::Exit,
         })
         .await?;
-        self.inner.sessions.lock().unwrap().shift_remove(session_id);
+        self.inner.sessions.lock().shift_remove(session_id);
         self.drain_agents(&handle).await?;
         handle.dispose().map_err(shared_error)?;
         self.inner.did_close.fire(&SessionClosedEvent {
@@ -899,7 +893,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
     }
 
     async fn archive(&self, session_id: &str) -> Result<(), SessionLifecycleError> {
-        let handle = { self.inner.sessions.lock().unwrap().get(session_id).cloned() };
+        let handle = { self.inner.sessions.lock().get(session_id).cloned() };
         let Some(handle) = handle else {
             return Ok(());
         };
@@ -920,7 +914,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
             reason: SessionCloseReason::Exit,
         })
         .await?;
-        self.inner.sessions.lock().unwrap().shift_remove(session_id);
+        self.inner.sessions.lock().shift_remove(session_id);
         handle.dispose().map_err(shared_error)?;
         self.inner.did_archive.fire(&SessionArchivedEvent {
             session_id: session_id.into(),
@@ -943,10 +937,10 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
 
     async fn delete_archived(&self, session_id: &str) -> Result<bool, SessionLifecycleError> {
         {
-            let mut deleting = self.inner.deleting.lock().unwrap();
+            let mut deleting = self.inner.deleting.lock();
             if deleting.contains(session_id)
-                || self.inner.resuming.lock().unwrap().contains_key(session_id)
-                || self.inner.sessions.lock().unwrap().contains_key(session_id)
+                || self.inner.resuming.lock().contains_key(session_id)
+                || self.inner.sessions.lock().contains_key(session_id)
             {
                 return Err(Arc::new(Error2::new(
                     SESSION_BUSY,
@@ -1008,7 +1002,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
         options: ForkSessionOptions,
     ) -> Result<SessionScopeHandle, SessionLifecycleError> {
         let source_id = options.source_session_id;
-        let source_handle = { self.inner.sessions.lock().unwrap().get(&source_id).cloned() };
+        let source_handle = { self.inner.sessions.lock().get(&source_id).cloned() };
         let index_summary = self
             .inner
             .index
@@ -1063,7 +1057,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
             };
             let id = options.new_session_id.unwrap_or_else(create_session_id);
             target_id = Some(id.clone());
-            let live_exists = self.inner.sessions.lock().unwrap().contains_key(&id);
+            let live_exists = self.inner.sessions.lock().contains_key(&id);
             if live_exists
                 || self
                     .inner
@@ -1094,8 +1088,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
                     mcp_servers: None,
                     workspace_id: None,
                 })
-                .await?
-                .expect("materialize always returns a handle");
+                .await?;
             target = Some(handle.clone());
             let target_context = handle.get(SESSION_CONTEXT_ID).map_err(shared_error)?;
             let target_metadata = handle.get(SESSION_METADATA_ID).map_err(shared_error)?;
@@ -1180,7 +1173,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
         .await;
         if let Err(error) = result {
             if let Some(id) = target_id {
-                self.inner.sessions.lock().unwrap().shift_remove(&id);
+                self.inner.sessions.lock().shift_remove(&id);
             }
             if let Some(handle) = target {
                 let _ = handle.dispose();

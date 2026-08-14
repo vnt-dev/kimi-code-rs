@@ -2,7 +2,8 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/flag/flagRegistryService.ts`.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 
@@ -49,7 +50,7 @@ impl FlagRegistryService {
 
     // Original: FlagRegistryService.add().
     fn add(&self, definition: FlagDefinitionInput) -> Result<(), FlagRegistryError> {
-        let mut by_id = self.by_id.lock().unwrap();
+        let mut by_id = self.by_id.lock();
         if by_id.contains_key(&definition.id) {
             return Err(FlagRegistryError::AlreadyRegistered(definition.id));
         }
@@ -68,18 +69,18 @@ impl FlagRegistry for FlagRegistryService {
         let by_id = Arc::clone(&self.by_id);
         let id = definition.id;
         Ok(self.registrations.add(to_disposable(move || {
-            by_id.lock().unwrap().shift_remove(&id);
+            by_id.lock().shift_remove(&id);
         })))
     }
 
     // Original: FlagRegistryService.get().
     fn get(&self, id: &str) -> Option<FlagDefinitionInput> {
-        self.by_id.lock().unwrap().get(id).cloned()
+        self.by_id.lock().get(id).cloned()
     }
 
     // Original: FlagRegistryService.list().
     fn list(&self) -> Vec<FlagDefinitionInput> {
-        self.by_id.lock().unwrap().values().cloned().collect()
+        self.by_id.lock().values().cloned().collect()
     }
 }
 

@@ -6,10 +6,9 @@
 //! reducers are synchronous. Blob transforms are serialized through a Tokio
 //! task chain, preserving journal order without holding model locks over await.
 
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
-};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -187,7 +186,7 @@ impl WireService {
     }
 
     pub fn restore_phase(&self) -> RestorePhase {
-        self.runtime.lock().unwrap().restore_phase
+        self.runtime.lock().restore_phase
     }
 
     // Original: getModel(). Rust returns a snapshot so the mutex guard cannot
@@ -205,7 +204,7 @@ impl WireService {
     where
         S: Send + Sync + 'static,
     {
-        let mut runtime = self.runtime.lock().unwrap();
+        let mut runtime = self.runtime.lock();
         let instance = ensure_model(&mut runtime.models, model.erased());
         let state = instance
             .state
@@ -222,7 +221,7 @@ impl WireService {
             return Ok(());
         }
         {
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             if runtime.dispatching {
                 runtime.queue.extend(ops);
                 return Ok(());
@@ -231,7 +230,7 @@ impl WireService {
         }
 
         let result = self.drain(ops);
-        let mut runtime = self.runtime.lock().unwrap();
+        let mut runtime = self.runtime.lock();
         runtime.queue.clear();
         runtime.dispatching = false;
         runtime.drain_depth = 0;
@@ -241,7 +240,7 @@ impl WireService {
     fn drain(&self, mut group: Vec<Op>) -> Result<(), WireServiceError> {
         loop {
             self.execute_group(group, false)?;
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             if runtime.queue.is_empty() {
                 return Ok(());
             }
@@ -262,7 +261,7 @@ impl WireService {
         for op in group {
             let model = op.descriptor.model();
             let (event, record) = {
-                let mut runtime = self.runtime.lock().unwrap();
+                let mut runtime = self.runtime.lock();
                 let instance = ensure_model(&mut runtime.models, Arc::clone(&model));
                 op.descriptor
                     .validate(instance.state.as_ref(), op.payload())?;
@@ -311,7 +310,7 @@ impl WireService {
 
     pub async fn restore(&self) -> Result<(), WireServiceError> {
         {
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             if runtime.restore_phase != RestorePhase::New {
                 let message = format!(
                     "Agent wire restore called while phase is {:?}",
@@ -323,7 +322,7 @@ impl WireService {
         }
         let mut result = self.restore_inner().await;
         if result.is_ok() {
-            self.runtime.lock().unwrap().restore_phase = RestorePhase::Ready;
+            self.runtime.lock().restore_phase = RestorePhase::Ready;
             let mut context = ();
             result = self
                 .hooks
@@ -333,7 +332,7 @@ impl WireService {
                 .map_err(|error| WireServiceError::RestoreHook(error.to_string()));
         }
         if result.is_err() {
-            self.runtime.lock().unwrap().restore_phase = RestorePhase::Failed;
+            self.runtime.lock().restore_phase = RestorePhase::Failed;
         }
         result
     }
@@ -353,7 +352,12 @@ impl WireService {
                 index += 1;
                 continue;
             }
-            let source_record = candidate.as_object().cloned().expect("validated object");
+            let source_record = candidate.as_object().cloned().ok_or_else(|| {
+                WireServiceError::Storage(StorageError::new(
+                    STORAGE_CORRUPTED,
+                    "Agent wire record is not an object",
+                ))
+            })?;
             if !has_records {
                 has_records = true;
                 if source_record.get("type").and_then(Value::as_str) != Some("metadata") {
@@ -368,7 +372,12 @@ impl WireService {
                 } else {
                     let version = source_record["protocol_version"]
                         .as_str()
-                        .expect("validated metadata version");
+                        .ok_or_else(|| {
+                            WireServiceError::Storage(StorageError::new(
+                                STORAGE_CORRUPTED,
+                                "Agent wire metadata is missing a protocol version",
+                            ))
+                        })?;
                     if is_newer_wire_version(version) {
                         newer_version = true;
                     } else {
@@ -409,7 +418,12 @@ impl WireService {
         let op_type = record
             .get("type")
             .and_then(Value::as_str)
-            .expect("wire record type was validated");
+            .ok_or_else(|| {
+                WireServiceError::Storage(StorageError::new(
+                    STORAGE_CORRUPTED,
+                    "Agent wire record is missing a type",
+                ))
+            })?;
         let Some(descriptor) = registered_op(op_type) else {
             report_skipped_record(Some(op_type), index, false);
             return Ok(());
@@ -426,7 +440,7 @@ impl WireService {
     }
 
     fn append_to_journal(&self, record: WireRecord, model: Arc<dyn ErasedModelDef>) {
-        let mut tail = self.persist_tail.lock().unwrap();
+        let mut tail = self.persist_tail.lock();
         if !model.has_blob_codec() && tail.is_none() {
             self.append_record(record);
             return;
@@ -459,7 +473,7 @@ impl WireService {
 
     async fn rehydrate_models(&self) -> Result<(), WireServiceError> {
         let pending = {
-            let mut runtime = self.runtime.lock().unwrap();
+            let mut runtime = self.runtime.lock();
             runtime
                 .models
                 .values_mut()
@@ -483,7 +497,6 @@ impl WireService {
                 .map_err(WireServiceError::Transform)?;
             self.runtime
                 .lock()
-                .unwrap()
                 .models
                 .get_mut(&id)
                 .expect("rehydrated model remains registered")
@@ -493,7 +506,7 @@ impl WireService {
     }
 
     pub async fn flush(&self) -> Result<(), WireServiceError> {
-        let tail = self.persist_tail.lock().unwrap().take();
+        let tail = self.persist_tail.lock().take();
         if let Some(tail) = tail {
             tail.await
                 .map_err(|error| WireServiceError::PersistenceTask(error.to_string()))?;
@@ -669,12 +682,12 @@ mod tests {
     #[async_trait]
     impl AppendLogStoreService for MemoryLog {
         fn append_value(&self, _: &str, _: &str, record: Value, _: AppendLogOptions) {
-            self.records.lock().unwrap().push(record);
+            self.records.lock().push(record);
         }
 
         fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
             Box::pin(stream::iter(
-                self.records.lock().unwrap().clone().into_iter().map(Ok),
+                self.records.lock().clone().into_iter().map(Ok),
             ))
         }
 
@@ -684,7 +697,7 @@ mod tests {
             _: &str,
             records: Vec<Value>,
         ) -> Result<(), AppendLogError> {
-            *self.records.lock().unwrap() = records;
+            *self.records.lock() = records;
             Ok(())
         }
 
@@ -747,7 +760,7 @@ mod tests {
 
     impl DomainEventPublisher for Events {
         fn publish(&self, event: Value) {
-            self.0.lock().unwrap().push(event);
+            self.0.lock().push(event);
         }
     }
 
@@ -874,7 +887,7 @@ mod tests {
         let wire = service(Arc::clone(&log));
         wire.seal().await.unwrap();
         wire.seal().await.unwrap();
-        let records = log.records.lock().unwrap();
+        let records = log.records.lock();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0]["type"], "metadata");
     }

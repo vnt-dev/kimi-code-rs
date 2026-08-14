@@ -70,7 +70,7 @@ fn stringify_properties(properties: &TelemetryProperties, pretty: bool) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use indexmap::IndexMap;
     use serde_json::json;
@@ -82,7 +82,7 @@ mod tests {
         let messages = Arc::new(Mutex::new(Vec::new()));
         let output = Arc::clone(&messages);
         let appender = ConsoleAppender::new(ConsoleAppenderOptions {
-            log: Arc::new(move |message| output.lock().unwrap().push(message.to_owned())),
+            log: Arc::new(move |message| output.lock().push(message.to_owned())),
             ..ConsoleAppenderOptions::default()
         });
         appender.track("turn_started", None);
@@ -95,7 +95,7 @@ mod tests {
             ])),
         );
         assert_eq!(
-            *messages.lock().unwrap(),
+            *messages.lock(),
             [
                 "[telemetry] turn_started",
                 "[telemetry] turn_ended {\"duration_ms\":12,\"error\":null}",
@@ -110,14 +110,14 @@ mod tests {
         let appender = ConsoleAppender::new(ConsoleAppenderOptions {
             prefix: "[metrics]".into(),
             pretty: true,
-            log: Arc::new(move |message| output.lock().unwrap().push(message.to_owned())),
+            log: Arc::new(move |message| output.lock().push(message.to_owned())),
         });
         appender.track(
             "event",
             Some(&IndexMap::from([("enabled".into(), Some(json!(true)))])),
         );
         assert_eq!(
-            messages.lock().unwrap()[0],
+            messages.lock()[0],
             "[metrics] event {\n  \"enabled\": true\n}"
         );
     }

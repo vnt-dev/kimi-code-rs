@@ -97,10 +97,9 @@ fn rewrite_thinking_effort(document: &mut Map<String, Value>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::PathBuf,
-        sync::{Arc, Mutex},
-    };
+    use std::path::PathBuf;
+    use std::sync::{Arc};
+    use parking_lot::Mutex;
 
     use async_trait::async_trait;
 
@@ -125,10 +124,10 @@ mod tests {
     #[async_trait]
     impl AtomicDocumentStoreService for StubStore {
         async fn get_value(&self, _scope: &str, _key: &str) -> Result<Option<Value>, StorageError> {
-            if *self.fail_reads.lock().unwrap() {
+            if *self.fail_reads.lock() {
                 Err(StorageError::new(STORAGE_IO_FAILED, "unreadable"))
             } else {
-                Ok(self.value.lock().unwrap().clone())
+                Ok(self.value.lock().clone())
             }
         }
 
@@ -138,7 +137,7 @@ mod tests {
             _key: &str,
             value: Value,
         ) -> Result<(), StorageError> {
-            *self.value.lock().unwrap() = Some(value);
+            *self.value.lock() = Some(value);
             Ok(())
         }
 
@@ -180,7 +179,7 @@ mod tests {
         let home = temp_home();
         migrate_thinking_effort_max_to_high(&handle, "config.toml", &home).await;
         assert_eq!(
-            backend.value.lock().unwrap().as_ref().unwrap()["thinking"]["effort"],
+            backend.value.lock().as_ref().unwrap()["thinking"]["effort"],
             "high"
         );
         assert!(
@@ -189,11 +188,11 @@ mod tests {
                 .contains_key(THINKING_EFFORT_MAX_TO_HIGH)
         );
 
-        backend.value.lock().unwrap().as_mut().unwrap()["thinking"]["effort"] =
+        backend.value.lock().as_mut().unwrap()["thinking"]["effort"] =
             Value::String("max".into());
         migrate_thinking_effort_max_to_high(&handle, "config.toml", &home).await;
         assert_eq!(
-            backend.value.lock().unwrap().as_ref().unwrap()["thinking"]["effort"],
+            backend.value.lock().as_ref().unwrap()["thinking"]["effort"],
             "max"
         );
         std::fs::remove_dir_all(home).unwrap();
@@ -210,10 +209,10 @@ mod tests {
         migrate_thinking_effort_max_to_high(&handle, "config.toml", &home).await;
         assert!(!home.join(MIGRATIONS_FILE).exists());
 
-        *backend.fail_reads.lock().unwrap() = false;
+        *backend.fail_reads.lock() = false;
         migrate_thinking_effort_max_to_high(&handle, "config.toml", &home).await;
         assert_eq!(
-            backend.value.lock().unwrap().as_ref().unwrap()["thinking"]["effort"],
+            backend.value.lock().as_ref().unwrap()["thinking"]["effort"],
             "high"
         );
         std::fs::remove_dir_all(home).unwrap();

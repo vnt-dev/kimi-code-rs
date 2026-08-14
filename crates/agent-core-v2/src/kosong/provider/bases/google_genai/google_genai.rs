@@ -1149,10 +1149,8 @@ impl ChatProvider for GoogleGenAiChatProvider {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::kosong::contract::message::{ToolCall, ToolCallType};
@@ -1332,7 +1330,7 @@ mod tests {
         let factory_received = Arc::clone(&received);
         let mut factory_options = GoogleGenAiOptions::new("gemini-2.5-pro");
         factory_options.client_factory = Some(Arc::new(move |auth| {
-            factory_received.lock().unwrap().push(auth);
+            factory_received.lock().push(auth);
             Ok(Arc::new(StubGoogleGenAiClient))
         }));
         let factory_provider = GoogleGenAiChatProvider::new(factory_options);
@@ -1343,7 +1341,7 @@ mod tests {
         };
         factory_provider.create_client(Some(&auth)).await.unwrap();
         assert_eq!(
-            *received.lock().unwrap(),
+            *received.lock(),
             vec![ProviderRequestAuth::default(), auth.clone()]
         );
 

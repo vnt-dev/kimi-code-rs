@@ -2,10 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/event/eventBusService.ts`.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use crate::_base::{
     di::{
@@ -79,7 +78,7 @@ impl ReplayDelivery {
     }
 
     fn accept(&self, event: &SequencedDomainEvent) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if event.seq <= state.replay_watermark {
             return;
         }
@@ -102,7 +101,7 @@ impl ReplayDelivery {
 
         loop {
             let queued = {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock();
                 state.replay_watermark = watermark;
                 if state.queued.is_empty() {
                     state.replaying = false;
@@ -262,18 +261,17 @@ fn event_prompt_id(event: &DomainEvent) -> Option<&str> {
 
 impl EventBusContract for EventBusService {
     fn publish(&self, event: DomainEvent) {
-        let (published, cleanup) = self.replay.lock().unwrap().record(event);
+        let (published, cleanup) = self.replay.lock().record(event);
         self.all.fire(&published);
         let typed = self
             .per_type
             .lock()
-            .unwrap()
             .get(&published.event.event_type)
             .cloned();
         if let Some(typed) = typed {
             typed.fire(&published.event);
         }
-        self.replay.lock().unwrap().cleanup(cleanup);
+        self.replay.lock().cleanup(cleanup);
     }
 
     fn subscribe(&self, handler: DomainEventHandler) -> DisposableHandle {
@@ -285,7 +283,7 @@ impl EventBusContract for EventBusService {
     fn subscribe_with_replay(&self, handler: DomainEventHandler) -> DisposableHandle {
         let delivery = Arc::new(ReplayDelivery::new(handler));
         let (subscription, events) = {
-            let replay = self.replay.lock().unwrap();
+            let replay = self.replay.lock();
             let delivery_for_live = Arc::clone(&delivery);
             let subscription = self
                 .all
@@ -301,7 +299,6 @@ impl EventBusContract for EventBusService {
         let emitter = self
             .per_type
             .lock()
-            .unwrap()
             .entry(event_type.into())
             .or_insert_with(|| Arc::new(Emitter::new()))
             .clone();
@@ -312,7 +309,7 @@ impl EventBusContract for EventBusService {
 impl Disposable for EventBusService {
     fn dispose(&self) -> DisposeResult {
         self.all.dispose()?;
-        let emitters = std::mem::take(&mut *self.per_type.lock().unwrap());
+        let emitters = std::mem::take(&mut *self.per_type.lock());
         for emitter in emitters.into_values() {
             emitter.dispose()?;
         }
@@ -362,7 +359,6 @@ mod tests {
         let _all = bus.subscribe(Arc::new(move |event| {
             all_seen
                 .lock()
-                .unwrap()
                 .push(format!("all:{}", event.event_type));
         }));
         let typed_seen = Arc::clone(&seen);
@@ -371,7 +367,6 @@ mod tests {
             Arc::new(move |event| {
                 typed_seen
                     .lock()
-                    .unwrap()
                     .push(format!("typed:{}", event.fields["x"]));
             }),
         );
@@ -386,7 +381,7 @@ mod tests {
             Map::from_iter([("x".into(), Value::from(2))]),
         ));
         assert_eq!(
-            *seen.lock().unwrap(),
+            *seen.lock(),
             ["all:test.a", "typed:1", "all:test.b", "all:test.a"]
         );
     }
@@ -415,7 +410,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_by_handler = Arc::clone(&seen);
         let _subscription = bus.subscribe_typed::<TestTypedEvent>(Arc::new(move |event| {
-            seen_by_handler.lock().unwrap().push(event.x);
+            seen_by_handler.lock().push(event.x);
         }));
 
         bus.publish_typed(TestTypedEvent { x: 1 });
@@ -424,7 +419,7 @@ mod tests {
             Map::from_iter([("x".into(), Value::from(2))]),
         ));
 
-        assert_eq!(*seen.lock().unwrap(), [1, 2]);
+        assert_eq!(*seen.lock(), [1, 2]);
     }
 
     fn turn_event(event_type: &str, turn_id: crate::agent::TurnId) -> DomainEvent {
@@ -453,17 +448,17 @@ mod tests {
         let ordinary = Arc::new(Mutex::new(Vec::new()));
         let ordinary_sink = Arc::clone(&ordinary);
         let _ordinary = bus.subscribe(Arc::new(move |event| {
-            ordinary_sink.lock().unwrap().push(event.event_type.clone());
+            ordinary_sink.lock().push(event.event_type.clone());
         }));
         let replayed = Arc::new(Mutex::new(Vec::new()));
         let replayed_sink = Arc::clone(&replayed);
         let _replay = bus.subscribe_with_replay(Arc::new(move |event| {
-            replayed_sink.lock().unwrap().push(event.event_type.clone());
+            replayed_sink.lock().push(event.event_type.clone());
         }));
 
-        assert!(ordinary.lock().unwrap().is_empty());
+        assert!(ordinary.lock().is_empty());
         assert_eq!(
-            *replayed.lock().unwrap(),
+            *replayed.lock(),
             ["prompt.submitted", "turn.started", "assistant.delta"]
         );
 
@@ -471,9 +466,9 @@ mod tests {
             "turn.step.started",
             crate::agent::TurnId::new(1),
         ));
-        assert_eq!(*ordinary.lock().unwrap(), ["turn.step.started"]);
+        assert_eq!(*ordinary.lock(), ["turn.step.started"]);
         assert_eq!(
-            *replayed.lock().unwrap(),
+            *replayed.lock(),
             [
                 "prompt.submitted",
                 "turn.started",
@@ -488,10 +483,9 @@ mod tests {
         let _after_end = bus.subscribe_with_replay(Arc::new(move |event| {
             after_end_sink
                 .lock()
-                .unwrap()
                 .push(event.event_type.clone());
         }));
-        assert!(after_end.lock().unwrap().is_empty());
+        assert!(after_end.lock().is_empty());
 
         bus.publish(turn_event("turn.started", crate::agent::TurnId::new(2)));
         let next_turn = Arc::new(Mutex::new(Vec::new()));
@@ -499,10 +493,9 @@ mod tests {
         let _next_turn = bus.subscribe_with_replay(Arc::new(move |event| {
             next_turn_sink
                 .lock()
-                .unwrap()
                 .push(event.event_type.clone());
         }));
-        assert_eq!(*next_turn.lock().unwrap(), ["turn.started"]);
+        assert_eq!(*next_turn.lock(), ["turn.started"]);
     }
 
     #[test]
@@ -513,9 +506,9 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&seen);
         let _subscription = bus.subscribe_with_replay(Arc::new(move |event| {
-            sink.lock().unwrap().push(event.event_type.clone());
+            sink.lock().push(event.event_type.clone());
         }));
-        assert!(seen.lock().unwrap().is_empty());
+        assert!(seen.lock().is_empty());
     }
 
     #[test]
@@ -533,10 +526,10 @@ mod tests {
         let before_match = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&before_match);
         let _subscription = bus.subscribe_with_replay(Arc::new(move |event| {
-            sink.lock().unwrap().push(event.event_type.clone());
+            sink.lock().push(event.event_type.clone());
         }));
         assert_eq!(
-            *before_match.lock().unwrap(),
+            *before_match.lock(),
             ["prompt.submitted", "prompt.aborted"]
         );
 
@@ -547,9 +540,9 @@ mod tests {
         let after_match = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&after_match);
         let _subscription = bus.subscribe_with_replay(Arc::new(move |event| {
-            sink.lock().unwrap().push(event.event_type.clone());
+            sink.lock().push(event.event_type.clone());
         }));
-        assert!(after_match.lock().unwrap().is_empty());
+        assert!(after_match.lock().is_empty());
     }
 
     #[test]
@@ -567,7 +560,7 @@ mod tests {
         let published = Arc::new(AtomicBool::new(false));
         let published_for_handler = Arc::clone(&published);
         let _subscription = bus.subscribe_with_replay(Arc::new(move |event| {
-            sink.lock().unwrap().push(event.event_type.clone());
+            sink.lock().push(event.event_type.clone());
             if event.event_type == "turn.started"
                 && !published_for_handler.swap(true, std::sync::atomic::Ordering::AcqRel)
             {
@@ -579,7 +572,7 @@ mod tests {
         }));
 
         assert_eq!(
-            *seen.lock().unwrap(),
+            *seen.lock(),
             ["turn.started", "assistant.delta", "thinking.delta"]
         );
     }
@@ -609,13 +602,12 @@ mod tests {
         let _subscription = bus.subscribe_with_replay(Arc::new(move |event| {
             if event.event_type == "assistant.delta" {
                 sink.lock()
-                    .unwrap()
                     .push(event.fields["index"].as_u64().unwrap());
             }
         }));
         publisher.join().unwrap();
 
-        let mut values = seen.lock().unwrap().clone();
+        let mut values = seen.lock().clone();
         values.sort_unstable();
         assert_eq!(values, (0..100).collect::<Vec<_>>());
     }

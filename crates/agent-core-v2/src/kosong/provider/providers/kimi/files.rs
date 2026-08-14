@@ -318,7 +318,7 @@ fn boxed(error: ChatProviderError) -> ProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     struct CapturingClient {
         files: Arc<Mutex<Vec<KimiUploadFile>>>,
@@ -331,7 +331,7 @@ mod tests {
             file: KimiUploadFile,
             _signal: Option<&CancellationToken>,
         ) -> Result<String, ProviderError> {
-            self.files.lock().unwrap().push(file);
+            self.files.lock().push(file);
             Ok("file_abc123".to_owned())
         }
     }
@@ -348,7 +348,7 @@ mod tests {
                 let auths = Arc::clone(&auths);
                 let captured = Arc::clone(&captured);
                 Arc::new(move |auth| {
-                    auths.lock().unwrap().push(auth);
+                    auths.lock().push(auth);
                     Arc::new(CapturingClient {
                         files: Arc::clone(&captured),
                     })
@@ -373,10 +373,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            auths.lock().unwrap()[0].api_key.as_deref(),
+            auths.lock()[0].api_key.as_deref(),
             Some("request-token")
         );
-        assert_eq!(captured.lock().unwrap()[0].filename, "upload.mp4");
+        assert_eq!(captured.lock()[0].filename, "upload.mp4");
         assert_eq!(
             part,
             ContentPart::VideoUrl {

@@ -6,8 +6,9 @@
 use std::{
     collections::HashSet,
     path::PathBuf,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
@@ -167,7 +168,6 @@ impl AgentProfileService {
     fn active_tool_names(&self) -> Option<Vec<String>> {
         self.state
             .lock()
-            .unwrap()
             .active_tool_names_overlay
             .clone()
             .or_else(|| self.wire.get_model(&ACTIVE_TOOLS_MODEL))
@@ -313,7 +313,7 @@ impl AgentProfileService {
     }
 
     fn after_config_dispatch(&self, changed: &ProfileUpdateData) {
-        let options = self.state.lock().unwrap().options.clone();
+        let options = self.state.lock().options.clone();
         if let (Some(cwd), Some(chdir)) = (&changed.cwd, options.chdir) {
             let future = chdir(cwd.clone());
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
@@ -397,7 +397,6 @@ impl AgentProfileService {
         if !self
             .state
             .lock()
-            .unwrap()
             .emitted_thinking_effort_warnings
             .insert(key)
         {
@@ -413,7 +412,7 @@ impl AgentProfileService {
     }
 
     fn set_active_tools(&self, names: Option<Vec<String>>) -> Result<(), ProfileServiceError> {
-        self.state.lock().unwrap().active_tool_names_overlay = None;
+        self.state.lock().active_tool_names_overlay = None;
         let op = match names {
             Some(names) => set_active_tools(names)?,
             None => reset_active_tools()?,
@@ -426,7 +425,6 @@ impl AgentProfileService {
         if let Some(custom) = self
             .state
             .lock()
-            .unwrap()
             .options
             .emit_status_updated
             .clone()
@@ -528,7 +526,6 @@ impl AgentProfileService {
     fn read_configured_cwd(&self) -> Option<String> {
         self.state
             .lock()
-            .unwrap()
             .options
             .cwd
             .as_ref()
@@ -540,7 +537,7 @@ impl AgentProfileService {
 
     fn cache_and_publish_agents_md_warning(&self, context: &AgentProfileContext) {
         let warning = context.agents_md_warning.clone();
-        self.state.lock().unwrap().agents_md_warning = warning.clone();
+        self.state.lock().agents_md_warning = warning.clone();
         if let Some(message) = warning {
             self.event_bus.publish(DomainEvent::new(
                 "warning",
@@ -622,7 +619,6 @@ impl AgentProfileService {
                 if !self
                     .state
                     .lock()
-                    .unwrap()
                     .emitted_tool_pattern_warnings
                     .insert(key)
                 {
@@ -648,7 +644,7 @@ impl AgentProfileService {
 #[async_trait]
 impl AgentProfileServiceContract for AgentProfileService {
     fn configure(&self, options: ProfileServiceOptions) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if options.cwd.is_some() {
             state.options.cwd = options.cwd;
         }
@@ -662,7 +658,7 @@ impl AgentProfileServiceContract for AgentProfileService {
 
     fn update(&self, changed: ProfileUpdateData) -> Result<(), ProfileServiceError> {
         if changed.profile_name.as_ref() != self.profile_name().as_ref() {
-            self.state.lock().unwrap().active_profile = None;
+            self.state.lock().active_profile = None;
         }
         let has_config = changed.cwd.is_some()
             || changed.model_alias.is_some()
@@ -686,7 +682,7 @@ impl AgentProfileServiceContract for AgentProfileService {
         snapshot: ProfileBindingSnapshot,
     ) -> Result<(), ProfileServiceError> {
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.active_profile = None;
             state.active_tool_names_overlay = None;
         }
@@ -795,7 +791,7 @@ impl AgentProfileServiceContract for AgentProfileService {
         let thinking = self.resolve_thinking_effort(requested, Some(&model));
         let system_prompt = profile.render_system_prompt(&context);
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.active_profile = Some(Arc::clone(&profile));
             state.active_tool_names_overlay = None;
         }
@@ -898,7 +894,7 @@ impl AgentProfileServiceContract for AgentProfileService {
         profile: ResolvedAgentProfile,
         context: SystemPromptContext,
     ) -> Result<(), ProfileServiceError> {
-        self.state.lock().unwrap().active_profile = Some(Arc::new(profile.clone()));
+        self.state.lock().active_profile = Some(Arc::new(profile.clone()));
         self.update(ProfileUpdateData {
             profile_name: Some(profile.name.clone()),
             system_prompt: Some(profile.render_system_prompt(&context)),
@@ -918,14 +914,14 @@ impl AgentProfileServiceContract for AgentProfileService {
             .await?;
         self.use_profile(profile, context.clone())?;
         self.cache_and_publish_agents_md_warning(&context);
-        let active = self.state.lock().unwrap().active_profile.clone();
+        let active = self.state.lock().active_profile.clone();
         self.publish_tool_pattern_warnings(active.as_deref());
         Ok(())
     }
 
     async fn refresh_system_prompt(&self) {
         let profile = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             state.active_profile.clone()
         }
         .or_else(|| self.profile_name().and_then(|name| self.catalog.get(&name)));
@@ -942,7 +938,7 @@ impl AgentProfileServiceContract for AgentProfileService {
                     system_prompt: Some(profile.render_system_prompt(&context)),
                     ..ProfileUpdateData::default()
                 });
-                self.state.lock().unwrap().active_profile = Some(profile);
+                self.state.lock().active_profile = Some(profile);
                 self.cache_and_publish_agents_md_warning(&context);
             }
             Err(error) => self.event_bus.publish(DomainEvent::new(
@@ -962,7 +958,7 @@ impl AgentProfileServiceContract for AgentProfileService {
     }
 
     fn get_agents_md_warning(&self) -> Option<String> {
-        self.state.lock().unwrap().agents_md_warning.clone()
+        self.state.lock().agents_md_warning.clone()
     }
 
     fn data(&self) -> Result<ProfileData, ProfileServiceError> {
@@ -1083,7 +1079,7 @@ impl AgentProfileServiceContract for AgentProfileService {
         };
         if !names.contains(&name) {
             names.push(name);
-            self.state.lock().unwrap().active_tool_names_overlay = Some(names);
+            self.state.lock().active_tool_names_overlay = Some(names);
         }
     }
 
@@ -1094,7 +1090,7 @@ impl AgentProfileServiceContract for AgentProfileService {
         let previous = names.len();
         names.retain(|candidate| candidate != name);
         if names.len() != previous {
-            self.state.lock().unwrap().active_tool_names_overlay = Some(names);
+            self.state.lock().active_tool_names_overlay = Some(names);
         }
     }
 }

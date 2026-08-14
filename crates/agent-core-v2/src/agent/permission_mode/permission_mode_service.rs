@@ -178,10 +178,8 @@ pub fn register_agent_permission_mode_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use async_trait::async_trait;
     use futures_util::stream;
@@ -255,7 +253,7 @@ mod tests {
     impl AgentContextInjectorServiceContract for Injector {
         fn register(&self, name: String, provider: ContextInjectionProvider) -> DisposableHandle {
             assert_eq!(name, "permission_mode");
-            *self.provider.lock().unwrap() = Some(provider);
+            *self.provider.lock() = Some(provider);
             to_disposable(|| {})
         }
 
@@ -292,11 +290,11 @@ mod tests {
     #[tokio::test]
     async fn explicit_initial_mode_persists_once_and_changes_emit_only_on_difference() {
         let (wire, log, injector, service) = setup();
-        assert!(injector.provider.lock().unwrap().is_some());
+        assert!(injector.provider.lock().is_some());
         let changes = Arc::new(Mutex::new(Vec::new()));
         let changes_for_listener = Arc::clone(&changes);
         let _subscription = service.on_did_change_mode().subscribe(move |change| {
-            changes_for_listener.lock().unwrap().push(*change);
+            changes_for_listener.lock().push(*change);
         });
 
         assert_eq!(service.mode(), PermissionMode::Manual);
@@ -307,7 +305,7 @@ mod tests {
         service.set_mode(PermissionMode::Auto).unwrap();
         assert_eq!(service.mode(), PermissionMode::Auto);
         assert_eq!(
-            *changes.lock().unwrap(),
+            *changes.lock(),
             [PermissionModeChangedContext {
                 mode: PermissionMode::Auto,
                 previous_mode: PermissionMode::Manual,

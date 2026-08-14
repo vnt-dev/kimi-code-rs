@@ -1,7 +1,8 @@
-use std::{
-    error::Error,
-    sync::{Arc, Mutex, RwLock},
-};
+use parking_lot::RwLock;
+use std::error::Error;
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use tokio::{sync::OnceCell, task::JoinHandle};
@@ -138,7 +139,6 @@ impl ExternalHooksRunnerService {
     pub fn summary(&self) -> std::collections::HashMap<String, usize> {
         self.by_event
             .read()
-            .unwrap()
             .iter()
             .map(|(event, hooks)| (event.clone(), hooks.len()))
             .collect()
@@ -149,7 +149,7 @@ impl ExternalHooksRunnerService {
             return;
         };
         let service = Arc::clone(self);
-        self.tasks.lock().unwrap().push(runtime.spawn(async move {
+        self.tasks.lock().push(runtime.spawn(async move {
             service.ready().await;
         }));
     }
@@ -159,7 +159,7 @@ impl ExternalHooksRunnerService {
             return;
         };
         let service = Arc::clone(self);
-        self.tasks.lock().unwrap().push(runtime.spawn(async move {
+        self.tasks.lock().push(runtime.spawn(async move {
             service.load_safe().await;
         }));
     }
@@ -175,7 +175,7 @@ impl ExternalHooksRunnerService {
     // Original: ExternalHooksRunnerService.loadSafe()/reloadSafe().
     async fn load_safe(&self) {
         if let Ok(hooks) = self.source.load().await {
-            *self.by_event.write().unwrap() = index_hooks(&hooks);
+            *self.by_event.write() = index_hooks(&hooks);
         }
     }
 }
@@ -193,7 +193,7 @@ impl ExternalHooksRunnerServiceContract for ExternalHooksRunnerService {
         if args.cwd.is_none() {
             args.cwd = Some(self.cwd.clone());
         }
-        let by_event = self.by_event.read().unwrap().clone();
+        let by_event = self.by_event.read().clone();
         run_matched_hooks(
             self.host_process.as_ref(),
             &by_event,
@@ -227,7 +227,7 @@ impl ExternalHooksRunnerServiceContract for ExternalHooksRunnerService {
 impl Disposable for ExternalHooksRunnerService {
     fn dispose(&self) -> DisposeResult {
         let subscription_result = self.disposables.dispose();
-        for task in self.tasks.lock().unwrap().drain(..) {
+        for task in self.tasks.lock().drain(..) {
             task.abort();
         }
         subscription_result
@@ -291,7 +291,7 @@ mod tests {
         }
 
         fn reload(&self, hooks: Vec<HookDef>, fail: bool) {
-            *self.hooks.lock().unwrap() = hooks;
+            *self.hooks.lock() = hooks;
             self.fail.store(fail, Ordering::SeqCst);
             self.reloaded.fire(&ReloadSummary::default());
         }
@@ -304,7 +304,7 @@ mod tests {
             if self.fail.load(Ordering::SeqCst) {
                 return Err("load failed".into());
             }
-            Ok(self.hooks.lock().unwrap().clone())
+            Ok(self.hooks.lock().clone())
         }
 
         fn on_did_reload(&self) -> Event<ReloadSummary> {

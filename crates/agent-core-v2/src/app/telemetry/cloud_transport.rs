@@ -688,7 +688,8 @@ pub(crate) fn cloud_properties_to_json_value(properties: &CloudProperties) -> Va
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, sync::Mutex};
+    use std::collections::VecDeque;
+    use parking_lot::Mutex;
 
     use serde_json::json;
 
@@ -723,7 +724,7 @@ mod tests {
         }
 
         fn push_status(&self, status: u16) {
-            self.responses.lock().unwrap().push_back(Ok(status));
+            self.responses.lock().push_back(Ok(status));
         }
     }
 
@@ -737,13 +738,12 @@ mod tests {
             _timeout: Duration,
             _signal: Option<&AbortSignal>,
         ) -> Result<u16, CloudHttpError> {
-            self.requests.lock().unwrap().push(CapturedRequest {
+            self.requests.lock().push(CapturedRequest {
                 headers: headers.clone(),
                 body: body.into(),
             });
             self.responses
                 .lock()
-                .unwrap()
                 .pop_front()
                 .unwrap_or(Ok(200))
         }
@@ -837,7 +837,7 @@ mod tests {
         let (transport, storage) = transport(Arc::clone(&http));
 
         transport.send(&[event("evt")], None).await.unwrap();
-        assert_eq!(http.requests.lock().unwrap().len(), 4);
+        assert_eq!(http.requests.lock().len(), 4);
         let keys = storage
             .list(TELEMETRY_SCOPE, Some(FAILED_PREFIX))
             .await
@@ -860,7 +860,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let replay = http.requests.lock().unwrap().last().unwrap().clone();
+        let replay = http.requests.lock().last().unwrap().clone();
         assert!(replay.body.contains("kfc_evt"));
     }
 
@@ -877,7 +877,7 @@ mod tests {
 
         transport.send(&[event("evt")], None).await.unwrap();
         {
-            let requests = http.requests.lock().unwrap();
+            let requests = http.requests.lock();
             assert_eq!(requests[0].headers["Authorization"], "Bearer token");
             assert!(!requests[1].headers.contains_key("Authorization"));
         }

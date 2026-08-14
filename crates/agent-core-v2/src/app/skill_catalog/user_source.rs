@@ -172,11 +172,9 @@ mod tests {
     use std::{
         collections::HashMap,
         path::PathBuf,
-        sync::{
-            Mutex,
-            atomic::{AtomicU64, Ordering},
-        },
     };
+    use std::sync::{atomic::{AtomicU64, Ordering}};
+    use parking_lot::Mutex;
 
     use serde_json::{Map, Value};
 
@@ -268,7 +266,7 @@ mod tests {
     #[async_trait]
     impl SkillDiscoveryContract for RecordingDiscovery {
         async fn discover(&self, roots: &[SkillRoot]) -> SkillDiscoveryResult {
-            *self.roots.lock().unwrap() = roots.to_vec();
+            *self.roots.lock() = roots.to_vec();
             SkillDiscoveryResult {
                 scanned_roots: roots.iter().map(|root| root.path.clone()).collect(),
                 ..SkillDiscoveryResult::default()

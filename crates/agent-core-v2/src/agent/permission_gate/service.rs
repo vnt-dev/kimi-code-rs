@@ -616,7 +616,7 @@ mod tests {
     use async_trait::async_trait;
     use futures_util::{FutureExt, StreamExt, stream};
     use serde_json::json;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use crate::{
         _base::{
@@ -680,7 +680,6 @@ mod tests {
         fn session_approval_rule_patterns(&self) -> Vec<String> {
             self.records
                 .lock()
-                .unwrap()
                 .iter()
                 .filter_map(|record| record.session_approval_rule.clone())
                 .collect()
@@ -695,7 +694,7 @@ mod tests {
             &self,
             record: PermissionApprovalResultRecord,
         ) -> Result<(), crate::agent::permission_rules::PermissionRulesServiceError> {
-            self.records.lock().unwrap().push(record);
+            self.records.lock().push(record);
             Ok(())
         }
     }
@@ -744,7 +743,7 @@ mod tests {
             &self,
             request: ApprovalRequest,
         ) -> Result<ApprovalResponse, serde_json::Error> {
-            self.requests.lock().unwrap().push(request);
+            self.requests.lock().push(request);
             Ok(self.response.clone())
         }
         async fn enqueue(&self, request: ApprovalRequest) -> ApprovalRequest {
@@ -752,7 +751,7 @@ mod tests {
         }
         async fn decide(&self, _: &str, _: ApprovalResponse) {}
         async fn list_pending(&self) -> Vec<ApprovalRequest> {
-            self.requests.lock().unwrap().clone()
+            self.requests.lock().clone()
         }
     }
 
@@ -965,21 +964,21 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&events);
         let _subscription = bus.subscribe(Arc::new(move |event| {
-            captured.lock().unwrap().push(event.clone());
+            captured.lock().push(event.clone());
         }));
         let result = gate
             .authorize(&context(AbortController::new().signal()))
             .await
             .unwrap();
         assert_eq!(result, None);
-        assert_eq!(approval.requests.lock().unwrap().len(), 1);
+        assert_eq!(approval.requests.lock().len(), 1);
         assert_eq!(
-            rules.records.lock().unwrap()[0]
+            rules.records.lock()[0]
                 .session_approval_rule
                 .as_deref(),
             Some("Bash(git status)")
         );
-        let events = events.lock().unwrap();
+        let events = events.lock();
         assert_eq!(events[0].event_type, "permission.approval.requested");
         assert_eq!(events[0].fields["toolInput"]["command"], "git status");
         assert_eq!(events[1].event_type, "permission.approval.resolved");

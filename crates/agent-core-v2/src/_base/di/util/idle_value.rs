@@ -6,9 +6,10 @@
 use std::{
     fmt,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Condvar, Mutex},
     thread,
 };
+use std::sync::Arc;
+use parking_lot::{Condvar, Mutex};
 
 type Executor<T> = Box<dyn FnOnce() -> T + Send + 'static>;
 
@@ -78,8 +79,7 @@ where
     pub fn dispose(&self) {
         let (state, _) = &*self.state;
         let mut state = state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         if !state.started && !state.initialized {
             state.cancelled = true;
         }
@@ -94,12 +94,9 @@ where
         claim_and_run(&self.state, true);
         let (lock, ready) = &*self.state;
         let mut state = lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         while !state.initialized {
-            state = ready
-                .wait(state)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            ready.wait(&mut state);
         }
         match (&state.value, &state.failure) {
             (Some(value), None) => Ok(Arc::clone(value)),
@@ -115,7 +112,6 @@ where
         self.state
             .0
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .initialized
     }
 }
@@ -127,8 +123,7 @@ where
     let executor = {
         let (lock, _) = &**state;
         let mut state = lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         if state.initialized || state.started || (!force && state.cancelled) {
             return;
         }
@@ -141,8 +136,7 @@ where
     let result = catch_unwind(AssertUnwindSafe(executor));
     let (lock, ready) = &**state;
     let mut state = lock
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .lock();
     match result {
         Ok(value) => state.value = Some(Arc::new(value)),
         Err(payload) => {

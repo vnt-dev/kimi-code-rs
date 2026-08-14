@@ -7,9 +7,11 @@
 use std::{
     collections::HashSet,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
+use parking_lot::MutexGuard;
 
 use async_trait::async_trait;
 use futures_util::{
@@ -292,7 +294,6 @@ impl AgentTaskService {
         self.inner
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
     }
 
     // Wired into the public registerTask/track paths by the next service unit.
@@ -1903,11 +1904,11 @@ mod tests {
     #[async_trait]
     impl AgentContextInjectorServiceContract for TestContextInjector {
         fn register(&self, name: String, provider: ContextInjectionProvider) -> DisposableHandle {
-            *self.name.lock().unwrap() = Some(name);
-            *self.provider.lock().unwrap() = Some(provider);
+            *self.name.lock() = Some(name);
+            *self.provider.lock() = Some(provider);
             let providers = Arc::clone(&self.provider);
             to_disposable(move || {
-                *providers.lock().unwrap() = None;
+                *providers.lock() = None;
             })
         }
 
@@ -1949,7 +1950,7 @@ mod tests {
         }
 
         fn transition(&self, state: TaskState) {
-            *self.state.lock().unwrap() = state;
+            *self.state.lock() = state;
             self.state_events.fire(&state);
             if state.is_terminal() {
                 self.lifecycle_done.send_replace(true);
@@ -1964,7 +1965,7 @@ mod tests {
         }
 
         fn state(&self) -> TaskState {
-            *self.state.lock().unwrap()
+            *self.state.lock()
         }
 
         async fn settled(&self) {
@@ -2034,25 +2035,24 @@ mod tests {
         fn task_config(&self) -> Option<AgentTaskConfig> {
             Some(AgentTaskConfig {
                 kill_grace_period_ms: Some(0),
-                keep_alive_on_exit: *self.keep_alive_on_exit.lock().unwrap(),
-                max_running_tasks: *self.max_running_tasks.lock().unwrap(),
+                keep_alive_on_exit: *self.keep_alive_on_exit.lock(),
+                max_running_tasks: *self.max_running_tasks.lock(),
                 ..AgentTaskConfig::default()
             })
         }
 
         fn context_snapshot(&self) -> ContextMemorySnapshot {
-            self.context.lock().unwrap().clone().into()
+            self.context.lock().clone().into()
         }
 
         fn record_task_started(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()> {
-            self.started.lock().unwrap().push(info.base.task_id.clone());
+            self.started.lock().push(info.base.task_id.clone());
             Ok(())
         }
 
         fn record_task_terminated(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()> {
             self.terminated
                 .lock()
-                .unwrap()
                 .push(info.base.task_id.clone());
             Ok(())
         }
@@ -2063,7 +2063,6 @@ mod tests {
         ) -> AgentTaskServiceResult<()> {
             self.enqueued
                 .lock()
-                .unwrap()
                 .push(built.hook_context.source_id.clone());
             Ok(())
         }
@@ -2074,7 +2073,6 @@ mod tests {
         ) -> AgentTaskServiceResult<()> {
             self.restored
                 .lock()
-                .unwrap()
                 .push(built.hook_context.source_id.clone());
             Ok(())
         }
@@ -2246,11 +2244,11 @@ mod tests {
             "registered output"
         );
         assert_eq!(
-            effects.started.lock().unwrap().as_slice(),
+            effects.started.lock().as_slice(),
             [task_id.as_str()]
         );
         assert_eq!(
-            effects.terminated.lock().unwrap().as_slice(),
+            effects.terminated.lock().as_slice(),
             [task_id.as_str()]
         );
     }
@@ -2258,7 +2256,7 @@ mod tests {
     #[tokio::test]
     async fn registration_quota_counts_only_tasks_that_started_detached() {
         let (_persistence, service, effects) = service_with_effects();
-        *effects.max_running_tasks.lock().unwrap() = Some(1);
+        *effects.max_running_tasks.lock() = Some(1);
         service
             .register_task(Arc::new(StubTask), RegisterAgentTaskOptions::default())
             .unwrap();
@@ -2335,11 +2333,11 @@ mod tests {
             "tracked output"
         );
         assert_eq!(
-            effects.started.lock().unwrap().as_slice(),
+            effects.started.lock().as_slice(),
             [entry.task_id.as_str()]
         );
         assert_eq!(
-            effects.terminated.lock().unwrap().as_slice(),
+            effects.terminated.lock().as_slice(),
             [entry.task_id.as_str()]
         );
     }
@@ -2519,7 +2517,7 @@ mod tests {
             AgentTaskStatus::Completed
         );
         assert_eq!(
-            *effects.terminated.lock().unwrap(),
+            *effects.terminated.lock(),
             ["bash-settle01".to_owned()]
         );
         assert!(
@@ -2582,7 +2580,7 @@ mod tests {
                 .as_deref(),
             Some("stopped")
         );
-        assert_eq!(effects.terminated.lock().unwrap().len(), 1);
+        assert_eq!(effects.terminated.lock().len(), 1);
     }
 
     #[tokio::test]
@@ -2606,7 +2604,7 @@ mod tests {
         assert_eq!(stopped.base.stop_reason.as_deref(), Some("requested"));
         assert!(signal.aborted());
         assert_eq!(
-            *effects.terminated.lock().unwrap(),
+            *effects.terminated.lock(),
             ["bash-stop0001".to_owned()]
         );
         assert_eq!(
@@ -2665,7 +2663,7 @@ mod tests {
         );
 
         insert_live(&service, "bash-keep0001", true);
-        *effects.keep_alive_on_exit.lock().unwrap() = Some(true);
+        *effects.keep_alive_on_exit.lock() = Some(true);
         assert!(
             service
                 .stop_all_on_exit("ignored")
@@ -2795,7 +2793,7 @@ mod tests {
         }));
         assert!(service.state().notifications.is_delivered(&delivered[0]));
         assert_eq!(
-            effects.terminated.lock().unwrap().as_slice(),
+            effects.terminated.lock().as_slice(),
             ["bash-restore2"]
         );
     }
@@ -2825,7 +2823,7 @@ mod tests {
             AgentTaskStatus::Lost
         );
         assert_eq!(
-            effects.terminated.lock().unwrap().as_slice(),
+            effects.terminated.lock().as_slice(),
             ["bash-wire0001"]
         );
 
@@ -2881,7 +2879,7 @@ mod tests {
         let injector = TestContextInjector::default();
         service.install_context_hooks(&bus_handle, &injector);
         assert_eq!(
-            injector.name.lock().unwrap().as_deref(),
+            injector.name.lock().as_deref(),
             Some(ACTIVE_BACKGROUND_TASK_INJECTION_VARIANT)
         );
 
@@ -2899,7 +2897,7 @@ mod tests {
                 ]),
             ),
         );
-        let provider = injector.provider.lock().unwrap().clone().unwrap();
+        let provider = injector.provider.lock().clone().unwrap();
         let injected = provider(ContextInjectionContext {
             injected_positions: vec![],
             last_injected_at: None,
@@ -2913,7 +2911,7 @@ mod tests {
         assert!(reminder.contains("task_id: bash-hook0001"));
 
         service.dispose().unwrap();
-        assert!(injector.provider.lock().unwrap().is_none());
+        assert!(injector.provider.lock().is_none());
     }
 
     #[tokio::test]
@@ -2966,7 +2964,7 @@ mod tests {
         assert_eq!(release.await, ForegroundTaskReleaseReason::Detached);
         assert_eq!(detach_calls.load(Ordering::SeqCst), 1);
         assert_eq!(
-            *effects.started.lock().unwrap(),
+            *effects.started.lock(),
             ["task-detach01".to_owned()]
         );
         assert_eq!(
@@ -2979,7 +2977,7 @@ mod tests {
         );
         service.detach("task-detach01");
         assert_eq!(detach_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(effects.started.lock().unwrap().len(), 1);
+        assert_eq!(effects.started.lock().len(), 1);
     }
 
     #[tokio::test(start_paused = true)]
@@ -3196,14 +3194,14 @@ mod tests {
         let lost = service.reconcile(100).await.unwrap();
         assert_eq!(lost.len(), 1);
         assert_eq!(
-            *effects.terminated.lock().unwrap(),
+            *effects.terminated.lock(),
             ["bash-running2".to_owned()]
         );
         assert_eq!(
-            *effects.restored.lock().unwrap(),
+            *effects.restored.lock(),
             ["bash-done0002".to_owned(), "bash-running2".to_owned()]
         );
-        assert!(effects.enqueued.lock().unwrap().is_empty());
+        assert!(effects.enqueued.lock().is_empty());
     }
 
     #[tokio::test]
@@ -3212,10 +3210,10 @@ mod tests {
         let completed = task("bash-notify04", AgentTaskStatus::Completed, true);
         service.notify_agent_task(&completed).await.unwrap();
         assert_eq!(
-            *effects.enqueued.lock().unwrap(),
+            *effects.enqueued.lock(),
             ["bash-notify04".to_owned()]
         );
-        assert!(effects.restored.lock().unwrap().is_empty());
+        assert!(effects.restored.lock().is_empty());
     }
 
     #[test]

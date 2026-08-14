@@ -13,8 +13,9 @@ use std::{
     collections::HashMap,
     error::Error,
     panic::AssertUnwindSafe,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -130,7 +131,6 @@ impl CapabilityService {
     fn progress_of(&self, id: CapabilityId) -> CapabilityInstallProgress {
         self.install_progress
             .lock()
-            .unwrap()
             .get(&id)
             .cloned()
             .unwrap_or_default()
@@ -268,7 +268,7 @@ impl CapabilityServiceContract for CapabilityService {
             ));
         }
         {
-            let mut progress = self.install_progress.lock().unwrap();
+            let mut progress = self.install_progress.lock();
             if progress
                 .get(&entry.id())
                 .is_some_and(|install| install.running)
@@ -292,7 +292,7 @@ impl CapabilityServiceContract for CapabilityService {
         if let (Some(plugins), Some(plugin_id)) = (&self.plugins, &reserved_plugin_id)
             && let Err(error) = plugins.reserve_plugin_removal(plugin_id).await
         {
-            self.install_progress.lock().unwrap().insert(
+            self.install_progress.lock().insert(
                 entry.id(),
                 CapabilityInstallProgress {
                     running: false,
@@ -314,7 +314,7 @@ impl CapabilityServiceContract for CapabilityService {
                 plugin_id: reserved_plugin_id,
             };
             let report: CapabilityInstallReporter = Box::new(move |step, percent| {
-                reporter_progress.lock().unwrap().insert(
+                reporter_progress.lock().insert(
                     entry_id,
                     CapabilityInstallProgress {
                         running: true,
@@ -327,7 +327,7 @@ impl CapabilityServiceContract for CapabilityService {
             let result = AssertUnwindSafe(installing.install(report))
                 .catch_unwind()
                 .await;
-            let mut progress = final_progress.lock().unwrap();
+            let mut progress = final_progress.lock();
             match result {
                 Ok(Ok(())) => {
                     progress.insert(entry_id, CapabilityInstallProgress::default());
@@ -718,7 +718,7 @@ mod tests {
             let release_receiver = Arc::clone(&release_receiver);
             Box::pin(async move {
                 report("download", Some(42));
-                let receiver = release_receiver.lock().unwrap().take().unwrap();
+                let receiver = release_receiver.lock().take().unwrap();
                 receiver.await.ok();
                 Ok(())
             })

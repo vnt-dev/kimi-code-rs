@@ -159,7 +159,8 @@ pub fn register_provider_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use serde_json::json;
 
@@ -184,8 +185,8 @@ mod tests {
         }
 
         fn change(&self, domain: &str, value: Option<Value>) {
-            let previous_value = self.values.lock().unwrap().get(domain).cloned();
-            let mut values = self.values.lock().unwrap();
+            let previous_value = self.values.lock().get(domain).cloned();
+            let mut values = self.values.lock();
             match &value {
                 Some(value) => {
                     values.insert(domain.to_owned(), value.clone());
@@ -216,13 +217,13 @@ mod tests {
             self.emitter.event()
         }
         fn get(&self, domain: &str) -> Option<Value> {
-            self.values.lock().unwrap().get(domain).cloned()
+            self.values.lock().get(domain).cloned()
         }
         fn inspect(&self, _domain: &str) -> ConfigInspectValue {
             ConfigInspectValue::default()
         }
         fn get_all(&self) -> ResolvedConfig {
-            self.values.lock().unwrap().clone()
+            self.values.lock().clone()
         }
         async fn set(
             &self,
@@ -288,7 +289,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_listener = Arc::clone(&seen);
         let _subscription = service.on_did_change_providers().subscribe(move |event| {
-            seen_listener.lock().unwrap().push(event.clone());
+            seen_listener.lock().push(event.clone());
         });
 
         service.ready().await.unwrap();
@@ -297,7 +298,7 @@ mod tests {
         service.delete("old").await.unwrap();
         assert_eq!(service.list().keys().cloned().collect::<Vec<_>>(), ["new"]);
         assert!(stub.get(DEFAULT_PROVIDER_SECTION).is_none());
-        let seen = seen.lock().unwrap();
+        let seen = seen.lock();
         assert_eq!(seen[0].added, ["new"]);
         assert_eq!(seen[1].removed, ["old"]);
     }

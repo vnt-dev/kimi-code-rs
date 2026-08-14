@@ -384,7 +384,7 @@ pub fn register_agent_plan_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use async_trait::async_trait;
     use futures_util::stream;
@@ -420,7 +420,7 @@ mod tests {
     #[async_trait]
     impl AppendLogStoreService for MemoryLog {
         fn append_value(&self, _: &str, _: &str, value: Value, _: AppendLogOptions) {
-            self.0.lock().unwrap().push(value);
+            self.0.lock().push(value);
         }
 
         fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {

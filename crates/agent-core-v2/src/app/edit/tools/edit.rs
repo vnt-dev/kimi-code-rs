@@ -291,10 +291,9 @@ pub fn register_edit_tool() {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::PathBuf,
-        sync::{Arc, Mutex},
-    };
+    use std::path::PathBuf;
+    use std::sync::{Arc};
+    use parking_lot::Mutex;
 
     use async_trait::async_trait;
 
@@ -330,15 +329,15 @@ mod tests {
         }
 
         fn inputs(&self) -> Vec<FileEditInput> {
-            self.inputs.lock().unwrap().clone()
+            self.inputs.lock().clone()
         }
     }
 
     #[async_trait]
     impl FileEditServiceContract for TestEditor {
         async fn edit(&self, input: FileEditInput) -> FileEditResult {
-            self.inputs.lock().unwrap().push(input);
-            self.result.lock().unwrap().clone()
+            self.inputs.lock().push(input);
+            self.result.lock().clone()
         }
     }
 

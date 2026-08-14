@@ -5,9 +5,10 @@
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
     time::SystemTime,
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt, stream};
@@ -74,12 +75,12 @@ impl FileStorageService {
 
     // Original: FileStorageService.syncDirOnce(). A removed directory is a no-op.
     async fn sync_dir_once(&self, directory: &Path) -> std::io::Result<()> {
-        if self.synced_dirs.lock().unwrap().contains(directory) {
+        if self.synced_dirs.lock().contains(directory) {
             return Ok(());
         }
         match sync_dir(directory).await {
             Ok(()) => {
-                self.synced_dirs.lock().unwrap().insert(directory.into());
+                self.synced_dirs.lock().insert(directory.into());
                 Ok(())
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -240,7 +241,7 @@ impl FileSystemStorageService for FileStorageService {
                 .emitter
                 .event()
                 .subscribe(move |value| listener(value));
-            let mut runtime = shared.state.lock().unwrap();
+            let mut runtime = shared.state.lock();
             runtime.ref_count += 1;
             if runtime.ref_count == 1 {
                 if let Err(error) = create_watch_directory(&directory, dir_mode) {
@@ -263,7 +264,7 @@ impl FileSystemStorageService for FileStorageService {
             drop(runtime);
             let shared_for_teardown = Arc::clone(&shared);
             let teardown = to_disposable(move || {
-                let mut runtime = shared_for_teardown.state.lock().unwrap();
+                let mut runtime = shared_for_teardown.state.lock();
                 runtime.ref_count = runtime.ref_count.saturating_sub(1);
                 if runtime.ref_count == 0 {
                     if let Some(cancellation) = runtime.cancellation.take() {

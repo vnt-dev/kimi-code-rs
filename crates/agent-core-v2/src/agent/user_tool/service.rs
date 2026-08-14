@@ -14,7 +14,7 @@ use crate::{
         di::{
             descriptors::SyncDescriptor,
             instantiation::{ServiceIdentifier, ServicesAccessorExt},
-            lifecycle::{Disposable, DisposableHandle, DisposeResult},
+            lifecycle::{Disposable, DisposableHandle, DisposeResult, disposable_none},
             scope::{InstantiationType, LifecycleScope, register_scoped_service},
         },
         utils::abort::abortable,
@@ -116,23 +116,22 @@ impl AgentUserToolService {
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak: &std::sync::Weak<Self>| {
             let weak_for_hook = weak.clone();
-            let subscription = wire
-                .hooks()
-                .on_did_restore
-                .register(
-                    "user-tool",
-                    Arc::new(move |context, next| {
-                        let weak = weak_for_hook.clone();
-                        Box::pin(async move {
-                            if let Some(service) = weak.upgrade() {
-                                service.restore_registered_tools().await;
-                            }
-                            next(context).await
-                        })
-                    }),
-                    Default::default(),
-                )
-                .expect("user-tool restore hook registration must be valid");
+            let subscription = match wire.hooks().on_did_restore.register(
+                "user-tool",
+                Arc::new(move |context, next| {
+                    let weak = weak_for_hook.clone();
+                    Box::pin(async move {
+                        if let Some(service) = weak.upgrade() {
+                            service.restore_registered_tools().await;
+                        }
+                        next(context).await
+                    })
+                }),
+                Default::default(),
+            ) {
+                Ok(handle) => handle,
+                Err(_) => disposable_none(),
+            };
             Self {
                 registry,
                 profile,

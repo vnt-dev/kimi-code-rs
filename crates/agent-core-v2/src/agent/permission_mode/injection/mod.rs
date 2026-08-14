@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use crate::{
     _base::di::lifecycle::{Disposable, DisposableHandle, DisposeResult},
@@ -35,7 +36,7 @@ impl PermissionModeInjection {
         let provider: ContextInjectionProvider = Arc::new(move |context| {
             let current_mode = permission_mode.mode();
             let reminder =
-                permission_mode_reminder(current_mode, &mut last_mode.lock().unwrap(), &context);
+                permission_mode_reminder(current_mode, &mut last_mode.lock(), &context);
             Box::pin(async move {
                 Ok(reminder.map(ContextInjectionContent::Text)) as ContextInjectionResult
             })
@@ -129,7 +130,7 @@ mod tests {
 
     impl PermissionModeReader for Mode {
         fn mode(&self) -> PermissionMode {
-            *self.0.lock().unwrap()
+            *self.0.lock()
         }
     }
 
@@ -143,7 +144,7 @@ mod tests {
     impl AgentContextInjectorServiceContract for Injector {
         fn register(&self, name: String, provider: ContextInjectionProvider) -> DisposableHandle {
             assert_eq!(name, PERMISSION_MODE_INJECTION_VARIANT);
-            *self.provider.lock().unwrap() = Some(provider);
+            *self.provider.lock() = Some(provider);
             let disposed = Arc::clone(&self.disposed);
             to_disposable(move || {
                 disposed.store(true, Ordering::SeqCst);
@@ -167,7 +168,7 @@ mod tests {
         let injector = Injector::default();
         let mode_reader: Arc<dyn PermissionModeReader> = mode;
         let injection = PermissionModeInjection::new(mode_reader, &injector);
-        let provider = injector.provider.lock().unwrap().clone().unwrap();
+        let provider = injector.provider.lock().clone().unwrap();
         let content = provider(context(&[])).await.unwrap().unwrap();
         assert!(matches!(
             content,

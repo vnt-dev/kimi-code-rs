@@ -3,7 +3,8 @@
 //! Original:
 //! `packages/agent-core-v2/src/agent/plugin/agentPluginService.ts`.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
@@ -134,7 +135,7 @@ impl AgentPluginService {
         let task = tokio::spawn(async move {
             let _ = service.append_fresh_session_start_reminder().await;
         });
-        self.tasks.lock().unwrap().push(task);
+        self.tasks.lock().push(task);
     }
 
     async fn render_session_start_reminder(&self) -> Result<Option<String>, BoxError> {
@@ -184,7 +185,7 @@ impl AgentPluginServiceContract for AgentPluginService {}
 impl Disposable for AgentPluginService {
     fn dispose(&self) -> DisposeResult {
         let result = self.disposables.dispose();
-        for task in self.tasks.lock().unwrap().drain(..) {
+        for task in self.tasks.lock().drain(..) {
             task.abort();
         }
         result
@@ -294,7 +295,7 @@ pub fn register_agent_plugin_service() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use crate::{
         _base::di::scope::get_scoped_service_descriptors,
@@ -312,19 +313,19 @@ mod tests {
 
     impl Logger for RecordingLogger {
         fn error(&self, message: &str, payload: Option<LogPayload>) {
-            self.0.lock().unwrap().push((message.into(), payload));
+            self.0.lock().push((message.into(), payload));
         }
 
         fn warn(&self, message: &str, payload: Option<LogPayload>) {
-            self.0.lock().unwrap().push((message.into(), payload));
+            self.0.lock().push((message.into(), payload));
         }
 
         fn info(&self, message: &str, payload: Option<LogPayload>) {
-            self.0.lock().unwrap().push((message.into(), payload));
+            self.0.lock().push((message.into(), payload));
         }
 
         fn debug(&self, message: &str, payload: Option<LogPayload>) {
-            self.0.lock().unwrap().push((message.into(), payload));
+            self.0.lock().push((message.into(), payload));
         }
 
         fn child(&self, _context: LogContext) -> Arc<dyn Logger> {
@@ -453,7 +454,7 @@ mod tests {
             ),
             None
         );
-        let records = log.0.lock().unwrap();
+        let records = log.0.lock();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].0, "plugin sessionStart skill not found");
         let Some(LogPayload::Context(payload)) = &records[0].1 else {

@@ -89,7 +89,8 @@ impl AgentTaskLifecycleRecorder {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use async_trait::async_trait;
     use futures_util::stream;
@@ -173,7 +174,6 @@ mod tests {
         fn track(&self, event: &str, properties: Option<&TelemetryProperties>) {
             self.0
                 .lock()
-                .unwrap()
                 .push((event.into(), properties.cloned().unwrap_or_default()));
         }
 
@@ -232,7 +232,7 @@ mod tests {
         recorder.record_task_terminated(&completed).unwrap();
         assert_eq!(wire.get_model(&TASK_MODEL)["bash-12345678"], completed);
 
-        let events = telemetry.0.lock().unwrap();
+        let events = telemetry.0.lock();
         assert_eq!(events[0].0, "background_task_created");
         assert_eq!(events[0].1["kind"], Some(Value::String("bash".into())));
         assert_eq!(events[1].0, "background_task_completed");
@@ -259,7 +259,7 @@ mod tests {
             .record_task_terminated(&info(AgentTaskStatus::Lost, None))
             .unwrap();
         assert_eq!(
-            telemetry.0.lock().unwrap()[0].1["duration_ms"],
+            telemetry.0.lock()[0].1["duration_ms"],
             Some(Value::Null)
         );
     }

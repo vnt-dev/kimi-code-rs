@@ -2,10 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/file/fileServiceImpl.ts`.
 
-use std::{
-    sync::{Arc, LazyLock, Mutex},
-    time::SystemTime,
-};
+use std::time::SystemTime;
+use std::sync::{Arc, LazyLock};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -61,11 +60,11 @@ impl FileService {
     // counterpart to the shared indexLoadPromise and is released after either
     // success or failure, allowing a later call to retry.
     async fn ensure_index(&self) -> FileServiceResult<()> {
-        if self.index_cache.lock().unwrap().is_some() {
+        if self.index_cache.lock().is_some() {
             return Ok(());
         }
         let _load = self.index_load.lock().await;
-        if self.index_cache.lock().unwrap().is_some() {
+        if self.index_cache.lock().is_some() {
             return Ok(());
         }
         self.load_index().await
@@ -75,7 +74,7 @@ impl FileService {
     // are ignored, while blob-store read errors continue to propagate.
     async fn load_index(&self) -> FileServiceResult<()> {
         let Some(raw) = self.blobs.get(INDEX_SCOPE, INDEX_KEY).await? else {
-            *self.index_cache.lock().unwrap() = Some(IndexMap::new());
+            *self.index_cache.lock() = Some(IndexMap::new());
             return Ok(());
         };
         let mut index = IndexMap::new();
@@ -89,7 +88,7 @@ impl FileService {
                 }
             }
         }
-        *self.index_cache.lock().unwrap() = Some(index);
+        *self.index_cache.lock() = Some(index);
         Ok(())
     }
 
@@ -99,7 +98,6 @@ impl FileService {
         let files = self
             .index_cache
             .lock()
-            .unwrap()
             .as_ref()
             .map(|index| index.values().cloned().collect::<Vec<_>>());
         let Some(files) = files else {
@@ -150,7 +148,6 @@ impl FileServiceContract for FileService {
 
         self.index_cache
             .lock()
-            .unwrap()
             .as_mut()
             .expect("ensure_index initialized the cache")
             .insert(id, meta.clone());
@@ -168,7 +165,6 @@ impl FileServiceContract for FileService {
         let meta = self
             .index_cache
             .lock()
-            .unwrap()
             .as_ref()
             .and_then(|index| index.get(file_id))
             .cloned()
@@ -176,7 +172,6 @@ impl FileServiceContract for FileService {
         if !self.blobs.has(BLOB_SCOPE, file_id).await? {
             self.index_cache
                 .lock()
-                .unwrap()
                 .as_mut()
                 .expect("ensure_index initialized the cache")
                 .shift_remove(file_id);
@@ -209,7 +204,6 @@ impl FileServiceContract for FileService {
         let removed = self
             .index_cache
             .lock()
-            .unwrap()
             .as_mut()
             .expect("ensure_index initialized the cache")
             .shift_remove(file_id)

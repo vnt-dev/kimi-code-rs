@@ -1,7 +1,5 @@
-use std::sync::{
-    Arc, Mutex, Weak,
-    atomic::{AtomicU64, Ordering},
-};
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak, atomic::{AtomicU64, Ordering}};
 
 use indexmap::IndexMap;
 
@@ -66,7 +64,7 @@ impl AgentToolRegistryServiceContract for AgentToolRegistryService {
             source: options.source.unwrap_or(ToolSource::Builtin),
             registration_id,
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         state.tools.shift_remove(&name);
         state.tools.insert(name.clone(), entry);
         drop(state);
@@ -80,7 +78,6 @@ impl AgentToolRegistryServiceContract for AgentToolRegistryService {
         let entries = self
             .state
             .lock()
-            .unwrap()
             .tools
             .values()
             .map(|entry| (Arc::clone(&entry.tool), entry.source))
@@ -104,7 +101,7 @@ impl AgentToolRegistryServiceContract for AgentToolRegistryService {
 
     // Original: toolRegistryService.ts, listReferences().
     fn list_references(&self) -> Vec<ToolReference> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         let mut tools = state
             .tools
             .iter()
@@ -121,7 +118,6 @@ impl AgentToolRegistryServiceContract for AgentToolRegistryService {
     fn resolve(&self, name: &str) -> Option<Arc<dyn ErasedExecutableTool>> {
         self.state
             .lock()
-            .unwrap()
             .tools
             .get(name)
             .map(|entry| Arc::clone(&entry.tool))
@@ -130,7 +126,7 @@ impl AgentToolRegistryServiceContract for AgentToolRegistryService {
 
 fn unregister_if_current(state: &Weak<Mutex<RegistryState>>, name: &str, registration_id: u64) {
     let Some(state) = state.upgrade() else { return };
-    let mut state = state.lock().unwrap();
+    let mut state = state.lock();
     if state
         .tools
         .get(name)

@@ -6,8 +6,9 @@ use std::{
     error::Error,
     fmt,
     ops::Deref,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use crate::{
     _base::{
@@ -65,17 +66,16 @@ impl FullCompactionTask {
     pub fn trace_id(&self) -> Option<String> {
         self.trace
             .lock()
-            .unwrap()
             .as_ref()
             .and_then(LlmRequestTrace::trace_id)
     }
 
     pub(crate) fn set_trace(&self, trace: LlmRequestTrace) {
-        *self.trace.lock().unwrap() = Some(trace);
+        *self.trace.lock() = Some(trace);
     }
 
     pub(crate) fn set_trace_id(&self, trace_id: Option<String>) {
-        let mut trace = self.trace.lock().unwrap();
+        let mut trace = self.trace.lock();
         match trace.as_ref() {
             Some(trace) => trace.set_trace_id(trace_id),
             None => *trace = Some(LlmRequestTrace::new(trace_id)),

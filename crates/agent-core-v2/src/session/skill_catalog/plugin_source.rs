@@ -102,11 +102,9 @@ mod tests {
     use std::{
         collections::HashMap,
         io,
-        sync::{
-            Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
     };
+    use std::sync::{atomic::{AtomicUsize, Ordering}};
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::{
@@ -221,7 +219,7 @@ mod tests {
     #[async_trait]
     impl SkillDiscoveryContract for RecordingDiscovery {
         async fn discover(&self, roots: &[SkillRoot]) -> SkillDiscoveryResult {
-            *self.roots.lock().unwrap() = roots.to_vec();
+            *self.roots.lock() = roots.to_vec();
             SkillDiscoveryResult {
                 scanned_roots: roots.iter().map(|root| root.path.clone()).collect(),
                 ..SkillDiscoveryResult::default()
@@ -260,7 +258,7 @@ mod tests {
             Some(vec!["/plugins/demo/skills".into()])
         );
         assert_eq!(
-            discovery.roots.lock().unwrap().as_slice(),
+            discovery.roots.lock().as_slice(),
             plugins.roots.as_slice()
         );
         plugins.reloaded.fire(&ReloadSummary::default());

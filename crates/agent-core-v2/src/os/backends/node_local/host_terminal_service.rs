@@ -5,8 +5,9 @@
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    sync::{Arc, Mutex, Weak},
 };
+use std::sync::{Arc, Weak};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -51,7 +52,7 @@ impl TerminalProcess for LocalTerminalProcess {
     }
 
     fn write(&self, data: &str) -> Result<(), TerminalProcessError> {
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock();
         writer.write_all(data.as_bytes()).map_err(terminal_error)?;
         writer.flush().map_err(terminal_error)
     }
@@ -59,13 +60,12 @@ impl TerminalProcess for LocalTerminalProcess {
     fn resize(&self, cols: u32, rows: u32) -> Result<(), TerminalProcessError> {
         self.master
             .lock()
-            .unwrap()
             .resize(pty_size(cols, rows)?)
             .map_err(terminal_error)
     }
 
     fn kill(&self) -> Result<(), TerminalProcessError> {
-        self.killer.lock().unwrap().kill().map_err(terminal_error)
+        self.killer.lock().kill().map_err(terminal_error)
     }
 }
 
@@ -125,7 +125,6 @@ impl HostTerminalService for LocalHostTerminalService {
         });
         self.processes
             .lock()
-            .unwrap()
             .push(Arc::downgrade(&process));
         Ok(process)
     }
@@ -136,7 +135,6 @@ impl Disposable for LocalHostTerminalService {
         for process in self
             .processes
             .lock()
-            .unwrap()
             .drain(..)
             .filter_map(|process| process.upgrade())
         {

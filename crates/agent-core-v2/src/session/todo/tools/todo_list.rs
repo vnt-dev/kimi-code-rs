@@ -231,7 +231,7 @@ pub fn register_todo_list_tool() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::{
@@ -254,11 +254,11 @@ mod tests {
 
     impl TodoListProvider for StubTodo {
         fn get_todos(&self) -> Vec<TodoItem> {
-            self.todos.lock().unwrap().clone()
+            self.todos.lock().clone()
         }
 
         fn set_todos(&self, todos: &[TodoItem]) -> Result<(), SessionTodoError> {
-            *self.todos.lock().unwrap() = todos.to_vec();
+            *self.todos.lock() = todos.to_vec();
             Ok(())
         }
     }

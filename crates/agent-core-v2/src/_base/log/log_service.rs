@@ -1,6 +1,7 @@
+use parking_lot::RwLock;
 use std::{
     sync::{
-        Arc, RwLock,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -54,11 +55,11 @@ impl BoundLogger {
     }
 
     pub fn level(&self) -> LogLevel {
-        *self.level.read().unwrap()
+        *self.level.read()
     }
 
     pub fn set_level(&self, level: LogLevel) {
-        *self.level.write().unwrap() = level;
+        *self.level.write() = level;
     }
 
     /// Creates another concrete bound logger. `Logger::child()` erases this

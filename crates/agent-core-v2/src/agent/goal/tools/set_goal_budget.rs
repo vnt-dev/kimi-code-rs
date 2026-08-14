@@ -117,7 +117,7 @@ pub static SET_GOAL_BUDGET_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::
 });
 
 pub trait SetGoalBudgetProvider: Send + Sync {
-    fn get_goal(&self) -> GoalToolResult;
+    fn get_goal(&self) -> Result<GoalToolResult, String>;
     fn is_goal_tool_target(&self, turn_id: crate::agent::TurnId, goal_id: &str) -> bool;
     fn set_budget_limits(
         &self,
@@ -126,10 +126,8 @@ pub trait SetGoalBudgetProvider: Send + Sync {
 }
 
 impl SetGoalBudgetProvider for AgentGoalServiceHandle {
-    fn get_goal(&self) -> GoalToolResult {
-        (**self)
-            .get_goal()
-            .expect("goal tools are only resolved for supported agents")
+    fn get_goal(&self) -> Result<GoalToolResult, String> {
+        (**self).get_goal().map_err(|error| error.to_string())
     }
 
     fn is_goal_tool_target(&self, turn_id: crate::agent::TurnId, goal_id: &str) -> bool {
@@ -183,7 +181,7 @@ impl ExecutableTool for SetGoalBudgetTool {
     async fn resolve_execution(&self, args: SetGoalBudgetInput) -> ToolExecution {
         let args = normalize_budget_input(args);
         let budget = budget_limits_from_input(args);
-        let goal_at_resolution = self.goal.get_goal().goal;
+        let goal_at_resolution = self.goal.get_goal().ok().and_then(|result| result.goal);
         let over_budget_after_set = budget.is_some_and(|budget| {
             goal_at_resolution
                 .as_ref()
@@ -195,7 +193,10 @@ impl ExecutableTool for SetGoalBudgetTool {
             let goal = Arc::clone(&goal);
             let goal_at_resolution = goal_at_resolution.clone();
             Box::pin(async move {
-                let current = goal.get_goal().goal;
+                let current = match goal.get_goal() {
+                    Ok(result) => result.goal,
+                    Err(error) => return ExecutableToolResult::error(error),
+                };
                 let Some(current) = current else {
                     return ExecutableToolResult::success("Goal budget not set: no current goal.");
                 };

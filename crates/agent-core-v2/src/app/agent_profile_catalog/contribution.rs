@@ -2,7 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/agentProfileCatalog/contribution.ts`.
 
-use std::sync::{Arc, LazyLock, RwLock};
+
+use parking_lot::RwLock;
+use std::sync::{Arc, LazyLock};
 
 use super::contract::AgentProfile;
 
@@ -13,8 +15,7 @@ static PROFILE_CONTRIBUTIONS: LazyLock<RwLock<Vec<Arc<AgentProfile>>>> =
 // position and appended, preserving the source's contribution order.
 pub fn register_agent_profile(definition: AgentProfile) {
     let mut contributions = PROFILE_CONTRIBUTIONS
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .write();
     if let Some(index) = contributions
         .iter()
         .position(|profile| profile.name == definition.name)
@@ -29,7 +30,6 @@ pub fn register_agent_profile(definition: AgentProfile) {
 pub fn get_agent_profile_contributions() -> Vec<Arc<AgentProfile>> {
     PROFILE_CONTRIBUTIONS
         .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
 }
 

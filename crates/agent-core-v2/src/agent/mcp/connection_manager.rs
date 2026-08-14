@@ -751,7 +751,8 @@ async fn format_startup_error(error: String, client: &Arc<dyn RuntimeMcpClient>)
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use super::*;
     use crate::{
@@ -827,7 +828,7 @@ mod tests {
         let statuses = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&statuses);
         let _listener = manager.on_status_change().subscribe(move |entry| {
-            captured.lock().unwrap().push(entry.status);
+            captured.lock().push(entry.status);
         });
 
         manager
@@ -848,7 +849,7 @@ mod tests {
         assert!(manager.remove("disabled").await);
         assert!(!manager.remove("disabled").await);
         assert_eq!(
-            *statuses.lock().unwrap(),
+            *statuses.lock(),
             vec![McpServerStatus::Disabled, McpServerStatus::Disabled]
         );
     }
@@ -859,7 +860,7 @@ mod tests {
         struct TestLogger(Mutex<Vec<String>>);
         impl Logger for TestLogger {
             fn error(&self, message: &str, _payload: Option<LogPayload>) {
-                self.0.lock().unwrap().push(message.into());
+                self.0.lock().push(message.into());
             }
             fn warn(&self, _message: &str, _payload: Option<LogPayload>) {}
             fn info(&self, _message: &str, _payload: Option<LogPayload>) {}
@@ -888,7 +889,7 @@ mod tests {
         let entry = manager.get("unsupported").await.unwrap();
         assert_eq!(entry.status, McpServerStatus::Failed);
         assert!(entry.error.unwrap().contains("executor 'kaos'"));
-        assert_eq!(*log.0.lock().unwrap(), vec!["mcp server unavailable"]);
+        assert_eq!(*log.0.lock(), vec!["mcp server unavailable"]);
     }
 
     #[tokio::test]

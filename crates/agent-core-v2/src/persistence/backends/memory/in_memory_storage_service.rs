@@ -2,13 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/persistence/backends/memory/inMemoryStorageService.ts`.
 
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::collections::HashMap;
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::stream;
@@ -47,7 +43,6 @@ impl FileSystemStorageService for InMemoryStorageService {
             .inner
             .scopes
             .lock()
-            .unwrap()
             .get(scope)
             .and_then(|bucket| bucket.get(key))
             .cloned())
@@ -63,7 +58,6 @@ impl FileSystemStorageService for InMemoryStorageService {
             .inner
             .scopes
             .lock()
-            .unwrap()
             .get(scope)
             .and_then(|bucket| bucket.get(key))
             .cloned()
@@ -81,7 +75,6 @@ impl FileSystemStorageService for InMemoryStorageService {
         self.inner
             .scopes
             .lock()
-            .unwrap()
             .entry(scope.into())
             .or_default()
             .insert(key.into(), data.into());
@@ -99,7 +92,6 @@ impl FileSystemStorageService for InMemoryStorageService {
         self.inner
             .scopes
             .lock()
-            .unwrap()
             .entry(scope.into())
             .or_default()
             .entry(key.into())
@@ -114,7 +106,6 @@ impl FileSystemStorageService for InMemoryStorageService {
             .inner
             .scopes
             .lock()
-            .unwrap()
             .get(scope)
             .into_iter()
             .flat_map(IndexMap::keys)
@@ -124,7 +115,7 @@ impl FileSystemStorageService for InMemoryStorageService {
     }
 
     async fn delete(&self, scope: &str, key: &str) -> Result<(), StorageError> {
-        if let Some(bucket) = self.inner.scopes.lock().unwrap().get_mut(scope) {
+        if let Some(bucket) = self.inner.scopes.lock().get_mut(scope) {
             bucket.shift_remove(key);
         }
         self.notify_watchers(scope, key);
@@ -136,7 +127,7 @@ impl FileSystemStorageService for InMemoryStorageService {
         let inner = Arc::clone(&self.inner);
         Some(Event::from_subscribe(move |listener| {
             let entry = {
-                let mut watchers = inner.watchers.lock().unwrap();
+                let mut watchers = inner.watchers.lock();
                 Arc::clone(watchers.entry(id.clone()).or_insert_with(|| {
                     Arc::new(WatchEntry {
                         emitter: Emitter::new(),
@@ -154,7 +145,7 @@ impl FileSystemStorageService for InMemoryStorageService {
             let entry_for_teardown = Arc::clone(&entry);
             let teardown = to_disposable(move || {
                 if entry_for_teardown.count.fetch_sub(1, Ordering::AcqRel) == 1 {
-                    let mut watchers = inner.watchers.lock().unwrap();
+                    let mut watchers = inner.watchers.lock();
                     if watchers
                         .get(&id)
                         .is_some_and(|current| Arc::ptr_eq(current, &entry_for_teardown))
@@ -182,7 +173,6 @@ impl InMemoryStorageService {
             .inner
             .watchers
             .lock()
-            .unwrap()
             .get(&watch_key(scope, key))
             .cloned();
         if let Some(entry) = entry {
@@ -192,7 +182,7 @@ impl InMemoryStorageService {
 
     #[cfg(test)]
     fn watcher_count(&self) -> usize {
-        self.inner.watchers.lock().unwrap().len()
+        self.inner.watchers.lock().len()
     }
 }
 

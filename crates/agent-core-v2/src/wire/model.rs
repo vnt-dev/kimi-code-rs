@@ -2,12 +2,13 @@
 //!
 //! Original: `packages/agent-core-v2/src/wire/model.ts`.
 
+use parking_lot::RwLock;
 use std::{
     any::Any,
     collections::HashMap,
     fmt,
     sync::{
-        Arc, LazyLock, RwLock,
+        Arc, LazyLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -246,7 +247,6 @@ static MODEL_CROSS_REDUCERS: LazyLock<RwLock<HashMap<String, Vec<ErasedCrossRedu
 pub fn model_cross_reducers(op_type: &str) -> Vec<ErasedCrossReducerEntry> {
     MODEL_CROSS_REDUCERS
         .read()
-        .unwrap()
         .get(op_type)
         .cloned()
         .unwrap_or_default()
@@ -271,7 +271,7 @@ where
     };
     if !options.reducers.is_empty() {
         let erased_model = model.erased();
-        let mut registry = MODEL_CROSS_REDUCERS.write().unwrap();
+        let mut registry = MODEL_CROSS_REDUCERS.write();
         for cross in options.reducers {
             let reducer = cross.reducer;
             let model_name = model.name().to_owned();

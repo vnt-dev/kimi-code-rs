@@ -234,7 +234,7 @@ pub fn register_task_stop_tool() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::{
@@ -270,7 +270,7 @@ mod tests {
     #[async_trait]
     impl TaskStopProvider for StubTasks {
         fn get_task(&self, _task_id: &str) -> Option<AgentTaskInfo> {
-            self.calls.lock().unwrap().push("get".into());
+            self.calls.lock().push("get".into());
             Some(self.current.clone())
         }
 
@@ -278,7 +278,7 @@ mod tests {
             &self,
             _task_id: &str,
         ) -> AgentTaskServiceResult<()> {
-            self.calls.lock().unwrap().push("suppress".into());
+            self.calls.lock().push("suppress".into());
             Ok(())
         }
 
@@ -287,7 +287,7 @@ mod tests {
             _task_id: &str,
             reason: &str,
         ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
-            self.calls.lock().unwrap().push(format!("stop:{reason}"));
+            self.calls.lock().push(format!("stop:{reason}"));
             Ok(self.stopped.clone())
         }
     }
@@ -349,7 +349,7 @@ mod tests {
                 "task_id: bash-12345678\nstatus: completed\nreason: already done".into()
             )
         );
-        assert_eq!(*tasks.calls.lock().unwrap(), ["get"]);
+        assert_eq!(*tasks.calls.lock(), ["get"]);
     }
 
     #[tokio::test]
@@ -381,7 +381,7 @@ mod tests {
             )
         );
         assert_eq!(
-            *tasks.calls.lock().unwrap(),
+            *tasks.calls.lock(),
             ["get", "suppress", "stop:Stopped by TaskStop"]
         );
     }

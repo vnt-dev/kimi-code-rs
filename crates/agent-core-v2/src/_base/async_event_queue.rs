@@ -1,7 +1,6 @@
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
+use std::collections::VecDeque;
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use futures_util::{Stream, stream};
 use tokio::sync::oneshot;
@@ -45,8 +44,7 @@ impl<T, E> AsyncEventQueue<T, E> {
     pub fn push(&self, mut value: T) {
         let mut state = self
             .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         if state.failure.is_some() || state.ended {
             return;
         }
@@ -66,8 +64,7 @@ impl<T, E> AsyncEventQueue<T, E> {
     pub fn end(&self) {
         let mut state = self
             .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         if state.failure.is_some() || state.ended {
             return;
         }
@@ -86,8 +83,7 @@ impl<T, E> AsyncEventQueue<T, E> {
     {
         let mut state = self
             .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock();
         if state.failure.is_some() || state.ended {
             return;
         }
@@ -110,8 +106,7 @@ impl<T, E> AsyncEventQueue<T, E> {
         let receiver = {
             let mut state = self
                 .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .lock();
             if let Some(value) = state.values.pop_front() {
                 return Ok(Some(value));
             }

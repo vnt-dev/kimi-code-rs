@@ -9,9 +9,10 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error,
-    sync::{Arc, Mutex, Weak},
     time::Duration,
 };
+use std::sync::{Arc, Weak};
+use parking_lot::Mutex;
 
 use chrono::Utc;
 use futures_util::{
@@ -79,7 +80,7 @@ impl<T: Clone + Send + 'static> Deferred<T> {
     }
 
     fn resolve(&self, value: T) {
-        if let Some(sender) = self.sender.lock().unwrap().take() {
+        if let Some(sender) = self.sender.lock().take() {
             let _ = sender.send(value);
         }
     }
@@ -95,17 +96,17 @@ pub(super) struct PromptRecord {
 
 impl PromptRecord {
     fn snapshot(&self) -> PromptSnapshot {
-        self.snapshot.lock().unwrap().clone()
+        self.snapshot.lock().clone()
     }
 
     fn set_state(&self, state: PromptState) {
-        self.snapshot.lock().unwrap().state = state;
+        self.snapshot.lock().state = state;
     }
 
     /// Terminal settlement is idempotent because clear/shutdown may race with a
     /// worker event that was already queued before cancellation became visible.
     fn set_terminal_state(&self, state: PromptState) -> bool {
-        let mut snapshot = self.snapshot.lock().unwrap();
+        let mut snapshot = self.snapshot.lock();
         if matches!(
             snapshot.state,
             PromptState::Completed
@@ -372,7 +373,7 @@ fn start_scheduler_with_idle_timeout(
             next_generation: 1,
         }),
     });
-    *runtime.controller.lock().unwrap() = Arc::downgrade(&controller);
+    *runtime.controller.lock() = Arc::downgrade(&controller);
     let actor = SchedulerActor {
         runtime: Arc::clone(&runtime),
         state: SchedulerState::default(),
@@ -421,7 +422,7 @@ enum RunnerState {
 
 impl SchedulerController {
     fn install(&self, actor: SchedulerActor) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         debug_assert!(matches!(state.runner, RunnerState::Initializing));
         state.runner = RunnerState::Dormant(Box::new(actor));
     }
@@ -431,7 +432,7 @@ impl SchedulerController {
             return;
         }
         let launch = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             match &mut state.runner {
                 RunnerState::Dormant(_) => {
                     let generation = state.next_generation;
@@ -460,7 +461,7 @@ impl SchedulerController {
     }
 
     fn begin_parking(&self, generation: u64) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if matches!(
             state.runner,
             RunnerState::Running {
@@ -478,7 +479,7 @@ impl SchedulerController {
     }
 
     fn cancel_parking(&self, generation: u64) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if matches!(
             state.runner,
             RunnerState::Parking {
@@ -497,7 +498,7 @@ impl SchedulerController {
         generation: u64,
         actor: SchedulerActor,
     ) -> Result<(), Box<SchedulerActor>> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         match &state.runner {
             RunnerState::Parking {
                 generation: current,
@@ -519,7 +520,7 @@ impl SchedulerController {
     }
 
     fn close_generation(&self, generation: u64) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if matches!(
             state.runner,
             RunnerState::Running {
@@ -537,12 +538,12 @@ impl SchedulerController {
         // A dormant Actor is quiescent by construction, so dropping it here is
         // sufficient.  A running Actor still owns its value and observes the
         // shutdown token before settling all live records.
-        self.state.lock().unwrap().runner = RunnerState::Closed;
+        self.state.lock().runner = RunnerState::Closed;
     }
 
     #[cfg(test)]
     fn is_dormant(&self) -> bool {
-        matches!(self.state.lock().unwrap().runner, RunnerState::Dormant(_))
+        matches!(self.state.lock().runner, RunnerState::Dormant(_))
     }
 }
 
@@ -1455,7 +1456,7 @@ pub(super) fn undo(runtime: &SchedulerRuntime, count: u32) -> PromptServiceResul
 
 pub(super) fn begin_shutdown(runtime: &Arc<SchedulerRuntime>) {
     runtime.shutdown.cancel();
-    if let Some(controller) = runtime.controller.lock().unwrap().upgrade() {
+    if let Some(controller) = runtime.controller.lock().upgrade() {
         controller.close();
     }
     runtime.tasks.close();
@@ -1498,7 +1499,7 @@ fn resolve_full_compaction(
     disposables: &DisposableStore,
     on_did_finish: impl Fn(&crate::agent::full_compaction::FullCompactionTask) + Send + Sync + 'static,
 ) -> Option<AgentFullCompactionServiceHandle> {
-    let mut cached = cache.lock().unwrap();
+    let mut cached = cache.lock();
     if let Some(service) = cached.as_ref() {
         return Some(service.clone());
     }
@@ -1783,7 +1784,7 @@ mod tests {
         }
 
         fn settle(&self, result: LoopRunResult) {
-            *self.state.lock().unwrap() = match result {
+            *self.state.lock() = match result {
                 LoopRunResult::Completed { .. } => TurnState::Completed,
                 LoopRunResult::Failed { .. } => TurnState::Failed,
                 LoopRunResult::Cancelled { .. } => TurnState::Cancelled,
@@ -1798,7 +1799,7 @@ mod tests {
         }
 
         fn state(&self) -> Option<TurnState> {
-            Some(*self.state.lock().unwrap())
+            Some(*self.state.lock())
         }
 
         fn signal(&self) -> crate::_base::utils::abort::AbortSignal {
@@ -1815,7 +1816,7 @@ mod tests {
 
         fn cancel(&self, reason: Option<LoopValue>) -> bool {
             if matches!(
-                *self.state.lock().unwrap(),
+                *self.state.lock(),
                 TurnState::Completed | TurnState::Failed | TurnState::Cancelled
             ) {
                 return false;
@@ -1847,7 +1848,7 @@ mod tests {
         }
 
         fn complete(&self, turn_id: crate::agent::TurnId) {
-            let turn = self.active.lock().unwrap().clone().unwrap();
+            let turn = self.active.lock().clone().unwrap();
             assert_eq!(turn.id, turn_id);
             turn.settle(LoopRunResult::Completed {
                 steps: 1,
@@ -1858,7 +1859,6 @@ mod tests {
         fn materialize_last_request(&self) {
             self.requests
                 .lock()
-                .unwrap()
                 .last()
                 .expect("a queued request should exist")
                 .on_will_materialize();
@@ -1875,18 +1875,17 @@ mod tests {
             let turn = if request.admission() == StepRequestAdmission::ActiveTurnOnly {
                 self.active
                     .lock()
-                    .unwrap()
                     .clone()
                     .expect("steer tests require an active turn")
             } else {
                 let turn = Arc::new(FakeTurn::new(crate::agent::TurnId::new(
                     self.next_id.fetch_add(1, Ordering::SeqCst),
                 )));
-                *self.active.lock().unwrap() = Some(Arc::clone(&turn));
+                *self.active.lock() = Some(Arc::clone(&turn));
                 turn
             };
             let turn_handle = TurnHandle(turn.clone());
-            self.requests.lock().unwrap().push(request);
+            self.requests.lock().push(request);
             let step = StepHandle(Arc::new(FakeStep {
                 id: format!("step-{}", turn.id),
                 turn_id: turn.id,
@@ -1910,7 +1909,7 @@ mod tests {
         }
 
         fn status(&self) -> AgentLoopStatus {
-            let active = self.active.lock().unwrap().clone();
+            let active = self.active.lock().clone();
             let running = active
                 .as_ref()
                 .is_some_and(|turn| turn.state() == Some(TurnState::Running));
@@ -1930,7 +1929,6 @@ mod tests {
         fn cancel(&self, turn_id: Option<crate::agent::TurnId>, reason: Option<LoopValue>) -> bool {
             self.active
                 .lock()
-                .unwrap()
                 .as_ref()
                 .is_some_and(|turn| turn_id.is_none_or(|id| id == turn.id) && turn.cancel(reason))
         }
@@ -2161,7 +2159,7 @@ mod tests {
         let captured_events = Arc::clone(&steered_events);
         let _subscription = runtime.event_bus.subscribe_type(
             "prompt.steered",
-            Arc::new(move |event| captured_events.lock().unwrap().push(event.clone())),
+            Arc::new(move |event| captured_events.lock().push(event.clone())),
         );
         let parent = scheduler.enqueue(prompt("parent")).await.unwrap();
         let child = scheduler.enqueue(prompt("child")).await.unwrap();
@@ -2170,13 +2168,13 @@ mod tests {
         assert_eq!(steered[0].snapshot().state, PromptState::Steered);
         assert_eq!(child.snapshot().state, PromptState::Steered);
         assert!(
-            steered_events.lock().unwrap().is_empty(),
+            steered_events.lock().is_empty(),
             "assignment must not move a prompt into the conversation"
         );
 
         loop_service.materialize_last_request();
         {
-            let events = steered_events.lock().unwrap();
+            let events = steered_events.lock();
             assert_eq!(events.len(), 1);
             assert_eq!(events[0].fields["promptIds"], serde_json::json!(["child"]));
             assert_eq!(events[0].fields["userMessages"][0]["promptId"], "child");

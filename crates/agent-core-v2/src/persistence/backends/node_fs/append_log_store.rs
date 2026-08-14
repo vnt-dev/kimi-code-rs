@@ -2,13 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/persistence/backends/node-fs/appendLogStore.ts`.
 
-use std::{
-    error::Error,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::error::Error;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt, future::join_all, stream};
@@ -107,9 +103,9 @@ impl AppendLogStore {
 
     fn state(&self, scope: &str, key: &str) -> Arc<LogState> {
         let id = log_id(scope, key);
-        let mut logs = self.inner.logs.lock().unwrap();
+        let mut logs = self.inner.logs.lock();
         if let Some(state) = logs.get(&id)
-            && !state.values.lock().unwrap().retired
+            && !state.values.lock().retired
         {
             return Arc::clone(state);
         }
@@ -126,7 +122,7 @@ impl AppendLogStore {
 
     fn schedule_flush(&self, scope: String, key: String, state: Arc<LogState>) {
         let should_schedule = {
-            let mut values = state.values.lock().unwrap();
+            let mut values = state.values.lock();
             if values.flush_scheduled {
                 false
             } else {
@@ -143,9 +139,9 @@ impl AppendLogStore {
                 self.inner.tasks.spawn_on(
                     async move {
                         tokio::task::yield_now().await;
-                        state.values.lock().unwrap().flush_scheduled = false;
+                        state.values.lock().flush_scheduled = false;
                         if let Err(error) = store.flush_state(&scope, &key, &state).await {
-                            let handler = state.values.lock().unwrap().on_error.clone();
+                            let handler = state.values.lock().on_error.clone();
                             if let Some(handler) = handler {
                                 handler(&error);
                             }
@@ -155,9 +151,9 @@ impl AppendLogStore {
                 );
             }
             Err(error) => {
-                state.values.lock().unwrap().flush_scheduled = false;
+                state.values.lock().flush_scheduled = false;
                 let append_error = runtime_error(error);
-                if let Some(handler) = state.values.lock().unwrap().on_error.clone() {
+                if let Some(handler) = state.values.lock().on_error.clone() {
                     handler(&append_error);
                 }
             }
@@ -191,7 +187,7 @@ impl AppendLogStore {
     ) -> Result<(), AppendLogError> {
         loop {
             let (batch, epoch, failure) = {
-                let values = state.values.lock().unwrap();
+                let values = state.values.lock();
                 (
                     values.pending.clone(),
                     values.cutover_epoch,
@@ -212,13 +208,13 @@ impl AppendLogStore {
                 .await
             {
                 let failure = AppendLogError::Storage(error);
-                let mut values = state.values.lock().unwrap();
+                let mut values = state.values.lock();
                 if values.storage_failure.is_none() {
                     values.storage_failure = Some(failure.clone());
                 }
                 return Err(values.storage_failure.clone().unwrap());
             }
-            let mut values = state.values.lock().unwrap();
+            let mut values = state.values.lock();
             if values.cutover_epoch != epoch {
                 return Ok(());
             }
@@ -228,7 +224,7 @@ impl AppendLogStore {
 
     async fn release(&self, scope: String, key: String, state: Arc<LogState>) {
         let should_retire = {
-            let mut values = state.values.lock().unwrap();
+            let mut values = state.values.lock();
             values.ref_count = values.ref_count.saturating_sub(1);
             if values.ref_count > 0 || values.retired {
                 false
@@ -243,7 +239,7 @@ impl AppendLogStore {
         let _ = self.flush_state(&scope, &key, &state).await;
         state.settled.complete();
         let id = log_id(&scope, &key);
-        let mut logs = self.inner.logs.lock().unwrap();
+        let mut logs = self.inner.logs.lock();
         if logs
             .get(&id)
             .is_some_and(|current| Arc::ptr_eq(current, &state))
@@ -276,7 +272,7 @@ pub fn register_append_log_store() {
 impl AppendLogStoreService for AppendLogStore {
     // Original: AppendLogStore.append<R>().
     fn append_value(&self, scope: &str, key: &str, record: Value, options: AppendLogOptions) {
-        let _admission = self.inner.task_admission.lock().unwrap();
+        let _admission = self.inner.task_admission.lock();
         if self.inner.closed.load(Ordering::Acquire) {
             if let Some(handler) = options.on_error {
                 handler(&closed_error());
@@ -285,7 +281,7 @@ impl AppendLogStoreService for AppendLogStore {
         }
         let state = self.state(scope, key);
         {
-            let mut values = state.values.lock().unwrap();
+            let mut values = state.values.lock();
             values.pending.push(record);
             if values.on_error.is_none() {
                 values.on_error = options.on_error;
@@ -322,7 +318,7 @@ impl AppendLogStoreService for AppendLogStore {
         let encoded = encode_batch(&records)?;
         let state = self.state(scope, key);
         {
-            let mut values = state.values.lock().unwrap();
+            let mut values = state.values.lock();
             values.cutover_epoch = values.cutover_epoch.wrapping_add(1);
         }
         let operation_guard = state.operation.lock().await;
@@ -333,10 +329,10 @@ impl AppendLogStoreService for AppendLogStore {
             .write(scope, key, &encoded, StorageWriteOptions { atomic: true })
             .await
         {
-            Ok(()) => state.values.lock().unwrap().storage_failure = None,
+            Ok(()) => state.values.lock().storage_failure = None,
             Err(error) => {
                 let failure = AppendLogError::Storage(error);
-                state.values.lock().unwrap().storage_failure = Some(failure.clone());
+                state.values.lock().storage_failure = Some(failure.clone());
                 return Err(failure);
             }
         }
@@ -350,7 +346,6 @@ impl AppendLogStoreService for AppendLogStore {
             .inner
             .logs
             .lock()
-            .unwrap()
             .iter()
             .map(|(id, state)| {
                 let (scope, key) = from_log_id(id);
@@ -371,7 +366,7 @@ impl AppendLogStoreService for AppendLogStore {
 
     async fn close(&self) -> Result<(), AppendLogError> {
         {
-            let _admission = self.inner.task_admission.lock().unwrap();
+            let _admission = self.inner.task_admission.lock();
             self.inner.closed.store(true, Ordering::Release);
             self.inner.tasks.close();
         }
@@ -380,21 +375,21 @@ impl AppendLogStoreService for AppendLogStore {
     }
 
     fn acquire(&self, scope: &str, key: &str) -> DisposableHandle {
-        let _admission = self.inner.task_admission.lock().unwrap();
+        let _admission = self.inner.task_admission.lock();
         if self.inner.closed.load(Ordering::Acquire) {
             return disposable_none();
         }
         let state = self.state(scope, key);
-        state.values.lock().unwrap().ref_count += 1;
+        state.values.lock().ref_count += 1;
         let store = self.clone();
         let scope = scope.to_owned();
         let key = key.to_owned();
         to_disposable(move || match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
-                let _admission = store.inner.task_admission.lock().unwrap();
+                let _admission = store.inner.task_admission.lock();
                 if store.inner.closed.load(Ordering::Acquire) {
                     let append_error = closed_error();
-                    if let Some(handler) = state.values.lock().unwrap().on_error.clone() {
+                    if let Some(handler) = state.values.lock().on_error.clone() {
                         handler(&append_error);
                     }
                     return;
@@ -410,7 +405,7 @@ impl AppendLogStoreService for AppendLogStore {
             }
             Err(error) => {
                 let append_error = runtime_error(error);
-                if let Some(handler) = state.values.lock().unwrap().on_error.clone() {
+                if let Some(handler) = state.values.lock().on_error.clone() {
                     handler(&append_error);
                 }
             }

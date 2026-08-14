@@ -285,22 +285,18 @@ fn publish_activation(telemetry: &TelemetryServiceHandle, origin: &SkillActivati
         FlowInvokedEvent, SkillInvokedEvent, SkillTrigger, TelemetryServiceEventExt,
     };
 
-    telemetry
-        .track_event(&SkillInvokedEvent {
+    let _ = telemetry.track_event(&SkillInvokedEvent {
             skill_name: origin.skill_name.clone(),
             trigger: match origin.trigger {
                 SkillActivationTrigger::UserSlash => SkillTrigger::UserSlash,
                 SkillActivationTrigger::ModelTool => SkillTrigger::ModelTool,
                 SkillActivationTrigger::NestedSkill => SkillTrigger::NestedSkill,
             },
-        })
-        .expect("skill invocation telemetry payload is serializable");
+        });
     if origin.skill_type.as_deref() == Some("flow") {
-        telemetry
-            .track_event(&FlowInvokedEvent {
-                flow_name: origin.skill_name.clone(),
-            })
-            .expect("flow invocation telemetry payload is serializable");
+        let _ = telemetry.track_event(&FlowInvokedEvent {
+            flow_name: origin.skill_name.clone(),
+        });
     }
 }
 

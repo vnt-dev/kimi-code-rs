@@ -2,12 +2,13 @@
 //!
 //! Original: `packages/agent-core-v2/src/wire/op.ts`.
 
+use parking_lot::RwLock;
 use std::{
     any::Any,
     collections::HashMap,
     error::Error,
     fmt,
-    sync::{Arc, LazyLock, RwLock},
+    sync::{Arc, LazyLock},
 };
 
 use serde::{Serialize, de::DeserializeOwned};
@@ -248,7 +249,7 @@ static OP_REGISTRY: LazyLock<RwLock<HashMap<String, Arc<dyn ErasedOpDescriptor>>
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub fn registered_op(op_type: &str) -> Option<Arc<dyn ErasedOpDescriptor>> {
-    OP_REGISTRY.read().unwrap().get(op_type).cloned()
+    OP_REGISTRY.read().get(op_type).cloned()
 }
 
 // Original: defineOp(). Registration and duplicate detection are atomic under
@@ -273,7 +274,7 @@ where
         persist: options.persist,
     });
     let erased: Arc<dyn ErasedOpDescriptor> = descriptor.clone();
-    let mut registry = OP_REGISTRY.write().unwrap();
+    let mut registry = OP_REGISTRY.write();
     if registry.contains_key(&op_type) {
         return Err(DuplicateOpError::new(op_type));
     }

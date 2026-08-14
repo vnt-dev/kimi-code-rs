@@ -198,7 +198,7 @@ pub fn register_select_tools_tool() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::{
@@ -218,7 +218,7 @@ mod tests {
         }
 
         fn load(&self, names: Vec<String>) -> LoadToolsResult {
-            self.calls.lock().unwrap().push(names);
+            self.calls.lock().push(names);
             self.result.clone()
         }
     }
@@ -277,7 +277,7 @@ mod tests {
             )
         );
         assert_eq!(
-            provider.calls.lock().unwrap().as_slice(),
+            provider.calls.lock().as_slice(),
             &[vec![
                 "alpha".to_owned(),
                 "beta".to_owned(),

@@ -6,9 +6,10 @@ use std::{
     collections::{HashMap, HashSet},
     io,
     path::Path,
-    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
@@ -76,7 +77,7 @@ impl GitService {
     // matching the source's `fetchedAt: now` behavior.
     async fn read_pull_request(&self, cwd: &str) -> GitServiceResult<Option<FsPullRequest>> {
         let now = Instant::now();
-        if let Some(cached) = self.pull_request_cache.lock().unwrap().get(cwd)
+        if let Some(cached) = self.pull_request_cache.lock().get(cwd)
             && now.duration_since(cached.fetched_at) < PULL_REQUEST_TTL
         {
             return Ok(cached.value.clone());
@@ -99,7 +100,7 @@ impl GitService {
         let value = (result.exit_code == 0)
             .then(|| parse_pull_request(&result.stdout))
             .flatten();
-        self.pull_request_cache.lock().unwrap().insert(
+        self.pull_request_cache.lock().insert(
             cwd.to_owned(),
             PullRequestCacheEntry {
                 value: value.clone(),
@@ -577,7 +578,6 @@ mod tests {
         async fn kill(&self, signal: Option<ProcessSignal>) -> Result<(), HostProcessError> {
             self.killed
                 .lock()
-                .unwrap()
                 .push(signal.unwrap_or(ProcessSignal::Terminate));
             self.kill_notification.notify_waiters();
             Ok(())
@@ -618,7 +618,7 @@ mod tests {
             args: &[String],
             options: HostProcessOptions,
         ) -> Result<Arc<dyn HostProcess>, HostProcessError> {
-            self.invocations.lock().unwrap().push(Invocation {
+            self.invocations.lock().push(Invocation {
                 command: command.into(),
                 args: args.to_vec(),
                 options,
@@ -626,11 +626,10 @@ mod tests {
             let spec = self
                 .specs
                 .lock()
-                .unwrap()
                 .pop_front()
                 .expect("unexpected process spawn");
             let process = Arc::new(StubProcess::new(spec));
-            self.spawned.lock().unwrap().push(Arc::clone(&process));
+            self.spawned.lock().push(Arc::clone(&process));
             Ok(process)
         }
     }
@@ -685,7 +684,7 @@ mod tests {
                 .is_some()
         );
 
-        let invocations = process.invocations.lock().unwrap();
+        let invocations = process.invocations.lock();
         assert_eq!(invocations.len(), 7);
         assert_eq!(
             invocations[0].args,
@@ -736,7 +735,7 @@ mod tests {
         assert_eq!(result.diff, "+brand new\n");
         assert!(!result.truncated);
         assert_eq!(
-            process.invocations.lock().unwrap()[3].args,
+            process.invocations.lock()[3].args,
             strings(&[
                 "diff",
                 "--no-color",
@@ -783,8 +782,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, RunResult::failed());
-        let process = Arc::clone(&process_service.spawned.lock().unwrap()[0]);
-        assert_eq!(*process.killed.lock().unwrap(), vec![ProcessSignal::Kill]);
+        let process = Arc::clone(&process_service.spawned.lock()[0]);
+        assert_eq!(*process.killed.lock(), vec![ProcessSignal::Kill]);
         assert!(process.disposed.load(Ordering::Acquire));
     }
 

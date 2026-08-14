@@ -110,10 +110,8 @@ pub fn register_session_process_runner() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex as StdMutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use parking_lot::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use tokio::{
         io::{empty, sink},
@@ -184,7 +182,7 @@ mod tests {
             options: HostProcessOptions,
         ) -> Result<Arc<dyn HostProcess>, HostProcessError> {
             self.count.fetch_add(1, Ordering::Relaxed);
-            self.calls.lock().unwrap().push(SpawnCall {
+            self.calls.lock().push(SpawnCall {
                 command: command.into(),
                 arguments: args.into(),
                 options,
@@ -216,7 +214,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(process.pid(), 7);
-        let calls = host.calls.lock().unwrap();
+        let calls = host.calls.lock();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].command, "git");
         assert_eq!(calls[0].arguments, ["status"]);
@@ -240,7 +238,7 @@ mod tests {
             .await
             .unwrap();
 
-        let calls = host.calls.lock().unwrap();
+        let calls = host.calls.lock();
         assert_eq!(calls[0].options.cwd.as_deref(), Some("/override"));
         assert_eq!(
             calls[0]

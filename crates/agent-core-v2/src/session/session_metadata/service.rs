@@ -5,9 +5,10 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -99,7 +100,7 @@ impl SessionMetadataService {
     }
     pub async fn read(&self) -> Result<SessionMeta, Box<dyn std::error::Error + Send + Sync>> {
         self.ensure_loaded().await?;
-        Ok(self.data.lock().unwrap().clone().expect("loaded metadata"))
+        Ok(self.data.lock().clone().expect("loaded metadata"))
     }
     pub async fn update(
         &self,
@@ -113,13 +114,13 @@ impl SessionMetadataService {
         patch: SessionMetaPatch,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.ensure_loaded().await?;
-        let mut data = self.data.lock().unwrap().clone().expect("loaded metadata");
+        let mut data = self.data.lock().clone().expect("loaded metadata");
         let changed = patch_keys(&patch);
         apply_patch(&mut data, patch);
         data.updated_at = now_ms();
         // The source updates its in-memory model before awaiting persistence.
         // Preserve that observation order for concurrent readers.
-        *self.data.lock().unwrap() = Some(data.clone());
+        *self.data.lock() = Some(data.clone());
         self.store
             .set(&self.context.meta_scope, META_KEY, &data)
             .await?;
@@ -155,7 +156,7 @@ impl SessionMetadataService {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let _lock = self.update_lock.lock().await;
         self.ensure_loaded().await?;
-        let data = self.data.lock().unwrap().clone().expect("loaded metadata");
+        let data = self.data.lock().clone().expect("loaded metadata");
         if data
             .agents
             .as_ref()
@@ -205,11 +206,11 @@ impl SessionMetadataService {
         }
     }
     async fn ensure_loaded(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if self.data.lock().unwrap().is_some() {
+        if self.data.lock().is_some() {
             return Ok(());
         }
         let _lock = self.load_lock.lock().await;
-        if self.data.lock().unwrap().is_some() {
+        if self.data.lock().is_some() {
             return Ok(());
         }
         let loaded = self
@@ -258,7 +259,7 @@ impl SessionMetadataService {
                 )]))),
             );
         }
-        *self.data.lock().unwrap() = Some(data);
+        *self.data.lock() = Some(data);
         Ok(())
     }
 }
@@ -502,7 +503,6 @@ mod tests {
             Ok(self
                 .values
                 .lock()
-                .unwrap()
                 .get(&(scope.into(), key.into()))
                 .cloned())
         }
@@ -521,7 +521,6 @@ mod tests {
             }
             self.values
                 .lock()
-                .unwrap()
                 .insert((scope.into(), key.into()), value);
             Ok(())
         }
@@ -606,19 +605,19 @@ mod tests {
 
     impl Logger for TestLog {
         fn error(&self, message: &str, payload: Option<LogPayload>) {
-            self.entries.lock().unwrap().push((message.into(), payload));
+            self.entries.lock().push((message.into(), payload));
         }
 
         fn warn(&self, message: &str, payload: Option<LogPayload>) {
-            self.entries.lock().unwrap().push((message.into(), payload));
+            self.entries.lock().push((message.into(), payload));
         }
 
         fn info(&self, message: &str, payload: Option<LogPayload>) {
-            self.entries.lock().unwrap().push((message.into(), payload));
+            self.entries.lock().push((message.into(), payload));
         }
 
         fn debug(&self, message: &str, payload: Option<LogPayload>) {
-            self.entries.lock().unwrap().push((message.into(), payload));
+            self.entries.lock().push((message.into(), payload));
         }
 
         fn child(&self, _: LogContext) -> Arc<dyn Logger> {
@@ -686,7 +685,6 @@ mod tests {
             }
             self.values
                 .lock()
-                .unwrap()
                 .insert((collection.into(), key.into()), value);
             Ok(())
         }
@@ -698,7 +696,6 @@ mod tests {
         async fn delete(&self, collection: &str, key: &str) -> Result<(), QueryStoreError> {
             self.values
                 .lock()
-                .unwrap()
                 .remove(&(collection.into(), key.into()));
             Ok(())
         }
@@ -711,7 +708,6 @@ mod tests {
             Ok(self
                 .values
                 .lock()
-                .unwrap()
                 .get(&(collection.into(), key.into()))
                 .cloned())
         }
@@ -785,7 +781,7 @@ mod tests {
         let target = Arc::clone(&events);
         let subscription = metadata
             .on_did_change_metadata()
-            .subscribe(move |event| target.lock().unwrap().push(event.clone()));
+            .subscribe(move |event| target.lock().push(event.clone()));
         (events, subscription)
     }
 
@@ -807,7 +803,7 @@ mod tests {
         assert_eq!(fixture.store.writes.load(Ordering::Relaxed), 1);
         assert_eq!(fixture.query_store.puts.load(Ordering::Relaxed), 0);
 
-        let entries = fixture.log.entries.lock().unwrap();
+        let entries = fixture.log.entries.lock();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "session metadata created");
         let Some(LogPayload::Context(context)) = &entries[0].1 else {
@@ -843,7 +839,6 @@ mod tests {
                 .query_store
                 .values
                 .lock()
-                .unwrap()
                 .get(&("session".into(), "s".into()))
                 .cloned(),
             Some(json!({
@@ -859,7 +854,7 @@ mod tests {
             }))
         );
         assert_eq!(
-            *events.lock().unwrap(),
+            *events.lock(),
             vec![SessionMetadataChangedEvent {
                 changed: vec![
                     "title".into(),
@@ -878,7 +873,7 @@ mod tests {
         fixture.metadata.set_archived(true).await.unwrap();
 
         assert_eq!(fixture.query_store.puts.load(Ordering::Relaxed), 0);
-        assert!(fixture.query_store.values.lock().unwrap().is_empty());
+        assert!(fixture.query_store.values.lock().is_empty());
     }
 
     #[tokio::test]
@@ -895,14 +890,13 @@ mod tests {
             .store
             .values
             .lock()
-            .unwrap()
             .get(&("sessions/w/s".into(), META_KEY.into()))
             .cloned()
             .unwrap();
         assert_eq!(persisted["archived"], true);
-        assert_eq!(events.lock().unwrap().len(), 1);
+        assert_eq!(events.lock().len(), 1);
 
-        let entries = fixture.log.entries.lock().unwrap();
+        let entries = fixture.log.entries.lock();
         let (_, payload) = entries
             .iter()
             .find(|(message, _)| message == "failed to mirror session metadata to read model")
@@ -939,7 +933,7 @@ mod tests {
             fixture.metadata.read().await.unwrap().title.as_deref(),
             Some("Retained in memory")
         );
-        assert!(events.lock().unwrap().is_empty());
+        assert!(events.lock().is_empty());
         assert_eq!(fixture.query_store.puts.load(Ordering::Relaxed), 0);
 
         fixture.metadata.set_archived(true).await.unwrap();
@@ -948,14 +942,13 @@ mod tests {
             .store
             .values
             .lock()
-            .unwrap()
             .get(&("sessions/w/s".into(), META_KEY.into()))
             .cloned()
             .unwrap();
         assert_eq!(persisted["title"], "Retained in memory");
         assert_eq!(persisted["archived"], true);
         assert_eq!(
-            *events.lock().unwrap(),
+            *events.lock(),
             vec![SessionMetadataChangedEvent {
                 changed: vec!["archived".into()],
             }]
@@ -990,11 +983,11 @@ mod tests {
         assert!(agents.contains_key("sub"));
         assert_eq!(fixture.store.writes.load(Ordering::Relaxed), 3);
         assert_eq!(fixture.query_store.puts.load(Ordering::Relaxed), 2);
-        assert_eq!(events.lock().unwrap().len(), 2);
+        assert_eq!(events.lock().len(), 2);
 
         let writes = fixture.store.writes.load(Ordering::Relaxed);
         let puts = fixture.query_store.puts.load(Ordering::Relaxed);
-        let event_count = events.lock().unwrap().len();
+        let event_count = events.lock().len();
         fixture
             .metadata
             .register_agent(
@@ -1008,13 +1001,13 @@ mod tests {
             .unwrap();
         assert_eq!(fixture.store.writes.load(Ordering::Relaxed), writes);
         assert_eq!(fixture.query_store.puts.load(Ordering::Relaxed), puts);
-        assert_eq!(events.lock().unwrap().len(), event_count);
+        assert_eq!(events.lock().len(), event_count);
     }
 
     #[tokio::test]
     async fn load_heals_missing_maps_without_bumping_time_or_mirroring() {
         let store = Arc::new(Store::default());
-        store.values.lock().unwrap().insert(
+        store.values.lock().insert(
             ("sessions/w/s".into(), META_KEY.into()),
             json!({
                 "id": "s",
@@ -1034,13 +1027,13 @@ mod tests {
         assert_eq!(metadata.custom, Some(BTreeMap::new()));
         assert_eq!(fixture.store.writes.load(Ordering::Relaxed), 1);
         assert_eq!(fixture.query_store.puts.load(Ordering::Relaxed), 0);
-        assert!(fixture.log.entries.lock().unwrap().is_empty());
+        assert!(fixture.log.entries.lock().is_empty());
     }
 
     #[tokio::test]
     async fn load_accepts_legacy_typescript_metadata_without_id() {
         let store = Arc::new(Store::default());
-        store.values.lock().unwrap().insert(
+        store.values.lock().insert(
             ("sessions/w/s".into(), META_KEY.into()),
             json!({
                 "title": "Legacy TypeScript session",

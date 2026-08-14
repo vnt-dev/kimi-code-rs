@@ -4,9 +4,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, LazyLock, Mutex, OnceLock, Weak},
     time::{SystemTime, UNIX_EPOCH},
 };
+use std::sync::{Arc, LazyLock, OnceLock, Weak};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -349,7 +350,6 @@ impl AgentGoalService {
                             if service
                                 .state
                                 .lock()
-                                .unwrap()
                                 .budget_grace_turns
                                 .contains(&context.turn_id)
                             {
@@ -387,7 +387,6 @@ impl AgentGoalService {
                                 service
                                     .state
                                     .lock()
-                                    .unwrap()
                                     .goal_outcome_tool_result_turns
                                     .insert(context.turn_id, goal_id);
                             }
@@ -576,7 +575,7 @@ impl AgentGoalService {
         origin: &PromptOrigin,
     ) -> GoalServiceResult<()> {
         {
-            let mut runtime = self.state.lock().unwrap();
+            let mut runtime = self.state.lock();
             runtime.live_turn_id = Some(turn_id);
             runtime.goal_turn_targets.remove(&turn_id);
             runtime.exhausted_turn_budget_goals.remove(&turn_id);
@@ -584,7 +583,6 @@ impl AgentGoalService {
         let has_driven = self
             .state
             .lock()
-            .unwrap()
             .goal_driven_turns
             .contains_key(&turn_id);
         if !has_driven {
@@ -592,7 +590,6 @@ impl AgentGoalService {
             let continuation_goal_id = if is_goal_continuation_origin(origin) {
                 self.state
                     .lock()
-                    .unwrap()
                     .pending_continuation_goals
                     .get(&turn_id)
                     .cloned()
@@ -606,7 +603,6 @@ impl AgentGoalService {
             {
                 self.state
                     .lock()
-                    .unwrap()
                     .goal_driven_turns
                     .insert(turn_id, continuation_goal_id);
             } else if let Some(state) = state
@@ -615,12 +611,11 @@ impl AgentGoalService {
             {
                 self.state
                     .lock()
-                    .unwrap()
                     .goal_driven_turns
                     .insert(turn_id, state.goal_id);
             }
         }
-        let mut runtime = self.state.lock().unwrap();
+        let mut runtime = self.state.lock();
         runtime.pending_continuation_goals.remove(&turn_id);
         runtime.goal_outcome_tool_result_turns.remove(&turn_id);
         runtime.goal_outcome_continuation_turns.remove(&turn_id);
@@ -628,7 +623,7 @@ impl AgentGoalService {
     }
 
     fn adopt_starter_turn(&self, actor: GoalActor) {
-        let Some(turn_id) = self.state.lock().unwrap().live_turn_id else {
+        let Some(turn_id) = self.state.lock().live_turn_id else {
             return;
         };
         let Some(state) = self
@@ -638,7 +633,7 @@ impl AgentGoalService {
             return;
         };
         let turn_budget_reached = self.snapshot(&state).budget.turn_budget_reached;
-        let mut runtime = self.state.lock().unwrap();
+        let mut runtime = self.state.lock();
         let goal_id = runtime.goal_driven_turns.get(&turn_id).cloned();
         if actor == GoalActor::Model {
             runtime
@@ -661,7 +656,7 @@ impl AgentGoalService {
 
     fn handle_before_step(&self, context: &BeforeStepContext) -> GoalServiceResult<()> {
         let goal_id = {
-            let mut runtime = self.state.lock().unwrap();
+            let mut runtime = self.state.lock();
             let goal_id = runtime.goal_driven_turns.get(&context.turn_id).cloned();
             if goal_id.is_none() || !runtime.counted_goal_turns.insert(context.turn_id) {
                 return Ok(());
@@ -680,7 +675,6 @@ impl AgentGoalService {
         let goal_id = self
             .state
             .lock()
-            .unwrap()
             .goal_driven_turns
             .get(&turn_id)
             .cloned();
@@ -708,7 +702,6 @@ impl AgentGoalService {
             && (self
                 .state
                 .lock()
-                .unwrap()
                 .exhausted_turn_budget_goals
                 .get(&context.turn_id)
                 == goal_id.as_ref()
@@ -737,7 +730,7 @@ impl AgentGoalService {
                 serde_json::from_value::<crate::agent::loop_::LoopControl>(value).ok()
             })
             .and_then(|control| control.max_steps_per_turn);
-        let mut runtime = self.state.lock().unwrap();
+        let mut runtime = self.state.lock();
         if context.finish_reason == FinishReason::ToolCalls
             && !runtime.budget_grace_turns.contains(&context.turn_id)
             && has_step_budget_remaining(max_steps, context.step)
@@ -762,7 +755,7 @@ impl AgentGoalService {
     ) -> GoalServiceResult<()> {
         let goal_id = self.goal_turn_target(context.turn_id);
         let outcome_goal_id = {
-            let mut runtime = self.state.lock().unwrap();
+            let mut runtime = self.state.lock();
             if runtime
                 .goal_outcome_continuation_turns
                 .contains(&context.turn_id)
@@ -786,7 +779,6 @@ impl AgentGoalService {
         }
         self.state
             .lock()
-            .unwrap()
             .goal_outcome_continuation_turns
             .insert(context.turn_id);
         let max_steps = self
@@ -813,7 +805,7 @@ impl AgentGoalService {
     fn handle_turn_ended(&self, event: TurnEndedEvent) -> GoalServiceResult<()> {
         let (goal_id, lifecycle_goal_id, starter_turn) = self.clear_turn_tracking(event.turn_id);
         let resume_continuation = {
-            let mut runtime = self.state.lock().unwrap();
+            let mut runtime = self.state.lock();
             let resume = runtime.resume_continuation.clone();
             if resume
                 .as_ref()
@@ -866,7 +858,7 @@ impl AgentGoalService {
         &self,
         turn_id: crate::agent::TurnId,
     ) -> (Option<String>, Option<String>, bool) {
-        let mut runtime = self.state.lock().unwrap();
+        let mut runtime = self.state.lock();
         if runtime
             .pending_continuation
             .as_ref()
@@ -962,7 +954,7 @@ impl AgentGoalService {
 
     fn launch_continuation_turn(&self, goal_id: &str) -> GoalServiceResult<()> {
         if !self.is_active_goal(goal_id)
-            || self.state.lock().unwrap().pending_continuation.is_some()
+            || self.state.lock().pending_continuation.is_some()
         {
             return Ok(());
         }
@@ -998,7 +990,7 @@ impl AgentGoalService {
             .enqueue(Arc::new(request), None)
             .map_err(GoalServiceError::Loop)?;
         let pending = {
-            let mut runtime = self.state.lock().unwrap();
+            let mut runtime = self.state.lock();
             runtime.next_pending_id += 1;
             let pending = PendingContinuation {
                 id: runtime.next_pending_id,
@@ -1020,7 +1012,7 @@ impl AgentGoalService {
                 return;
             };
             if let Some(service) = weak.upgrade() {
-                let mut runtime = service.state.lock().unwrap();
+                let mut runtime = service.state.lock();
                 if let Some(current) = runtime
                     .pending_continuation
                     .as_mut()
@@ -1046,7 +1038,7 @@ impl AgentGoalService {
     }
 
     fn can_launch_continuation(&self) -> bool {
-        let runtime = self.state.lock().unwrap();
+        let runtime = self.state.lock();
         if runtime.live_turn_id.is_some() || runtime.pending_continuation.is_some() {
             return false;
         }
@@ -1071,7 +1063,7 @@ impl AgentGoalService {
     }
 
     fn goal_turn_target(&self, turn_id: crate::agent::TurnId) -> Option<String> {
-        let runtime = self.state.lock().unwrap();
+        let runtime = self.state.lock();
         runtime
             .goal_turn_targets
             .get(&turn_id)
@@ -1085,7 +1077,7 @@ impl AgentGoalService {
         reason: Option<LoopValue>,
     ) {
         let pending = {
-            let mut runtime = self.state.lock().unwrap();
+            let mut runtime = self.state.lock();
             if preserve_live_continuation
                 && runtime
                     .pending_continuation
@@ -1109,7 +1101,7 @@ impl AgentGoalService {
     fn normalize_after_replay(&self) -> GoalServiceResult<()> {
         self.append_fork_cleared_reminder()?;
         self.clear_wall_clock_deadline();
-        self.state.lock().unwrap().live_wall_clock_started_at = None;
+        self.state.lock().live_wall_clock_started_at = None;
         let Some(state) = self.goal_state() else {
             return Ok(());
         };
@@ -1159,10 +1151,10 @@ impl AgentGoalService {
         if self.goal_state().is_none() {
             return Ok(());
         }
-        self.state.lock().unwrap().resume_continuation = None;
+        self.state.lock().resume_continuation = None;
         self.cancel_pending_continuation(preserve_live_continuation, None);
         self.clear_wall_clock_deadline();
-        self.state.lock().unwrap().live_wall_clock_started_at = None;
+        self.state.lock().live_wall_clock_started_at = None;
         self.wire.dispatch([clear_goal()?])?;
         if emit {
             self.emit_goal_updated(None, None);
@@ -1188,13 +1180,13 @@ impl AgentGoalService {
         let wall_clock_ms = self.settle_wall_clock(state);
         let wall_clock_resumed_at = (status == GoalStatus::Active).then(epoch_millis);
         if status == GoalStatus::Active {
-            self.state.lock().unwrap().live_wall_clock_started_at =
+            self.state.lock().live_wall_clock_started_at =
                 Some(self.deadline_scheduler.now());
         } else if state.status == GoalStatus::Active {
-            self.state.lock().unwrap().resume_continuation = None;
+            self.state.lock().resume_continuation = None;
             self.cancel_pending_continuation(preserve_live_continuation, cancellation_reason);
             self.clear_wall_clock_deadline();
-            self.state.lock().unwrap().live_wall_clock_started_at = None;
+            self.state.lock().live_wall_clock_started_at = None;
         }
         self.wire.dispatch([update_goal(UpdateGoalPayload {
             status: Some(status),
@@ -1257,7 +1249,7 @@ impl AgentGoalService {
 
     fn live_wall_clock_ms(&self, state: &GoalState) -> u64 {
         if state.status == GoalStatus::Active {
-            if let Some(started_at) = self.state.lock().unwrap().live_wall_clock_started_at {
+            if let Some(started_at) = self.state.lock().live_wall_clock_started_at {
                 let elapsed = self.deadline_scheduler.now().saturating_sub(started_at);
                 return state.wall_clock_ms.saturating_add(elapsed);
             }
@@ -1299,14 +1291,14 @@ impl AgentGoalService {
     }
 
     fn clear_wall_clock_deadline(&self) {
-        if let Some(deadline) = self.state.lock().unwrap().wall_clock_deadline.take() {
+        if let Some(deadline) = self.state.lock().wall_clock_deadline.take() {
             let _ = deadline.dispose();
         }
     }
 
     fn refresh_wall_clock_deadline(&self, state: &GoalState) {
         self.clear_wall_clock_deadline();
-        let runtime = self.state.lock().unwrap();
+        let runtime = self.state.lock();
         let started = runtime.live_wall_clock_started_at.is_some();
         drop(runtime);
         let Some(budget_ms) = state.budget_limits.wall_clock_budget_ms else {
@@ -1329,7 +1321,7 @@ impl AgentGoalService {
                 }
             }),
         );
-        self.state.lock().unwrap().wall_clock_deadline = Some(deadline);
+        self.state.lock().wall_clock_deadline = Some(deadline);
     }
 
     fn handle_wall_clock_deadline(&self) {
@@ -1354,7 +1346,7 @@ impl AgentGoalService {
             Arc::new(abort_error(Some(&reason))) as Arc<dyn std::error::Error + Send + Sync>
         );
         let (live_turn_id, pending_turn_id) = {
-            let runtime = self.state.lock().unwrap();
+            let runtime = self.state.lock();
             (
                 runtime.live_turn_id,
                 runtime
@@ -1395,7 +1387,6 @@ impl AgentGoalServiceContract for AgentGoalService {
         Ok(self
             .state
             .lock()
-            .unwrap()
             .goal_turn_targets
             .get(&turn_id)
             .is_some_and(|target| target == goal_id))
@@ -1422,7 +1413,7 @@ impl AgentGoalServiceContract for AgentGoalService {
             actor: None,
             budget_limits: None,
         })?])?;
-        self.state.lock().unwrap().live_wall_clock_started_at = Some(self.deadline_scheduler.now());
+        self.state.lock().live_wall_clock_started_at = Some(self.deadline_scheduler.now());
         self.adopt_starter_turn(actor);
         let state = self.require_state()?;
         // `refresh_wall_clock_deadline` needs the service Arc in timer
@@ -1511,7 +1502,7 @@ impl AgentGoalServiceContract for AgentGoalService {
                 return Err(error);
             }
         } else if continue_paused {
-            let mut runtime = self.state.lock().unwrap();
+            let mut runtime = self.state.lock();
             if let Some(turn_id) = runtime.live_turn_id {
                 runtime.resume_continuation = Some((turn_id, state.goal_id));
             }
@@ -1529,7 +1520,7 @@ impl AgentGoalServiceContract for AgentGoalService {
         let state = self.require_state()?;
         let snapshot = self.snapshot(&state);
         if state.status == GoalStatus::Active
-            && let Some(turn_id) = self.state.lock().unwrap().live_turn_id
+            && let Some(turn_id) = self.state.lock().live_turn_id
         {
             self.loop_service.cancel(Some(turn_id), None);
         }
@@ -1719,7 +1710,7 @@ fn cleanup_pending(service: &Weak<AgentGoalService>, pending: &PendingContinuati
     let Some(service) = service.upgrade() else {
         return;
     };
-    let mut runtime = service.state.lock().unwrap();
+    let mut runtime = service.state.lock();
     if let Some(turn_id) = pending.turn_id {
         runtime.pending_continuation_goals.remove(&turn_id);
     }
@@ -1915,12 +1906,12 @@ mod tests {
     #[async_trait]
     impl AppendLogStoreService for MemoryLog {
         fn append_value(&self, _: &str, _: &str, value: Value, _: AppendLogOptions) {
-            self.0.lock().unwrap().push(value);
+            self.0.lock().push(value);
         }
 
         fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
             Box::pin(stream::iter(
-                self.0.lock().unwrap().clone().into_iter().map(Ok),
+                self.0.lock().clone().into_iter().map(Ok),
             ))
         }
 
@@ -1930,7 +1921,7 @@ mod tests {
             _: &str,
             records: Vec<Value>,
         ) -> Result<(), AppendLogError> {
-            *self.0.lock().unwrap() = records;
+            *self.0.lock() = records;
             Ok(())
         }
 
@@ -1965,11 +1956,11 @@ mod tests {
 
     impl AgentContextMemoryServiceContract for MemoryContext {
         fn get(&self) -> crate::agent::context_memory::ContextMemorySnapshot {
-            self.0.lock().unwrap().clone().into()
+            self.0.lock().clone().into()
         }
 
         fn append(&self, messages: Vec<ContextMessage>) -> Result<(), ContextMemoryServiceError> {
-            self.0.lock().unwrap().extend(messages);
+            self.0.lock().extend(messages);
             Ok(())
         }
 
@@ -1978,7 +1969,7 @@ mod tests {
         }
 
         fn clear(&self) -> Result<(), ContextMemoryServiceError> {
-            self.0.lock().unwrap().clear();
+            self.0.lock().clear();
             Ok(())
         }
 
@@ -2142,7 +2133,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);
         let registration = event_bus.subscribe(Arc::new(move |event| {
-            recorded.lock().unwrap().push(event.clone());
+            recorded.lock().push(event.clone());
         }));
         let service = Arc::new(AgentGoalService {
             wire,
@@ -2385,7 +2376,7 @@ mod tests {
                 Some(PromptOrigin::SystemTrigger { name }) if name == "goal_cancelled"
             )
         }));
-        let events = events.lock().unwrap();
+        let events = events.lock();
         assert!(events.iter().any(|event| {
             event.event_type == "goal.updated" && event.fields.get("snapshot") == Some(&Value::Null)
         }));

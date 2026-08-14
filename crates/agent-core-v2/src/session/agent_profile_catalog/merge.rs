@@ -61,7 +61,8 @@ pub fn merge_agent_profiles(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use crate::app::agent_profile_catalog::AgentSystemPrompt;
 
@@ -120,7 +121,7 @@ mod tests {
                     20,
                 ),
             ],
-            |message| warnings.lock().unwrap().push(message.to_owned()),
+            |message| warnings.lock().push(message.to_owned()),
         );
         assert_eq!(
             result["agent"].render_system_prompt(&Default::default()),
@@ -131,7 +132,7 @@ mod tests {
             "tail"
         );
         assert!(result.contains_key("builtin-only"));
-        assert!(warnings.lock().unwrap().is_empty());
+        assert!(warnings.lock().is_empty());
 
         let fallback = merge_agent_profiles(
             vec![profile("agent", "builtin", false)],
@@ -139,12 +140,12 @@ mod tests {
                 contribution(vec![profile("agent", "ignored", false)], 40),
                 contribution(vec![profile("agent", "fallback", true)], 10),
             ],
-            |message| warnings.lock().unwrap().push(message.to_owned()),
+            |message| warnings.lock().push(message.to_owned()),
         );
         assert_eq!(
             fallback["agent"].render_system_prompt(&Default::default()),
             "fallback"
         );
-        assert_eq!(warnings.lock().unwrap().len(), 1);
+        assert_eq!(warnings.lock().len(), 1);
     }
 }

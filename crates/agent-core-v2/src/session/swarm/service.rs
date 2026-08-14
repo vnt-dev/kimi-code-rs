@@ -2,13 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/swarm/sessionSwarmService.ts`.
 
-use std::{
-    io,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::io;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{FutureExt, future::BoxFuture};
@@ -449,7 +445,7 @@ impl SessionSwarmServiceContract for SessionSwarmService {
                 .next_generation
                 .fetch_add(1, Ordering::Relaxed);
             let controller = AbortController::new();
-            service.inner.in_flight.lock().unwrap().insert(
+            service.inner.in_flight.lock().insert(
                 args.caller_agent_id.clone(),
                 InFlight {
                     generation,
@@ -483,7 +479,7 @@ impl SessionSwarmServiceContract for SessionSwarmService {
                     .run()
                     .await;
             drop(links);
-            let mut in_flight = service.inner.in_flight.lock().unwrap();
+            let mut in_flight = service.inner.in_flight.lock();
             if in_flight
                 .get(&args.caller_agent_id)
                 .is_some_and(|entry| entry.generation == generation)
@@ -496,7 +492,7 @@ impl SessionSwarmServiceContract for SessionSwarmService {
     }
 
     fn cancel(&self, caller_agent_id: &str) {
-        if let Some(entry) = self.inner.in_flight.lock().unwrap().get(caller_agent_id) {
+        if let Some(entry) = self.inner.in_flight.lock().get(caller_agent_id) {
             entry.controller.abort(None);
         }
     }

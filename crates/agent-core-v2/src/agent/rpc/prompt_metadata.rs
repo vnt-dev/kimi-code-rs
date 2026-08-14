@@ -229,10 +229,8 @@ fn is_js_whitespace(character: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    };
+    use parking_lot::Mutex;
+    use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
 
     use async_trait::async_trait;
     use serde_json::json;
@@ -301,14 +299,14 @@ mod tests {
             if self.fail_read.load(Ordering::Acquire) {
                 return Err(Box::new(MetadataReadFailed));
             }
-            Ok(self.data.lock().unwrap().clone())
+            Ok(self.data.lock().clone())
         }
 
         async fn update(&self, patch: SessionMetaPatch) -> Result<(), SessionMetadataError> {
             if self.fail_update.load(Ordering::Acquire) {
                 return Err(Box::new(MetadataUpdateFailed));
             }
-            let mut data = self.data.lock().unwrap();
+            let mut data = self.data.lock();
             if let Some(title) = &patch.title {
                 data.title = Some(title.clone());
             }
@@ -319,7 +317,7 @@ mod tests {
                 data.last_prompt = Some(last_prompt.clone());
             }
             drop(data);
-            self.patches.lock().unwrap().push(patch);
+            self.patches.lock().push(patch);
             Ok(())
         }
 
@@ -503,7 +501,7 @@ sk-abcdefghijkl
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&events);
         let _subscription = event_service.subscribe(Arc::new(move |event| {
-            captured.lock().unwrap().push(event.clone());
+            captured.lock().push(event.clone());
         }));
 
         apply_prompt_metadata_update(
@@ -518,7 +516,7 @@ sk-abcdefghijkl
         .unwrap();
 
         assert_eq!(
-            metadata.patches.lock().unwrap().as_slice(),
+            metadata.patches.lock().as_slice(),
             [SessionMetaPatch {
                 title: Some("first prompt".into()),
                 is_custom_title: Some(false),
@@ -527,7 +525,7 @@ sk-abcdefghijkl
             }]
         );
         assert_eq!(
-            events.lock().unwrap().as_slice(),
+            events.lock().as_slice(),
             [GlobalDomainEvent {
                 event_type: "session.meta.updated".into(),
                 payload: json!({
@@ -551,7 +549,7 @@ sk-abcdefghijkl
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&events);
         let _subscription = event_service.subscribe(Arc::new(move |event| {
-            captured.lock().unwrap().push(event.clone());
+            captured.lock().push(event.clone());
         }));
 
         apply_prompt_metadata_update(
@@ -566,14 +564,14 @@ sk-abcdefghijkl
         .unwrap();
 
         assert_eq!(
-            metadata.patches.lock().unwrap().as_slice(),
+            metadata.patches.lock().as_slice(),
             [SessionMetaPatch {
                 last_prompt: Some("another prompt".into()),
                 ..SessionMetaPatch::default()
             }]
         );
         assert_eq!(
-            events.lock().unwrap()[0].payload,
+            events.lock()[0].payload,
             json!({
                 "agentId": "main",
                 "sessionId": "s1",
@@ -589,7 +587,7 @@ sk-abcdefghijkl
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&events);
         let _subscription = event_service.subscribe(Arc::new(move |event| {
-            captured.lock().unwrap().push(event.clone());
+            captured.lock().push(event.clone());
         }));
 
         apply_prompt_metadata_update(
@@ -602,7 +600,7 @@ sk-abcdefghijkl
         )
         .await
         .unwrap();
-        assert!(metadata.patches.lock().unwrap().is_empty());
+        assert!(metadata.patches.lock().is_empty());
         assert_eq!(metadata.reads.load(Ordering::Relaxed), 0);
 
         metadata.fail_update.store(true, Ordering::Release);
@@ -617,7 +615,7 @@ sk-abcdefghijkl
         .await
         .unwrap_err();
         assert!(error.downcast_ref::<MetadataUpdateFailed>().is_some());
-        assert!(events.lock().unwrap().is_empty());
+        assert!(events.lock().is_empty());
     }
 
     #[tokio::test]
@@ -628,7 +626,7 @@ sk-abcdefghijkl
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&events);
         let _subscription = event_service.subscribe(Arc::new(move |event| {
-            captured.lock().unwrap().push(event.clone());
+            captured.lock().push(event.clone());
         }));
 
         let error = apply_prompt_metadata_update(
@@ -643,7 +641,7 @@ sk-abcdefghijkl
         .unwrap_err();
 
         assert!(error.downcast_ref::<MetadataReadFailed>().is_some());
-        assert!(metadata.patches.lock().unwrap().is_empty());
-        assert!(events.lock().unwrap().is_empty());
+        assert!(metadata.patches.lock().is_empty());
+        assert!(events.lock().is_empty());
     }
 }

@@ -5,8 +5,9 @@
 use std::{
     collections::HashSet,
     io,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -98,7 +99,7 @@ impl SessionToolPolicyService {
             .await
             .map_err(|error| Box::new(error) as SessionToolPolicyError)?;
         if let Some(stored) = stored {
-            self.state.lock().unwrap().disabled_tools = dedupe_names(stored.disabled_tools);
+            self.state.lock().disabled_tools = dedupe_names(stored.disabled_tools);
         }
         Ok(())
     }
@@ -106,7 +107,7 @@ impl SessionToolPolicyService {
     async fn replace(&self, names: Vec<String>) -> Result<(), SessionToolPolicyError> {
         self.ensure_ready().await?;
         let disabled_tools = dedupe_names(names);
-        if self.state.lock().unwrap().disabled_tools == disabled_tools {
+        if self.state.lock().disabled_tools == disabled_tools {
             return Ok(());
         }
         let next_state = SessionToolPolicyState { disabled_tools };
@@ -114,7 +115,7 @@ impl SessionToolPolicyService {
             .set(&self.scope, STATE_KEY, &next_state)
             .await
             .map_err(|error| Box::new(error) as SessionToolPolicyError)?;
-        *self.state.lock().unwrap() = next_state;
+        *self.state.lock() = next_state;
         self.change_emitter
             .fire_async((), CancellationToken::new())
             .await;
@@ -133,7 +134,7 @@ impl SessionToolPolicyContract for SessionToolPolicyService {
     }
 
     fn disabled_tools(&self) -> Vec<String> {
-        self.state.lock().unwrap().disabled_tools.clone()
+        self.state.lock().disabled_tools.clone()
     }
 
     async fn set_disabled_tools(&self, names: Vec<String>) -> Result<(), SessionToolPolicyError> {
@@ -199,7 +200,6 @@ mod tests {
             Ok(self
                 .values
                 .lock()
-                .unwrap()
                 .get(&(scope.into(), key.into()))
                 .cloned())
         }
@@ -211,14 +211,12 @@ mod tests {
         ) -> Result<(), StorageError> {
             self.values
                 .lock()
-                .unwrap()
                 .insert((scope.into(), key.into()), value);
             Ok(())
         }
         async fn delete(&self, scope: &str, key: &str) -> Result<(), StorageError> {
             self.values
                 .lock()
-                .unwrap()
                 .remove(&(scope.into(), key.into()));
             Ok(())
         }
@@ -261,7 +259,6 @@ mod tests {
         let state = store
             .values
             .lock()
-            .unwrap()
             .values()
             .next()
             .cloned()
@@ -271,6 +268,6 @@ mod tests {
             .set_disabled_tools(vec!["Read".into(), "Write".into()])
             .await
             .unwrap();
-        assert_eq!(store.values.lock().unwrap().len(), 1);
+        assert_eq!(store.values.lock().len(), 1);
     }
 }

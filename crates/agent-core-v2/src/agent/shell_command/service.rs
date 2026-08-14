@@ -6,8 +6,9 @@
 use std::{
     collections::HashMap,
     io,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -162,7 +163,7 @@ impl AgentShellCommandService {
     }
 
     fn task_id(&self, command_id: &str) -> Option<String> {
-        self.tasks.lock().unwrap().get(command_id).cloned()
+        self.tasks.lock().get(command_id).cloned()
     }
 
     fn publish_fallback_error(&self, command_id: &str, text: String) {
@@ -203,20 +204,19 @@ impl AgentShellCommandServiceContract for AgentShellCommandService {
         if let Some(command_id) = &input.command_id {
             self.controllers
                 .lock()
-                .unwrap()
                 .insert(command_id.clone(), controller.clone());
         }
 
         let result = self.run_inner(&input, controller).await;
         if let Some(command_id) = &input.command_id {
-            self.controllers.lock().unwrap().remove(command_id);
-            self.tasks.lock().unwrap().remove(command_id);
+            self.controllers.lock().remove(command_id);
+            self.tasks.lock().remove(command_id);
         }
         Ok(result)
     }
 
     fn cancel(&self, command_id: &str) {
-        if let Some(controller) = self.controllers.lock().unwrap().get(command_id) {
+        if let Some(controller) = self.controllers.lock().get(command_id) {
             controller.abort(Some(user_cancellation_reason()));
         }
     }
@@ -279,11 +279,9 @@ impl AgentShellCommandService {
             match update.kind {
                 ToolUpdateKind::Stdout => stdout_for_update
                     .lock()
-                    .unwrap()
                     .push_str(update.text.as_deref().unwrap_or_default()),
                 ToolUpdateKind::Stderr => stderr_for_update
                     .lock()
-                    .unwrap()
                     .push_str(update.text.as_deref().unwrap_or_default()),
                 _ => return,
             }
@@ -291,7 +289,7 @@ impl AgentShellCommandService {
                 event_bus.publish_typed(ShellOutputEvent {
                     command_id: command_id.clone(),
                     update,
-                    task_id: tasks.lock().unwrap().get(command_id).cloned(),
+                    task_id: tasks.lock().get(command_id).cloned(),
                 });
             }
         });
@@ -303,7 +301,6 @@ impl AgentShellCommandService {
             if let Some(command_id) = &command_id {
                 tasks
                     .lock()
-                    .unwrap()
                     .insert(command_id.clone(), task_id.clone());
                 event_bus.publish_typed(ShellStartedEvent {
                     command_id: command_id.clone(),
@@ -326,8 +323,8 @@ impl AgentShellCommandService {
             })
             .await;
 
-        stdout = stdout_buffer.lock().unwrap().clone();
-        stderr = stderr_buffer.lock().unwrap().clone();
+        stdout = stdout_buffer.lock().clone();
+        stderr = stderr_buffer.lock().clone();
         if let Some(output) = text_output(&result.output)
             && output.starts_with("task_id: ")
         {

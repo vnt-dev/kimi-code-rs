@@ -22,9 +22,10 @@ use std::{
     error::Error,
     io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
     time::Duration,
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -234,7 +235,6 @@ impl KimiWebbridgeEntry {
             let migration_error = self
                 .standalone_skill_migration_error
                 .lock()
-                .unwrap()
                 .clone();
             steps.push(CapabilityStep {
                 id: "standalone-skill-migration".to_owned(),
@@ -249,7 +249,7 @@ impl KimiWebbridgeEntry {
                 optional: Some(true),
             });
         } else if path_exists(&self.standalone_skill_backup_dir).await {
-            let backup_path = self.standalone_skill_backup_path.lock().unwrap().clone();
+            let backup_path = self.standalone_skill_backup_path.lock().clone();
             steps.push(CapabilityStep {
                 id: "standalone-skill-migration".to_owned(),
                 state: CapabilityStepState::Ok,
@@ -419,12 +419,12 @@ impl KimiWebbridgeEntry {
             report("standalone-skill-migration", None);
             match self.migrate_standalone_skills().await {
                 Ok(backup_root) => {
-                    *self.standalone_skill_backup_path.lock().unwrap() =
+                    *self.standalone_skill_backup_path.lock() =
                         backup_root.map(|path| path.display().to_string());
-                    *self.standalone_skill_migration_error.lock().unwrap() = None;
+                    *self.standalone_skill_migration_error.lock() = None;
                 }
                 Err(error) => {
-                    *self.standalone_skill_migration_error.lock().unwrap() = Some(format!(
+                    *self.standalone_skill_migration_error.lock() = Some(format!(
                         "Could not back up the standalone kimi-webbridge skill: {error}"
                     ));
                 }
@@ -527,7 +527,8 @@ mod tests {
     //!
     //! Original: `packages/agent-core-v2/test/app/capability/kimiWebbridge.test.ts`.
 
-    use std::{path::PathBuf, sync::Mutex};
+    use std::path::PathBuf;
+    use parking_lot::Mutex;
 
     use serde_json::json;
 
@@ -606,7 +607,7 @@ mod tests {
         let recording = Arc::clone(&reports);
         (
             Box::new(move |step, percent| {
-                recording.lock().unwrap().push((step.to_owned(), percent));
+                recording.lock().push((step.to_owned(), percent));
             }),
             reports,
         )
@@ -778,10 +779,10 @@ mod tests {
         entry.install(report).await.unwrap();
 
         assert_eq!(
-            plugins.installs.lock().unwrap().as_slice(),
+            plugins.installs.lock().as_slice(),
             ["https://code.kimi.com/kimi-code/plugins/official/kimi-webbridge.zip"]
         );
-        let reports = reports.lock().unwrap().clone();
+        let reports = reports.lock().clone();
         assert!(
             reports
                 .iter()
@@ -837,16 +838,16 @@ mod tests {
         assert!(path_exists(&bin_path).await);
         // Daemon started exactly once (start-if-down).
         assert_eq!(
-            calls.lock().unwrap().as_slice(),
+            calls.lock().as_slice(),
             [format!("{} start", bin_path.display())]
         );
         // Plugin wiring installed from the official CDN zip.
         assert_eq!(
-            plugins.installs.lock().unwrap().as_slice(),
+            plugins.installs.lock().as_slice(),
             ["https://code.kimi.com/kimi-code/plugins/official/kimi-webbridge.zip"]
         );
         // Progress reported download steps.
-        let reports = reports.lock().unwrap().clone();
+        let reports = reports.lock().clone();
         assert_eq!(reports[0], ("download".to_owned(), Some(0)));
         assert!(reports.iter().any(|(step, _)| step == "daemon"));
         assert!(reports.iter().any(|(step, _)| step == "skill"));
@@ -867,7 +868,7 @@ mod tests {
         });
 
         entry.install(noop_reporter()).await.unwrap();
-        assert!(calls.lock().unwrap().is_empty());
+        assert!(calls.lock().is_empty());
         rm_force(&root).await.unwrap();
     }
 
@@ -893,12 +894,12 @@ mod tests {
 
         entry.install(report).await.unwrap();
 
-        let reports = reports.lock().unwrap().clone();
+        let reports = reports.lock().clone();
         assert_eq!(reports[0].0, "download");
         assert!(reports.iter().any(|(step, _)| step == "skill"));
-        assert!(calls.lock().unwrap().is_empty());
+        assert!(calls.lock().is_empty());
         assert_eq!(
-            plugins.installs.lock().unwrap().as_slice(),
+            plugins.installs.lock().as_slice(),
             ["https://code.kimi.com/kimi-code/plugins/official/kimi-webbridge.zip"]
         );
         assert_eq!(
@@ -928,14 +929,13 @@ mod tests {
         assert_eq!(
             reports
                 .lock()
-                .unwrap()
                 .iter()
                 .map(|(step, _)| step.clone())
                 .collect::<Vec<_>>(),
             vec!["skill"]
         );
-        assert!(calls.lock().unwrap().is_empty());
-        assert_eq!(plugins.installs.lock().unwrap().len(), 1);
+        assert!(calls.lock().is_empty());
+        assert_eq!(plugins.installs.lock().len(), 1);
         rm_force(&root).await.unwrap();
     }
 
@@ -960,11 +960,11 @@ mod tests {
         entry.install(noop_reporter()).await.unwrap();
 
         assert_eq!(
-            plugins.installs.lock().unwrap().as_slice(),
+            plugins.installs.lock().as_slice(),
             ["https://code.kimi.com/kimi-code/plugins/official/kimi-webbridge.zip"]
         );
         assert_eq!(
-            calls.lock().unwrap().as_slice(),
+            calls.lock().as_slice(),
             [format!("{} start", bin_path.display())]
         );
         rm_force(&root).await.unwrap();
@@ -981,7 +981,7 @@ mod tests {
         });
         let error = entry.install(noop_reporter()).await.unwrap_err();
         assert!(error.to_string().contains("not supported"), "{error}");
-        assert!(plugins.installs.lock().unwrap().is_empty());
+        assert!(plugins.installs.lock().is_empty());
         rm_force(&root).await.unwrap();
     }
 
@@ -1045,7 +1045,7 @@ mod tests {
         // the capability at partial by leaving the wiring off.
         entry.install(noop_reporter()).await.unwrap();
         assert_eq!(
-            plugins.enabled_calls.lock().unwrap().as_slice(),
+            plugins.enabled_calls.lock().as_slice(),
             [("kimi-webbridge".to_owned(), true)]
         );
         rm_force(&root).await.unwrap();

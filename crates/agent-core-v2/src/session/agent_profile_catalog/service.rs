@@ -2,12 +2,16 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/sessionAgentProfileCatalog/sessionAgentProfileCatalogService.ts`.
 
+
+use parking_lot::RwLock;
 use std::{
     collections::HashMap,
     error::Error,
     fmt,
-    sync::{Arc, Mutex, RwLock},
 };
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -169,13 +173,13 @@ impl SessionAgentProfileCatalogService {
 
     async fn ensure_ready(&self) -> Result<(), SessionAgentProfileCatalogError> {
         let _gate = self.ready_gate.lock().await;
-        match &*self.ready_state.lock().unwrap() {
+        match &*self.ready_state.lock() {
             ReadyState::Ready => return Ok(()),
             ReadyState::Failed(error) => return Err(Box::new(CatalogLoadError(error.clone()))),
             ReadyState::Pending => {}
         }
         let result = self.load_all().await;
-        *self.ready_state.lock().unwrap() = match &result {
+        *self.ready_state.lock() = match &result {
             Ok(()) => ReadyState::Ready,
             Err(error) => ReadyState::Failed(error.to_string()),
         };
@@ -184,9 +188,9 @@ impl SessionAgentProfileCatalogService {
 
     async fn reload_all(&self) -> Result<(), SessionAgentProfileCatalogError> {
         let _gate = self.ready_gate.lock().await;
-        *self.ready_state.lock().unwrap() = ReadyState::Pending;
+        *self.ready_state.lock() = ReadyState::Pending;
         let result = self.load_all().await;
-        *self.ready_state.lock().unwrap() = match &result {
+        *self.ready_state.lock() = match &result {
             Ok(()) => ReadyState::Ready,
             Err(error) => ReadyState::Failed(error.to_string()),
         };
@@ -239,7 +243,7 @@ impl SessionAgentProfileCatalogService {
                 return Ok(());
             }
         };
-        self.state.write().unwrap().contributions.insert(
+        self.state.write().contributions.insert(
             slot.source.id().to_owned(),
             ProfileContributionWithPriority {
                 contribution,
@@ -258,7 +262,6 @@ impl SessionAgentProfileCatalogService {
         let contributions = self
             .state
             .read()
-            .unwrap()
             .contributions
             .values()
             .map(|value| ProfileContributionWithPriority {
@@ -270,7 +273,7 @@ impl SessionAgentProfileCatalogService {
         let merged = merge_agent_profiles(self.builtin.list(), contributions, move |message| {
             log.warn(message, None);
         });
-        self.state.write().unwrap().merged = merged;
+        self.state.write().merged = merged;
     }
 }
 
@@ -283,7 +286,7 @@ impl SessionAgentProfileCatalogContract for SessionAgentProfileCatalogService {
         self.on_did_change_emitter.event()
     }
     fn get(&self, name: &str) -> Option<Arc<AgentProfile>> {
-        self.state.read().unwrap().merged.get(name).cloned()
+        self.state.read().merged.get(name).cloned()
     }
     fn get_default(&self) -> Result<Arc<AgentProfile>, MissingDefaultAgentProfile> {
         self.get(DEFAULT_AGENT_PROFILE_NAME)
@@ -292,7 +295,6 @@ impl SessionAgentProfileCatalogContract for SessionAgentProfileCatalogService {
     fn list(&self) -> Vec<Arc<AgentProfile>> {
         self.state
             .read()
-            .unwrap()
             .merged
             .values()
             .cloned()
@@ -345,7 +347,7 @@ pub fn register_session_agent_profile_catalog() {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        Arc, RwLock,
+        Arc,
         atomic::{AtomicBool, Ordering},
     };
 
@@ -398,7 +400,7 @@ mod tests {
             if self.fail.load(Ordering::Relaxed) {
                 return Err(Box::new(TestError));
             }
-            Ok(self.contribution.read().unwrap().clone())
+            Ok(self.contribution.read().clone())
         }
     }
 

@@ -3,7 +3,8 @@
 //! Original: `toolExecutorService.ts`, `recordDupType()` and the three
 //! `register*()` methods.
 
-use std::sync::{Arc, Mutex, Weak};
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 
 use crate::_base::di::lifecycle::{DisposableHandle, to_disposable};
 
@@ -33,14 +34,13 @@ impl ToolExecutorState {
     pub fn record_dup_type(&self, tool_call_id: String, dup_type: ToolCallDupType) {
         self.inner
             .lock()
-            .unwrap()
             .tool_call_dup_types
             .insert(tool_call_id, dup_type);
     }
 
     /// Original: the `execute()` turn-boundary reset before preflight.
     pub fn begin_turn(&self, turn_id: crate::agent::TurnId) {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = self.inner.lock();
         if state.dup_type_turn_id != Some(turn_id) {
             state.dup_type_turn_id = Some(turn_id);
             state.tool_call_dup_types.clear();
@@ -51,30 +51,28 @@ impl ToolExecutorState {
     pub fn take_dup_type(&self, tool_call_id: &str) -> Option<ToolCallDupType> {
         self.inner
             .lock()
-            .unwrap()
             .tool_call_dup_types
             .remove(tool_call_id)
     }
 
     pub fn tool_call_guard(&self) -> Option<ToolCallGuard> {
-        self.inner.lock().unwrap().tool_call_guard.clone()
+        self.inner.lock().tool_call_guard.clone()
     }
 
     pub fn unavailable_tool_describer(&self) -> Option<UnavailableToolDescriber> {
         self.inner
             .lock()
-            .unwrap()
             .unavailable_tool_describer
             .clone()
     }
 
     pub fn missing_tool_describer(&self) -> Option<MissingToolDescriber> {
-        self.inner.lock().unwrap().missing_tool_describer.clone()
+        self.inner.lock().missing_tool_describer.clone()
     }
 
     /// Original: `AgentToolExecutorService.registerToolCallGuard()`.
     pub fn register_tool_call_guard(&self, guard: ToolCallGuard) -> DisposableHandle {
-        self.inner.lock().unwrap().tool_call_guard = Some(Arc::clone(&guard));
+        self.inner.lock().tool_call_guard = Some(Arc::clone(&guard));
         let state = Arc::downgrade(&self.inner);
         to_disposable(move || clear_guard_if_current(&state, &guard))
     }
@@ -84,7 +82,7 @@ impl ToolExecutorState {
         &self,
         describer: UnavailableToolDescriber,
     ) -> DisposableHandle {
-        self.inner.lock().unwrap().unavailable_tool_describer = Some(Arc::clone(&describer));
+        self.inner.lock().unavailable_tool_describer = Some(Arc::clone(&describer));
         let state = Arc::downgrade(&self.inner);
         to_disposable(move || clear_unavailable_describer_if_current(&state, &describer))
     }
@@ -94,7 +92,7 @@ impl ToolExecutorState {
         &self,
         describer: MissingToolDescriber,
     ) -> DisposableHandle {
-        self.inner.lock().unwrap().missing_tool_describer = Some(Arc::clone(&describer));
+        self.inner.lock().missing_tool_describer = Some(Arc::clone(&describer));
         let state = Arc::downgrade(&self.inner);
         to_disposable(move || clear_missing_describer_if_current(&state, &describer))
     }
@@ -102,7 +100,7 @@ impl ToolExecutorState {
 
 fn clear_guard_if_current(state: &Weak<Mutex<State>>, guard: &ToolCallGuard) {
     let Some(state) = state.upgrade() else { return };
-    let mut state = state.lock().unwrap();
+    let mut state = state.lock();
     if state
         .tool_call_guard
         .as_ref()
@@ -117,7 +115,7 @@ fn clear_unavailable_describer_if_current(
     describer: &UnavailableToolDescriber,
 ) {
     let Some(state) = state.upgrade() else { return };
-    let mut state = state.lock().unwrap();
+    let mut state = state.lock();
     if state
         .unavailable_tool_describer
         .as_ref()
@@ -132,7 +130,7 @@ fn clear_missing_describer_if_current(
     describer: &MissingToolDescriber,
 ) {
     let Some(state) = state.upgrade() else { return };
-    let mut state = state.lock().unwrap();
+    let mut state = state.lock();
     if state
         .missing_tool_describer
         .as_ref()

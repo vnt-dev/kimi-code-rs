@@ -3,7 +3,8 @@
 //! Original:
 //! `packages/agent-core-v2/src/app/telemetry/agentTelemetryContextService.ts`.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use crate::_base::di::{
     descriptors::SyncDescriptor,
@@ -39,12 +40,12 @@ impl AgentTelemetryContextServiceContract for AgentTelemetryContextService {
     // preserves the source snapshot: set() replaces its context object rather
     // than mutating previously returned objects.
     fn get(&self) -> AgentTelemetryContext {
-        self.context.lock().unwrap().clone()
+        self.context.lock().clone()
     }
 
     // Original: AgentTelemetryContextService.set().
     fn set(&self, patch: AgentTelemetryContextPatch) {
-        let mut context = self.context.lock().unwrap();
+        let mut context = self.context.lock();
         if let Some(mode) = patch.mode {
             context.mode = mode;
         }

@@ -254,10 +254,8 @@ fn goal_status_name(status: GoalStatus) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
-    };
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use async_trait::async_trait;
 
@@ -328,7 +326,7 @@ mod tests {
     impl AgentContextInjectorServiceContract for Injector {
         fn register(&self, name: String, provider: ContextInjectionProvider) -> DisposableHandle {
             assert_eq!(name, GOAL_INJECTION_VARIANT);
-            *self.provider.lock().unwrap() = Some(provider);
+            *self.provider.lock() = Some(provider);
             let disposed = Arc::clone(&self.disposed);
             to_disposable(move || disposed.store(true, Ordering::SeqCst))
         }
@@ -348,7 +346,7 @@ mod tests {
         let injector = Injector::default();
         let goal: Arc<dyn GoalReader> = Arc::new(Reader(Some(snapshot(GoalStatus::Paused))));
         let injection = GoalInjection::new(goal, &injector);
-        let provider = injector.provider.lock().unwrap().clone().unwrap();
+        let provider = injector.provider.lock().clone().unwrap();
         let base = ContextInjectionContext {
             injected_positions: vec![],
             last_injected_at: None,

@@ -6,12 +6,10 @@
 use std::{
     collections::HashMap,
     num::NonZeroU64,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
     time::Duration,
 };
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -82,7 +80,7 @@ impl DeviceCodeObserver for DeviceObserver {
         &self,
         authorization: &DeviceAuthorization,
     ) -> Result<(), OAuthManagerError> {
-        if let Some(sender) = self.sender.lock().unwrap().take() {
+        if let Some(sender) = self.sender.lock().take() {
             let _ = sender.send(authorization.clone());
         }
         Ok(())
@@ -157,9 +155,9 @@ impl OAuthService {
     }
 
     fn abort_existing(&self, provider: &str) {
-        let existing = self.flows.lock().unwrap().get(provider).cloned();
+        let existing = self.flows.lock().get(provider).cloned();
         if let Some(existing) = existing {
-            let mut state = existing.lock().unwrap();
+            let mut state = existing.lock();
             if state.status == OAuthFlowStatus::Pending {
                 state.cancelled.store(true, Ordering::Release);
                 Self::set_terminal(&mut state, OAuthFlowStatus::Cancelled, None);
@@ -180,7 +178,7 @@ impl OAuthService {
     ) {
         tokio::spawn(async move {
             tokio::time::sleep(TERMINAL_RETENTION).await;
-            let mut flows = flows.lock().unwrap();
+            let mut flows = flows.lock();
             if flows
                 .get(&provider)
                 .is_some_and(|candidate| Arc::ptr_eq(candidate, &state))
@@ -419,7 +417,6 @@ impl OAuthServiceContract for OAuthService {
         }));
         self.flows
             .lock()
-            .unwrap()
             .insert(provider.clone(), Arc::clone(&state));
 
         let (device_tx, device_rx) = oneshot::channel();
@@ -475,7 +472,7 @@ impl OAuthServiceContract for OAuthService {
                             .await;
                     }
                     Self::set_terminal(
-                        &mut state_for_task.lock().unwrap(),
+                        &mut state_for_task.lock(),
                         OAuthFlowStatus::Authenticated,
                         None,
                     );
@@ -490,7 +487,6 @@ impl OAuthServiceContract for OAuthService {
                     let message = error.to_string();
                     let status = if state_for_task
                         .lock()
-                        .unwrap()
                         .cancelled
                         .load(Ordering::Acquire)
                     {
@@ -503,7 +499,7 @@ impl OAuthServiceContract for OAuthService {
                         OAuthFlowStatus::Denied
                     };
                     Self::set_terminal(
-                        &mut state_for_task.lock().unwrap(),
+                        &mut state_for_task.lock(),
                         status,
                         Some(message.clone()),
                     );
@@ -520,7 +516,7 @@ impl OAuthServiceContract for OAuthService {
         tokio::select! {
             device = device_rx => {
                 let device = device.map_err(|_| AuthOperationError::new("OAuth login ended before a device code was issued"))?;
-                let mut state = state.lock().unwrap();
+                let mut state = state.lock();
                 state.expires_at = Utc::now() + chrono::Duration::seconds(
                     positive_seconds(device.expires_in.unwrap_or(DEFAULT_DEVICE_EXPIRES_IN_SEC)).get() as i64
                 );
@@ -539,8 +535,8 @@ impl OAuthServiceContract for OAuthService {
 
     fn get_flow(&self, provider: Option<&str>) -> Option<OAuthFlowSnapshot> {
         let provider = Self::provider_name(provider);
-        let state = self.flows.lock().unwrap().get(&provider).cloned()?;
-        Self::snapshot(&state.lock().unwrap())
+        let state = self.flows.lock().get(&provider).cloned()?;
+        Self::snapshot(&state.lock())
     }
 
     async fn cancel_login(
@@ -548,13 +544,13 @@ impl OAuthServiceContract for OAuthService {
         provider: Option<&str>,
     ) -> Result<OAuthLoginCancelResponse, AuthOperationError> {
         let provider = Self::provider_name(provider);
-        let Some(flow) = self.flows.lock().unwrap().get(&provider).cloned() else {
+        let Some(flow) = self.flows.lock().get(&provider).cloned() else {
             return Ok(OAuthLoginCancelResponse {
                 cancelled: false,
                 status: OAuthFlowStatus::Cancelled,
             });
         };
-        let mut state = flow.lock().unwrap();
+        let mut state = flow.lock();
         if state.status != OAuthFlowStatus::Pending {
             return Ok(OAuthLoginCancelResponse {
                 cancelled: false,

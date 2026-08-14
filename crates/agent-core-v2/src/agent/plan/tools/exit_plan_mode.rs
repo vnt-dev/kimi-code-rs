@@ -370,10 +370,8 @@ fn format_plan_for_output(plan: &str, path: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::{
@@ -414,12 +412,12 @@ mod tests {
 
         fn exit(&self, _id: Option<String>) -> Result<(), PlanServiceError> {
             self.exits.fetch_add(1, Ordering::SeqCst);
-            *self.data.lock().unwrap() = None;
+            *self.data.lock() = None;
             Ok(())
         }
 
         async fn status(&self) -> Result<Option<PlanData>, PlanServiceError> {
-            Ok(self.data.lock().unwrap().clone())
+            Ok(self.data.lock().clone())
         }
     }
 

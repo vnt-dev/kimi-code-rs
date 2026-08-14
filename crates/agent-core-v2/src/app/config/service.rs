@@ -3,7 +3,8 @@
 //! Original: `packages/agent-core-v2/src/app/config/configService.ts`,
 //! `ConfigService`.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
@@ -161,7 +162,7 @@ impl ConfigService {
                     "config load failed",
                     Some(LogPayload::Value(Value::String(message.clone()))),
                 );
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock();
                 state.diagnostics.clear();
                 state.diagnostics.push(ConfigDiagnostic {
                     domain: None,
@@ -171,7 +172,7 @@ impl ConfigService {
                 Map::new()
             }
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if !matches!(source, ConfigChangeSource::Load)
             && serde_json::to_string(&file_data).ok()
                 == serde_json::to_string(&state.raw_snake).ok()
@@ -302,7 +303,7 @@ impl ConfigService {
     }
 
     fn reapply_overlays(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let commits = self.rebuild_effective_locked(&mut state, ConfigChangeSource::Reload, None);
         drop(state);
         self.fire_commits(commits);
@@ -312,7 +313,7 @@ impl ConfigService {
         let Some(section) = self.registry.get_section(domain) else {
             return;
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if let Some(from_toml) = section.from_toml
             && let Some(raw) = state.raw_snake.get(&camel_to_snake(domain)).cloned()
         {
@@ -396,7 +397,7 @@ impl ConfigServiceContract for ConfigService {
 
     // Original: ConfigService.get().
     fn get(&self, domain: &str) -> Option<Value> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if let Some(value) = state.memory.get(domain) {
             return Some(value.clone());
         }
@@ -417,7 +418,7 @@ impl ConfigServiceContract for ConfigService {
 
     fn inspect(&self, domain: &str) -> ConfigInspectValue {
         let value = self.get(domain);
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         ConfigInspectValue {
             value,
             default_value: self.registry.default_value(domain),
@@ -427,7 +428,7 @@ impl ConfigServiceContract for ConfigService {
     }
 
     fn get_all(&self) -> ResolvedConfig {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         let mut result = state.effective.clone();
         result.extend(state.memory.clone());
         result
@@ -441,7 +442,7 @@ impl ConfigServiceContract for ConfigService {
     ) -> Result<(), ConfigServiceError> {
         self.ready().await?;
         if matches!(target, ConfigTarget::Memory) {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let next = self
                 .registry
                 .merge(domain, state.memory.get(domain), patch.as_ref());
@@ -461,7 +462,7 @@ impl ConfigServiceContract for ConfigService {
         }
         let _transition = self.transition.lock().await;
         let persisted = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let next = self
                 .registry
                 .merge(domain, state.raw.get(domain), patch.as_ref());
@@ -489,7 +490,7 @@ impl ConfigServiceContract for ConfigService {
         self.document_store
             .set(CONFIG_SCOPE, &self.config_key, &persisted)
             .await?;
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let commits = self.rebuild_effective_locked(
             &mut state,
             ConfigChangeSource::Set,
@@ -508,7 +509,7 @@ impl ConfigServiceContract for ConfigService {
     ) -> Result<(), ConfigServiceError> {
         if matches!(target, ConfigTarget::Memory) {
             self.ready().await?;
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             match value {
                 Some(value) => {
                     let validated = self.registry.validate(domain, &value)?;
@@ -526,7 +527,7 @@ impl ConfigServiceContract for ConfigService {
         self.ready().await?;
         let _transition = self.transition.lock().await;
         let persisted = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let stripped = self.strip_env_locked(&state, domain, value);
             let validated = stripped
                 .map(|value| self.registry.validate(domain, &value))
@@ -551,7 +552,7 @@ impl ConfigServiceContract for ConfigService {
         self.document_store
             .set(CONFIG_SCOPE, &self.config_key, &persisted)
             .await?;
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let commits = self.rebuild_effective_locked(
             &mut state,
             ConfigChangeSource::Set,
@@ -570,7 +571,7 @@ impl ConfigServiceContract for ConfigService {
     }
 
     fn diagnostics(&self) -> Vec<ConfigDiagnostic> {
-        self.state.lock().unwrap().diagnostics.clone()
+        self.state.lock().diagnostics.clone()
     }
 }
 
@@ -662,8 +663,9 @@ mod tests {
     use std::{
         collections::HashMap,
         path::PathBuf,
-        sync::{Arc, Mutex},
     };
+    use std::sync::{Arc};
+    use parking_lot::Mutex;
 
     use futures_util::future::{BoxFuture, ready};
     use serde_json::json;
@@ -833,12 +835,12 @@ mod tests {
         let _touched = fixture
             .service
             .on_did_change_configuration()
-            .subscribe(move |event| target.lock().unwrap().push(event.clone()));
+            .subscribe(move |event| target.lock().push(event.clone()));
         let target = Arc::clone(&changed);
         let _changed = fixture
             .service
             .on_did_section_change()
-            .subscribe(move |event| target.lock().unwrap().push(event.clone()));
+            .subscribe(move |event| target.lock().push(event.clone()));
 
         fixture
             .service
@@ -850,14 +852,14 @@ mod tests {
             .set("agent", Some(json!({"enabled": false})), ConfigTarget::User)
             .await
             .unwrap();
-        assert_eq!(touched.lock().unwrap().len(), 2);
-        assert_eq!(changed.lock().unwrap().len(), 1);
+        assert_eq!(touched.lock().len(), 2);
+        assert_eq!(changed.lock().len(), 1);
         assert_eq!(
-            changed.lock().unwrap()[0].previous_value.as_ref().unwrap()["enabled"],
+            changed.lock()[0].previous_value.as_ref().unwrap()["enabled"],
             true
         );
         assert_eq!(
-            changed.lock().unwrap()[0].value.as_ref().unwrap()["enabled"],
+            changed.lock()[0].value.as_ref().unwrap()["enabled"],
             false
         );
     }

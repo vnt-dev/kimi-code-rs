@@ -526,7 +526,7 @@ mod tests {
         assert!(execution.matches_rule("*"));
         assert!(!execution.matches_rule("other"));
 
-        let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let updates = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let updates_for_callback = Arc::clone(&updates);
         let result = execution
             .execute(ExecutableToolContext {
@@ -536,14 +536,14 @@ mod tests {
                 metadata: None,
                 signal: AbortController::new().signal(),
                 on_update: Some(Arc::new(move |update| {
-                    updates_for_callback.lock().unwrap().push(update);
+                    updates_for_callback.lock().push(update);
                 })),
                 on_foreground_task_start: None,
             })
             .await;
         assert_eq!(result.output, ExecutableToolOutput::Text("hello".into()));
         assert!(!result.is_error);
-        assert_eq!(updates.lock().unwrap()[0].text.as_deref(), Some("hello"));
+        assert_eq!(updates.lock()[0].text.as_deref(), Some("hello"));
     }
 
     #[tokio::test]

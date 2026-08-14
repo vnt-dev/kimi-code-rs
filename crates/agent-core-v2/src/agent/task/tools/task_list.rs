@@ -191,7 +191,7 @@ pub fn register_task_list_tool() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::{
@@ -230,7 +230,7 @@ mod tests {
 
     impl TaskListProvider for StubTasks {
         fn list(&self, active_only: bool, limit: usize) -> Vec<AgentTaskInfo> {
-            self.calls.lock().unwrap().push((active_only, limit));
+            self.calls.lock().push((active_only, limit));
             self.tasks.iter().take(limit).cloned().collect()
         }
     }
@@ -316,6 +316,6 @@ mod tests {
             ExecutableToolOutput::Text(ref output)
                 if output.starts_with("active_background_tasks: 1\n")
         ));
-        assert_eq!(*tasks.calls.lock().unwrap(), [(true, 20)]);
+        assert_eq!(*tasks.calls.lock(), [(true, 20)]);
     }
 }

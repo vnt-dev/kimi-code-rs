@@ -2,13 +2,9 @@
 //!
 //! Original: `agent/mcp/mcpService.ts`.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{
-        Arc, Mutex, Weak,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Weak, atomic::{AtomicBool, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -191,7 +187,7 @@ impl AgentMcpService {
             }
         });
         let weak = Arc::downgrade(&service);
-        *service.status_worker.lock().unwrap() = Some(tokio::spawn(async move {
+        *service.status_worker.lock() = Some(tokio::spawn(async move {
             while let Some(entry) = status_receiver.recv().await {
                 let Some(service) = weak.upgrade() else {
                     break;
@@ -297,7 +293,7 @@ impl AgentMcpService {
                 source: Some(ToolSource::Mcp),
             },
         );
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         state.tools.insert(
             name.clone(),
             ToolRegistration {
@@ -319,7 +315,7 @@ impl AgentMcpService {
         let mut registered_names = Vec::new();
         let mut collisions = Vec::new();
         let mut seen_this_call = HashMap::<String, String>::new();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         for tool in &resolved.tools {
             if !resolved.enabled_names.contains(&tool.name) {
                 continue;
@@ -378,7 +374,7 @@ impl AgentMcpService {
     }
 
     fn unregister_server(&self, server_name: &str) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let Some(names) = state.tools_by_server.remove(server_name) else {
             return false;
         };
@@ -405,7 +401,7 @@ impl AgentMcpService {
             enabled_names,
             collisions,
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if !state.discovery_writes_ready {
             state.pending_discoveries.push(discovery);
             return;
@@ -418,7 +414,7 @@ impl AgentMcpService {
 
     fn flush_pending_discoveries(&self) -> Result<(), DiscoveryWriteError> {
         let pending = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.discovery_writes_ready = true;
             std::mem::take(&mut state.pending_discoveries)
         };
@@ -615,10 +611,10 @@ impl Disposable for AgentMcpService {
             self.executor_subscription.clone(),
             self.restore_subscription.clone(),
         ];
-        if let Some(worker) = self.status_worker.lock().unwrap().take() {
+        if let Some(worker) = self.status_worker.lock().take() {
             worker.abort();
         }
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         disposables.extend(
             std::mem::take(&mut state.tools)
                 .into_values()

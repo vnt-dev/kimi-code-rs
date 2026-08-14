@@ -1,7 +1,6 @@
-use std::{
-    ops::Deref,
-    sync::{Arc, Mutex},
-};
+use std::ops::Deref;
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use crate::{
     _base::di::{
@@ -87,7 +86,7 @@ impl AgentContextSizeService {
 
     fn emit_if_changed(&self) {
         let tokens = self.wire.get_model(&CONTEXT_SIZE_MODEL).tokens;
-        let mut last = self.last_emitted_tokens.lock().unwrap();
+        let mut last = self.last_emitted_tokens.lock();
         if tokens != *last {
             *last = tokens;
         }

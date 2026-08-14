@@ -195,7 +195,7 @@ fn camel_to_snake(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::kosong::contract::message::MediaUrl;
@@ -324,14 +324,13 @@ mod tests {
                 Arc::new(move |event, target, count| {
                     triggered
                         .lock()
-                        .unwrap()
                         .push((event.to_owned(), target.to_owned(), count));
                 })
             }),
             on_resolved: Some({
                 let resolved = Arc::clone(&resolved);
                 Arc::new(move |event, target, action, reason, _duration| {
-                    resolved.lock().unwrap().push((
+                    resolved.lock().push((
                         event.to_owned(),
                         target.to_owned(),
                         action.to_owned(),
@@ -366,11 +365,11 @@ mod tests {
         assert_eq!(input["cwd"], "caller-override");
         assert_eq!(input["tool_name"], "Bash");
         assert_eq!(
-            *triggered.lock().unwrap(),
+            *triggered.lock(),
             [("PreToolUse".into(), "Bash".into(), 1)]
         );
         assert_eq!(
-            *resolved.lock().unwrap(),
+            *resolved.lock(),
             [("PreToolUse".into(), "Bash".into(), "allow".into(), None)]
         );
     }

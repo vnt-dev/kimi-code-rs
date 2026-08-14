@@ -251,7 +251,7 @@ pub const QUERY_STORE_SERVICE_ID: ServiceIdentifier<QueryStoreHandle> =
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
 
@@ -262,7 +262,7 @@ mod tests {
     #[async_trait]
     impl QueryBuilderService for StubQuery {
         fn where_filter(&mut self, filter: QueryFilter) {
-            self.filter.lock().unwrap().extend(filter);
+            self.filter.lock().extend(filter);
         }
 
         fn order_by(&mut self, _field: String, _direction: SortDir) {}

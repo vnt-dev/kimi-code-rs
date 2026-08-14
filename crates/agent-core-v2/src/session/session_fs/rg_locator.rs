@@ -93,7 +93,8 @@ pub fn rg_unavailable_message(cause: &(dyn Error + 'static)) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, sync::Mutex};
+    use std::collections::VecDeque;
+    use parking_lot::Mutex;
 
     use super::*;
 
@@ -105,8 +106,8 @@ mod tests {
     #[async_trait]
     impl RgProbe for Probe {
         async fn exec(&self, args: &[String]) -> Result<i32, Box<dyn Error + Send + Sync>> {
-            self.calls.lock().unwrap().push(args.to_vec());
-            Ok(self.results.lock().unwrap().pop_front().unwrap_or(-1))
+            self.calls.lock().push(args.to_vec());
+            Ok(self.results.lock().pop_front().unwrap_or(-1))
         }
     }
 
@@ -123,7 +124,7 @@ mod tests {
                 .source,
             RgResolutionSource::SystemPath
         );
-        assert_eq!(*system.calls.lock().unwrap(), [vec!["rg", "--version"]]);
+        assert_eq!(*system.calls.lock(), [vec!["rg", "--version"]]);
 
         let cached = Probe {
             results: Mutex::new(VecDeque::from([-1, 0])),
@@ -142,7 +143,7 @@ mod tests {
             .source,
             RgResolutionSource::ShareBinCached
         );
-        assert_eq!(cached.calls.lock().unwrap().len(), 2);
+        assert_eq!(cached.calls.lock().len(), 2);
     }
 
     #[tokio::test]

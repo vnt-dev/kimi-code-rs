@@ -5,8 +5,9 @@
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
-    sync::{Arc, LazyLock, Mutex},
 };
+use std::sync::{Arc, LazyLock};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, future::FutureExt};
@@ -118,11 +119,11 @@ impl TurnConfigCache {
     }
 
     fn get(&self, id: crate::agent::TurnId) -> Option<TurnRequestConfig> {
-        self.configs.lock().unwrap().get(&id).cloned()
+        self.configs.lock().get(&id).cloned()
     }
 
     fn insert(&self, id: crate::agent::TurnId, config: TurnRequestConfig) {
-        let mut configs = self.configs.lock().unwrap();
+        let mut configs = self.configs.lock();
         configs.retain(|key, _| *key >= id);
         configs.insert(id, config);
     }
@@ -279,21 +280,20 @@ impl AgentLlmRequesterService {
         let turn_id = source_turn_id(source)?;
         self.media_stripped_turns
             .lock()
-            .unwrap()
             .get(&turn_id)
             .cloned()
     }
 
     fn is_media_degraded_recovery_turn(&self, source: Option<&AgentLlmRequestSource>) -> bool {
         source_turn_id(source)
-            .is_some_and(|turn_id| self.media_degraded_turns.lock().unwrap().contains(&turn_id))
+            .is_some_and(|turn_id| self.media_degraded_turns.lock().contains(&turn_id))
     }
 
     fn mark_media_degraded_recovery_turn(&self, source: Option<&AgentLlmRequestSource>) {
         let Some(turn_id) = source_turn_id(source) else {
             return;
         };
-        let mut turns = self.media_degraded_turns.lock().unwrap();
+        let mut turns = self.media_degraded_turns.lock();
         turns.retain(|candidate| *candidate >= turn_id);
         turns.insert(turn_id);
     }
@@ -306,7 +306,7 @@ impl AgentLlmRequesterService {
         let Some(turn_id) = source_turn_id(source) else {
             return;
         };
-        let mut turns = self.media_stripped_turns.lock().unwrap();
+        let mut turns = self.media_stripped_turns.lock();
         turns.retain(|candidate, _| *candidate >= turn_id);
         turns.insert(turn_id, snapshot);
     }
@@ -940,12 +940,12 @@ mod tests {
     #[async_trait]
     impl AppendLogStoreService for MemoryLog {
         fn append_value(&self, _: &str, _: &str, value: Value, _: AppendLogOptions) {
-            self.0.lock().unwrap().push(value);
+            self.0.lock().push(value);
         }
 
         fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
             Box::pin(stream::iter(
-                self.0.lock().unwrap().clone().into_iter().map(Ok),
+                self.0.lock().clone().into_iter().map(Ok),
             ))
         }
 
@@ -955,7 +955,7 @@ mod tests {
             _: &str,
             records: Vec<Value>,
         ) -> Result<(), AppendLogError> {
-            *self.0.lock().unwrap() = records;
+            *self.0.lock() = records;
             Ok(())
         }
 
@@ -1178,7 +1178,7 @@ mod tests {
         .unwrap();
         first.flush().await.unwrap();
 
-        let records = log.0.lock().unwrap().clone();
+        let records = log.0.lock().clone();
         assert_eq!(
             records
                 .iter()
@@ -1211,7 +1211,7 @@ mod tests {
         .unwrap();
         restored.flush().await.unwrap();
 
-        let records = log.0.lock().unwrap();
+        let records = log.0.lock();
         assert_eq!(
             records
                 .iter()

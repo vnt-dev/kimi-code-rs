@@ -27,10 +27,8 @@ pub async fn ensure_main_agent(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    };
+    use parking_lot::Mutex;
+    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
     use futures_util::{FutureExt, future::BoxFuture};
 
@@ -78,7 +76,7 @@ mod tests {
             &self,
             options: CreateAgentOptions,
         ) -> BoxFuture<'static, Result<AgentScopeHandle, BoxError>> {
-            self.options.lock().unwrap().push(options);
+            self.options.lock().push(options);
             futures_util::future::ready(Ok(self.returned.clone())).boxed()
         }
 
@@ -138,7 +136,7 @@ mod tests {
         };
         let created = ensure_main_agent(&session, Some(options)).await.unwrap();
         assert_eq!(created.id(), returned.id());
-        let seen = lifecycle.options.lock().unwrap();
+        let seen = lifecycle.options.lock();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].agent_id.as_deref(), Some(MAIN_AGENT_ID));
         assert_eq!(seen[0].forked_from.as_deref(), Some("source"));

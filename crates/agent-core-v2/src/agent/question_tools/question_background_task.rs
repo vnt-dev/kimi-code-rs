@@ -114,7 +114,7 @@ fn tool_output_text(output: &ExecutableToolOutput) -> Result<String, AgentTaskEr
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use futures_util::FutureExt;
 
@@ -137,11 +137,11 @@ mod tests {
         }
 
         fn append_output(&self, chunk: &str) {
-            self.output.lock().unwrap().push(chunk.into());
+            self.output.lock().push(chunk.into());
         }
 
         async fn settle(&self, settlement: AgentTaskSettlement) -> Result<bool, AgentTaskError> {
-            self.settlements.lock().unwrap().push(settlement);
+            self.settlements.lock().push(settlement);
             Ok(true)
         }
     }
@@ -179,11 +179,11 @@ mod tests {
 
         task.start(&sink).await.unwrap();
         assert_eq!(
-            *sink.output.lock().unwrap(),
+            *sink.output.lock(),
             vec!["{\"answers\":{\"q_0\":\"Yes\"}}"]
         );
         assert_eq!(
-            sink.settlements.lock().unwrap()[0].status,
+            sink.settlements.lock()[0].status,
             AgentTaskSettlementStatus::Completed
         );
         let info = task.to_info(base());
@@ -211,7 +211,7 @@ mod tests {
 
         task.start(&sink).await.unwrap();
         assert_eq!(
-            sink.settlements.lock().unwrap()[0].status,
+            sink.settlements.lock()[0].status,
             AgentTaskSettlementStatus::Killed
         );
     }

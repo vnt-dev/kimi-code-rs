@@ -85,7 +85,7 @@ pub static CREATE_GOAL_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(
 });
 
 pub trait CreateGoalProvider: Send + Sync {
-    fn get_goal(&self) -> GoalToolResult;
+    fn get_goal(&self) -> Result<GoalToolResult, String>;
     fn is_goal_tool_target(&self, turn_id: crate::agent::TurnId, goal_id: &str) -> bool;
     fn create_goal(
         &self,
@@ -93,10 +93,8 @@ pub trait CreateGoalProvider: Send + Sync {
     ) -> BoxFuture<'static, Result<GoalSnapshot, String>>;
 }
 impl CreateGoalProvider for AgentGoalServiceHandle {
-    fn get_goal(&self) -> GoalToolResult {
-        (**self)
-            .get_goal()
-            .expect("goal tools are only resolved for supported agents")
+    fn get_goal(&self) -> Result<GoalToolResult, String> {
+        (**self).get_goal().map_err(|error| error.to_string())
     }
     fn is_goal_tool_target(&self, turn_id: crate::agent::TurnId, goal_id: &str) -> bool {
         (**self)
@@ -156,7 +154,7 @@ impl ExecutableTool for CreateGoalTool {
         &self.definition
     }
     async fn resolve_execution(&self, args: CreateGoalToolInput) -> ToolExecution {
-        let at_resolution = self.goal.get_goal().goal;
+        let at_resolution = self.goal.get_goal().ok().and_then(|result| result.goal);
         let display = goal_start_display(&args, self.permission.mode());
         let goal = Arc::clone(&self.goal);
         let execute = Arc::new(move |context: ExecutableToolContext| {
@@ -164,7 +162,10 @@ impl ExecutableTool for CreateGoalTool {
             let at_resolution = at_resolution.clone();
             let args = args.clone();
             Box::pin(async move {
-                let current = goal.get_goal().goal;
+                let current = match goal.get_goal() {
+                    Ok(result) => result.goal,
+                    Err(error) => return ExecutableToolResult::error(error),
+                };
                 if current.as_ref().map(|goal| &goal.goal_id)
                     != at_resolution.as_ref().map(|goal| &goal.goal_id)
                     && (current.is_none()

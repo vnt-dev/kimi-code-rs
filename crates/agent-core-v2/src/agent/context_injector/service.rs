@@ -2,10 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/contextInjector/contextInjectorService.ts`.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, Weak},
-};
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -128,7 +127,7 @@ impl AgentContextInjectorService {
             "turn.started",
             Arc::new(move |_| {
                 if let Some(service) = weak.upgrade() {
-                    service.state.lock().unwrap().is_new_turn = true;
+                    service.state.lock().is_new_turn = true;
                 }
             }),
         ));
@@ -162,7 +161,7 @@ impl AgentContextInjectorService {
     }
     async fn inject(&self) -> Result<(), ContextInjectionError> {
         let (is_new_turn, entries) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let value = state.is_new_turn;
             state.is_new_turn = false;
             (value, state.entries.clone())
@@ -177,7 +176,6 @@ impl AgentContextInjectorService {
             if !self
                 .state
                 .lock()
-                .unwrap()
                 .entries
                 .iter()
                 .any(|current| current.id == entry.id)
@@ -213,7 +211,7 @@ impl AgentContextInjectorService {
     }
     fn resync_positions(&self) {
         let history = self.context.get();
-        for entry in &mut self.state.lock().unwrap().entries {
+        for entry in &mut self.state.lock().entries {
             entry.positions = find_injections(&history, &entry.name);
         }
     }
@@ -224,7 +222,7 @@ impl AgentContextInjectorService {
         }
         let end = splice.start.saturating_add(splice.delete_count);
         let delta = splice.messages.len() as isize - splice.delete_count as isize;
-        for entry in &mut self.state.lock().unwrap().entries {
+        for entry in &mut self.state.lock().entries {
             let insert = adopted.get(&entry.name).cloned().unwrap_or_default();
             let lo = entry.positions.partition_point(|p| *p < splice.start);
             let hi = entry.positions.partition_point(|p| *p < end);
@@ -239,7 +237,7 @@ impl AgentContextInjectorService {
 impl AgentContextInjectorServiceContract for AgentContextInjectorService {
     fn register(&self, name: String, provider: ContextInjectionProvider) -> DisposableHandle {
         let id = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let id = state.next_id;
             state.next_id = state.next_id.wrapping_add(1);
             let positions = find_injections(&self.context.get(), &name);
@@ -254,12 +252,12 @@ impl AgentContextInjectorServiceContract for AgentContextInjectorService {
         let state = Arc::downgrade(&self.state);
         to_disposable(move || {
             if let Some(state) = state.upgrade() {
-                state.lock().unwrap().entries.retain(|entry| entry.id != id);
+                state.lock().entries.retain(|entry| entry.id != id);
             }
         })
     }
     async fn inject_after_compaction(&self) -> Result<(), ContextInjectionError> {
-        self.state.lock().unwrap().is_new_turn = true;
+        self.state.lock().is_new_turn = true;
         self.inject().await
     }
 }

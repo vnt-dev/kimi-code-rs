@@ -331,10 +331,8 @@ pub fn register_skill_tool() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::{
@@ -433,11 +431,11 @@ mod tests {
         }
 
         fn record_user_activations(&self, origins: &[SkillActivationOrigin]) {
-            self.origins.lock().unwrap().extend_from_slice(origins);
+            self.origins.lock().extend_from_slice(origins);
         }
 
         fn record_model_tool_activation(&self, origin: SkillActivationOrigin) {
-            self.origins.lock().unwrap().push(origin);
+            self.origins.lock().push(origin);
         }
     }
 
@@ -657,7 +655,7 @@ mod tests {
         ));
         assert!(text.contains("ARGUMENTS: src/app.ts"));
 
-        let recorded = skill_service.origins.lock().unwrap();
+        let recorded = skill_service.origins.lock();
         assert_eq!(recorded.as_slice(), &[origin]);
     }
 
@@ -701,6 +699,6 @@ mod tests {
             error.to_string(),
             "Nested skill invocation \"commit\" exceeded the maximum depth of 3 — refusing to recurse further."
         );
-        assert_eq!(skill_service.origins.lock().unwrap().len(), 1);
+        assert_eq!(skill_service.origins.lock().len(), 1);
     }
 }

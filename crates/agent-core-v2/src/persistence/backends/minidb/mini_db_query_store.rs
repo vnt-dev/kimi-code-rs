@@ -6,11 +6,9 @@ use std::{
     collections::HashSet,
     future::Future,
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
 };
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use kimi_code_minidb::{
@@ -124,7 +122,7 @@ impl MiniDbQueryStore {
         if let Some(logger) = &self.inner.rebuild_logger {
             logger(&self.inner.directory, &cause.to_string());
         }
-        self.inner.ensured_indexes.lock().unwrap().clear();
+        self.inner.ensured_indexes.lock().clear();
         if let Some(previous) = previous {
             let _ = previous.close().await;
         }
@@ -294,7 +292,7 @@ impl QueryStoreService for MiniDbQueryStore {
             IndexDef::Text { name, .. } => ("text", name),
         };
         let guard = format!("{collection}:{kind}:{unprefixed_name}");
-        if self.inner.ensured_indexes.lock().unwrap().contains(&guard) {
+        if self.inner.ensured_indexes.lock().contains(&guard) {
             return Ok(());
         }
         let name = index_name(collection, unprefixed_name);
@@ -342,7 +340,7 @@ impl QueryStoreService for MiniDbQueryStore {
             }
         })
         .await?;
-        self.inner.ensured_indexes.lock().unwrap().insert(guard);
+        self.inner.ensured_indexes.lock().insert(guard);
         Ok(())
     }
 

@@ -110,7 +110,8 @@ impl ExecutableTool for McpTool {
 
 #[cfg(test)]
 mod tests {
-    use std::{io, sync::Mutex};
+    use std::io;
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::{
@@ -137,7 +138,7 @@ mod tests {
             args: Map<String, Value>,
             _signal: Option<crate::_base::utils::abort::AbortSignal>,
         ) -> Result<McpToolResult, super::super::super::McpClientError> {
-            self.calls.lock().unwrap().push((name.into(), args));
+            self.calls.lock().push((name.into(), args));
             Ok(McpToolResult {
                 content: vec![McpContentBlock {
                     kind: "text".into(),
@@ -189,7 +190,7 @@ mod tests {
         );
         assert!(!result.is_error);
         assert_eq!(
-            client.calls.lock().unwrap().as_slice(),
+            client.calls.lock().as_slice(),
             &[(
                 "read".into(),
                 serde_json::json!({"path": "/tmp/a"})

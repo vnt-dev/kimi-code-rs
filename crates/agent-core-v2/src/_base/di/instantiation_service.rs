@@ -1,10 +1,6 @@
-use std::{
-    cell::RefCell,
-    sync::{
-        Arc, Mutex, Weak,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::cell::RefCell;
+use std::sync::{Arc, Weak, atomic::{AtomicBool, Ordering}};
+use parking_lot::Mutex;
 
 use super::{
     descriptors::SyncDescriptor,
@@ -59,7 +55,6 @@ impl InstantiationService {
         self.inner
             .services
             .lock()
-            .unwrap()
             .set_instance(INSTANTIATION_SERVICE_ID, Arc::new(self.clone()));
     }
 
@@ -100,7 +95,6 @@ impl InstantiationService {
         self.inner
             .children
             .lock()
-            .unwrap()
             .push(Arc::downgrade(&child.inner));
         Ok(child)
     }
@@ -118,7 +112,7 @@ impl InstantiationService {
     ) -> Option<(Arc<InstantiationInner>, ServiceEntry)> {
         let mut current = Some(Arc::clone(&self.inner));
         while let Some(inner) = current {
-            let entry = inner.services.lock().unwrap().get_entry(id).cloned();
+            let entry = inner.services.lock().get_entry(id).cloned();
             if let Some(entry) = entry {
                 return Some((inner, entry));
             }
@@ -152,7 +146,7 @@ impl InstantiationService {
         }
 
         let (value, redundant) = {
-            let mut services = owner.services.lock().unwrap();
+            let mut services = owner.services.lock();
             if let Some(ServiceEntry::Instance { value, .. }) = services.get_entry(id) {
                 (Arc::clone(value), created.disposable)
             } else {
@@ -161,7 +155,6 @@ impl InstantiationService {
                     owner
                         .construction_order
                         .lock()
-                        .unwrap()
                         .push(Arc::clone(disposable));
                 }
                 services.set_erased(
@@ -216,12 +209,12 @@ impl Disposable for InstantiationService {
         if self.inner.disposed.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        let children = std::mem::take(&mut *self.inner.children.lock().unwrap())
+        let children = std::mem::take(&mut *self.inner.children.lock())
             .into_iter()
             .filter_map(|child| child.upgrade())
             .map(|inner| Arc::new(Self { inner }) as DisposableHandle)
             .collect::<Vec<_>>();
-        let mut own = std::mem::take(&mut *self.inner.construction_order.lock().unwrap());
+        let mut own = std::mem::take(&mut *self.inner.construction_order.lock());
         own.reverse();
         dispose_all(children.into_iter().chain(own))
     }
@@ -347,7 +340,7 @@ mod tests {
         let descriptor = |name: &'static str, order: Arc<Mutex<Vec<&'static str>>>| {
             SyncDescriptor::new(move |_| Ok(name)).managed(move |_| {
                 let order = Arc::clone(&order);
-                to_disposable(move || order.lock().unwrap().push(name))
+                to_disposable(move || order.lock().push(name))
             })
         };
         let mut parent_services = ServiceCollection::new();
@@ -359,6 +352,6 @@ mod tests {
         let _ = parent.get(TEXT.refine::<&'static str>()).unwrap();
         let _ = child.get(NUMBER.refine::<&'static str>()).unwrap();
         parent.dispose().unwrap();
-        assert_eq!(*order.lock().unwrap(), vec!["child", "parent"]);
+        assert_eq!(*order.lock(), vec!["child", "parent"]);
     }
 }

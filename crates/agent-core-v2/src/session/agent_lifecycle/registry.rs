@@ -6,8 +6,9 @@
 use std::{
     collections::HashMap,
     fmt,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use futures_util::{
     FutureExt,
@@ -108,7 +109,6 @@ impl<B: AgentScopeBootstrap + 'static> AgentLifecycleRegistry<B> {
             let handle = self.bootstrap.create(agent_id.clone(), options).await?;
             self.handles
                 .lock()
-                .unwrap()
                 .insert(agent_id, handle.clone());
             self.did_create.fire(&handle);
             return Ok(handle);
@@ -117,7 +117,7 @@ impl<B: AgentScopeBootstrap + 'static> AgentLifecycleRegistry<B> {
             return Ok(handle);
         }
         let (creation, owner) = {
-            let mut creating = self.creating.lock().unwrap();
+            let mut creating = self.creating.lock();
             if let Some(creation) = creating.get(&agent_id) {
                 (creation.clone(), false)
             } else {
@@ -132,11 +132,10 @@ impl<B: AgentScopeBootstrap + 'static> AgentLifecycleRegistry<B> {
         };
         let result = creation.await;
         if owner {
-            self.creating.lock().unwrap().remove(&agent_id);
+            self.creating.lock().remove(&agent_id);
             if let Ok(handle) = &result {
                 self.handles
                     .lock()
-                    .unwrap()
                     .insert(agent_id, handle.clone());
                 self.did_create.fire(handle);
             }
@@ -166,17 +165,17 @@ impl<B: AgentScopeBootstrap + 'static> AgentLifecycleRegistry<B> {
             .fork(source, source_agent_id.to_owned(), options)
             .await?;
         let id = handle.id().to_owned();
-        self.handles.lock().unwrap().insert(id, handle.clone());
+        self.handles.lock().insert(id, handle.clone());
         self.did_create.fire(&handle);
         Ok(handle)
     }
 
     pub fn get(&self, agent_id: &str) -> Option<ScopeHandle> {
-        self.handles.lock().unwrap().get(agent_id).cloned()
+        self.handles.lock().get(agent_id).cloned()
     }
 
     pub fn list(&self, filter: Option<&AgentListFilter>) -> Vec<ScopeHandle> {
-        let handles = self.handles.lock().unwrap();
+        let handles = self.handles.lock();
         handles
             .iter()
             .filter(|(id, _)| {
@@ -195,7 +194,7 @@ impl<B: AgentScopeBootstrap + 'static> AgentLifecycleRegistry<B> {
     }
 
     pub async fn remove(&self, agent_id: &str) -> Result<(), AgentLifecycleRegistryError> {
-        let Some(handle) = self.handles.lock().unwrap().remove(agent_id) else {
+        let Some(handle) = self.handles.lock().remove(agent_id) else {
             return Ok(());
         };
         self.bootstrap.remove(handle).await?;
@@ -204,7 +203,7 @@ impl<B: AgentScopeBootstrap + 'static> AgentLifecycleRegistry<B> {
     }
 
     fn next_agent_id(&self) -> String {
-        let mut next = self.next_agent_id.lock().unwrap();
+        let mut next = self.next_agent_id.lock();
         let id = format!("agent-{}", *next);
         *next += 1;
         id

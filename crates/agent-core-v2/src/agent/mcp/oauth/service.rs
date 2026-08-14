@@ -351,7 +351,7 @@ impl McpOAuthService {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex as StdMutex;
+    use parking_lot::Mutex as StdMutex;
 
     use super::*;
     use crate::persistence::interface::storage::StorageError;
@@ -362,16 +362,16 @@ mod tests {
     #[async_trait]
     impl McpOAuthStore for MemoryStore {
         async fn read_value(&self, key: &str) -> Option<Value> {
-            self.0.lock().unwrap().get(key).cloned()
+            self.0.lock().get(key).cloned()
         }
 
         async fn write_value(&self, key: &str, value: Value) -> Result<(), StorageError> {
-            self.0.lock().unwrap().insert(key.into(), value);
+            self.0.lock().insert(key.into(), value);
             Ok(())
         }
 
         async fn remove(&self, key: &str) -> Result<(), StorageError> {
-            self.0.lock().unwrap().remove(key);
+            self.0.lock().remove(key);
             Ok(())
         }
     }

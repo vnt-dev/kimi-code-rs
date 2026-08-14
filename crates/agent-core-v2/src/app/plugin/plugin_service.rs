@@ -6,8 +6,9 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     panic::AssertUnwindSafe,
-    sync::{Arc, Mutex},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -75,7 +76,7 @@ struct InitialLoadGuard<'a> {
 
 impl InitialLoadGuard<'_> {
     fn finish(mut self) {
-        *self.state.lock().unwrap() = InitialLoadState::Complete;
+        *self.state.lock() = InitialLoadState::Complete;
         self.finished = true;
         self.notify.notify_waiters();
     }
@@ -86,7 +87,7 @@ impl Drop for InitialLoadGuard<'_> {
         if self.finished {
             return;
         }
-        *self.state.lock().unwrap() = InitialLoadState::NotStarted;
+        *self.state.lock() = InitialLoadState::NotStarted;
         self.notify.notify_waiters();
     }
 }
@@ -148,7 +149,7 @@ impl PluginService {
             let notified = self.initial_load_notify.notified();
             if let Some(guard) = self.try_claim_initial_load() {
                 let result = self.manager.lock().await.load().await;
-                let mut status = self.status.lock().unwrap();
+                let mut status = self.status.lock();
                 match result {
                     Ok(()) => {
                         status.has_loaded_snapshot = true;
@@ -160,7 +161,7 @@ impl PluginService {
                 guard.finish();
                 return;
             }
-            if *self.initial_load.lock().unwrap() == InitialLoadState::Complete {
+            if *self.initial_load.lock() == InitialLoadState::Complete {
                 return;
             }
             notified.await;
@@ -168,7 +169,7 @@ impl PluginService {
     }
 
     fn try_claim_initial_load(&self) -> Option<InitialLoadGuard<'_>> {
-        let mut state = self.initial_load.lock().unwrap();
+        let mut state = self.initial_load.lock();
         if *state == InitialLoadState::NotStarted {
             *state = InitialLoadState::Loading;
             Some(InitialLoadGuard {
@@ -182,7 +183,7 @@ impl PluginService {
     }
 
     fn assert_loaded(&self) -> PluginServiceResult<()> {
-        let status = self.status.lock().unwrap();
+        let status = self.status.lock();
         let Some(error) = &status.load_error else {
             return Ok(());
         };
@@ -201,7 +202,7 @@ impl PluginService {
     }
 
     fn has_loaded_snapshot(&self) -> bool {
-        self.status.lock().unwrap().has_loaded_snapshot
+        self.status.lock().has_loaded_snapshot
     }
 
     // Original: managedKimiCodeEnvForPlugins().
@@ -295,7 +296,7 @@ impl PluginServiceContract for PluginService {
         operation_id: String,
     ) -> PluginServiceResult<()> {
         {
-            let mut operations = self.install_operations.lock().unwrap();
+            let mut operations = self.install_operations.lock();
             if operations
                 .values()
                 .any(|operation| !operation.is_finished())
@@ -316,7 +317,7 @@ impl PluginServiceContract for PluginService {
             let operations = Arc::clone(&self.install_operations);
             let progress_operation_id = operation_id.clone();
             let progress: PluginInstallProgressCallback = Arc::new(move |update| {
-                if let Some(operation) = operations.lock().unwrap().get_mut(&progress_operation_id)
+                if let Some(operation) = operations.lock().get_mut(&progress_operation_id)
                 {
                     operation.phase = update.phase;
                     operation.downloaded_bytes = update.downloaded_bytes;
@@ -326,7 +327,7 @@ impl PluginServiceContract for PluginService {
             let result = AssertUnwindSafe(self.install_plugin_with_progress(input, progress))
                 .catch_unwind()
                 .await;
-            let mut operations = self.install_operations.lock().unwrap();
+            let mut operations = self.install_operations.lock();
             if let Some(operation) = operations.get_mut(&operation_id) {
                 match result {
                     Ok(Ok(_)) => operation.phase = PluginInstallPhase::Complete,
@@ -341,7 +342,7 @@ impl PluginServiceContract for PluginService {
     }
 
     fn plugin_install_progress(&self, operation_id: &str) -> Option<PluginInstallOperation> {
-        let mut operations = self.install_operations.lock().unwrap();
+        let mut operations = self.install_operations.lock();
         let operation = operations.get(operation_id)?.clone();
         if operation.is_finished() {
             operations.remove(operation_id);
@@ -352,7 +353,6 @@ impl PluginServiceContract for PluginService {
     fn list_plugin_install_operations(&self) -> Vec<PluginInstallOperation> {
         self.install_operations
             .lock()
-            .unwrap()
             .values()
             .cloned()
             .collect()
@@ -364,7 +364,6 @@ impl PluginServiceContract for PluginService {
         self.assert_loaded()?;
         self.removal_reservations
             .lock()
-            .unwrap()
             .insert(id.to_lowercase());
         Ok(())
     }
@@ -372,7 +371,6 @@ impl PluginServiceContract for PluginService {
     fn release_plugin_removal(&self, id: &str) {
         self.removal_reservations
             .lock()
-            .unwrap()
             .remove(&id.to_lowercase());
     }
 
@@ -402,7 +400,6 @@ impl PluginServiceContract for PluginService {
         if self
             .removal_reservations
             .lock()
-            .unwrap()
             .contains(&input.id.to_lowercase())
         {
             return Err(message_error(format!(
@@ -421,7 +418,7 @@ impl PluginServiceContract for PluginService {
         let result = self.manager.lock().await.reload().await;
         match result {
             Ok(summary) => {
-                let mut status = self.status.lock().unwrap();
+                let mut status = self.status.lock();
                 status.has_loaded_snapshot = true;
                 status.load_error = None;
                 drop(status);
@@ -433,7 +430,7 @@ impl PluginServiceContract for PluginService {
             }
             Err(error) => {
                 let error: Arc<dyn Error + Send + Sync> = Arc::from(error);
-                self.status.lock().unwrap().load_error = Some(Arc::clone(&error));
+                self.status.lock().load_error = Some(Arc::clone(&error));
                 if let Some(guard) = initial_guard {
                     guard.finish();
                 }
@@ -740,7 +737,7 @@ mod tests {
     async fn background_install_state_is_discoverable_and_rejects_overlap() {
         let home = std::env::temp_dir().join(format!("plugin-service-{}", uuid::Uuid::new_v4()));
         let service = Arc::new(service(&home, HashMap::new()));
-        service.install_operations.lock().unwrap().insert(
+        service.install_operations.lock().insert(
             "running".to_owned(),
             PluginInstallOperation::started("running".to_owned(), "demo.zip".to_owned()),
         );

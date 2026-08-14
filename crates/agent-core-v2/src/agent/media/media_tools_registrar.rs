@@ -2,7 +2,8 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/media/mediaToolsRegistrar.ts`.
 
-use std::sync::{Arc, Mutex, Weak};
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 
 use crate::{
     _base::{
@@ -120,7 +121,7 @@ impl AgentMediaToolsRegistrar {
             capabilities.image_in, capabilities.video_in
         );
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if state.registered_key.as_deref() == Some(&key) {
             return Ok(());
         }
@@ -203,7 +204,7 @@ impl AgentMediaToolsRegistrarContract for AgentMediaToolsRegistrar {}
 impl Disposable for AgentMediaToolsRegistrar {
     fn dispose(&self) -> DisposeResult {
         self.disposables.dispose()?;
-        if let Some(registration) = self.state.lock().unwrap().registration.take() {
+        if let Some(registration) = self.state.lock().registration.take() {
             registration.dispose()?;
         }
         Ok(())
@@ -302,7 +303,7 @@ mod tests {
 
     impl Profile {
         fn bind_media(&self, alias: &str, capabilities: ModelCapability) {
-            *self.state.lock().unwrap() = (alias.into(), capabilities);
+            *self.state.lock() = (alias.into(), capabilities);
         }
     }
 
@@ -328,7 +329,7 @@ mod tests {
             unreachable!()
         }
         fn get_model(&self) -> Result<String, ProfileServiceError> {
-            let alias = self.state.lock().unwrap().0.clone();
+            let alias = self.state.lock().0.clone();
             if alias.is_empty() {
                 Err(Box::new(crate::_base::errors::errors::Error2::new(
                     "model.not_configured",
@@ -369,13 +370,13 @@ mod tests {
             unreachable!()
         }
         fn get_model_capabilities(&self) -> Result<ModelCapability, ProfileServiceError> {
-            Ok(self.state.lock().unwrap().1.clone())
+            Ok(self.state.lock().1.clone())
         }
         fn get_max_output_size(&self) -> Result<Option<u64>, ProfileServiceError> {
             unreachable!()
         }
         fn has_model(&self) -> bool {
-            !self.state.lock().unwrap().0.is_empty()
+            !self.state.lock().0.is_empty()
         }
         fn is_runnable(&self) -> bool {
             false

@@ -6,12 +6,10 @@ use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering as AtomicOrdering},
-    },
     time::{Duration, Instant},
 };
+use std::sync::{Arc, atomic::{AtomicBool, Ordering as AtomicOrdering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -284,7 +282,7 @@ impl SessionFsService {
                 let record = line.trim_end_matches(['\r', '\n']);
                 if !record.is_empty() {
                     let capped = {
-                        let mut accumulator = stdout_accumulator.lock().unwrap();
+                        let mut accumulator = stdout_accumulator.lock();
                         accumulator.feed(record);
                         accumulator.capped()
                     };
@@ -324,7 +322,7 @@ impl SessionFsService {
             Err(error) => return Err(Box::new(error)),
         }
         let accumulator = {
-            let mut accumulator = accumulator.lock().unwrap();
+            let mut accumulator = accumulator.lock();
             std::mem::replace(&mut *accumulator, RgJsonAccumulator::new(request))
         };
         accumulator.finish(signal.aborted(), elapsed_millis(started_at))
@@ -1525,9 +1523,10 @@ pub fn register_session_fs_service() {
 mod tests {
     use std::{
         path::PathBuf,
-        sync::{Arc, Mutex},
         time::{SystemTime, UNIX_EPOCH},
     };
+    use std::sync::{Arc};
+    use parking_lot::Mutex;
 
     use async_trait::async_trait;
 
@@ -1644,7 +1643,6 @@ mod tests {
         ) -> crate::app::git::GitServiceResult<FsGitStatusResponse> {
             self.status_calls
                 .lock()
-                .unwrap()
                 .push((cwd.into(), path_filter.cloned()));
             Ok(FsGitStatusResponse {
                 branch: "main".into(),
@@ -1663,7 +1661,7 @@ mod tests {
             relative_path: &str,
             absolute_path: &str,
         ) -> crate::app::git::GitServiceResult<FsDiffResponse> {
-            self.diff_calls.lock().unwrap().push((
+            self.diff_calls.lock().push((
                 cwd.into(),
                 relative_path.into(),
                 absolute_path.into(),
@@ -1834,7 +1832,7 @@ mod tests {
             .unwrap();
         assert_eq!(status.branch, "main");
         assert_eq!(
-            git.status_calls.lock().unwrap()[0].1,
+            git.status_calls.lock()[0].1,
             Some(HashSet::from(["src/lib.rs".into()]))
         );
         let diff = service
@@ -1844,7 +1842,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(diff.diff, "diff");
-        assert_eq!(git.diff_calls.lock().unwrap()[0].1, "src/lib.rs");
+        assert_eq!(git.diff_calls.lock()[0].1, "src/lib.rs");
 
         let escaped = service
             .stat(FsStatRequest {

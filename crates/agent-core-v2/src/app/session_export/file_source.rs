@@ -9,9 +9,9 @@
 use std::{
     io,
     path::{Path, PathBuf},
-    sync::Mutex,
     time::SystemTime,
 };
+use parking_lot::Mutex;
 
 use tokio::fs::File;
 use tokio_util::sync::CancellationToken;
@@ -84,10 +84,8 @@ impl ZipSource {
         Ok(())
     }
 
-    fn lock_file(&self) -> io::Result<std::sync::MutexGuard<'_, Option<File>>> {
-        self.file
-            .lock()
-            .map_err(|_| io::Error::other("session export source lock poisoned"))
+    fn lock_file(&self) -> io::Result<parking_lot::MutexGuard<'_, Option<File>>> {
+        Ok(self.file.lock())
     }
 }
 

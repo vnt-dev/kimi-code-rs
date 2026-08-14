@@ -6,9 +6,10 @@
 use std::{
     io,
     pin::Pin,
-    sync::{Arc, Mutex},
     task::{Context, Poll},
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, DuplexStream, ReadBuf, duplex};
 use tokio_util::sync::CancellationToken;
@@ -65,7 +66,6 @@ impl AsyncRead for BufferedReadable {
                 let error = self
                     .source_error
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .take();
                 match error {
                     Some(error) => Poll::Ready(Err(error)),
@@ -115,8 +115,7 @@ async fn forward<R>(
         && !cancellation.is_cancelled()
     {
         *source_error
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error);
+            .lock() = Some(error);
     }
 }
 

@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex, Weak};
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 
 struct Node<T> {
     element: Option<T>,
@@ -47,7 +48,7 @@ impl<T> LinkedList<T> {
     }
 
     pub fn len(&self) -> usize {
-        self.state.lock().unwrap().size
+        self.state.lock().size
     }
 
     pub fn is_empty(&self) -> bool {
@@ -56,7 +57,7 @@ impl<T> LinkedList<T> {
 
     // Original: packages/agent-core-v2/src/_base/di/util/linkedList.ts, LinkedList.push().
     pub fn push(&self, element: T) -> Removal<T> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let generation = state.next_generation;
         state.next_generation = state.next_generation.wrapping_add(1);
         let previous = state.last;
@@ -93,7 +94,7 @@ impl<T> LinkedList<T> {
     }
 
     pub fn shift(&self) -> Option<T> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let index = state.first?;
         remove_node(&mut state, index)
     }
@@ -102,7 +103,7 @@ impl<T> LinkedList<T> {
     where
         T: Clone,
     {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         let mut values = Vec::with_capacity(state.size);
         let mut current = state.first;
         while let Some(index) = current {
@@ -127,7 +128,7 @@ impl<T> Removal<T> {
         let Some(state) = self.state.upgrade() else {
             return false;
         };
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock();
         if state
             .nodes
             .get(self.index)

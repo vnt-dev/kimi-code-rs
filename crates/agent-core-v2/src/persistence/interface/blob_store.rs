@@ -31,7 +31,8 @@ pub const BLOB_STORE_SERVICE_ID: ServiceIdentifier<BlobStoreHandle> =
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Mutex};
+    use std::collections::HashMap;
+    use parking_lot::Mutex;
 
     use futures_util::{StreamExt, stream};
 
@@ -47,7 +48,6 @@ mod tests {
         async fn put(&self, scope: &str, key: &str, data: &[u8]) -> Result<(), StorageError> {
             self.values
                 .lock()
-                .unwrap()
                 .insert((scope.into(), key.into()), data.into());
             Ok(())
         }
@@ -56,7 +56,6 @@ mod tests {
             Ok(self
                 .values
                 .lock()
-                .unwrap()
                 .get(&(scope.into(), key.into()))
                 .cloned())
         }
@@ -70,7 +69,6 @@ mod tests {
             let value = self
                 .values
                 .lock()
-                .unwrap()
                 .get(&(scope.into(), key.into()))
                 .cloned();
             Box::pin(stream::iter(value.into_iter().map(Ok)))
@@ -80,14 +78,12 @@ mod tests {
             Ok(self
                 .values
                 .lock()
-                .unwrap()
                 .contains_key(&(scope.into(), key.into())))
         }
 
         async fn delete(&self, scope: &str, key: &str) -> Result<(), StorageError> {
             self.values
                 .lock()
-                .unwrap()
                 .remove(&(scope.into(), key.into()));
             Ok(())
         }
@@ -100,7 +96,6 @@ mod tests {
             let mut keys = self
                 .values
                 .lock()
-                .unwrap()
                 .keys()
                 .filter(|(stored_scope, key)| {
                     stored_scope == scope && prefix.is_none_or(|prefix| key.starts_with(prefix))

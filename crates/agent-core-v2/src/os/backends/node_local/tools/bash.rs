@@ -2,13 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/os/backends/node-local/tools/bash.ts`.
 
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::collections::HashMap;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -311,13 +307,13 @@ impl BashTool {
                     });
                 }
                 let truncated = {
-                    let mut builder = builder.lock().unwrap();
+                    let mut builder = builder.lock();
                     builder.write(text);
                     builder.truncated()
                 };
                 if truncated
                     && !persisted.swap(true, Ordering::AcqRel)
-                    && let Some(task_id) = task_id.lock().unwrap().as_deref()
+                    && let Some(task_id) = task_id.lock().as_deref()
                 {
                     tasks.persist_output(task_id);
                 }
@@ -350,7 +346,7 @@ impl BashTool {
             }
         };
         if !starts_in_background {
-            *foreground_task_id.lock().unwrap() = Some(task_id.clone());
+            *foreground_task_id.lock() = Some(task_id.clone());
             if let Some(callback) = context.on_foreground_task_start {
                 callback(task_id.clone());
             }
@@ -452,7 +448,7 @@ impl BashTool {
             .or_else(|| process.exit_code());
         let user_cancellation = user_cancellation_reason().to_string();
         let result = {
-            let mut builder = builder.lock().unwrap();
+            let mut builder = builder.lock();
             match current.as_ref().map(|task| task.base.status) {
                 Some(AgentTaskStatus::TimedOut) => {
                     let label = format_timeout_label(foreground_timeout_ms);
@@ -553,7 +549,7 @@ impl BashTool {
             process.pid(),
             self.next_step_lines(scenario)
         );
-        let foreground = builder.lock().unwrap().ok("", None);
+        let foreground = builder.lock().ok("", None);
         let output = if foreground.output.is_empty() {
             metadata
         } else {

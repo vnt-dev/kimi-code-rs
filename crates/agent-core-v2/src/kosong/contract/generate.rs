@@ -335,7 +335,7 @@ mod tests {
     use serde_json::Map;
     use std::collections::VecDeque;
     use std::pin::Pin;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Poll};
     use tokio_util::sync::CancellationToken;
@@ -471,11 +471,11 @@ mod tests {
             options: Option<&GenerateOptions>,
         ) -> Result<Box<dyn StreamedMessage>, ProviderError> {
             self.generate_calls.fetch_add(1, Ordering::SeqCst);
-            *self.sent_tool_names.lock().unwrap() =
+            *self.sent_tool_names.lock() =
                 tools.iter().map(|tool| tool.name.clone()).collect();
-            *self.observed_cache_key.lock().unwrap() =
+            *self.observed_cache_key.lock() =
                 options.and_then(|options| options.cache_key.clone());
-            Ok(Box::new(self.stream.lock().unwrap().take().unwrap()))
+            Ok(Box::new(self.stream.lock().take().unwrap()))
         }
     }
 
@@ -588,7 +588,7 @@ mod tests {
             on_message_part: Some(Arc::new(move |mut part| {
                 let part_sink = Arc::clone(&part_sink);
                 Box::pin(async move {
-                    part_sink.lock().unwrap().push(part.clone());
+                    part_sink.lock().push(part.clone());
                     if let StreamedMessagePart::Content(ContentPart::Text { text }) = &mut part {
                         *text = "MUTATED".to_owned();
                     }
@@ -606,7 +606,7 @@ mod tests {
         let result = generate(&provider, "system", &[], &history(), Some(&callbacks), None)
             .await
             .unwrap();
-        assert_eq!(seen_parts.lock().unwrap().len(), 2);
+        assert_eq!(seen_parts.lock().len(), 2);
         assert_eq!(
             result.message.content,
             vec![ContentPart::Text {
@@ -651,9 +651,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(*provider.sent_tool_names.lock().unwrap(), ["visible"]);
+        assert_eq!(*provider.sent_tool_names.lock(), ["visible"]);
         assert_eq!(
-            provider.observed_cache_key.lock().unwrap().as_deref(),
+            provider.observed_cache_key.lock().as_deref(),
             Some("session-42")
         );
     }
@@ -711,14 +711,14 @@ mod tests {
         let stats_sink = Arc::clone(&stats);
         let options = GenerateOptions {
             on_stream_end: Some(Arc::new(move |value| {
-                *stats_sink.lock().unwrap() = value;
+                *stats_sink.lock() = value;
             })),
             ..GenerateOptions::default()
         };
         generate(&provider, "system", &[], &history(), None, Some(&options))
             .await
             .unwrap();
-        let _stats = stats.lock().unwrap().unwrap();
+        let _stats = stats.lock();
     }
 
     #[tokio::test]

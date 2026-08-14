@@ -232,9 +232,9 @@ pub async fn rm_force(path: &Path) -> io::Result<()> {
 mod tests {
     use std::{
         pin::Pin,
-        sync::Mutex,
         task::{Context, Poll},
     };
+    use parking_lot::Mutex;
 
     use futures_util::stream;
     use tokio::{
@@ -319,7 +319,7 @@ mod tests {
             Ok(self.code)
         }
         async fn kill(&self, signal: Option<ProcessSignal>) -> Result<(), HostProcessError> {
-            self.kill_calls.lock().unwrap().push(signal);
+            self.kill_calls.lock().push(signal);
             Ok(())
         }
         fn dispose(&self) {}
@@ -413,7 +413,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.to_string(), "command timed out after 5ms: hang");
-        assert_eq!(kill_calls.lock().unwrap().len(), 1);
+        assert_eq!(kill_calls.lock().len(), 1);
     }
 
     struct ScriptedFetch {
@@ -460,7 +460,7 @@ mod tests {
                 ok: self.ok,
                 status: self.status,
                 content_length: self.content_length,
-                body: self.body.lock().unwrap().take().flatten(),
+                body: self.body.lock().take().flatten(),
             })
         }
     }
@@ -563,14 +563,14 @@ mod tests {
         let received = download_to_file(
             "https://cdn.example.test/blob",
             &root.join("blob"),
-            Some(&move |percent| recorded.lock().unwrap().push(percent)),
+            Some(&move |percent| recorded.lock().push(percent)),
             &fetch,
             None,
         )
         .await
         .unwrap();
         assert_eq!(received, 100);
-        assert_eq!(*percents.lock().unwrap(), vec![40, 80, 99, 100]);
+        assert_eq!(*percents.lock(), vec![40, 80, 99, 100]);
         rm_force(&root).await.unwrap();
     }
 

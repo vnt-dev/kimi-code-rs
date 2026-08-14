@@ -37,14 +37,12 @@ pub static GET_GOAL_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(|| 
 });
 
 pub trait GetGoalProvider: Send + Sync {
-    fn get_goal(&self) -> GoalToolResult;
+    fn get_goal(&self) -> Result<GoalToolResult, String>;
 }
 
 impl GetGoalProvider for AgentGoalServiceHandle {
-    fn get_goal(&self) -> GoalToolResult {
-        (**self)
-            .get_goal()
-            .expect("goal tools are only resolved for supported agents")
+    fn get_goal(&self) -> Result<GoalToolResult, String> {
+        (**self).get_goal().map_err(|error| error.to_string())
     }
 }
 
@@ -85,7 +83,10 @@ impl ExecutableTool for GetGoalTool {
         let execute = Arc::new(move |_context: ExecutableToolContext| {
             let goal = Arc::clone(&goal);
             Box::pin(async move {
-                let result = goal_result_for_model(goal.get_goal());
+                let result = match goal.get_goal() {
+                    Ok(result) => goal_result_for_model(result),
+                    Err(error) => return ExecutableToolResult::error(error),
+                };
                 ExecutableToolResult::success(
                     serde_json::to_string_pretty(&result)
                         .expect("GoalResultForModel is always serializable"),
@@ -128,8 +129,8 @@ mod tests {
     struct StubGoal(GoalToolResult);
 
     impl GetGoalProvider for StubGoal {
-        fn get_goal(&self) -> GoalToolResult {
-            self.0.clone()
+        fn get_goal(&self) -> Result<GoalToolResult, String> {
+            Ok(self.0.clone())
         }
     }
 

@@ -2582,6 +2582,7 @@ dependencies = [
  "kimi-code-protocol",
  "libc",
  "notify",
+ "parking_lot",
  "path-clean",
  "percent-encoding",
  "portable-pty",

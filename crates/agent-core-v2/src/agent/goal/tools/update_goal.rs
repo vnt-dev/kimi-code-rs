@@ -89,7 +89,7 @@ pub static UPDATE_GOAL_PARAMETERS: LazyLock<Map<String, Value>> = LazyLock::new(
 });
 
 pub trait UpdateGoalProvider: Send + Sync {
-    fn get_goal(&self) -> GoalToolResult;
+    fn get_goal(&self) -> Result<GoalToolResult, String>;
     fn is_goal_tool_target(&self, turn_id: crate::agent::TurnId, goal_id: &str) -> bool;
     fn resume_goal(&self) -> BoxFuture<'static, Result<GoalSnapshot, String>>;
     fn mark_complete(&self) -> BoxFuture<'static, Result<Option<GoalSnapshot>, String>>;
@@ -97,10 +97,8 @@ pub trait UpdateGoalProvider: Send + Sync {
 }
 
 impl UpdateGoalProvider for AgentGoalServiceHandle {
-    fn get_goal(&self) -> GoalToolResult {
-        (**self)
-            .get_goal()
-            .expect("goal tools are only resolved for supported agents")
+    fn get_goal(&self) -> Result<GoalToolResult, String> {
+        (**self).get_goal().map_err(|error| error.to_string())
     }
     fn is_goal_tool_target(&self, turn_id: crate::agent::TurnId, goal_id: &str) -> bool {
         (**self)
@@ -165,7 +163,7 @@ impl ExecutableTool for UpdateGoalTool {
         &self.definition
     }
     async fn resolve_execution(&self, args: UpdateGoalInput) -> ToolExecution {
-        let current = self.goal.get_goal().goal;
+        let current = self.goal.get_goal().ok().and_then(|result| result.goal);
         let goal_is_active = current
             .as_ref()
             .is_some_and(|goal| matches!(goal.status, crate::agent::goal::GoalStatus::Active));
@@ -174,7 +172,10 @@ impl ExecutableTool for UpdateGoalTool {
             let goal = Arc::clone(&goal);
             let current = current.clone();
             Box::pin(async move {
-                let at_execution = goal.get_goal().goal;
+                let at_execution = match goal.get_goal() {
+                    Ok(result) => result.goal,
+                    Err(error) => return ExecutableToolResult::error(error),
+                };
                 let Some(at_execution) = at_execution else {
                     return ExecutableToolResult::success(missing_goal_output(args.status));
                 };

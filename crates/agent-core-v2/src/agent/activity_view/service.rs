@@ -3,10 +3,9 @@
 //! Original:
 //! `packages/agent-core-v2/src/agent/activityView/activityViewService.ts`.
 
-use std::{
-    sync::{Arc, Mutex, Weak},
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Weak};
+use parking_lot::Mutex;
 
 use indexmap::IndexMap;
 use serde::Deserialize;
@@ -147,7 +146,7 @@ impl AgentActivityView {
         let Some(turn_id) = status.active_turn_id else {
             return;
         };
-        self.fold.lock().unwrap().turn = Some(MutableTurn::new(turn_id, PromptOrigin::User));
+        self.fold.lock().turn = Some(MutableTurn::new(turn_id, PromptOrigin::User));
         self.publish();
     }
 
@@ -155,7 +154,7 @@ impl AgentActivityView {
         if infos.is_empty() {
             return;
         }
-        let mut fold = self.fold.lock().unwrap();
+        let mut fold = self.fold.lock();
         for info in infos {
             fold.background.insert(
                 info.base.task_id.clone(),
@@ -174,7 +173,7 @@ impl AgentActivityView {
         if !compacting {
             return;
         }
-        self.fold.lock().unwrap().background.insert(
+        self.fold.lock().background.insert(
             FULL_COMPACTION_BACKGROUND_ID.into(),
             BackgroundRef {
                 kind: "compaction".into(),
@@ -259,7 +258,7 @@ impl AgentActivityView {
         });
         self.subscribe("task.started", |service, event| {
             if let Some(info) = task_info(event) {
-                let mut fold = service.fold.lock().unwrap();
+                let mut fold = service.fold.lock();
                 fold.background.insert(
                     info.base.task_id.clone(),
                     BackgroundRef {
@@ -279,7 +278,6 @@ impl AgentActivityView {
             if service
                 .fold
                 .lock()
-                .unwrap()
                 .background
                 .shift_remove(&info.base.task_id)
                 .is_some()
@@ -288,7 +286,7 @@ impl AgentActivityView {
             }
         });
         self.subscribe("compaction.started", |service, _| {
-            service.fold.lock().unwrap().background.insert(
+            service.fold.lock().background.insert(
                 FULL_COMPACTION_BACKGROUND_ID.into(),
                 BackgroundRef {
                     kind: "compaction".into(),
@@ -339,7 +337,6 @@ impl AgentActivityView {
         if self
             .fold
             .lock()
-            .unwrap()
             .background
             .shift_remove(FULL_COMPACTION_BACKGROUND_ID)
             .is_some()
@@ -349,7 +346,7 @@ impl AgentActivityView {
     }
 
     fn on_turn_started(&self, turn_id: crate::agent::TurnId, origin: PromptOrigin) {
-        let mut fold = self.fold.lock().unwrap();
+        let mut fold = self.fold.lock();
         fold.turn = Some(MutableTurn::new(turn_id, origin));
         fold.last_turn = None;
         drop(fold);
@@ -357,7 +354,7 @@ impl AgentActivityView {
     }
 
     fn on_turn_ended(&self, turn_id: crate::agent::TurnId, reason: TurnEndReason) {
-        let mut fold = self.fold.lock().unwrap();
+        let mut fold = self.fold.lock();
         let at = epoch_millis();
         if fold
             .turn
@@ -465,7 +462,7 @@ impl AgentActivityView {
     }
 
     fn mutate_turn(&self, mutate: impl FnOnce(&mut MutableTurn)) {
-        let mut fold = self.fold.lock().unwrap();
+        let mut fold = self.fold.lock();
         let Some(turn) = fold.turn.as_mut() else {
             return;
         };
@@ -476,7 +473,7 @@ impl AgentActivityView {
 
     fn publish(&self) {
         let next = {
-            let mut fold = self.fold.lock().unwrap();
+            let mut fold = self.fold.lock();
             let next = AgentActivityState {
                 lifecycle: fold.lifecycle,
                 turn: fold.turn.as_ref().map(MutableTurn::snapshot),
@@ -501,13 +498,13 @@ impl AgentActivityView {
 
 impl AgentActivityViewContract for AgentActivityView {
     fn state(&self) -> AgentActivityState {
-        self.fold.lock().unwrap().current.clone()
+        self.fold.lock().current.clone()
     }
 }
 
 impl Disposable for AgentActivityView {
     fn dispose(&self) -> DisposeResult {
-        self.fold.lock().unwrap().lifecycle = ActivityViewLifecycle::Disposed;
+        self.fold.lock().lifecycle = ActivityViewLifecycle::Disposed;
         self.publish();
         self.disposables.dispose()
     }
@@ -664,7 +661,7 @@ mod tests {
         let updates = Arc::new(Mutex::new(Vec::new()));
         let updates_for_listener = Arc::clone(&updates);
         let registration = bus.subscribe(Arc::new(move |event| {
-            updates_for_listener.lock().unwrap().push(event.clone());
+            updates_for_listener.lock().push(event.clone());
         }));
         let service = AgentActivityView::build(EventBusHandle(bus.clone()));
         if let Some(status) = loop_status {
@@ -735,7 +732,6 @@ mod tests {
         assert_eq!(
             updates
                 .lock()
-                .unwrap()
                 .iter()
                 .filter(|event| event.event_type == "agent.activity.updated")
                 .count(),
@@ -867,7 +863,7 @@ mod tests {
 
         view.dispose().unwrap();
         assert_eq!(view.state().lifecycle, ActivityViewLifecycle::Disposed);
-        assert!(updates.lock().unwrap().iter().any(|event| {
+        assert!(updates.lock().iter().any(|event| {
             event.event_type == "agent.activity.updated"
                 && event.fields.get("lifecycle") == Some(&json!("disposed"))
         }));

@@ -4,9 +4,10 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
     time::Duration,
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use indexmap::IndexSet;
@@ -116,12 +117,12 @@ impl SessionFsWatchService {
             ) as usize,
         });
         let worker = tokio::spawn(run_watch_worker(Arc::downgrade(&inner), receiver));
-        *inner.worker_task.lock().unwrap() = Some(worker);
+        *inner.worker_task.lock() = Some(worker);
         Self { inner }
     }
 
     fn ensure_handle(&self) -> Result<(), SessionFsWatchError> {
-        if self.inner.state.lock().unwrap().handle.is_some() {
+        if self.inner.state.lock().handle.is_some() {
             return Ok(());
         }
         let work_dir = self.inner.workspace.work_dir();
@@ -136,7 +137,7 @@ impl SessionFsWatchService {
         let subscription = handle.on_did_change().subscribe(move |change| {
             let _ = commands.send(WatchCommand::Raw(change.clone()));
         });
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.state.lock();
         if state.handle.is_none() {
             state.handle = Some(handle);
             state.handle_subscription = Some(subscription);
@@ -149,7 +150,7 @@ impl SessionFsWatchService {
 
     fn teardown_handle(&self) {
         let (subscription, handle) = {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.inner.state.lock();
             (state.handle_subscription.take(), state.handle.take())
         };
         if let Some(subscription) = subscription {
@@ -199,7 +200,7 @@ impl SessionFsWatchServiceContract for SessionFsWatchService {
             watched.insert(to_relative(&self.inner.workspace.work_dir(), &absolute));
         }
         let empty = watched.is_empty();
-        self.inner.state.lock().unwrap().watched = watched;
+        self.inner.state.lock().watched = watched;
         if empty {
             self.teardown_handle();
             self.clear_window();
@@ -213,7 +214,6 @@ impl SessionFsWatchServiceContract for SessionFsWatchService {
         self.inner
             .state
             .lock()
-            .unwrap()
             .watched
             .iter()
             .cloned()
@@ -241,7 +241,7 @@ impl Disposable for SessionFsWatchService {
     fn dispose(&self) -> DisposeResult {
         self.clear_window();
         self.teardown_handle();
-        if let Some(worker) = self.inner.worker_task.lock().unwrap().take() {
+        if let Some(worker) = self.inner.worker_task.lock().take() {
             worker.abort();
         }
         self.inner.emitter.dispose()
@@ -315,7 +315,7 @@ fn process_raw(
         return;
     }
 
-    if !is_under_any(&relative, &inner.state.lock().unwrap().watched) {
+    if !is_under_any(&relative, &inner.state.lock().watched) {
         return;
     }
     window.pending.push(FsChangeEntry {
@@ -457,12 +457,10 @@ pub fn register_session_fs_watch_service() {
 mod tests {
     use std::{
         path::PathBuf,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
-        },
         time::{SystemTime, UNIX_EPOCH},
     };
+    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use parking_lot::Mutex;
 
     use crate::{
         os::{
@@ -576,7 +574,7 @@ mod tests {
             path: &Path,
             _: HostFsWatchOptions,
         ) -> Result<Arc<dyn HostFsWatchHandle>, HostFsError> {
-            self.calls.lock().unwrap().push(path.to_path_buf());
+            self.calls.lock().push(path.to_path_buf());
             Ok(self.handle.clone())
         }
     }
@@ -607,11 +605,11 @@ mod tests {
         let captured = Arc::clone(&events);
         service
             .on_did_change_files()
-            .subscribe(move |event| captured.lock().unwrap().push(event.clone()));
+            .subscribe(move |event| captured.lock().push(event.clone()));
 
         service.set_watched_paths(&["src".into()]).unwrap();
         assert_eq!(
-            watcher.calls.lock().unwrap().as_slice(),
+            watcher.calls.lock().as_slice(),
             std::slice::from_ref(&directory.0)
         );
         assert_eq!(service.watched_paths(), ["src"]);
@@ -632,8 +630,8 @@ mod tests {
             kind: HostFsChangeKind::File,
         });
         service.flush_pending().await;
-        assert_eq!(events.lock().unwrap()[0].changes.len(), 1);
-        assert_eq!(events.lock().unwrap()[0].changes[0].path, "src/a.ts");
+        assert_eq!(events.lock()[0].changes.len(), 1);
+        assert_eq!(events.lock()[0].changes[0].path, "src/a.ts");
 
         service.set_watched_paths(&[]).unwrap();
         assert!(watcher.handle.disposed.load(Ordering::Acquire));
@@ -648,7 +646,7 @@ mod tests {
         let captured = Arc::clone(&events);
         service
             .on_did_change_files()
-            .subscribe(move |event| captured.lock().unwrap().push(event.clone()));
+            .subscribe(move |event| captured.lock().push(event.clone()));
         service.set_watched_paths(&[".".into()]).unwrap();
         // Raw changes may arrive while `.gitignore` is still loading. They stay
         // queued behind that async initialization and are filtered afterward.
@@ -669,7 +667,7 @@ mod tests {
             });
         }
         service.flush_pending().await;
-        let events = events.lock().unwrap();
+        let events = events.lock();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].truncated, Some(true));
         assert_eq!(events[0].count, Some(501));

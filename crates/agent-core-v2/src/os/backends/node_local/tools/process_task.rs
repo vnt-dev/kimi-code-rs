@@ -4,9 +4,10 @@
 
 use std::{
     fmt,
-    sync::{Arc, Mutex},
     time::Duration,
 };
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use tokio::io::AsyncReadExt;
 
@@ -97,7 +98,7 @@ impl AgentTask for ProcessTask {
         }
         let settlement = match wait {
             Ok(exit_code) if drain.is_ok() => {
-                *self.exit_code.lock().unwrap() = Some(exit_code);
+                *self.exit_code.lock() = Some(exit_code);
                 AgentTaskSettlement {
                     status: if signal.aborted() {
                         AgentTaskSettlementStatus::Killed
@@ -110,7 +111,7 @@ impl AgentTask for ProcessTask {
                 }
             }
             result => {
-                *self.exit_code.lock().unwrap() = self.process.exit_code();
+                *self.exit_code.lock() = self.process.exit_code();
                 let reason = result
                     .err()
                     .map(|error| error.to_string())
@@ -157,7 +158,6 @@ impl AgentTask for ProcessTask {
                     "exitCode".into(),
                     self.exit_code
                         .lock()
-                        .unwrap()
                         .map_or(serde_json::Value::Null, serde_json::Value::from),
                 ),
             ]),
@@ -408,10 +408,10 @@ mod tests {
             self.signal.clone()
         }
         fn append_output(&self, chunk: &str) {
-            self.output.lock().unwrap().push_str(chunk);
+            self.output.lock().push_str(chunk);
         }
         async fn settle(&self, settlement: AgentTaskSettlement) -> Result<bool, AgentTaskError> {
-            *self.settlement.lock().unwrap() = Some(settlement);
+            *self.settlement.lock() = Some(settlement);
             Ok(true)
         }
     }
@@ -466,7 +466,7 @@ mod tests {
         }
 
         async fn kill(&self, signal: Option<ProcessSignal>) -> Result<(), HostProcessError> {
-            self.signals.lock().unwrap().push(signal);
+            self.signals.lock().push(signal);
             self.killed.send_replace(true);
             Ok(())
         }
@@ -504,11 +504,11 @@ mod tests {
             settlement: Mutex::new(None),
         };
         task.start(&sink).await.unwrap();
-        let output = sink.output.lock().unwrap().clone();
+        let output = sink.output.lock().clone();
         assert!(output.contains("out"));
         assert!(output.contains("err"));
         assert_eq!(
-            sink.settlement.lock().unwrap().as_ref().unwrap().status,
+            sink.settlement.lock().as_ref().unwrap().status,
             AgentTaskSettlementStatus::Completed
         );
         let info = task.to_info(AgentTaskInfoBase {
@@ -536,7 +536,7 @@ mod tests {
         let error = execute_process(
             process,
             &AbortController::new().signal(),
-            &|chunk| output.lock().unwrap().push_str(chunk),
+            &|chunk| output.lock().push_str(chunk),
             None,
         )
         .await
@@ -545,7 +545,7 @@ mod tests {
             error,
             ProcessExecutorError::Exit(ProcessExitError { exit_code: Some(7) })
         ));
-        assert_eq!(*output.lock().unwrap(), "output");
+        assert_eq!(*output.lock(), "output");
     }
 
     #[tokio::test]
@@ -564,11 +564,11 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            sink.settlement.lock().unwrap().as_ref().unwrap().status,
+            sink.settlement.lock().as_ref().unwrap().status,
             AgentTaskSettlementStatus::Killed
         );
         assert_eq!(
-            *process.signals.lock().unwrap(),
+            *process.signals.lock(),
             [Some(ProcessSignal::Terminate)]
         );
         assert!(process.disposed.load(Ordering::Acquire));
@@ -582,7 +582,7 @@ mod tests {
         let result = execute_process(process.clone(), &controller.signal(), &|_| {}, None).await;
         assert!(matches!(result, Err(ProcessExecutorError::Aborted(_))));
         assert_eq!(
-            *process.signals.lock().unwrap(),
+            *process.signals.lock(),
             [Some(ProcessSignal::Terminate)]
         );
         assert!(process.disposed.load(Ordering::Acquire));

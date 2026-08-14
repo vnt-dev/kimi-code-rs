@@ -98,7 +98,7 @@ impl AgentSystemReminderServiceContract for AgentSystemReminderService {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::agent::context_memory::{
@@ -111,11 +111,11 @@ mod tests {
 
     impl AgentContextMemoryServiceContract for MemoryContext {
         fn get(&self) -> crate::agent::context_memory::ContextMemorySnapshot {
-            self.0.lock().unwrap().clone().into()
+            self.0.lock().clone().into()
         }
 
         fn append(&self, messages: Vec<ContextMessage>) -> Result<(), ContextMemoryServiceError> {
-            self.0.lock().unwrap().extend(messages);
+            self.0.lock().extend(messages);
             Ok(())
         }
 
@@ -127,7 +127,7 @@ mod tests {
         }
 
         fn clear(&self) -> Result<(), ContextMemoryServiceError> {
-            self.0.lock().unwrap().clear();
+            self.0.lock().clear();
             Ok(())
         }
 

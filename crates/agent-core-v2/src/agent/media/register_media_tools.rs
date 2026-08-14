@@ -172,7 +172,7 @@ fn error_name(error: &(dyn Error + 'static)) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use async_trait::async_trait;
     use futures_util::{StreamExt, stream};
@@ -269,7 +269,6 @@ mod tests {
         fn track(&self, event: &str, properties: Option<&TelemetryProperties>) {
             self.0
                 .lock()
-                .unwrap()
                 .push((event.into(), properties.cloned().unwrap_or_default()));
         }
     }
@@ -376,7 +375,7 @@ mod tests {
             "upload failed"
         );
 
-        let events = capture.0.lock().unwrap();
+        let events = capture.0.lock();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].0, "video_upload");
         assert_eq!(

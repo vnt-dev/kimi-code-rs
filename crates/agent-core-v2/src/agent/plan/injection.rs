@@ -2,7 +2,8 @@
 //!
 //! Original: `agent/plan/injection/planModeInjection.ts`.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
@@ -79,12 +80,12 @@ async fn plan_mode_injection(
         .await
         .map_err(|error| -> ContextInjectionError { Box::new(error) })?;
     let Some(data) = data else {
-        let was_active = std::mem::replace(&mut *was_active.lock().unwrap(), false);
+        let was_active = std::mem::replace(&mut *was_active.lock(), false);
         return Ok(
             was_active.then(|| ContextInjectionContent::Text(PLAN_MODE_EXIT_REMINDER.into()))
         );
     };
-    let was_active_before = std::mem::replace(&mut *was_active.lock().unwrap(), true);
+    let was_active_before = std::mem::replace(&mut *was_active.lock(), true);
     if !was_active_before {
         return Ok(Some(ContextInjectionContent::Text(
             if data.content.trim().is_empty() {

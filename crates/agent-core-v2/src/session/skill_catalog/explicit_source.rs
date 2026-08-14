@@ -124,11 +124,9 @@ mod tests {
     use std::{
         collections::HashMap,
         path::{Path, PathBuf},
-        sync::{
-            Mutex,
-            atomic::{AtomicU64, Ordering},
-        },
     };
+    use std::sync::{atomic::{AtomicU64, Ordering}};
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::{
@@ -150,7 +148,7 @@ mod tests {
     #[async_trait]
     impl SkillDiscoveryContract for RecordingDiscovery {
         async fn discover(&self, roots: &[SkillRoot]) -> SkillDiscoveryResult {
-            *self.roots.lock().unwrap() = roots.to_vec();
+            *self.roots.lock() = roots.to_vec();
             SkillDiscoveryResult {
                 scanned_roots: roots.iter().map(|root| root.path.clone()).collect(),
                 ..SkillDiscoveryResult::default()
@@ -216,7 +214,7 @@ mod tests {
             bootstrap(&directory),
         );
         assert_eq!(empty.load().await.unwrap(), SkillContribution::default());
-        assert!(discovery.roots.lock().unwrap().is_empty());
+        assert!(discovery.roots.lock().is_empty());
 
         let source = ExplicitFileSkillSource::new(
             handle,
@@ -231,7 +229,7 @@ mod tests {
         assert_eq!(source.priority(), 20);
         assert_eq!(contribution.scanned_roots.as_ref().unwrap().len(), 1);
         assert_eq!(
-            discovery.roots.lock().unwrap()[0].source,
+            discovery.roots.lock()[0].source,
             SkillDefinitionSource::User
         );
 

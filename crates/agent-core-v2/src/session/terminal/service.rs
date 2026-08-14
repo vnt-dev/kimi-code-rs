@@ -2,10 +2,9 @@
 //!
 //! Original: `session/terminal/terminalService.ts`, `SessionTerminalService`.
 
-use std::{
-    ops::Deref,
-    sync::{Arc, Mutex},
-};
+use std::ops::Deref;
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -168,7 +167,7 @@ impl SessionTerminalService {
             exit_code: None,
         };
         let terminal_id = terminal.id.clone();
-        self.state.lock().unwrap().records.insert(
+        self.state.lock().records.insert(
             terminal_id.clone(),
             TerminalRecord {
                 terminal: terminal.clone(),
@@ -193,7 +192,7 @@ impl SessionTerminalService {
                 mark_exited(&state, &terminal_id, event.exit_code);
             }
         });
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if let Some(record) = state.records.get_mut(&terminal.id) {
             if record.terminal.status == TerminalStatus::Exited {
                 let _ = data_subscription.dispose();
@@ -211,7 +210,6 @@ impl SessionTerminalService {
         Ok(self
             .state
             .lock()
-            .unwrap()
             .records
             .values()
             .map(|record| record.terminal.clone())
@@ -219,7 +217,7 @@ impl SessionTerminalService {
     }
 
     pub async fn get(&self, terminal_id: &str) -> SessionTerminalResult<Terminal> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         Ok(
             require_record(&mut state, terminal_id, &self.context.session_id)?
                 .terminal
@@ -234,7 +232,7 @@ impl SessionTerminalService {
         options: TerminalAttachOptions,
     ) -> SessionTerminalResult<AttachResult> {
         let replay = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let record = require_record(&mut state, terminal_id, &self.context.session_id)?;
             record.sinks.insert(sink.id().to_owned(), Arc::clone(&sink));
             let since_seq = options.since_seq.unwrap_or(0);
@@ -254,20 +252,20 @@ impl SessionTerminalService {
     }
 
     pub fn detach(&self, terminal_id: &str, sink_id: &str) {
-        if let Some(record) = self.state.lock().unwrap().records.get_mut(terminal_id) {
+        if let Some(record) = self.state.lock().records.get_mut(terminal_id) {
             record.sinks.shift_remove(sink_id);
         }
     }
 
     pub fn detach_all_for_sink(&self, sink_id: &str) {
-        for record in self.state.lock().unwrap().records.values_mut() {
+        for record in self.state.lock().records.values_mut() {
             record.sinks.shift_remove(sink_id);
         }
     }
 
     pub async fn write(&self, terminal_id: &str, data: &str) -> SessionTerminalResult<()> {
         let process = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             Arc::clone(&require_record(&mut state, terminal_id, &self.context.session_id)?.process)
         };
         process.write(data)?;
@@ -281,7 +279,7 @@ impl SessionTerminalService {
         rows: u32,
     ) -> SessionTerminalResult<()> {
         let process = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let record = require_record(&mut state, terminal_id, &self.context.session_id)?;
             record.terminal.cols = cols;
             record.terminal.rows = rows;
@@ -293,7 +291,7 @@ impl SessionTerminalService {
 
     pub async fn close(&self, terminal_id: &str) -> SessionTerminalResult<CloseResult> {
         let process = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let record = require_record(&mut state, terminal_id, &self.context.session_id)?;
             if record.closed {
                 None
@@ -325,7 +323,7 @@ fn require_record<'a>(
 
 fn on_data(state: &Mutex<TerminalState>, terminal_id: &str, data: &str) {
     let (frame, sinks) = {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock();
         let Some(record) = state.records.get_mut(terminal_id) else {
             return;
         };
@@ -350,7 +348,7 @@ fn on_data(state: &Mutex<TerminalState>, terminal_id: &str, data: &str) {
 
 fn mark_exited(state: &Mutex<TerminalState>, terminal_id: &str, exit_code: Option<i32>) {
     let (frame, sinks, disposables) = {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock();
         let Some(record) = state.records.get_mut(terminal_id) else {
             return;
         };
@@ -405,7 +403,7 @@ fn default_shell() -> String {
 
 impl Disposable for SessionTerminalService {
     fn dispose(&self) -> DisposeResult {
-        let records = std::mem::take(&mut self.state.lock().unwrap().records);
+        let records = std::mem::take(&mut self.state.lock().records);
         for (_, record) in records {
             let _ = dispose_all(record.disposables);
             let _ = record.process.kill();
@@ -473,10 +471,8 @@ pub fn register_session_terminal_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::{Path, PathBuf},
-        sync::Mutex,
-    };
+    use std::path::{Path, PathBuf};
+    use parking_lot::Mutex;
 
     use crate::{
         _base::event::{Emitter, Event},
@@ -515,17 +511,17 @@ mod tests {
         }
 
         fn write(&self, data: &str) -> Result<(), TerminalProcessError> {
-            self.writes.lock().unwrap().push(data.into());
+            self.writes.lock().push(data.into());
             Ok(())
         }
 
         fn resize(&self, cols: u32, rows: u32) -> Result<(), TerminalProcessError> {
-            self.resizes.lock().unwrap().push((cols, rows));
+            self.resizes.lock().push((cols, rows));
             Ok(())
         }
 
         fn kill(&self) -> Result<(), TerminalProcessError> {
-            *self.killed.lock().unwrap() += 1;
+            *self.killed.lock() += 1;
             Ok(())
         }
     }
@@ -543,8 +539,8 @@ mod tests {
             options: TerminalSpawnOptions,
         ) -> Result<Arc<dyn TerminalProcess>, TerminalProcessError> {
             let process = Arc::new(FakeProcess::default());
-            self.options.lock().unwrap().push(options);
-            self.processes.lock().unwrap().push(Arc::clone(&process));
+            self.options.lock().push(options);
+            self.processes.lock().push(Arc::clone(&process));
             Ok(process)
         }
     }
@@ -604,7 +600,7 @@ mod tests {
             &self.id
         }
         fn send(&self, frame: TerminalFrame) {
-            self.frames.lock().unwrap().push(frame);
+            self.frames.lock().push(frame);
         }
     }
 
@@ -645,9 +641,9 @@ mod tests {
         assert_eq!(terminal.session_id, "session-1");
         assert_eq!(terminal.cwd, expected_cwd);
         assert_eq!(terminal.cols, 100);
-        assert_eq!(host.options.lock().unwrap()[0].cwd, terminal.cwd);
+        assert_eq!(host.options.lock()[0].cwd, terminal.cwd);
 
-        let process = host.processes.lock().unwrap()[0].clone();
+        let process = host.processes.lock()[0].clone();
         process.emit_data("first");
         let sink = Arc::new(Sink::new("client"));
         assert_eq!(
@@ -661,7 +657,7 @@ mod tests {
         process.emit_exit(Some(7));
 
         {
-            let frames = sink.frames.lock().unwrap();
+            let frames = sink.frames.lock();
             assert!(
                 matches!(&frames[0], TerminalFrame::Output { seq: 1, payload, .. } if payload.data == "first")
             );
@@ -684,21 +680,21 @@ mod tests {
             .create(CreateTerminalRequest::default())
             .await
             .unwrap();
-        let process = host.processes.lock().unwrap()[0].clone();
+        let process = host.processes.lock()[0].clone();
 
         service.write(&terminal.id, "ls\n").await.unwrap();
         service.resize(&terminal.id, 120, 50).await.unwrap();
-        assert_eq!(*process.writes.lock().unwrap(), ["ls\n"]);
-        assert_eq!(*process.resizes.lock().unwrap(), [(120, 50)]);
+        assert_eq!(*process.writes.lock(), ["ls\n"]);
+        assert_eq!(*process.resizes.lock(), [(120, 50)]);
         assert_eq!(service.get(&terminal.id).await.unwrap().cols, 120);
 
         assert_eq!(
             service.close(&terminal.id).await.unwrap(),
             CloseResult { closed: true }
         );
-        assert_eq!(*process.killed.lock().unwrap(), 1);
+        assert_eq!(*process.killed.lock(), 1);
         service.dispose().unwrap();
-        assert_eq!(*process.killed.lock().unwrap(), 2);
+        assert_eq!(*process.killed.lock(), 2);
     }
 
     #[tokio::test]

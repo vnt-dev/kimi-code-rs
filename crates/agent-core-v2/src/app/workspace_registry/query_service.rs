@@ -69,7 +69,7 @@ pub fn register_workspace_query_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use crate::{
         app::session_index::{SessionIndexContract, SessionIndexResult},
@@ -87,9 +87,9 @@ mod tests {
     #[async_trait]
     impl SessionIndexContract for StubSessionIndex {
         async fn list(&self, query: SessionListQuery) -> SessionIndexResult<Page<SessionSummary>> {
-            *self.last_query.lock().unwrap() = Some(query);
+            *self.last_query.lock() = Some(query);
             Ok(Page {
-                items: self.items.lock().unwrap().clone(),
+                items: self.items.lock().clone(),
                 next_cursor: Some("ignored".into()),
             })
         }
@@ -134,7 +134,7 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            *index.last_query.lock().unwrap(),
+            *index.last_query.lock(),
             Some(SessionListQuery {
                 workspace_ids: Some(vec!["wd_abc".into()]),
                 limit: Some(RECENT_SESSIONS_LIMIT),
@@ -147,7 +147,7 @@ mod tests {
     async fn returns_only_the_session_index_items() {
         let index = Arc::new(StubSessionIndex::default());
         let expected = vec![summary("s2", "wd_abc", 200), summary("s1", "wd_abc", 100)];
-        *index.items.lock().unwrap() = expected.clone();
+        *index.items.lock() = expected.clone();
         let service = WorkspaceQueryService::new(SessionIndexHandle(index));
 
         assert_eq!(

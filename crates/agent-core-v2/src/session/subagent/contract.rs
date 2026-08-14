@@ -214,15 +214,15 @@ mod tests {
     #[test]
     fn stop_emitter_notifies_in_registration_order() {
         let emitter = AgentTaskStopEmitter::default();
-        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let received = Arc::clone(&seen);
         let _subscription = emitter.event().subscribe(move |context| {
-            received.lock().unwrap().push(context.response.clone());
+            received.lock().push(context.response.clone());
         });
         emitter.fire(&AgentTaskStopHookContext {
             agent_name: "coder".into(),
             response: "done".into(),
         });
-        assert_eq!(*seen.lock().unwrap(), ["done"]);
+        assert_eq!(*seen.lock(), ["done"]);
     }
 }

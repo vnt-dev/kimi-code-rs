@@ -166,7 +166,7 @@ mod tests {
     use super::*;
     use crate::kosong::protocol::identity::Protocol;
     use std::io;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     fn context() -> TraitContext {
         TraitContext {
@@ -274,7 +274,6 @@ mod tests {
             default_headers: Some(Arc::new(move |context| {
                 seen_by_hook
                     .lock()
-                    .unwrap()
                     .push(context.provider_id.clone());
                 Some(IndexMap::from([("x-a".to_owned(), "1".to_owned())]))
             })),
@@ -285,7 +284,7 @@ mod tests {
             trait_default_headers(&[entry]),
             Some(IndexMap::from([("x-a".to_owned(), "1".to_owned())]))
         );
-        assert_eq!(*seen.lock().unwrap(), vec![Some("vendor-x".to_owned())]);
+        assert_eq!(*seen.lock(), vec![Some("vendor-x".to_owned())]);
     }
 
     #[test]

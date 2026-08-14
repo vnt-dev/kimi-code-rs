@@ -2,12 +2,10 @@ use std::{
     collections::VecDeque,
     io::Write,
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
     time::{Duration, Instant},
 };
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use parking_lot::Mutex;
 
 use futures_util::future::BoxFuture;
 use tokio::{
@@ -79,7 +77,7 @@ impl RotatingFileWriter {
     // Original: RotatingFileWriter.enqueue(); oldest entries are dropped at the cap.
     pub fn enqueue(&self, line: impl Into<String>) {
         {
-            let mut pending = self.inner.pending.lock().unwrap();
+            let mut pending = self.inner.pending.lock();
             if pending.closed {
                 return;
             }
@@ -113,7 +111,7 @@ impl RotatingFileWriter {
 
     pub async fn close(&self) {
         {
-            let mut pending = self.inner.pending.lock().unwrap();
+            let mut pending = self.inner.pending.lock();
             if pending.closed {
                 return;
             }
@@ -124,7 +122,7 @@ impl RotatingFileWriter {
 
     pub fn flush_sync(&self) {
         let (lines, notice) = {
-            let mut pending = self.inner.pending.lock().unwrap();
+            let mut pending = self.inner.pending.lock();
             if pending.closed || pending.lines.is_empty() {
                 return;
             }
@@ -150,7 +148,7 @@ impl RotatingFileWriter {
     async fn drain(&self) -> bool {
         let mut io = self.inner.io.lock().await;
         let lines = {
-            let mut pending = self.inner.pending.lock().unwrap();
+            let mut pending = self.inner.pending.lock();
             if pending.lines.is_empty() {
                 return true;
             }
@@ -242,7 +240,7 @@ impl RotatingFileWriter {
     }
 
     fn restore_pending(&self, lines: Vec<String>) {
-        let mut pending = self.inner.pending.lock().unwrap();
+        let mut pending = self.inner.pending.lock();
         let mut restored = lines.into_iter().collect::<VecDeque<_>>();
         restored.append(&mut pending.lines);
         let overflow = restored.len().saturating_sub(PENDING_MAX);
@@ -252,7 +250,7 @@ impl RotatingFileWriter {
     }
 
     fn note_failure(&self, error: &std::io::Error) {
-        let mut pending = self.inner.pending.lock().unwrap();
+        let mut pending = self.inner.pending.lock();
         let now = Instant::now();
         if pending
             .last_stderr_notice
@@ -358,13 +356,13 @@ pub struct MemoryLogWriter {
 
 impl MemoryLogWriter {
     pub fn entries(&self) -> Vec<LogEntry> {
-        self.entries.lock().unwrap().clone()
+        self.entries.lock().clone()
     }
 }
 
 impl LogWriter for MemoryLogWriter {
     fn write(&self, entry: LogEntry) {
-        self.entries.lock().unwrap().push(entry);
+        self.entries.lock().push(entry);
     }
 }
 

@@ -8,7 +8,8 @@
 //! source's intentionally unawaited `SubagentStop` promise is a Tokio task
 //! owned by this disposable session service.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
@@ -243,7 +244,7 @@ impl SessionExternalHooksService {
                 )
                 .await;
         });
-        self.tasks.lock().unwrap().push(task);
+        self.tasks.lock().push(task);
     }
 }
 
@@ -252,7 +253,7 @@ impl SessionExternalHooksServiceContract for SessionExternalHooksService {}
 impl Disposable for SessionExternalHooksService {
     fn dispose(&self) -> DisposeResult {
         let result = self.disposables.dispose();
-        for task in self.tasks.lock().unwrap().drain(..) {
+        for task in self.tasks.lock().drain(..) {
             task.abort();
         }
         result
@@ -349,7 +350,7 @@ mod tests {
 
         fn record(&self, event: &str, args: ExternalHooksRunnerTriggerArgs) {
             self.started.fetch_add(1, Ordering::SeqCst);
-            self.calls.lock().unwrap().push(Call {
+            self.calls.lock().push(Call {
                 event: event.into(),
                 matcher: args.matcher_value.and_then(|matcher| match matcher {
                     HookMatcherValue::String(value) => Some(value),
@@ -587,7 +588,7 @@ mod tests {
             .await
             .unwrap();
 
-        let calls = runner.calls.lock().unwrap();
+        let calls = runner.calls.lock();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].event, "SessionStart");
         assert_eq!(calls[0].matcher.as_deref(), Some("startup"));
@@ -621,7 +622,7 @@ mod tests {
         tokio::task::yield_now().await;
 
         {
-            let calls = runner.calls.lock().unwrap();
+            let calls = runner.calls.lock();
             assert_eq!(calls.len(), 2);
             assert_eq!(calls[0].event, "SubagentStart");
             assert_eq!(calls[0].input.as_ref().unwrap()["agentName"], "coder");

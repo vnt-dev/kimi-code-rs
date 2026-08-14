@@ -1,7 +1,8 @@
+use parking_lot::RwLock;
 use indexmap::IndexMap;
 use std::error::Error;
 use std::fmt;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
 
 use crate::kosong::contract::capability::ModelCapability;
 use crate::kosong::protocol::identity::{Protocol, ProtocolAdapterConfig};
@@ -275,7 +276,6 @@ pub fn register_provider_definition(
 ) -> Result<(), ProviderDefinitionRegistryError> {
     PROVIDER_DEFINITIONS
         .write()
-        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .register(definition)
 }
 
@@ -285,7 +285,6 @@ pub fn get_provider_definition(
 ) -> Result<Option<Arc<ProviderDefinition>>, ProviderDefinitionRegistryError> {
     Ok(PROVIDER_DEFINITIONS
         .read()
-        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .get(id, protocol))
 }
 
@@ -294,21 +293,18 @@ pub fn get_provider_definitions(
 ) -> Result<Vec<Arc<ProviderDefinition>>, ProviderDefinitionRegistryError> {
     Ok(PROVIDER_DEFINITIONS
         .read()
-        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .get_all(id))
 }
 
 pub fn has_provider_definition(id: &str) -> Result<bool, ProviderDefinitionRegistryError> {
     Ok(PROVIDER_DEFINITIONS
         .read()
-        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .contains(id))
 }
 
 pub fn is_oauth_catalog_vendor(id: Option<&str>) -> Result<bool, ProviderDefinitionRegistryError> {
     Ok(PROVIDER_DEFINITIONS
         .read()
-        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .is_oauth_catalog_vendor(id))
 }
 
@@ -316,7 +312,6 @@ pub fn list_provider_definitions()
 -> Result<Vec<Arc<ProviderDefinition>>, ProviderDefinitionRegistryError> {
     Ok(PROVIDER_DEFINITIONS
         .read()
-        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .list())
 }
 
@@ -326,7 +321,6 @@ pub fn explain_provider_endpoint(
 ) -> Result<ExplainedProviderEndpoint, ProviderDefinitionRegistryError> {
     Ok(PROVIDER_DEFINITIONS
         .read()
-        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .explain_endpoint(provider_type, env))
 }
 
@@ -336,7 +330,6 @@ pub fn resolve_provider_endpoint(
 ) -> Result<ResolvedProviderEndpoint, ProviderDefinitionRegistryError> {
     Ok(PROVIDER_DEFINITIONS
         .read()
-        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .resolve_endpoint(provider_type, env))
 }
 
@@ -346,7 +339,6 @@ pub fn resolve_provider_endpoint_with_env(
 ) -> Result<ResolvedProviderEndpoint, ProviderDefinitionRegistryError> {
     Ok(PROVIDER_DEFINITIONS
         .read()
-        .map_err(|_| ProviderDefinitionRegistryError::Poisoned)?
         .resolve_endpoint_with_env(provider_type, get_env))
 }
 

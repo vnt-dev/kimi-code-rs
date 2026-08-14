@@ -272,7 +272,8 @@ fn truncate_chars(value: &str, maximum: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Mutex};
+    use std::collections::HashMap;
+    use parking_lot::Mutex;
 
     use async_trait::async_trait;
     use tokio::{
@@ -337,7 +338,7 @@ mod tests {
             args: &[String],
             _: Option<ProcessExecOptions>,
         ) -> crate::session::process::SessionProcessRunnerResult<SessionProcess> {
-            self.commands.lock().unwrap().push(args.to_vec());
+            self.commands.lock().push(args.to_vec());
             let script = self.scripts[&args[3..].join(" ")].clone();
             let stdout = reader(script.stdout).await;
             let stderr = reader(script.stderr).await;
@@ -447,7 +448,6 @@ mod tests {
             success
                 .commands
                 .lock()
-                .unwrap()
                 .iter()
                 .all(|args| args[..3] == ["git", "-C", "/repo"])
         );

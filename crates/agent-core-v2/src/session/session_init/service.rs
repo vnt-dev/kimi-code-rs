@@ -5,11 +5,9 @@
 use std::{
     error::Error,
     path::Path,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
 };
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use parking_lot::Mutex;
 
 use futures_util::{FutureExt, future::BoxFuture};
 
@@ -107,10 +105,10 @@ impl SessionInitService {
 
         let generation = self.inner.next_generation.fetch_add(1, Ordering::Relaxed);
         let controller = AbortController::new();
-        *self.inner.active.lock().unwrap() = Some((generation, controller.clone()));
+        *self.inner.active.lock() = Some((generation, controller.clone()));
 
         let result = self.run(&main, &controller).await;
-        let mut active = self.inner.active.lock().unwrap();
+        let mut active = self.inner.active.lock();
         if active
             .as_ref()
             .is_some_and(|(current, _)| *current == generation)
@@ -245,7 +243,7 @@ impl SessionInitServiceContract for SessionInitService {
     }
 
     fn cancel_init(&self) {
-        if let Some((_, controller)) = self.inner.active.lock().unwrap().as_ref() {
+        if let Some((_, controller)) = self.inner.active.lock().as_ref() {
             controller.abort(Some(user_cancellation_reason()));
         }
     }

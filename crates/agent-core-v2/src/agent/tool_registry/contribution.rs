@@ -2,7 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/toolRegistry/toolContribution.ts`.
 
-use std::sync::{Arc, LazyLock, RwLock};
+
+use parking_lot::RwLock;
+use std::sync::{Arc, LazyLock};
 
 use crate::{
     _base::di::{errors::DiError, instantiation::ServicesAccessor},
@@ -34,16 +36,15 @@ static TOOL_CONTRIBUTIONS: LazyLock<RwLock<Vec<ToolContribution>>> =
 pub fn register_tool(factory: ToolFactory, options: ToolContributionOptions) {
     TOOL_CONTRIBUTIONS
         .write()
-        .unwrap()
         .push(ToolContribution { factory, options });
 }
 
 // Original: toolContribution.ts, getToolContributions().
 pub fn get_tool_contributions() -> Vec<ToolContribution> {
-    TOOL_CONTRIBUTIONS.read().unwrap().clone()
+    TOOL_CONTRIBUTIONS.read().clone()
 }
 
 // Original: toolContribution.ts, _clearToolContributionsForTests().
 pub fn clear_tool_contributions_for_tests() {
-    TOOL_CONTRIBUTIONS.write().unwrap().clear();
+    TOOL_CONTRIBUTIONS.write().clear();
 }

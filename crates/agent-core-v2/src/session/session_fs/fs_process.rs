@@ -79,10 +79,8 @@ pub async fn read_stream(stream: SharedProcessReader) -> std::io::Result<String>
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    };
+    use parking_lot::Mutex;
+    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
     use async_trait::async_trait;
     use tokio::{
@@ -146,7 +144,7 @@ mod tests {
             args: &[String],
             options: Option<ProcessExecOptions>,
         ) -> SessionProcessRunnerResult<SessionProcess> {
-            self.calls.lock().unwrap().push((args.to_vec(), options));
+            self.calls.lock().push((args.to_vec(), options));
             Ok(self.process.clone())
         }
     }
@@ -192,7 +190,7 @@ mod tests {
             }
         );
         assert!(process.killed.load(Ordering::Acquire));
-        let calls = runner.calls.lock().unwrap();
+        let calls = runner.calls.lock();
         assert_eq!(calls[0].0, ["git", "status"]);
         assert_eq!(calls[0].1.as_ref().unwrap().cwd.as_deref(), Some("/repo"));
         assert_eq!(

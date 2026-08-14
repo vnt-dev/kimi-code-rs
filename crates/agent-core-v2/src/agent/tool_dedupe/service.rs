@@ -5,8 +5,9 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
-    sync::{Arc, Mutex, Weak},
 };
+use std::sync::{Arc, Weak};
+use parking_lot::Mutex;
 
 use futures_util::future::BoxFuture;
 use tokio::sync::oneshot;
@@ -206,7 +207,7 @@ impl AgentToolDedupeService {
     }
 
     fn begin_step(&self, turn_id: crate::agent::TurnId, step: crate::agent::StepId) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if state.active_turn_id != Some(turn_id) {
             state.active_turn_id = Some(turn_id);
             state.consecutive_key = None;
@@ -229,7 +230,7 @@ impl AgentToolDedupeService {
     }
 
     fn end_step(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         for key in state.step_calls.clone() {
             if state.consecutive_key.as_deref() == Some(&key) {
                 state.consecutive_count += 1;
@@ -249,7 +250,7 @@ impl AgentToolDedupeService {
         trace: Option<&LlmRequestTrace>,
     ) -> bool {
         let key = format!("{tool_name} {}", canonical_telemetry_args(args));
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let index = state.step_calls.len();
         state.step_calls.push(key.clone());
         state
@@ -323,7 +324,7 @@ impl AgentToolDedupeService {
         trace: Option<&LlmRequestTrace>,
     ) -> ExecutableToolResult {
         let (key, is_synthetic, receiver, original_index) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let Some(key) = state.call_key_by_call_id.remove(call_id) else {
                 return result;
             };
@@ -346,7 +347,7 @@ impl AgentToolDedupeService {
             return result;
         };
         let (streak, turn_id) = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             let mut last = state.consecutive_key.clone();
             let mut streak = state.consecutive_count;
             for candidate in state.step_calls.iter().take(index + 1) {
@@ -394,7 +395,6 @@ impl AgentToolDedupeService {
         let senders = self
             .state
             .lock()
-            .unwrap()
             .deferreds
             .remove(&key)
             .unwrap_or_default();

@@ -2,10 +2,9 @@
 //!
 //! Original: `agent/permissionPolicy/permissionPolicyService.ts`.
 
-use std::{
-    ops::Deref,
-    sync::{Arc, Mutex},
-};
+use std::ops::Deref;
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use futures_util::future::BoxFuture;
 
@@ -154,7 +153,6 @@ impl AgentPermissionPolicyServiceContract for AgentPermissionPolicyService {
             let dynamic = self
                 .dynamic_policies
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
             for policy in dynamic.iter().chain(self.policies.iter()) {
                 if let Some(result) = policy.evaluate(context).await {
@@ -170,13 +168,11 @@ impl AgentPermissionPolicyServiceContract for AgentPermissionPolicyService {
     fn register_policy(&self, policy: Arc<dyn PermissionPolicy>) -> DisposableHandle {
         self.dynamic_policies
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(0, Arc::clone(&policy));
         let policies = Arc::clone(&self.dynamic_policies);
         to_disposable(move || {
             policies
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .retain(|candidate| !Arc::ptr_eq(candidate, &policy))
         })
     }

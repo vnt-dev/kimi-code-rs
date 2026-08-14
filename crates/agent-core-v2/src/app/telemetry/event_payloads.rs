@@ -819,7 +819,8 @@ impl_event_payload!(ExitEvent, "exit", None);
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use async_trait::async_trait;
 
@@ -835,7 +836,6 @@ mod tests {
         fn track(&self, event: &str, properties: Option<&TelemetryProperties>) {
             self.0
                 .lock()
-                .unwrap()
                 .push((event.into(), properties.cloned().unwrap_or_default()));
         }
     }
@@ -865,7 +865,7 @@ mod tests {
             })
             .unwrap();
 
-        let events = capture.0.lock().unwrap();
+        let events = capture.0.lock();
         assert_eq!(events[0].0, "turn_started");
         assert_eq!(events[0].1["mode"], Some(Value::from("plan")));
         assert!(!events[0].1.contains_key("provider_type"));

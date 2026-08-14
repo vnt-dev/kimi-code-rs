@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use serde_json::Map;
 
@@ -67,7 +68,7 @@ impl AgentUsageService {
         let Some(AgentLlmRequestSource::Turn { turn_id, .. }) = source else {
             return;
         };
-        let mut current = self.current_turn.lock().unwrap();
+        let mut current = self.current_turn.lock();
         if current.turn_id != Some(*turn_id) {
             current.turn_id = Some(*turn_id);
             current.usage = Some(usage);
@@ -119,7 +120,7 @@ impl AgentUsageServiceContract for AgentUsageService {
 
     // Original: usageService.ts, AgentUsageService.status().
     fn status(&self) -> UsageStatus {
-        let current_turn = self.current_turn.lock().unwrap().usage;
+        let current_turn = self.current_turn.lock().usage;
         usage_status_from_state(&self.wire.get_model(&USAGE_MODEL), current_turn.as_ref())
     }
 
@@ -182,7 +183,7 @@ mod tests {
     #[async_trait]
     impl AppendLogStoreService for MemoryLog {
         fn append_value(&self, _: &str, _: &str, value: Value, _: AppendLogOptions) {
-            self.0.lock().unwrap().push(value);
+            self.0.lock().push(value);
         }
         fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
             Box::pin(stream::empty())
@@ -229,7 +230,7 @@ mod tests {
 
     impl EventBusContract for CaptureEvents {
         fn publish(&self, event: DomainEvent) {
-            self.0.lock().unwrap().push(event);
+            self.0.lock().push(event);
         }
         fn subscribe(&self, _: DomainEventHandler) -> DisposableHandle {
             disposable_none()
@@ -289,7 +290,7 @@ mod tests {
         let records = Arc::new(Mutex::new(Vec::new()));
         let captured = records.clone();
         let _subscription = service.on_did_record().subscribe(move |record| {
-            captured.lock().unwrap().push(record.clone());
+            captured.lock().push(record.clone());
         });
 
         service.record("a".into(), usage(1), None).unwrap();
@@ -322,15 +323,15 @@ mod tests {
         assert_eq!(status.by_model.as_ref().unwrap()["b"], usage(3));
         assert_eq!(status.total, Some(usage(10)));
         assert_eq!(status.current_turn, Some(usage(4)));
-        assert_eq!(records.lock().unwrap().len(), 4);
-        assert_eq!(events.0.lock().unwrap().len(), 4);
+        assert_eq!(records.lock().len(), 4);
+        assert_eq!(events.0.lock().len(), 4);
         assert_eq!(
-            events.0.lock().unwrap()[3].fields["usage"]["currentTurn"]["output"],
+            events.0.lock()[3].fields["usage"]["currentTurn"]["output"],
             8
         );
 
         wire.flush().await.unwrap();
-        let persisted = log.0.lock().unwrap();
+        let persisted = log.0.lock();
         assert_eq!(persisted.len(), 4);
         assert_eq!(persisted[0]["usageScope"], "session");
         assert_eq!(persisted[1]["usageScope"], "turn");
@@ -364,9 +365,9 @@ mod tests {
         let captured = count.clone();
         let _subscription = service
             .on_did_record()
-            .subscribe(move |_| *captured.lock().unwrap() += 1);
+            .subscribe(move |_| *captured.lock() += 1);
         service.dispose().unwrap();
         service.record("a".into(), usage(1), None).unwrap();
-        assert_eq!(*count.lock().unwrap(), 0);
+        assert_eq!(*count.lock(), 0);
     }
 }

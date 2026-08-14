@@ -228,10 +228,9 @@ fn is_missing_path(error: &HostFsError) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{Arc, Mutex},
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::{Arc};
+    use parking_lot::Mutex;
 
     use crate::{
         app::agent_file_catalog::AgentFileSource,
@@ -284,7 +283,7 @@ mod tests {
         let warnings = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&warnings);
         let warn =
-            move |message: &str, _: Option<&str>| captured.lock().unwrap().push(message.to_owned());
+            move |message: &str, _: Option<&str>| captured.lock().push(message.to_owned());
         let roots = vec![
             AgentFileRoot {
                 path: first.to_string_lossy().into_owned(),
@@ -304,7 +303,7 @@ mod tests {
         assert_eq!(result.agents[0].description, "first");
         assert_eq!(result.skipped.len(), 6);
         {
-            let warnings = warnings.lock().unwrap();
+            let warnings = warnings.lock();
             assert_eq!(warnings.len(), 6);
             assert!(
                 warnings

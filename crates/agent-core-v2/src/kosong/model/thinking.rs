@@ -330,10 +330,11 @@ pub fn resolve_thinking_keep(
 mod tests {
     use std::{
         collections::HashMap,
-        sync::{Arc, OnceLock, RwLock},
+        sync::{Arc, OnceLock},
     };
 
     use super::*;
+    use parking_lot::RwLock;
     use crate::app::config::apply_section_env;
     use crate::kosong::{
         contract::capability::ModelCapability,
@@ -446,7 +447,6 @@ mod tests {
         let providers = RwLock::new(ProviderDefinitionRegistry::default());
         providers
             .write()
-            .unwrap()
             .register(ProviderDefinition {
                 id: "thinking-verdict-local".into(),
                 base_protocol: Protocol::Anthropic,
@@ -459,7 +459,6 @@ mod tests {
             .unwrap();
         providers
             .write()
-            .unwrap()
             .register(ProviderDefinition {
                 id: "thinking-verdict-strict".into(),
                 base_protocol: Protocol::Anthropic,

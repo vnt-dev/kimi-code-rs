@@ -2,7 +2,8 @@
 //!
 //! Original: `agent/mcp/oauth/provider.ts`, `McpOAuthClientProvider`.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -112,7 +113,7 @@ impl McpOAuthClientProvider {
                     self.store.read_value(&tokens_key),
                     self.store.read_value(&discovery_key),
                 );
-                let mut cache = self.cache.lock().unwrap();
+                let mut cache = self.cache.lock();
                 cache.client = client;
                 cache.tokens = tokens;
                 cache.discovery = discovery;
@@ -122,14 +123,13 @@ impl McpOAuthClientProvider {
 
     // Original: setRedirectUrl().
     pub fn set_redirect_url(&self, url: &Url) {
-        self.cache.lock().unwrap().redirect_url = Some(url.to_string());
+        self.cache.lock().redirect_url = Some(url.to_string());
     }
 
     // Original: takeAuthorizationUrl().
     pub fn take_authorization_url(&self) -> Option<Url> {
         self.cache
             .lock()
-            .unwrap()
             .last_authorization_url
             .take()
             .and_then(|url| Url::parse(&url).ok())
@@ -137,19 +137,19 @@ impl McpOAuthClientProvider {
 
     // Original: expectedState().
     pub fn expected_state(&self) -> Option<String> {
-        self.cache.lock().unwrap().state.clone()
+        self.cache.lock().state.clone()
     }
 
     /// Rust OAuth transport adaptation: the RMCP authorization manager owns
     /// CSRF generation, so retain its generated state for the callback check
     /// performed by `McpOAuthService.complete`.
     pub fn set_expected_state(&self, state: String) {
-        self.cache.lock().unwrap().state = Some(state);
+        self.cache.lock().state = Some(state);
     }
 
     // Original: resetFlow().
     pub fn reset_flow(&self) {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock();
         cache.redirect_url = None;
         cache.code_verifier = None;
         cache.state = None;
@@ -174,7 +174,7 @@ impl McpOAuthClientProvider {
 
     // Original: state().
     pub fn state(&self) -> Result<String, McpOAuthProviderError> {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock();
         if let Some(state) = &cache.state {
             return Ok(state.clone());
         }
@@ -188,12 +188,12 @@ impl McpOAuthClientProvider {
     // Original: clientInformation().
     pub async fn client_information(&self) -> Option<Value> {
         self.ready().await;
-        self.cache.lock().unwrap().client.clone()
+        self.cache.lock().client.clone()
     }
 
     // Original: saveClientInformation().
     pub async fn save_client_information(&self, info: Value) -> Result<(), McpOAuthProviderError> {
-        self.cache.lock().unwrap().client = Some(info.clone());
+        self.cache.lock().client = Some(info.clone());
         self.store.write_value(&self.client_key(), info).await?;
         Ok(())
     }
@@ -201,31 +201,30 @@ impl McpOAuthClientProvider {
     // Original: tokens().
     pub async fn tokens(&self) -> Option<Value> {
         self.ready().await;
-        self.cache.lock().unwrap().tokens.clone()
+        self.cache.lock().tokens.clone()
     }
 
     // Original: saveTokens().
     pub async fn save_tokens(&self, tokens: Value) -> Result<(), McpOAuthProviderError> {
-        self.cache.lock().unwrap().tokens = Some(tokens.clone());
+        self.cache.lock().tokens = Some(tokens.clone());
         self.store.write_value(&self.tokens_key(), tokens).await?;
         Ok(())
     }
 
     // Original: redirectToAuthorization().
     pub fn redirect_to_authorization(&self, url: &Url) {
-        self.cache.lock().unwrap().last_authorization_url = Some(url.to_string());
+        self.cache.lock().last_authorization_url = Some(url.to_string());
     }
 
     // Original: saveCodeVerifier().
     pub fn save_code_verifier(&self, code_verifier: String) {
-        self.cache.lock().unwrap().code_verifier = Some(code_verifier);
+        self.cache.lock().code_verifier = Some(code_verifier);
     }
 
     // Original: codeVerifier().
     pub fn code_verifier(&self) -> Result<String, McpOAuthProviderError> {
         self.cache
             .lock()
-            .unwrap()
             .code_verifier
             .clone()
             .ok_or(McpOAuthProviderError::MissingCodeVerifier)
@@ -236,7 +235,7 @@ impl McpOAuthClientProvider {
         &self,
         discovery: Value,
     ) -> Result<(), McpOAuthProviderError> {
-        self.cache.lock().unwrap().discovery = Some(discovery.clone());
+        self.cache.lock().discovery = Some(discovery.clone());
         self.store
             .write_value(&self.discovery_key(), discovery)
             .await?;
@@ -246,7 +245,7 @@ impl McpOAuthClientProvider {
     // Original: discoveryState().
     pub async fn discovery_state(&self) -> Option<Value> {
         self.ready().await;
-        self.cache.lock().unwrap().discovery.clone()
+        self.cache.lock().discovery.clone()
     }
 
     // Original: invalidateCredentials().
@@ -255,38 +254,38 @@ impl McpOAuthClientProvider {
         scope: McpOAuthInvalidationScope,
     ) -> Result<(), McpOAuthProviderError> {
         if scope == McpOAuthInvalidationScope::Verifier {
-            self.cache.lock().unwrap().code_verifier = None;
+            self.cache.lock().code_verifier = None;
             return Ok(());
         }
         if matches!(
             scope,
             McpOAuthInvalidationScope::Tokens | McpOAuthInvalidationScope::All
         ) {
-            self.cache.lock().unwrap().tokens = None;
+            self.cache.lock().tokens = None;
             self.store.remove(&self.tokens_key()).await?;
         }
         if matches!(
             scope,
             McpOAuthInvalidationScope::Client | McpOAuthInvalidationScope::All
         ) {
-            self.cache.lock().unwrap().client = None;
+            self.cache.lock().client = None;
             self.store.remove(&self.client_key()).await?;
         }
         if matches!(
             scope,
             McpOAuthInvalidationScope::Discovery | McpOAuthInvalidationScope::All
         ) {
-            self.cache.lock().unwrap().discovery = None;
+            self.cache.lock().discovery = None;
             self.store.remove(&self.discovery_key()).await?;
         }
         if scope == McpOAuthInvalidationScope::All {
-            self.cache.lock().unwrap().code_verifier = None;
+            self.cache.lock().code_verifier = None;
         }
         Ok(())
     }
 
     fn effective_redirect_uri(&self) -> String {
-        let cache = self.cache.lock().unwrap();
+        let cache = self.cache.lock();
         if let Some(url) = &cache.redirect_url {
             return url.clone();
         }
@@ -318,7 +317,8 @@ fn registered_redirect_uri(info: Option<&Value>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Mutex};
+    use std::collections::HashMap;
+    use parking_lot::Mutex;
 
     use async_trait::async_trait;
 
@@ -330,16 +330,16 @@ mod tests {
     #[async_trait]
     impl McpOAuthStore for MemoryStore {
         async fn read_value(&self, key: &str) -> Option<Value> {
-            self.0.lock().unwrap().get(key).cloned()
+            self.0.lock().get(key).cloned()
         }
 
         async fn write_value(&self, key: &str, data: Value) -> Result<(), StorageError> {
-            self.0.lock().unwrap().insert(key.into(), data);
+            self.0.lock().insert(key.into(), data);
             Ok(())
         }
 
         async fn remove(&self, key: &str) -> Result<(), StorageError> {
-            self.0.lock().unwrap().remove(key);
+            self.0.lock().remove(key);
             Ok(())
         }
     }

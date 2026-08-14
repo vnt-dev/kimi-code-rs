@@ -3,7 +3,8 @@
 //! Original: `packages/agent-core-v2/src/app/config/configService.ts`,
 //! `ConfigRegistry`.
 
-use std::sync::{Arc, LazyLock, Mutex};
+use parking_lot::Mutex;
+use std::sync::{Arc, LazyLock};
 
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -85,7 +86,7 @@ impl ConfigRegistryContract for ConfigRegistry {
             .merge
             .clone()
             .unwrap_or_else(|| Arc::clone(&DEFAULT_MERGE));
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if let Some(existing) = state.sections.get(domain) {
             if same_section(existing, &schema, &options, &merge) {
                 return Ok(());
@@ -116,14 +117,13 @@ impl ConfigRegistryContract for ConfigRegistry {
 
     // Original: ConfigRegistry.getSection().
     fn get_section(&self, domain: &str) -> Option<ConfigSection> {
-        self.state.lock().unwrap().sections.get(domain).cloned()
+        self.state.lock().sections.get(domain).cloned()
     }
 
     // Original: ConfigRegistry.listSections().
     fn list_sections(&self) -> Vec<ConfigSection> {
         self.state
             .lock()
-            .unwrap()
             .sections
             .values()
             .cloned()
@@ -134,7 +134,6 @@ impl ConfigRegistryContract for ConfigRegistry {
     fn register_effective_overlay(&self, overlay: Arc<dyn ConfigEffectiveOverlay>) {
         self.state
             .lock()
-            .unwrap()
             .overlays
             .push(Arc::clone(&overlay));
         self.on_did_register_overlay
@@ -143,7 +142,7 @@ impl ConfigRegistryContract for ConfigRegistry {
 
     // Original: ConfigRegistry.listEffectiveOverlays().
     fn list_effective_overlays(&self) -> Vec<Arc<dyn ConfigEffectiveOverlay>> {
-        self.state.lock().unwrap().overlays.clone()
+        self.state.lock().overlays.clone()
     }
 
     // Original: ConfigRegistry.validate().
@@ -151,7 +150,6 @@ impl ConfigRegistryContract for ConfigRegistry {
         let schema = self
             .state
             .lock()
-            .unwrap()
             .sections
             .get(domain)
             .map(|section| section.schema.clone());
@@ -171,7 +169,6 @@ impl ConfigRegistryContract for ConfigRegistry {
         let merge = self
             .state
             .lock()
-            .unwrap()
             .sections
             .get(domain)
             .map(|section| Arc::clone(&section.merge))
@@ -183,7 +180,6 @@ impl ConfigRegistryContract for ConfigRegistry {
     fn default_value(&self, domain: &str) -> Option<Value> {
         self.state
             .lock()
-            .unwrap()
             .sections
             .get(domain)
             .and_then(|section| section.default_value.clone())
@@ -236,7 +232,7 @@ pub fn register_config_registry() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use serde_json::json;
 
@@ -256,7 +252,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let listener_seen = Arc::clone(&seen);
         let _listener = registry.on_did_register_section().subscribe(move |event| {
-            listener_seen.lock().unwrap().push(event.domain.clone());
+            listener_seen.lock().push(event.domain.clone());
         });
         let schema = boolean_schema();
         registry
@@ -279,7 +275,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(registry.default_value("example"), Some(Value::Bool(true)));
-        assert_eq!(*seen.lock().unwrap(), ["example"]);
+        assert_eq!(*seen.lock(), ["example"]);
 
         registry
             .register_section(
@@ -291,7 +287,7 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(*seen.lock().unwrap(), ["example"]);
+        assert_eq!(*seen.lock(), ["example"]);
     }
 
     #[test]
