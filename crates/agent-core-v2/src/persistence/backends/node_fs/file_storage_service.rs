@@ -7,16 +7,19 @@ use std::sync::Arc;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
-    time::SystemTime,
 };
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt, stream};
+use notify::{
+    Config, Event as NotifyEvent, RecommendedWatcher, RecursiveMode, Watcher,
+    event::{EventKind, ModifyKind, RenameMode},
+};
 use tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncSeekExt, AsyncWriteExt},
     task::JoinHandle,
-    time::{Duration, Instant, MissedTickBehavior},
+    time::{Duration, Instant},
 };
 use tokio_util::{io::ReaderStream, sync::CancellationToken};
 
@@ -33,7 +36,6 @@ use crate::persistence::interface::storage::{
 };
 
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
-const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub struct FileStorageService {
     base_dir: PathBuf,
@@ -225,9 +227,10 @@ impl FileSystemStorageService for FileStorageService {
         }
     }
 
-    // Rust adaptation: chokidar is replaced by a runtime-owned metadata poller.
-    // It observes external changes and atomic renames, retains exact-key filtering,
-    // and applies the original 150ms debounce without a detached task lifecycle.
+    // Rust adaptation: chokidar is replaced by a `notify` directory watcher.
+    // It observes external changes and atomic renames, retains exact-key
+    // filtering, and applies the original 150ms debounce without a detached
+    // task lifecycle.
     fn watch(&self, scope: &str, key: &str) -> Option<Event<()>> {
         let target = self.path(scope, key);
         let directory = target.parent().unwrap_or_else(|| Path::new(".")).to_owned();
@@ -327,59 +330,65 @@ struct WatchShared {
     state: Mutex<WatchRuntime>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct FileStamp {
-    exists: bool,
-    length: u64,
-    modified: Option<SystemTime>,
-}
-
-async fn file_stamp(path: &Path) -> std::io::Result<FileStamp> {
-    match fs::metadata(path).await {
-        Ok(metadata) => Ok(FileStamp {
-            exists: true,
-            length: metadata.len(),
-            modified: metadata.modified().ok(),
-        }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(FileStamp {
-            exists: false,
-            length: 0,
-            modified: None,
-        }),
-        Err(error) => Err(error),
-    }
-}
-
 async fn watch_file(target: PathBuf, shared: Arc<WatchShared>, cancellation: CancellationToken) {
-    let mut previous = match file_stamp(&target).await {
-        Ok(stamp) => stamp,
+    let directory = target.parent().unwrap_or_else(|| Path::new(".")).to_owned();
+    let (event_sender, mut event_receiver) = tokio::sync::mpsc::unbounded_channel::<NotifyEvent>();
+    let mut watcher = match RecommendedWatcher::new(
+        move |result: notify::Result<NotifyEvent>| match result {
+            Ok(event) => {
+                let _ = event_sender.send(event);
+            }
+            Err(error) => on_unexpected_error(&error),
+        },
+        Config::default(),
+    ) {
+        Ok(watcher) => watcher,
         Err(error) => {
             on_unexpected_error(&error);
             return;
         }
     };
-    let mut pending_since = None;
-    let mut interval = tokio::time::interval(WATCH_POLL_INTERVAL);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    if let Err(error) = watcher.watch(&directory, RecursiveMode::NonRecursive) {
+        on_unexpected_error(&error);
+        return;
+    }
+    // One-shot debounce timer: (re)started by the first matching event and
+    // reset by every subsequent one, so the emitter fires only once the file
+    // has been quiet for `WATCH_DEBOUNCE`. No polling is involved.
+    let debounce = tokio::time::sleep(WATCH_DEBOUNCE);
+    tokio::pin!(debounce);
+    let mut pending_since: Option<Instant> = None;
     loop {
         tokio::select! {
             _ = cancellation.cancelled() => return,
-            _ = interval.tick() => {
-                match file_stamp(&target).await {
-                    Ok(current) if current != previous => {
-                        previous = current;
-                        pending_since = Some(Instant::now());
-                    }
-                    Ok(_) => {
-                        if pending_since.is_some_and(|since| since.elapsed() >= WATCH_DEBOUNCE) {
-                            pending_since = None;
-                            shared.emitter.fire(&());
-                        }
-                    }
-                    Err(error) => on_unexpected_error(&error),
+            Some(event) = event_receiver.recv() => {
+                if !matches_target(&event, &target) {
+                    continue;
+                }
+                pending_since = Some(Instant::now());
+                debounce.as_mut().reset(Instant::now() + WATCH_DEBOUNCE);
+            }
+            _ = &mut debounce, if pending_since.is_some() => {
+                if pending_since.is_some_and(|since| since.elapsed() >= WATCH_DEBOUNCE) {
+                    pending_since = None;
+                    shared.emitter.fire(&());
                 }
             }
         }
+    }
+}
+
+/// Whether a notify event touches the watched key itself. A rename reports the
+/// new path as its destination, so both sides of an atomic replace match.
+fn matches_target(event: &NotifyEvent, target: &Path) -> bool {
+    if event.paths.iter().any(|path| path == target) {
+        return true;
+    }
+    match event.kind {
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
+            event.paths.len() >= 2 && event.paths.iter().skip(1).any(|path| path == target)
+        }
+        _ => false,
     }
 }
 

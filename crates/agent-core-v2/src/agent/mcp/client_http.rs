@@ -65,7 +65,7 @@ struct HttpState {
     started: bool,
     closed: bool,
     ready: bool,
-    running: Option<RunningHttpClient>,
+    peer: Option<Peer<RoleClient>>,
     unexpected_close_listener: Option<UnexpectedCloseListener>,
     pending_unexpected_close: Option<UnexpectedCloseReason>,
     close_monitor: Option<JoinHandle<()>>,
@@ -153,10 +153,9 @@ impl HttpMcpClient {
             return Err(error);
         }
         if state.closed {
-            let mut running = state.running.take();
-            drop(state);
-            if let Some(running) = running.as_mut() {
-                let _ = running.close().await;
+            if let Some(monitor) = state.close_monitor.take() {
+                monitor.abort();
+                let _ = monitor.await;
             }
             return Err(McpHttpClientError::ClosedDuringStartup);
         }
@@ -179,16 +178,20 @@ impl HttpMcpClient {
                     message: error.to_string(),
                     source: Some(Box::new(error)),
                 })?;
-        let monitor = self.spawn_close_monitor(running.peer().clone());
+        let peer = running.peer().clone();
+        let monitor = self.spawn_close_monitor(running);
         let mut state = self.state.lock().await;
-        state.running = Some(running);
+        state.peer = Some(peer);
         state.close_monitor = Some(monitor);
         Ok(())
     }
 
-    // Original: HttpMcpClient.close().
+    // Original: HttpMcpClient.close(). The close monitor owns the running
+    // service; aborting it drops the service, and rmcp's own drop guard
+    // cancels the serve loop, which drains in-flight responses and closes the
+    // transport asynchronously.
     pub async fn close(&self) -> Result<(), McpHttpClientError> {
-        let (mut running, monitor) = {
+        let monitor = {
             let mut state = self.state.lock().await;
             if state.closed {
                 return Ok(());
@@ -196,21 +199,12 @@ impl HttpMcpClient {
             state.closed = true;
             state.ready = false;
             state.started = false;
-            (state.running.take(), state.close_monitor.take())
+            state.peer = None;
+            state.close_monitor.take()
         };
         if let Some(monitor) = monitor {
             monitor.abort();
             let _ = monitor.await;
-        }
-        if let Some(running) = running.as_mut() {
-            running
-                .close()
-                .await
-                .map_err(|error| McpHttpClientError::Runtime {
-                    operation: "shutdown",
-                    message: error.to_string(),
-                    source: Some(Box::new(error)),
-                })?;
         }
         Ok(())
     }
@@ -230,40 +224,37 @@ impl HttpMcpClient {
         self.state
             .lock()
             .await
-            .running
-            .as_ref()
-            .map(|running| running.peer().clone())
+            .peer
+            .clone()
             .ok_or(McpHttpClientError::NotConnected)
     }
 
-    fn spawn_close_monitor(&self, peer: Peer<RoleClient>) -> JoinHandle<()> {
+    /// Waits for the service loop to terminate instead of polling
+    /// `peer.is_transport_closed()`: the loop ends exactly when the transport
+    /// closes (or the service is cancelled or errors), so this is a true
+    /// event-driven wait with no timers.
+    fn spawn_close_monitor(&self, running: RunningHttpClient) -> JoinHandle<()> {
         let state = Arc::clone(&self.state);
         tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                if !peer.is_transport_closed() {
-                    continue;
+            let _ = running.waiting().await;
+            let listener = {
+                let mut state = state.lock().await;
+                if state.closed || !state.ready {
+                    return;
                 }
-                let listener = {
-                    let mut state = state.lock().await;
-                    if state.closed || !state.ready {
-                        return;
-                    }
-                    let reason = UnexpectedCloseReason {
-                        error: None,
-                        stderr: None,
-                    };
-                    if let Some(listener) = &state.unexpected_close_listener {
-                        Some((Arc::clone(listener), reason))
-                    } else {
-                        state.pending_unexpected_close = Some(reason);
-                        None
-                    }
+                let reason = UnexpectedCloseReason {
+                    error: None,
+                    stderr: None,
                 };
-                if let Some((listener, reason)) = listener {
-                    listener(reason);
+                if let Some(listener) = &state.unexpected_close_listener {
+                    Some((Arc::clone(listener), reason))
+                } else {
+                    state.pending_unexpected_close = Some(reason);
+                    None
                 }
-                return;
+            };
+            if let Some((listener, reason)) = listener {
+                listener(reason);
             }
         })
     }

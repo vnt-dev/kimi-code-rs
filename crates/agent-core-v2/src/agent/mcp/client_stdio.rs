@@ -84,7 +84,7 @@ struct StdioMcpClientState {
     started: bool,
     closed: bool,
     ready: bool,
-    running: Option<RunningStdioClient>,
+    peer: Option<Peer<RoleClient>>,
     unexpected_close_listener: Option<UnexpectedCloseListener>,
     pending_unexpected_close: Option<UnexpectedCloseReason>,
     stderr_task: Option<JoinHandle<()>>,
@@ -188,10 +188,9 @@ impl StdioMcpClient {
             return Err(error);
         }
         if state.closed {
-            let mut running = state.running.take();
-            drop(state);
-            if let Some(running) = running.as_mut() {
-                let _ = running.close().await;
+            if let Some(close_monitor) = state.close_monitor.take() {
+                close_monitor.abort();
+                let _ = close_monitor.await;
             }
             return Err(McpStdioClientError::ClosedDuringStartup);
         }
@@ -230,17 +229,22 @@ impl StdioMcpClient {
                 });
             }
         };
-        let close_monitor = self.spawn_close_monitor(running.peer().clone());
+        let peer = running.peer().clone();
+        let close_monitor = self.spawn_close_monitor(running);
         let mut state = self.state.lock().await;
-        state.running = Some(running);
+        state.peer = Some(peer);
         state.stderr_task = stderr_task;
         state.close_monitor = Some(close_monitor);
         Ok(())
     }
 
-    // Original: StdioMcpClient.close().
+    // Original: StdioMcpClient.close(). The close monitor owns the running
+    // service; aborting it drops the service, and rmcp's own drop guard
+    // cancels the serve loop, which drains in-flight responses, closes the
+    // transport and terminates the child process. Awaiting the stderr reader
+    // afterwards keeps the shutdown bounded until those pipes close.
     pub async fn close(&self) -> Result<(), McpStdioClientError> {
-        let (mut running, stderr_task, close_monitor) = {
+        let (stderr_task, close_monitor) = {
             let mut state = self.state.lock().await;
             if state.closed {
                 return Ok(());
@@ -248,24 +252,12 @@ impl StdioMcpClient {
             state.closed = true;
             state.ready = false;
             state.started = false;
-            (
-                state.running.take(),
-                state.stderr_task.take(),
-                state.close_monitor.take(),
-            )
+            state.peer = None;
+            (state.stderr_task.take(), state.close_monitor.take())
         };
         if let Some(close_monitor) = close_monitor {
             close_monitor.abort();
             let _ = close_monitor.await;
-        }
-        if let Some(running) = running.as_mut() {
-            running
-                .close()
-                .await
-                .map_err(|error| McpStdioClientError::Runtime {
-                    operation: "shutdown",
-                    message: error.to_string(),
-                })?;
         }
         if let Some(stderr_task) = stderr_task {
             let _ = stderr_task.await;
@@ -294,9 +286,8 @@ impl StdioMcpClient {
         self.state
             .lock()
             .await
-            .running
-            .as_ref()
-            .map(|running| running.peer().clone())
+            .peer
+            .clone()
             .ok_or(McpStdioClientError::NotConnected)
     }
 
@@ -320,36 +311,34 @@ impl StdioMcpClient {
         })
     }
 
-    fn spawn_close_monitor(&self, peer: Peer<RoleClient>) -> JoinHandle<()> {
+    /// Waits for the service loop to terminate instead of polling
+    /// `peer.is_transport_closed()`: the loop ends exactly when the transport
+    /// closes (or the service is cancelled or errors), so this is a true
+    /// event-driven wait with no timers.
+    fn spawn_close_monitor(&self, running: RunningStdioClient) -> JoinHandle<()> {
         let state = Arc::clone(&self.state);
         let stderr = Arc::clone(&self.stderr);
         tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                if !peer.is_transport_closed() {
-                    continue;
+            let _ = running.waiting().await;
+            let stderr = stderr.lock().await.snapshot();
+            let listener = {
+                let mut state = state.lock().await;
+                if state.closed || !state.ready {
+                    return;
                 }
-                let stderr = stderr.lock().await.snapshot();
-                let listener = {
-                    let mut state = state.lock().await;
-                    if state.closed || !state.ready {
-                        return;
-                    }
-                    let reason = UnexpectedCloseReason {
-                        error: None,
-                        stderr: (!stderr.is_empty()).then_some(stderr),
-                    };
-                    if let Some(listener) = &state.unexpected_close_listener {
-                        Some((Arc::clone(listener), reason))
-                    } else {
-                        state.pending_unexpected_close = Some(reason);
-                        None
-                    }
+                let reason = UnexpectedCloseReason {
+                    error: None,
+                    stderr: (!stderr.is_empty()).then_some(stderr),
                 };
-                if let Some((listener, reason)) = listener {
-                    listener(reason);
+                if let Some(listener) = &state.unexpected_close_listener {
+                    Some((Arc::clone(listener), reason))
+                } else {
+                    state.pending_unexpected_close = Some(reason);
+                    None
                 }
-                return;
+            };
+            if let Some((listener, reason)) = listener {
+                listener(reason);
             }
         })
     }
@@ -506,7 +495,7 @@ mod tests {
         assert!(!state.started);
         assert!(!state.closed);
         assert!(!state.ready);
-        assert!(state.running.is_none());
+        assert!(state.peer.is_none());
         assert!(state.unexpected_close_listener.is_none());
         assert!(state.pending_unexpected_close.is_none());
         assert!(state.stderr_task.is_none());

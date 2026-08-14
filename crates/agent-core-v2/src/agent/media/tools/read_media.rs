@@ -351,18 +351,26 @@ impl ReadMediaFileTool {
 
         let media_part = if is_image {
             if let Some(region) = args.region {
-                let outcome = crop_image_for_model(
-                    &data,
-                    &file_type.mime_type,
-                    region.into(),
-                    &CropImageOptions {
-                        compress: CompressImageOptions {
-                            telemetry: self.compress_telemetry.clone(),
-                            ..CompressImageOptions::default()
+                let mime_type = file_type.mime_type.clone();
+                let region = region.into();
+                let telemetry = self.compress_telemetry.clone();
+                let skip_resize = args.full_resolution == Some(true);
+                let outcome = tokio::task::spawn_blocking(move || {
+                    crop_image_for_model(
+                        &data,
+                        &mime_type,
+                        region,
+                        &CropImageOptions {
+                            compress: CompressImageOptions {
+                                telemetry,
+                                ..CompressImageOptions::default()
+                            },
+                            skip_resize,
                         },
-                        skip_resize: args.full_resolution == Some(true),
-                    },
-                );
+                    )
+                })
+                .await
+                .expect("crop_image_for_model panicked");
                 let CropImageOutcome::Success(outcome) = outcome else {
                     let CropImageOutcome::Failure(failure) = outcome else {
                         unreachable!()
@@ -403,16 +411,22 @@ impl ReadMediaFileTool {
                 });
                 image_part(&data, &file_type.mime_type)
             } else {
-                let compressed = compress_image_for_model(
-                    &data,
-                    &file_type.mime_type,
-                    &CompressImageOptions {
-                        max_edge: Some(max_edge),
-                        byte_budget: Some(read_byte_budget),
-                        telemetry: self.compress_telemetry.clone(),
-                        ..CompressImageOptions::default()
-                    },
-                );
+                let mime_type = file_type.mime_type.clone();
+                let telemetry = self.compress_telemetry.clone();
+                let compressed = tokio::task::spawn_blocking(move || {
+                    compress_image_for_model(
+                        &data,
+                        &mime_type,
+                        &CompressImageOptions {
+                            max_edge: Some(max_edge),
+                            byte_budget: Some(read_byte_budget),
+                            telemetry,
+                            ..CompressImageOptions::default()
+                        },
+                    )
+                })
+                .await
+                .expect("compress_image_for_model panicked");
                 if compressed.final_byte_length > read_byte_budget
                     || compressed.width.max(compressed.height) > i64::from(max_edge)
                 {

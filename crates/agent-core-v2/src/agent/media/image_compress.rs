@@ -849,8 +849,16 @@ pub async fn compress_image_content_parts(
             output.push(part);
             continue;
         };
-        let result =
-            compress_base64_for_model(&parsed.base64, &parsed.mime_type, &options.compress);
+        // Full decode + re-encode ladder can take seconds; run it off the
+        // async executor so it never stalls other tool work.
+        let result = tokio::task::spawn_blocking({
+            let base64 = parsed.base64.clone();
+            let mime_type = parsed.mime_type.clone();
+            let compress = options.compress.clone();
+            move || compress_base64_for_model(&base64, &mime_type, &compress)
+        })
+        .await
+        .expect("compress_base64_for_model panicked");
         if !result.changed {
             output.push(part);
             continue;

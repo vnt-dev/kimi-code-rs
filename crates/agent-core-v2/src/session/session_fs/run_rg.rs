@@ -56,34 +56,37 @@ pub async fn run_rg_once(
     let stderr_task =
         tokio::spawn(async move { read_stream_with_cap(stderr_process, false).await });
     let wait_process = Arc::clone(&process);
-    let wait_task = tokio::spawn(async move { wait_process.wait().await });
+    let mut wait_task = tokio::spawn(async move { wait_process.wait().await });
 
     let timed_out;
     let aborted;
-    tokio::select! {
+    let waited = tokio::select! {
         _ = signal.cancelled() => {
             aborted = true;
             timed_out = false;
             terminate_process(&process).await;
+            None
         }
         _ = tokio::time::sleep(Duration::from_millis(DEFAULT_TIMEOUT_MS)) => {
             aborted = false;
             timed_out = true;
             terminate_process(&process).await;
+            None
         }
-        _ = async {
-            while process.exit_code().is_none() && !wait_task.is_finished() {
-                tokio::task::yield_now().await;
-            }
-        } => {
+        result = &mut wait_task => {
             aborted = false;
             timed_out = false;
+            Some(result)
         }
-    }
+    };
 
     let stdout = stdout_task.await;
     let stderr = stderr_task.await;
-    let exit_code = wait_task.await;
+    let exit_code = match waited {
+        Some(result) => result.ok().and_then(Result::ok),
+        None => wait_task.await.ok().and_then(Result::ok),
+    }
+    .unwrap_or_else(|| process.exit_code().unwrap_or(0));
     process.dispose();
 
     if aborted {
@@ -93,10 +96,6 @@ pub async fn run_rg_once(
     let terminating = timed_out;
     let stdout = flatten_stream_task(stdout, terminating)?;
     let stderr = flatten_stream_task(stderr, terminating)?;
-    let exit_code = exit_code
-        .ok()
-        .and_then(Result::ok)
-        .unwrap_or_else(|| process.exit_code().unwrap_or(0));
     Ok(RunRgOutcome::Result(RunRgResult {
         exit_code,
         stdout_text: stdout.text,

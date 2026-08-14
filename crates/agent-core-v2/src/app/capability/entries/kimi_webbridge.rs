@@ -57,8 +57,12 @@ const BINARY_CDN_BASE: &str = "https://cdn.kimi.com/webbridge/latest/releases";
 const DEFAULT_DAEMON_BASE_URL: &str = "http://127.0.0.1:10086";
 const STATUS_TIMEOUT: Duration = Duration::from_millis(1_500);
 const START_TIMEOUT: Duration = Duration::from_secs(30);
+// Daemon readiness is probed over HTTP with exponential backoff instead of a
+// fixed-rate poll: a ready daemon is detected on the next probe, and a stuck
+// daemon still fails after the same ~10s budget as the previous 20×500ms loop.
+const START_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const START_POLL_INTERVAL: Duration = Duration::from_millis(500);
-const START_POLL_ATTEMPTS: usize = 20;
+const START_POLL_INTERVAL_MAX: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct DaemonStatus {
@@ -280,7 +284,9 @@ impl KimiWebbridgeEntry {
     }
 
     async fn wait_for_daemon(&self) -> CapabilityEntryResult<()> {
-        for _ in 0..START_POLL_ATTEMPTS {
+        let deadline = tokio::time::Instant::now() + START_READY_TIMEOUT;
+        let mut delay = START_POLL_INTERVAL;
+        loop {
             if self
                 .fetch_daemon_status()
                 .await
@@ -289,7 +295,11 @@ impl KimiWebbridgeEntry {
             {
                 return Ok(());
             }
-            tokio::time::sleep(START_POLL_INTERVAL).await;
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(delay).await;
+            delay = (delay * 2).min(START_POLL_INTERVAL_MAX);
         }
         Err(Box::new(ExpectedError::new(format!(
             "WebBridge daemon did not come up on {} — check ~/.kimi-webbridge/logs",
