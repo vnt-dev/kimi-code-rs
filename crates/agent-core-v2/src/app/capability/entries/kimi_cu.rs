@@ -411,10 +411,7 @@ impl MacKimiCuEntry {
             let mut options = tokio::fs::OpenOptions::new();
             options.write(true).create_new(true);
             #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(mode);
-            }
+            options.mode(mode);
             #[cfg(not(unix))]
             let _ = mode;
             let mut file = options.open(&temp_path).await?;
