@@ -2,12 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/telemetry/telemetryService.ts`.
 
-use std::{
-    any::Any,
-    panic::AssertUnwindSafe,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{any::Any, panic::AssertUnwindSafe};
 
 use async_trait::async_trait;
 use futures_util::{FutureExt, future::join_all};
@@ -97,10 +94,7 @@ impl TelemetryServiceContract for TelemetryService {
 
     // Original: TelemetryService.addAppender().
     fn add_appender(&self, appender: Arc<dyn TelemetryAppender>) -> DisposableHandle {
-        self.state
-            .lock()
-            .appenders
-            .push(Arc::clone(&appender));
+        self.state.lock().appenders.push(Arc::clone(&appender));
         let state = Arc::clone(&self.state);
         to_disposable(move || remove_from_state(&state, &appender))
     }

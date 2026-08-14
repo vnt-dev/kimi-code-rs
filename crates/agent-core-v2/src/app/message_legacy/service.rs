@@ -334,9 +334,9 @@ pub fn register_message_legacy_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::{Arc};
     use parking_lot::Mutex;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
 
     use futures_util::{FutureExt, future::BoxFuture, stream};
     use serde_json::{Value, json};

@@ -2,9 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/contextInjector/contextInjectorService.ts`.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;

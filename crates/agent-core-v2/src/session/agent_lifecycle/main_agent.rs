@@ -28,7 +28,10 @@ pub async fn ensure_main_agent(
 #[cfg(test)]
 mod tests {
     use parking_lot::Mutex;
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     use futures_util::{FutureExt, future::BoxFuture};
 

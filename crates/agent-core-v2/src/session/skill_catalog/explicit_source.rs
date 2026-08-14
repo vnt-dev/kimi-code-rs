@@ -121,12 +121,12 @@ pub fn register_explicit_file_skill_source() {
 
 #[cfg(test)]
 mod tests {
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::{
         collections::HashMap,
         path::{Path, PathBuf},
     };
-    use std::sync::{atomic::{AtomicU64, Ordering}};
-    use parking_lot::Mutex;
 
     use super::*;
     use crate::{

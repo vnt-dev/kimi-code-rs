@@ -615,8 +615,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use futures_util::{FutureExt, StreamExt, stream};
-    use serde_json::json;
     use parking_lot::Mutex;
+    use serde_json::json;
 
     use crate::{
         _base::{
@@ -973,9 +973,7 @@ mod tests {
         assert_eq!(result, None);
         assert_eq!(approval.requests.lock().len(), 1);
         assert_eq!(
-            rules.records.lock()[0]
-                .session_approval_rule
-                .as_deref(),
+            rules.records.lock()[0].session_approval_rule.as_deref(),
             Some("Bash(git status)")
         );
         let events = events.lock();

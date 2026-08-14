@@ -334,7 +334,6 @@ mod tests {
     };
 
     use super::*;
-    use parking_lot::RwLock;
     use crate::app::config::apply_section_env;
     use crate::kosong::{
         contract::capability::ModelCapability,
@@ -346,6 +345,7 @@ mod tests {
             },
         },
     };
+    use parking_lot::RwLock;
 
     fn thinking_trait(strict: Option<bool>) -> Arc<ProtocolTrait> {
         Arc::new(ProtocolTrait {

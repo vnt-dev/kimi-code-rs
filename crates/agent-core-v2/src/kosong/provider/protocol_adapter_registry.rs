@@ -86,7 +86,6 @@ impl<'a> ProtocolAdapterRegistry<'a> {
         provider_type.and_then(|provider_type| {
             self.provider_definitions
                 .read()
-
                 .get(provider_type, Some(protocol))
         })
     }
@@ -96,7 +95,6 @@ impl ProtocolAdapterRegistryContract for ProtocolAdapterRegistry<'_> {
     fn supported_protocols(&self) -> Vec<Protocol> {
         self.protocol_bases
             .read()
-
             .list()
             .iter()
             .map(|base| base.id)
@@ -205,7 +203,6 @@ impl ProtocolAdapterRegistryContract for ProtocolAdapterRegistry<'_> {
         let base_capability = self
             .protocol_bases
             .read()
-
             .get(identity.base_id)
             .and_then(|base| base.capability.as_ref().and_then(|hook| hook(model_name)));
         base_capability.map_or_else(
@@ -266,8 +263,8 @@ mod tests {
     use crate::kosong::protocol::protocol_base::ProtocolBaseDefinition;
     use crate::kosong::provider::provider_definition::ProviderDefinition;
     use indexmap::IndexMap;
-    use std::io;
     use parking_lot::Mutex;
+    use std::io;
 
     fn registries() -> (
         RwLock<ProviderDefinitionRegistry>,

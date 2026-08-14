@@ -1,5 +1,5 @@
-use parking_lot::RwLock;
 use indexmap::IndexMap;
+use parking_lot::RwLock;
 use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, LazyLock};
@@ -274,45 +274,33 @@ pub(crate) static PROVIDER_DEFINITIONS: LazyLock<RwLock<ProviderDefinitionRegist
 pub fn register_provider_definition(
     definition: ProviderDefinition,
 ) -> Result<(), ProviderDefinitionRegistryError> {
-    PROVIDER_DEFINITIONS
-        .write()
-        .register(definition)
+    PROVIDER_DEFINITIONS.write().register(definition)
 }
 
 pub fn get_provider_definition(
     id: &str,
     protocol: Option<Protocol>,
 ) -> Result<Option<Arc<ProviderDefinition>>, ProviderDefinitionRegistryError> {
-    Ok(PROVIDER_DEFINITIONS
-        .read()
-        .get(id, protocol))
+    Ok(PROVIDER_DEFINITIONS.read().get(id, protocol))
 }
 
 pub fn get_provider_definitions(
     id: &str,
 ) -> Result<Vec<Arc<ProviderDefinition>>, ProviderDefinitionRegistryError> {
-    Ok(PROVIDER_DEFINITIONS
-        .read()
-        .get_all(id))
+    Ok(PROVIDER_DEFINITIONS.read().get_all(id))
 }
 
 pub fn has_provider_definition(id: &str) -> Result<bool, ProviderDefinitionRegistryError> {
-    Ok(PROVIDER_DEFINITIONS
-        .read()
-        .contains(id))
+    Ok(PROVIDER_DEFINITIONS.read().contains(id))
 }
 
 pub fn is_oauth_catalog_vendor(id: Option<&str>) -> Result<bool, ProviderDefinitionRegistryError> {
-    Ok(PROVIDER_DEFINITIONS
-        .read()
-        .is_oauth_catalog_vendor(id))
+    Ok(PROVIDER_DEFINITIONS.read().is_oauth_catalog_vendor(id))
 }
 
 pub fn list_provider_definitions()
 -> Result<Vec<Arc<ProviderDefinition>>, ProviderDefinitionRegistryError> {
-    Ok(PROVIDER_DEFINITIONS
-        .read()
-        .list())
+    Ok(PROVIDER_DEFINITIONS.read().list())
 }
 
 pub fn explain_provider_endpoint(

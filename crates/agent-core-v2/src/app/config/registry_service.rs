@@ -122,20 +122,12 @@ impl ConfigRegistryContract for ConfigRegistry {
 
     // Original: ConfigRegistry.listSections().
     fn list_sections(&self) -> Vec<ConfigSection> {
-        self.state
-            .lock()
-            .sections
-            .values()
-            .cloned()
-            .collect()
+        self.state.lock().sections.values().cloned().collect()
     }
 
     // Original: ConfigRegistry.registerEffectiveOverlay().
     fn register_effective_overlay(&self, overlay: Arc<dyn ConfigEffectiveOverlay>) {
-        self.state
-            .lock()
-            .overlays
-            .push(Arc::clone(&overlay));
+        self.state.lock().overlays.push(Arc::clone(&overlay));
         self.on_did_register_overlay
             .fire(&ConfigOverlayRegisteredEvent { overlay });
     }

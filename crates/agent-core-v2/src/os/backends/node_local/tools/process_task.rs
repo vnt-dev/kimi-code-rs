@@ -2,12 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/os/backends/node-local/tools/process-task.ts`.
 
-use std::{
-    fmt,
-    time::Duration,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{fmt, time::Duration};
 
 use tokio::io::AsyncReadExt;
 
@@ -567,10 +564,7 @@ mod tests {
             sink.settlement.lock().as_ref().unwrap().status,
             AgentTaskSettlementStatus::Killed
         );
-        assert_eq!(
-            *process.signals.lock(),
-            [Some(ProcessSignal::Terminate)]
-        );
+        assert_eq!(*process.signals.lock(), [Some(ProcessSignal::Terminate)]);
         assert!(process.disposed.load(Ordering::Acquire));
     }
 
@@ -581,10 +575,7 @@ mod tests {
         controller.abort(None);
         let result = execute_process(process.clone(), &controller.signal(), &|_| {}, None).await;
         assert!(matches!(result, Err(ProcessExecutorError::Aborted(_))));
-        assert_eq!(
-            *process.signals.lock(),
-            [Some(ProcessSignal::Terminate)]
-        );
+        assert_eq!(*process.signals.lock(), [Some(ProcessSignal::Terminate)]);
         assert!(process.disposed.load(Ordering::Acquire));
     }
 }

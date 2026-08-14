@@ -4,14 +4,14 @@
 //! turn operations, domain events, telemetry, hooks, cancellation, and ordered
 //! error recovery. Bound at Agent scope.
 
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 use std::{
     collections::{HashMap, VecDeque},
     error::Error,
     panic::AssertUnwindSafe,
     time::Instant,
 };
-use std::sync::{Arc, Weak};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{
@@ -492,12 +492,7 @@ impl AgentLoopService {
         options: Option<StepEnqueueOptions>,
     ) -> StepHandle {
         let step = self.enqueue_step(job, Arc::clone(&request), options);
-        if let Some(assignment) = self
-            .state
-            .lock()
-            .pending_assignments
-            .remove(request.id())
-        {
+        if let Some(assignment) = self.state.lock().pending_assignments.remove(request.id()) {
             assignment.settle(Ok(StepAssignment {
                 turn: job.turn.clone(),
                 step: step.clone(),
@@ -543,12 +538,7 @@ impl AgentLoopService {
     }
 
     fn reject_assignment(&self, request: &Arc<dyn StepRequest>, reason: LoopValue) {
-        if let Some(assignment) = self
-            .state
-            .lock()
-            .pending_assignments
-            .remove(request.id())
-        {
+        if let Some(assignment) = self.state.lock().pending_assignments.remove(request.id()) {
             assignment.settle(Err(reason));
         }
     }

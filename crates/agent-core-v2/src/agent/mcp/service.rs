@@ -2,9 +2,12 @@
 //!
 //! Original: `agent/mcp/mcpService.ts`.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Weak, atomic::{AtomicBool, Ordering}};
 use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, Ordering},
+};
 
 use async_trait::async_trait;
 use serde::Serialize;

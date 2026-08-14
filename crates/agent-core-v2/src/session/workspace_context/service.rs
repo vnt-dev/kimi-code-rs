@@ -44,13 +44,11 @@ impl SessionWorkspaceContextService {
     }
 
     fn read_state(&self) -> parking_lot::RwLockReadGuard<'_, WorkspaceState> {
-        self.state
-            .read()
+        self.state.read()
     }
 
     fn write_state(&self) -> parking_lot::RwLockWriteGuard<'_, WorkspaceState> {
-        self.state
-            .write()
+        self.state.write()
     }
 }
 

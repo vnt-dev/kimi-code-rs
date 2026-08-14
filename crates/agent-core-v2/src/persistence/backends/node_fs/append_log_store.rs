@@ -2,9 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/persistence/backends/node-fs/appendLogStore.ts`.
 
-use std::error::Error;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use parking_lot::Mutex;
+use std::error::Error;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt, future::join_all, stream};

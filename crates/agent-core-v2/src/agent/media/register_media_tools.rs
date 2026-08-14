@@ -16,7 +16,7 @@ use crate::{
         utils::abort::AbortError,
     },
     agent::{
-        media::tools::{ReadMediaFileTool, VideoUploader},
+        media::tools::{ReadMediaFileTool, VideoUploadError, VideoUploader},
         tool_registry::{AgentToolRegistryServiceHandle, ToolRegistrationOptions},
     },
     app::telemetry::{
@@ -103,7 +103,6 @@ pub fn create_video_uploader(
                     Ok(part)
                 }
                 Ok(None) => {
-                    let error = "Model requester does not support video upload".to_owned();
                     track_video_upload(
                         telemetry.as_ref(),
                         mime_type,
@@ -112,7 +111,7 @@ pub fn create_video_uploader(
                         started_at.elapsed(),
                         Some("Error".into()),
                     );
-                    Err(error)
+                    Err(VideoUploadError::Unsupported)
                 }
                 Err(error) => {
                     let error_type = error_name(error.as_ref());
@@ -124,7 +123,7 @@ pub fn create_video_uploader(
                         started_at.elapsed(),
                         Some(error_type),
                     );
-                    Err(error.to_string())
+                    Err(VideoUploadError::Provider(error))
                 }
             }
         })
@@ -371,7 +370,8 @@ mod tests {
                 filename: None,
             })
             .await
-            .unwrap_err(),
+            .unwrap_err()
+            .to_string(),
             "upload failed"
         );
 

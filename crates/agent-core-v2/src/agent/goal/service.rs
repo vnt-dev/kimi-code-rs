@@ -2,12 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/goal/goalService.ts`.
 
+use parking_lot::Mutex;
+use std::sync::{Arc, LazyLock, OnceLock, Weak};
 use std::{
     collections::{HashMap, HashSet},
     time::{SystemTime, UNIX_EPOCH},
 };
-use std::sync::{Arc, LazyLock, OnceLock, Weak};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -580,11 +580,7 @@ impl AgentGoalService {
             runtime.goal_turn_targets.remove(&turn_id);
             runtime.exhausted_turn_budget_goals.remove(&turn_id);
         }
-        let has_driven = self
-            .state
-            .lock()
-            .goal_driven_turns
-            .contains_key(&turn_id);
+        let has_driven = self.state.lock().goal_driven_turns.contains_key(&turn_id);
         if !has_driven {
             let state = self.goal_state();
             let continuation_goal_id = if is_goal_continuation_origin(origin) {
@@ -672,12 +668,7 @@ impl AgentGoalService {
             return Ok(());
         };
         let turn_id = *turn_id;
-        let goal_id = self
-            .state
-            .lock()
-            .goal_driven_turns
-            .get(&turn_id)
-            .cloned();
+        let goal_id = self.state.lock().goal_driven_turns.get(&turn_id).cloned();
         let Some(goal_id) = goal_id else {
             return Ok(());
         };
@@ -953,9 +944,7 @@ impl AgentGoalService {
     }
 
     fn launch_continuation_turn(&self, goal_id: &str) -> GoalServiceResult<()> {
-        if !self.is_active_goal(goal_id)
-            || self.state.lock().pending_continuation.is_some()
-        {
+        if !self.is_active_goal(goal_id) || self.state.lock().pending_continuation.is_some() {
             return Ok(());
         }
         let message = ContextMessage {
@@ -1180,8 +1169,7 @@ impl AgentGoalService {
         let wall_clock_ms = self.settle_wall_clock(state);
         let wall_clock_resumed_at = (status == GoalStatus::Active).then(epoch_millis);
         if status == GoalStatus::Active {
-            self.state.lock().live_wall_clock_started_at =
-                Some(self.deadline_scheduler.now());
+            self.state.lock().live_wall_clock_started_at = Some(self.deadline_scheduler.now());
         } else if state.status == GoalStatus::Active {
             self.state.lock().resume_continuation = None;
             self.cancel_pending_continuation(preserve_live_continuation, cancellation_reason);
@@ -1910,9 +1898,7 @@ mod tests {
         }
 
         fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
-            Box::pin(stream::iter(
-                self.0.lock().clone().into_iter().map(Ok),
-            ))
+            Box::pin(stream::iter(self.0.lock().clone().into_iter().map(Ok)))
         }
 
         async fn rewrite_values(

@@ -688,8 +688,8 @@ pub(crate) fn cloud_properties_to_json_value(properties: &CloudProperties) -> Va
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use parking_lot::Mutex;
+    use std::collections::VecDeque;
 
     use serde_json::json;
 
@@ -742,10 +742,7 @@ mod tests {
                 headers: headers.clone(),
                 body: body.into(),
             });
-            self.responses
-                .lock()
-                .pop_front()
-                .unwrap_or(Ok(200))
+            self.responses.lock().pop_front().unwrap_or(Ok(200))
         }
     }
 

@@ -2,13 +2,13 @@
 //!
 //! Original: `packages/agent-core-v2/src/kosong/model/modelRequesterImpl.ts`.
 
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::{
     pin::Pin,
     task::{Context, Poll},
     time::Instant,
 };
-use std::sync::{Arc};
-use parking_lot::Mutex;
 
 use futures_util::{Stream, future::BoxFuture};
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -59,9 +59,7 @@ impl ModelRequesterImpl {
     // Original: resolveChatProvider(). One immutable provider is constructed
     // lazily and shared for this model's lifetime.
     fn resolve_chat_provider(&self) -> Result<Arc<dyn ChatProvider>, ProviderError> {
-        let mut cached = self
-            .cached_chat_provider
-            .lock();
+        let mut cached = self.cached_chat_provider.lock();
         if let Some(provider) = cached.as_ref() {
             return Ok(Arc::clone(provider));
         }
@@ -188,18 +186,13 @@ impl ModelRequesterImpl {
                 .and_then(|params| params.used_context_tokens),
             max_context_tokens: params.as_ref().and_then(|params| params.max_context_tokens),
             on_request_start: Some(Arc::new(move || {
-                on_start_timing
-                    .lock()
-                    .request_started_at = Instant::now();
+                on_start_timing.lock().request_started_at = Instant::now();
             })),
             on_request_sent: Some(Arc::new(move || {
-                on_sent_timing
-                    .lock()
-                    .request_sent_at = Some(Instant::now());
+                on_sent_timing.lock().request_sent_at = Some(Instant::now());
             })),
             on_stream_end: Some(Arc::new(move |stats| {
-                let mut state = on_end_timing
-                    .lock();
+                let mut state = on_end_timing.lock();
                 state.stream_ended_at = Some(Instant::now());
                 state.decode_stats = stats;
             })),
@@ -260,8 +253,7 @@ impl ModelRequesterImpl {
             id: result.id,
             trace_id: result.trace_id.flatten(),
         }));
-        let timing = timing
-            .lock();
+        let timing = timing.lock();
         if let Some(first_chunk_at) = timing.first_chunk_at {
             let _ = events.send(Ok(ModelRequestEvent::Timing(build_stream_timing(
                 timing.request_started_at,
@@ -504,13 +496,16 @@ pub fn build_stream_timing(
 
 #[cfg(test)]
 mod tests {
+    use parking_lot::Mutex;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::{
         collections::VecDeque,
         task::{Context, Poll},
         time::Duration,
     };
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
-    use parking_lot::Mutex;
 
     use async_trait::async_trait;
     use futures_util::StreamExt;
@@ -679,9 +674,7 @@ mod tests {
             config: ProtocolAdapterConfig,
         ) -> Result<Arc<dyn ChatProvider>, ProviderError> {
             self.create_calls.fetch_add(1, Ordering::SeqCst);
-            self.configurations
-                .lock()
-                .push(config);
+            self.configurations.lock().push(config);
             Ok(Arc::clone(&self.provider))
         }
     }
@@ -845,9 +838,7 @@ mod tests {
         assert!(matches!(events[3], Ok(ModelRequestEvent::Timing(_))));
         assert!(second_events.iter().all(Result::is_ok));
         assert_eq!(registry.create_calls.load(Ordering::SeqCst), 1);
-        let configurations = registry
-            .configurations
-            .lock();
+        let configurations = registry.configurations.lock();
         assert_eq!(configurations[0].model_name, "model");
         assert_eq!(
             configurations[0].base_url.as_deref(),
@@ -887,17 +878,10 @@ mod tests {
         assert!(events.iter().all(Result::is_ok));
         assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
         assert_eq!(
-            *provider
-                .observed_token_estimates
-                .lock(),
+            *provider.observed_token_estimates.lock(),
             vec![123_456, 123_456]
         );
-        assert_eq!(
-            *auth
-                .requests
-                .lock(),
-            vec![false, true]
-        );
+        assert_eq!(*auth.requests.lock(), vec![false, true]);
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
+use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
-use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock};
 
 use crate::kosong::contract::capability::UNKNOWN_CAPABILITY;
@@ -147,8 +147,7 @@ fn resolve_files(
             })
             .unwrap_or_default(),
     };
-    let mut cache = cache
-        .lock();
+    let mut cache = cache.lock();
     Arc::clone(cache.entry(key).or_insert_with(|| {
         Arc::new(KimiFiles::new(KimiFilesOptions {
             api_key,

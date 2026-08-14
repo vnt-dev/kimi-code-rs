@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     _base::{
         di::instantiation::ServicesAccessorExt,
-        exec_env::decode_text::{TextDecodeErrors, TextEncoding},
+        exec_env::decode_text::{TextDecodeError, TextDecodeErrors, TextEncoding},
         text::line_endings::{LineEndingStyle, make_carriage_returns_visible},
     },
     agent::{
@@ -678,12 +678,7 @@ fn is_file_not_found_error(error: &HostFsError) -> bool {
 fn is_text_decode_error(error: &HostFsError) -> bool {
     let mut current: Option<&(dyn Error + 'static)> = Some(error);
     while let Some(candidate) = current {
-        let message = candidate.to_string().to_ascii_lowercase();
-        if message.contains("encoded data was not valid")
-            || message.contains("invalid encoding")
-            || message.contains("invalid utf-8")
-            || message.contains("invalid utf8")
-        {
+        if candidate.downcast_ref::<TextDecodeError>().is_some() {
             return true;
         }
         current = candidate.source();
@@ -700,6 +695,11 @@ fn not_readable_file_output(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::_base::{
+        errors::errors::{Error2Options, ErrorCause},
+        exec_env::decode_text::{TextDecodeErrors, TextEncoding, decode_text_with_errors},
+    };
+    use crate::os::interface::host_fs_errors::OS_FS_UNKNOWN;
 
     #[test]
     fn rendering_preserves_source_limits_and_line_endings() {
@@ -721,5 +721,32 @@ mod tests {
             .line,
             "7\thello"
         );
+    }
+
+    #[test]
+    fn detects_text_decode_failures_by_type_not_message() {
+        let decode_error = decode_text_with_errors(
+            b"\xff\xfe\x00",
+            TextEncoding::Utf8,
+            TextDecodeErrors::Strict,
+            false,
+        )
+        .unwrap_err();
+        let error = HostFsError::with_options(
+            OS_FS_UNKNOWN,
+            "read failed",
+            Error2Options {
+                cause: Some(ErrorCause::Error(Arc::new(decode_error))),
+                ..Error2Options::default()
+            },
+        );
+        assert!(is_text_decode_error(&error));
+
+        let io_error = HostFsError::with_options(
+            OS_FS_UNKNOWN,
+            "read failed: encoded data was not valid utf-8, but the wording alone must not classify",
+            Error2Options::default(),
+        );
+        assert!(!is_text_decode_error(&io_error));
     }
 }

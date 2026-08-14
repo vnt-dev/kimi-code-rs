@@ -1,6 +1,9 @@
-use std::collections::BTreeMap;
-use std::sync::{Arc, Weak, atomic::{AtomicBool, AtomicU64, Ordering}};
 use parking_lot::Mutex;
+use std::collections::BTreeMap;
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use futures_util::future::{BoxFuture, join_all};
 use tokio::sync::Mutex as AsyncMutex;
@@ -379,10 +382,7 @@ mod tests {
 
         emitter.fire(&1);
         emitter.fire(&2);
-        assert_eq!(
-            *seen.lock(),
-            vec!["first", "second", "second", "late"]
-        );
+        assert_eq!(*seen.lock(), vec!["first", "second", "second", "late"]);
     }
 
     #[test]
@@ -423,9 +423,6 @@ mod tests {
             .event()
             .subscribe(move |_| second.lock().push("listener-2"));
         emitter.fire_async((), CancellationToken::new()).await;
-        assert_eq!(
-            *order.lock(),
-            vec!["listener-1", "wait-1", "listener-2"]
-        );
+        assert_eq!(*order.lock(), vec!["listener-1", "wait-1", "listener-2"]);
     }
 }

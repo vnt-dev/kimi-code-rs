@@ -1,6 +1,6 @@
-use std::collections::VecDeque;
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use futures_util::{Stream, stream};
 use tokio::sync::oneshot;
@@ -42,9 +42,7 @@ impl<T, E> AsyncEventQueue<T, E> {
     // failure returns ownership of the value, so it is offered to the next
     // waiter or buffered instead of being lost.
     pub fn push(&self, mut value: T) {
-        let mut state = self
-            .state
-            .lock();
+        let mut state = self.state.lock();
         if state.failure.is_some() || state.ended {
             return;
         }
@@ -62,9 +60,7 @@ impl<T, E> AsyncEventQueue<T, E> {
     //   packages/agent-core-v2/src/_base/asyncEventQueue.ts
     //   AsyncEventQueue.end()
     pub fn end(&self) {
-        let mut state = self
-            .state
-            .lock();
+        let mut state = self.state.lock();
         if state.failure.is_some() || state.ended {
             return;
         }
@@ -81,9 +77,7 @@ impl<T, E> AsyncEventQueue<T, E> {
     where
         E: Clone,
     {
-        let mut state = self
-            .state
-            .lock();
+        let mut state = self.state.lock();
         if state.failure.is_some() || state.ended {
             return;
         }
@@ -104,9 +98,7 @@ impl<T, E> AsyncEventQueue<T, E> {
         E: Clone,
     {
         let receiver = {
-            let mut state = self
-                .state
-                .lock();
+            let mut state = self.state.lock();
             if let Some(value) = state.values.pop_front() {
                 return Ok(Some(value));
             }

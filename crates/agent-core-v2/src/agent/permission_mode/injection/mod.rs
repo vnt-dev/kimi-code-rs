@@ -35,8 +35,7 @@ impl PermissionModeInjection {
         let last_mode = Arc::new(Mutex::new(None));
         let provider: ContextInjectionProvider = Arc::new(move |context| {
             let current_mode = permission_mode.mode();
-            let reminder =
-                permission_mode_reminder(current_mode, &mut last_mode.lock(), &context);
+            let reminder = permission_mode_reminder(current_mode, &mut last_mode.lock(), &context);
             Box::pin(async move {
                 Ok(reminder.map(ContextInjectionContent::Text)) as ContextInjectionResult
             })

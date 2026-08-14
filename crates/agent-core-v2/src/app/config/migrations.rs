@@ -97,9 +97,9 @@ fn rewrite_thinking_effort(document: &mut Map<String, Value>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::{Arc};
     use parking_lot::Mutex;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
     use async_trait::async_trait;
 
@@ -188,8 +188,7 @@ mod tests {
                 .contains_key(THINKING_EFFORT_MAX_TO_HIGH)
         );
 
-        backend.value.lock().as_mut().unwrap()["thinking"]["effort"] =
-            Value::String("max".into());
+        backend.value.lock().as_mut().unwrap()["thinking"]["effort"] = Value::String("max".into());
         migrate_thinking_effort_max_to_high(&handle, "config.toml", &home).await;
         assert_eq!(
             backend.value.lock().as_ref().unwrap()["thinking"]["effort"],

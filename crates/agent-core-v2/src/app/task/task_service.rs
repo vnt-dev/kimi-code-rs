@@ -2,9 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/task/taskService.ts`.
 
-use std::future::Future;
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}};
 use parking_lot::Mutex;
+use std::future::Future;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -247,9 +250,7 @@ impl TaskService {
         let output_disposed = Arc::clone(&disposed);
         let output_events = Arc::clone(&output_emitter);
         let output: TaskOutput = Arc::new(move |data| {
-            if !output_state.lock().is_terminal()
-                && !output_disposed.load(Ordering::Acquire)
-            {
+            if !output_state.lock().is_terminal() && !output_disposed.load(Ordering::Acquire) {
                 output_events.fire(&data.to_owned());
             }
         });

@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
+    _base::errors::errors::BugIndicatingError,
     agent::media::{
         CompressImageOptions, CropImageOptions, CropImageOutcome, DetectFileTypeMode, FileTypeKind,
         IMAGE_BYTE_BUDGET, ImageCompressionTelemetry, ImageCropRegion, MAX_IMAGE_DECODE_BYTES,
@@ -22,10 +23,12 @@ use crate::{
     kosong::contract::{
         capability::ModelCapability,
         message::{ContentPart, MediaUrl},
+        provider::ProviderError,
         tool::Tool,
     },
     os::interface::{
         host_environment::HostEnvironmentHandle, host_file_system::HostFileSystemServiceHandle,
+        host_fs_errors::HostFsError,
     },
     tool::{
         ExecutableTool, ExecutableToolContext, ExecutableToolOutput, ExecutableToolResult,
@@ -46,7 +49,25 @@ pub const MAX_MEDIA_MEGABYTES: u64 = 100;
 pub const MAX_MEDIA_BYTES: u64 = MAX_MEDIA_MEGABYTES * 1_024 * 1_024;
 const READ_MEDIA_DESCRIPTION_HEAD: &str = include_str!("read-media.md");
 
-pub type VideoUploadFuture = BoxFuture<'static, Result<ContentPart, String>>;
+#[derive(Debug, thiserror::Error)]
+pub enum VideoUploadError {
+    #[error("Model requester does not support video upload")]
+    Unsupported,
+    #[error(transparent)]
+    Provider(#[from] ProviderError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReadMediaError {
+    #[error(transparent)]
+    Fs(#[from] HostFsError),
+    #[error(transparent)]
+    Environment(#[from] BugIndicatingError),
+    #[error(transparent)]
+    Video(#[from] VideoUploadError),
+}
+
+pub type VideoUploadFuture = BoxFuture<'static, Result<ContentPart, VideoUploadError>>;
 pub type VideoUploader = Arc<dyn Fn(VideoUploadInput) -> VideoUploadFuture + Send + Sync + 'static>;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -224,12 +245,11 @@ impl ReadMediaFileTool {
         &self,
         args: &ReadMediaFileInput,
         safe_path: &str,
-    ) -> Result<ExecutableToolResult, String> {
+    ) -> Result<ExecutableToolResult, ReadMediaError> {
         let header = self
             .fs
             .read_bytes(Path::new(safe_path), Some(MEDIA_SNIFF_BYTES))
-            .await
-            .map_err(|error| error.to_string())?;
+            .await?;
         let file_type = detect_file_type(safe_path, Some(&header), DetectFileTypeMode::Media);
 
         match file_type.kind {
@@ -251,7 +271,7 @@ impl ReadMediaFileTool {
                 ));
             }
             FileTypeKind::Image if !is_model_accepted_image_mime(&file_type.mime_type) => {
-                let info = self.environment.info().map_err(|error| error.to_string())?;
+                let info = self.environment.info()?;
                 return Ok(ExecutableToolResult::error(
                     build_image_conversion_guidance(
                         &args.path,
@@ -268,11 +288,7 @@ impl ReadMediaFileTool {
             _ => {}
         }
 
-        let stat = self
-            .fs
-            .stat(Path::new(safe_path))
-            .await
-            .map_err(|error| error.to_string())?;
+        let stat = self.fs.stat(Path::new(safe_path)).await?;
         if stat.size == 0 {
             return Ok(ExecutableToolResult::error(format!(
                 "\"{}\" is empty.",
@@ -323,11 +339,7 @@ impl ReadMediaFileTool {
             ));
         }
 
-        let data = self
-            .fs
-            .read_bytes(Path::new(safe_path), None)
-            .await
-            .map_err(|error| error.to_string())?;
+        let data = self.fs.read_bytes(Path::new(safe_path), None).await?;
         let mut dimensions = is_image
             .then(|| sniff_image_dimensions(&data))
             .flatten()

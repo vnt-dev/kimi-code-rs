@@ -609,9 +609,7 @@ pub fn assemble_model_inspection(
         }
     };
 
-    let provider_config_value = provider_config
-        .map(|config| serde_json::to_value(config))
-        .transpose()?;
+    let provider_config_value = provider_config.map(serde_json::to_value).transpose()?;
 
     Ok(ModelInspection {
         id: id.to_owned(),

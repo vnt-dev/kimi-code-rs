@@ -2,13 +2,16 @@
 //!
 //! Original: `packages/agent-core-v2/src/persistence/backends/minidb/miniDbQueryStore.ts`.
 
+use parking_lot::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::{
     collections::HashSet,
     future::Future,
     path::{Path, PathBuf},
 };
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use kimi_code_minidb::{
@@ -19,8 +22,8 @@ use kimi_code_minidb::{
         types::ClusterOpenOptions,
     },
     codec::CodecError,
-    compound_index::{CompoundIndexDef as MiniDbCompoundIndexDef, OrderType},
-    index_manager::{IndexDef as MiniDbIndexDef, IndexType},
+    compound_index::{CompoundIndexDef as MiniDbCompoundIndexDef, CompoundIndexError, OrderType},
+    index_manager::{IndexDef as MiniDbIndexDef, IndexError, IndexType},
     minidb::{BatchInputOp, KeyQuery, QueryOptions, SetOptions, ValueModeSetting},
     recovery::RecoveryError,
 };
@@ -334,7 +337,7 @@ impl QueryStoreService for MiniDbQueryStore {
                     }
                 };
                 match result {
-                    Err(error) if error.to_string().contains("already exists") => Ok(()),
+                    Err(error) if index_already_exists(&error) => Ok(()),
                     other => other,
                 }
             }
@@ -372,6 +375,15 @@ impl QueryStoreService for MiniDbQueryStore {
         }
         Ok(())
     }
+}
+
+fn index_already_exists(error: &ClusterError) -> bool {
+    matches!(
+        error,
+        ClusterError::Database(MiniDbError::Index(IndexError::AlreadyExists(_)))
+            | ClusterError::Database(MiniDbError::Compound(CompoundIndexError::AlreadyExists(_)))
+            | ClusterError::Database(MiniDbError::TextIndexExists(_))
+    )
 }
 
 struct MiniDbQuery {

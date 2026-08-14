@@ -660,12 +660,9 @@ pub fn register_config_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        path::PathBuf,
-    };
-    use std::sync::{Arc};
     use parking_lot::Mutex;
+    use std::sync::Arc;
+    use std::{collections::HashMap, path::PathBuf};
 
     use futures_util::future::{BoxFuture, ready};
     use serde_json::json;
@@ -858,10 +855,7 @@ mod tests {
             changed.lock()[0].previous_value.as_ref().unwrap()["enabled"],
             true
         );
-        assert_eq!(
-            changed.lock()[0].value.as_ref().unwrap()["enabled"],
-            false
-        );
+        assert_eq!(changed.lock()[0].value.as_ref().unwrap()["enabled"], false);
     }
 
     #[tokio::test]

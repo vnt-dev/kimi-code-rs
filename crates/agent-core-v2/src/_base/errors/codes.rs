@@ -138,10 +138,7 @@ fn register_inner(
 
 // Original: codes.ts, isErrorCode()
 pub fn is_error_code(code: &str) -> bool {
-    ERROR_REGISTRY
-        .read()
-        .registered_codes
-        .contains_key(code)
+    ERROR_REGISTRY.read().registered_codes.contains_key(code)
 }
 
 // Original: codes.ts, errorInfo()

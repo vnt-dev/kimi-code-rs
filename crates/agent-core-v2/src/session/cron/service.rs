@@ -2,12 +2,15 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/cron/sessionCronServiceImpl.ts`.
 
+use parking_lot::Mutex;
+use std::sync::{
+    Arc, OnceLock, Weak,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
 };
-use std::sync::{Arc, OnceLock, Weak, atomic::{AtomicBool, AtomicU64, Ordering}};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{
@@ -273,8 +276,7 @@ impl SessionCronService {
 
     fn resolve_clocks(&self) {
         let config = self.cron_config();
-        self.runtime.lock().clocks =
-            resolve_clock_sources(config.clock.as_deref(), config.debug);
+        self.runtime.lock().clocks = resolve_clock_sources(config.clock.as_deref(), config.debug);
     }
 
     fn compute_jittered_next(
@@ -382,10 +384,7 @@ impl SessionCronService {
         } else {
             (1, None)
         };
-        self.runtime
-            .lock()
-            .in_flight
-            .insert(task.id.clone());
+        self.runtime.lock().in_flight.insert(task.id.clone());
         let delivered = self.deliver_due(&task, coalesced).await;
         self.runtime.lock().in_flight.remove(&task.id);
         if !delivered {
@@ -704,12 +703,7 @@ impl SessionCronServiceContract for SessionCronService {
     }
 
     fn list(&self) -> Vec<CronTask> {
-        self.runtime
-            .lock()
-            .tasks
-            .values()
-            .cloned()
-            .collect()
+        self.runtime.lock().tasks.values().cloned().collect()
     }
 
     fn now(&self) -> f64 {
@@ -783,10 +777,7 @@ impl SessionCronServiceContract for SessionCronService {
                     .insert(CRON_SESSION_TAG.into(), self.ctx.session_id.clone());
                 self.enqueue_save(task.clone());
             }
-            self.runtime
-                .lock()
-                .tasks
-                .insert(task.id.clone(), task);
+            self.runtime.lock().tasks.insert(task.id.clone(), task);
         }
         Ok(())
     }

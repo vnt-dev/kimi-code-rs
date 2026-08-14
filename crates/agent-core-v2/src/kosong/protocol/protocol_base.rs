@@ -1,5 +1,5 @@
-use parking_lot::RwLock;
 use indexmap::IndexMap;
+use parking_lot::RwLock;
 use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, LazyLock};
@@ -95,27 +95,18 @@ pub(crate) static PROTOCOL_BASES: LazyLock<RwLock<ProtocolBaseRegistry>> =
 pub fn register_protocol_base(
     definition: ProtocolBaseDefinition,
 ) -> Result<(), ProtocolBaseRegistryError> {
-    PROTOCOL_BASES
-        .write()
-
-        .register(definition)
+    PROTOCOL_BASES.write().register(definition)
 }
 
 pub fn get_protocol_base(
     id: ProtocolBaseId,
 ) -> Result<Option<Arc<ProtocolBaseDefinition>>, ProtocolBaseRegistryError> {
-    Ok(PROTOCOL_BASES
-        .read()
-
-        .get(id))
+    Ok(PROTOCOL_BASES.read().get(id))
 }
 
 pub fn list_protocol_bases() -> Result<Vec<Arc<ProtocolBaseDefinition>>, ProtocolBaseRegistryError>
 {
-    Ok(PROTOCOL_BASES
-        .read()
-
-        .list())
+    Ok(PROTOCOL_BASES.read().list())
 }
 
 #[cfg(test)]
@@ -125,8 +116,8 @@ mod tests {
     use crate::kosong::contract::provider::{GenerateOptions, StreamedMessage, ThinkingEffort};
     use crate::kosong::contract::tool::Tool;
     use async_trait::async_trait;
-    use std::io;
     use parking_lot::Mutex;
+    use std::io;
 
     struct FakeChatProvider;
 

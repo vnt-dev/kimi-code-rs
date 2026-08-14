@@ -272,8 +272,8 @@ fn truncate_chars(value: &str, maximum: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use parking_lot::Mutex;
+    use std::collections::HashMap;
 
     use async_trait::async_trait;
     use tokio::{

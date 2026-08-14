@@ -4,13 +4,9 @@
 //! The format gate, compression ladder, caption helpers, content-part
 //! integration, and crop path are translated here.
 
-use std::{
-    fmt,
-    io::Cursor,
-    time::Instant,
-};
-use std::sync::{Arc, OnceLock};
 use parking_lot::Mutex;
+use std::sync::{Arc, OnceLock};
+use std::{fmt, io::Cursor, time::Instant};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::future::BoxFuture;
@@ -42,9 +38,7 @@ static CONFIGURED_MAX_EDGE: OnceLock<Mutex<Option<u32>>> = OnceLock::new();
 static CONFIGURED_READ_BUDGET: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
 
 pub fn set_configured_max_image_edge_px(value: Option<u64>) {
-    *CONFIGURED_MAX_EDGE
-        .get_or_init(|| Mutex::new(None))
-        .lock() = value
+    *CONFIGURED_MAX_EDGE.get_or_init(|| Mutex::new(None)).lock() = value
         .filter(|v| *v > 0)
         .map(|v| v.min(u32::MAX as u64) as u32);
 }

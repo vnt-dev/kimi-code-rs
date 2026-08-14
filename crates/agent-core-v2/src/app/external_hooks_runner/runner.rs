@@ -364,10 +364,7 @@ mod tests {
         assert_eq!(input["session_id"], "ses_1");
         assert_eq!(input["cwd"], "caller-override");
         assert_eq!(input["tool_name"], "Bash");
-        assert_eq!(
-            *triggered.lock(),
-            [("PreToolUse".into(), "Bash".into(), 1)]
-        );
+        assert_eq!(*triggered.lock(), [("PreToolUse".into(), "Bash".into(), 1)]);
         assert_eq!(
             *resolved.lock(),
             [("PreToolUse".into(), "Bash".into(), "allow".into(), None)]

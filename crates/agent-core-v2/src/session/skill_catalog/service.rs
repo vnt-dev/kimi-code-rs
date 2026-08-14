@@ -2,9 +2,8 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/sessionSkillCatalog/skillCatalogService.ts`.
 
-
-use parking_lot::RwLock;
 use parking_lot::Mutex;
+use parking_lot::RwLock;
 use std::sync::Arc;
 
 use async_trait::async_trait;

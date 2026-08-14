@@ -129,11 +129,7 @@ impl FlagServiceContract for FlagService {
     // Original: FlagService.explain().
     fn explain(&self, id: &str) -> Option<ExperimentalFeatureState> {
         let definition = self.registry.get(id)?;
-        let config_value = self
-            .config_overrides
-            .lock()
-            .get(&definition.id)
-            .copied();
+        let config_value = self.config_overrides.lock().get(&definition.id).copied();
         if parse_boolean_env(self.bootstrap.get_env(MASTER_ENV)) == Some(true) {
             return Some(Self::state(
                 definition,

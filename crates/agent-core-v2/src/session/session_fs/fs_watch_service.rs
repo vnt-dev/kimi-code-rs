@@ -2,12 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/sessionFs/fsWatchService.ts`.
 
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use std::sync::{Arc};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use indexmap::IndexSet;
@@ -211,13 +211,7 @@ impl SessionFsWatchServiceContract for SessionFsWatchService {
     }
 
     fn watched_paths(&self) -> Vec<String> {
-        self.inner
-            .state
-            .lock()
-            .watched
-            .iter()
-            .cloned()
-            .collect()
+        self.inner.state.lock().watched.iter().cloned().collect()
     }
 
     fn on_did_change_files(&self) -> Event<FsChangeEvent> {
@@ -455,12 +449,15 @@ pub fn register_session_fs_watch_service() {
 
 #[cfg(test)]
 mod tests {
+    use parking_lot::Mutex;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     use std::{
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-    use parking_lot::Mutex;
 
     use crate::{
         os::{

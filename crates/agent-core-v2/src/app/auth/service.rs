@@ -3,21 +3,20 @@
 //! Original: `packages/agent-core-v2/src/app/auth/authService.ts`,
 //! `OAuthService`.
 
-use std::{
-    collections::HashMap,
-    num::NonZeroU64,
-    time::Duration,
-};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use parking_lot::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::{collections::HashMap, error::Error, num::NonZeroU64, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use kimi_code_oauth::{
     BearerTokenProvider, CredentialKind, DeviceAuthorization, DeviceCodeObserver,
     KIMI_CODE_PROVIDER_NAME, KimiOAuthLoginOptions, KimiOAuthTokenRef, LoginAbortSignal,
-    ManagedKimiCodeApplyOptions, OAuthManagerError, apply_managed_kimi_code_config,
-    clear_managed_kimi_code_config, fetch_managed_kimi_code_models,
+    ManagedKimiCodeApplyOptions, OAuthError, OAuthErrorKind, OAuthManagerError,
+    apply_managed_kimi_code_config, clear_managed_kimi_code_config, fetch_managed_kimi_code_models,
 };
 use serde_json::{Map, Value};
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
@@ -485,24 +484,14 @@ impl OAuthServiceContract for OAuthService {
                 }
                 Err(error) => {
                     let message = error.to_string();
-                    let status = if state_for_task
-                        .lock()
-                        .cancelled
-                        .load(Ordering::Acquire)
-                    {
+                    let status = if state_for_task.lock().cancelled.load(Ordering::Acquire) {
                         OAuthFlowStatus::Cancelled
-                    } else if message.to_lowercase().contains("expired")
-                        || message.to_lowercase().contains("timeout")
-                    {
+                    } else if is_oauth_expired(&error) {
                         OAuthFlowStatus::Expired
                     } else {
                         OAuthFlowStatus::Denied
                     };
-                    Self::set_terminal(
-                        &mut state_for_task.lock(),
-                        status,
-                        Some(message.clone()),
-                    );
+                    Self::set_terminal(&mut state_for_task.lock(), status, Some(message.clone()));
                     Self::schedule_cleanup(
                         flows_for_task,
                         provider_for_task.clone(),
@@ -643,6 +632,23 @@ fn positive_seconds(value: u64) -> NonZeroU64 {
 
 fn operation_error(error: impl std::fmt::Display) -> AuthOperationError {
     AuthOperationError::new(error.to_string())
+}
+
+/// Classifies the device-flow outcome by error type instead of message text.
+/// The login error chain ends at `OAuthError`, which carries a typed
+/// `OAuthErrorKind` for expired/timeout device codes.
+fn is_oauth_expired(error: &(dyn Error + 'static)) -> bool {
+    let mut current: Option<&(dyn Error + 'static)> = Some(error);
+    while let Some(candidate) = current {
+        if let Some(oauth) = candidate.downcast_ref::<OAuthError>() {
+            return matches!(
+                oauth.kind(),
+                OAuthErrorKind::DeviceCodeExpired | OAuthErrorKind::DeviceCodeTimeout
+            );
+        }
+        current = candidate.source();
+    }
+    false
 }
 
 pub fn register_oauth_service() {

@@ -3,12 +3,9 @@
 //! Original: `session/agentLifecycle/agentLifecycleService.ts`, registry
 //! portions of `create()`, `get()`, `list()`, and `remove()`.
 
-use std::{
-    collections::HashMap,
-    fmt,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{collections::HashMap, fmt};
 
 use futures_util::{
     FutureExt,
@@ -107,9 +104,7 @@ impl<B: AgentScopeBootstrap + 'static> AgentLifecycleRegistry<B> {
         }
         if explicit_id.is_none() {
             let handle = self.bootstrap.create(agent_id.clone(), options).await?;
-            self.handles
-                .lock()
-                .insert(agent_id, handle.clone());
+            self.handles.lock().insert(agent_id, handle.clone());
             self.did_create.fire(&handle);
             return Ok(handle);
         }
@@ -134,9 +129,7 @@ impl<B: AgentScopeBootstrap + 'static> AgentLifecycleRegistry<B> {
         if owner {
             self.creating.lock().remove(&agent_id);
             if let Ok(handle) = &result {
-                self.handles
-                    .lock()
-                    .insert(agent_id, handle.clone());
+                self.handles.lock().insert(agent_id, handle.clone());
                 self.did_create.fire(handle);
             }
         }

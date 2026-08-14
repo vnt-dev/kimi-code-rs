@@ -161,12 +161,12 @@ pub fn register_extra_file_skill_source() {
 
 #[cfg(test)]
 mod tests {
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::{
         collections::HashMap,
         path::{Path, PathBuf},
     };
-    use std::sync::{atomic::{AtomicU64, Ordering}};
-    use parking_lot::Mutex;
 
     use serde_json::{Map, Value, json};
 

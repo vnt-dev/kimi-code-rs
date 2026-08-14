@@ -248,12 +248,7 @@ impl Scope {
     }
 
     pub fn child_ids(&self) -> Vec<String> {
-        self.inner
-            .children
-            .lock()
-            .keys()
-            .cloned()
-            .collect()
+        self.inner.children.lock().keys().cloned().collect()
     }
 
     fn assert_not_disposed(&self) -> Result<(), DiError> {

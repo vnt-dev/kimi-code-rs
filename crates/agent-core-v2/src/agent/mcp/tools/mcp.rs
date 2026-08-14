@@ -110,8 +110,8 @@ impl ExecutableTool for McpTool {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
     use parking_lot::Mutex;
+    use std::io;
 
     use super::*;
     use crate::{

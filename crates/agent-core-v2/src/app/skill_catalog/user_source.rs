@@ -169,12 +169,9 @@ pub fn register_user_file_skill_source() {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        path::PathBuf,
-    };
-    use std::sync::{atomic::{AtomicU64, Ordering}};
     use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{collections::HashMap, path::PathBuf};
 
     use serde_json::{Map, Value};
 

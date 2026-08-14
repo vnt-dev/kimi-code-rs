@@ -1,11 +1,6 @@
-use std::{
-    collections::HashMap,
-    error::Error,
-    fmt,
-    hash::Hash,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{collections::HashMap, error::Error, fmt, hash::Hash};
 
 pub type DisposableHandle = Arc<dyn Disposable>;
 pub type DisposeResult = Result<(), DisposeError>;

@@ -291,9 +291,9 @@ pub fn register_edit_tool() {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::{Arc};
     use parking_lot::Mutex;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
     use async_trait::async_trait;
 

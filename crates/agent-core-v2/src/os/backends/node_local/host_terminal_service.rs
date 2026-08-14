@@ -2,12 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/os/backends/node-local/hostTerminalService.ts`.
 
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 use std::{
     collections::HashMap,
     io::{Read, Write},
 };
-use std::sync::{Arc, Weak};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -123,9 +123,7 @@ impl HostTerminalService for LocalHostTerminalService {
             data,
             exit,
         });
-        self.processes
-            .lock()
-            .push(Arc::downgrade(&process));
+        self.processes.lock().push(Arc::downgrade(&process));
         Ok(process)
     }
 }

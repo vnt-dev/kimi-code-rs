@@ -49,10 +49,7 @@ impl ToolExecutorState {
 
     /// Original: `trackToolCall()` consumes an entry after reporting it.
     pub fn take_dup_type(&self, tool_call_id: &str) -> Option<ToolCallDupType> {
-        self.inner
-            .lock()
-            .tool_call_dup_types
-            .remove(tool_call_id)
+        self.inner.lock().tool_call_dup_types.remove(tool_call_id)
     }
 
     pub fn tool_call_guard(&self) -> Option<ToolCallGuard> {
@@ -60,10 +57,7 @@ impl ToolExecutorState {
     }
 
     pub fn unavailable_tool_describer(&self) -> Option<UnavailableToolDescriber> {
-        self.inner
-            .lock()
-            .unavailable_tool_describer
-            .clone()
+        self.inner.lock().unavailable_tool_describer.clone()
     }
 
     pub fn missing_tool_describer(&self) -> Option<MissingToolDescriber> {

@@ -334,7 +334,12 @@ async fn upload_handler(
             serde_json::to_value(file).unwrap_or(Value::Null),
         ))
         .into_response(),
-        Err(error) => rpc_http_error(StatusCode::OK, request_id, "transport.error", error),
+        Err(error) => rpc_http_error(
+            StatusCode::OK,
+            request_id,
+            "transport.error",
+            error.to_string(),
+        ),
     }
 }
 

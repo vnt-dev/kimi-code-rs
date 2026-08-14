@@ -4,7 +4,7 @@
 //! `app/auth/webSearch/providers/moonshot-web-search.ts`.
 
 use indexmap::IndexMap;
-use kimi_code_oauth::BearerTokenProvider;
+use kimi_code_oauth::{BearerTokenProvider, OAuthManagerError};
 use reqwest::{
     Client, Response,
     header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue},
@@ -14,6 +14,26 @@ use serde_json::Value;
 use crate::app::auth::web_search::{
     WebSearchError, WebSearchOptions, WebSearchProvider, WebSearchResult,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum MoonshotWebSearchError {
+    #[error("Search cancelled: {0}")]
+    Cancelled(String),
+    #[error("Moonshot search request failed: HTTP {status} (auth/unauthorized). {detail}")]
+    Unauthorized { status: u16, detail: String },
+    #[error("Moonshot search request failed: HTTP {status}. {detail}")]
+    HttpStatus { status: u16, detail: String },
+    #[error(transparent)]
+    Request(#[from] reqwest::Error),
+    #[error("Moonshot search service is not configured: missing API key or token provider.")]
+    NotConfigured,
+    #[error(transparent)]
+    Token(#[from] OAuthManagerError),
+    #[error(transparent)]
+    HeaderValue(#[from] reqwest::header::InvalidHeaderValue),
+    #[error(transparent)]
+    HeaderName(#[from] reqwest::header::InvalidHeaderName),
+}
 
 pub struct MoonshotWebSearchProviderOptions {
     pub token_provider: Option<BearerTokenProvider>,
@@ -65,10 +85,9 @@ impl MoonshotWebSearchProvider {
             .send();
         if let Some(signal) = &options.signal {
             tokio::select! {
-                reason = signal.cancelled() => Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    format!("Search cancelled: {reason}"),
-                ))),
+                reason = signal.cancelled() => Err(Box::new(
+                    MoonshotWebSearchError::Cancelled(reason.to_string()),
+                )),
                 response = request => Ok(response?),
             }
         } else {
@@ -83,17 +102,13 @@ impl MoonshotWebSearchProvider {
                 Err(_) if self.api_key.as_deref().is_some_and(|key| !key.is_empty()) => {
                     return Ok(self.api_key.clone().expect("checked as present"));
                 }
-                Err(error) => return Err(Box::new(error)),
+                Err(error) => return Err(Box::new(MoonshotWebSearchError::Token(error))),
             }
         }
         self.api_key
             .clone()
             .filter(|key| !key.is_empty())
-            .ok_or_else(|| {
-                Box::new(std::io::Error::other(
-                    "Moonshot search service is not configured: missing API key or token provider.",
-                )) as WebSearchError
-            })
+            .ok_or_else(|| Box::new(MoonshotWebSearchError::NotConfigured) as WebSearchError)
     }
 }
 
@@ -111,19 +126,17 @@ impl WebSearchProvider for MoonshotWebSearchProvider {
         let status = response.status().as_u16();
         if status == 401 {
             let detail = response.text().await.unwrap_or_default();
-            return Err(Box::new(std::io::Error::other(
-                format!("Moonshot search request failed: HTTP 401 (auth/unauthorized). {detail}")
-                    .trim()
-                    .to_owned(),
-            )));
+            return Err(Box::new(MoonshotWebSearchError::Unauthorized {
+                status,
+                detail: detail.trim().to_owned(),
+            }));
         }
         if status != 200 {
             let detail = response.text().await.unwrap_or_default();
-            return Err(Box::new(std::io::Error::other(
-                format!("Moonshot search request failed: HTTP {status}. {detail}")
-                    .trim()
-                    .to_owned(),
-            )));
+            return Err(Box::new(MoonshotWebSearchError::HttpStatus {
+                status,
+                detail: detail.trim().to_owned(),
+            }));
         }
 
         let json: Value = response.json().await?;

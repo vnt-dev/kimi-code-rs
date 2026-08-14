@@ -2,7 +2,6 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/agentProfileCatalog/contribution.ts`.
 
-
 use parking_lot::RwLock;
 use std::sync::{Arc, LazyLock};
 
@@ -14,8 +13,7 @@ static PROFILE_CONTRIBUTIONS: LazyLock<RwLock<Vec<Arc<AgentProfile>>>> =
 // Original: registerAgentProfile(). A replacement is removed from its old
 // position and appended, preserving the source's contribution order.
 pub fn register_agent_profile(definition: AgentProfile) {
-    let mut contributions = PROFILE_CONTRIBUTIONS
-        .write();
+    let mut contributions = PROFILE_CONTRIBUTIONS.write();
     if let Some(index) = contributions
         .iter()
         .position(|profile| profile.name == definition.name)
@@ -28,9 +26,7 @@ pub fn register_agent_profile(definition: AgentProfile) {
 // Original: getAgentProfileContributions(). Arc cloning snapshots ownership,
 // while the catalog service still snapshots the list only at construction.
 pub fn get_agent_profile_contributions() -> Vec<Arc<AgentProfile>> {
-    PROFILE_CONTRIBUTIONS
-        .read()
-        .clone()
+    PROFILE_CONTRIBUTIONS.read().clone()
 }
 
 #[cfg(test)]

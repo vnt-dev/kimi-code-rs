@@ -2,12 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/llmRequester/llmRequesterService.ts`.
 
+use parking_lot::Mutex;
+use std::sync::{Arc, LazyLock};
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
 };
-use std::sync::{Arc, LazyLock};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, future::FutureExt};
@@ -278,10 +278,7 @@ impl AgentLlmRequesterService {
         source: Option<&AgentLlmRequestSource>,
     ) -> Option<MediaStripSnapshot> {
         let turn_id = source_turn_id(source)?;
-        self.media_stripped_turns
-            .lock()
-            .get(&turn_id)
-            .cloned()
+        self.media_stripped_turns.lock().get(&turn_id).cloned()
     }
 
     fn is_media_degraded_recovery_turn(&self, source: Option<&AgentLlmRequestSource>) -> bool {
@@ -944,9 +941,7 @@ mod tests {
         }
 
         fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
-            Box::pin(stream::iter(
-                self.0.lock().clone().into_iter().map(Ok),
-            ))
+            Box::pin(stream::iter(self.0.lock().clone().into_iter().map(Ok)))
         }
 
         async fn rewrite_values(

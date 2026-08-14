@@ -3,12 +3,9 @@
 //! Original:
 //! `packages/agent-core-v2/src/agent/shellCommand/shellCommandService.ts`.
 
-use std::{
-    collections::HashMap,
-    io,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{collections::HashMap, io};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -299,9 +296,7 @@ impl AgentShellCommandService {
         let command_id = input.command_id.clone();
         let on_foreground_task_start = Arc::new(move |task_id: String| {
             if let Some(command_id) = &command_id {
-                tasks
-                    .lock()
-                    .insert(command_id.clone(), task_id.clone());
+                tasks.lock().insert(command_id.clone(), task_id.clone());
                 event_bus.publish_typed(ShellStartedEvent {
                     command_id: command_id.clone(),
                     task_id,

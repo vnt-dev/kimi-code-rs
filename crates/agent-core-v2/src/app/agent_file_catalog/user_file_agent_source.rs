@@ -3,10 +3,7 @@
 //! Original: `packages/agent-core-v2/src/app/agentFileCatalog/userFileAgentSource.ts`.
 
 use parking_lot::RwLock;
-use std::{
-    ops::Deref,
-    sync::{Arc},
-};
+use std::{ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 
@@ -131,9 +128,7 @@ impl AgentProfileSourceContract for UserFileAgentSource {
             discover_agent_files(self.fs.0.as_ref(), &roots, Some(&discovery_warn)).await?;
         let default_profile = Arc::clone(&self.default_profile);
         let base_prompt: AgentSystemPrompt = Arc::new(move |context: &AgentProfileContext| {
-            default_profile
-                .read()
-                .render_system_prompt(context)
+            default_profile.read().render_system_prompt(context)
         });
         let mut contribution = profiles_from_discovery(discovery, base_prompt);
         if let Some(system_md) = system_md {

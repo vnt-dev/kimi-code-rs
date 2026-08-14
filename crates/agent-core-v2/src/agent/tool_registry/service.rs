@@ -1,5 +1,8 @@
 use parking_lot::Mutex;
-use std::sync::{Arc, Weak, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicU64, Ordering},
+};
 
 use indexmap::IndexMap;
 

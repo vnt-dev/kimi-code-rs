@@ -2,15 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/fullCompaction/fullCompactionService.ts`.
 
-use std::{
-    collections::HashMap,
-    error::Error,
-    fmt,
-    panic::AssertUnwindSafe,
-    time::Instant,
-};
-use std::sync::{Arc, OnceLock, Weak, atomic::{AtomicBool, Ordering}};
 use parking_lot::Mutex;
+use std::sync::{
+    Arc, OnceLock, Weak,
+    atomic::{AtomicBool, Ordering},
+};
+use std::{collections::HashMap, error::Error, fmt, panic::AssertUnwindSafe, time::Instant};
 
 use async_trait::async_trait;
 use futures_util::{FutureExt, future::Shared};
@@ -805,8 +802,7 @@ impl AgentFullCompactionService {
                 .inject_after_compaction()
                 .await
                 .map_err(FullCompactionError::from)?;
-            self.state.lock().last_compacted_token_count =
-                Some(self.token_count_with_pending());
+            self.state.lock().last_compacted_token_count = Some(self.token_count_with_pending());
             if !self.mark_completed(active)? {
                 return Err(compaction_cancelled_reason(active));
             }

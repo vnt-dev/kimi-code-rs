@@ -361,9 +361,7 @@ mod tests {
         }
 
         fn read_values(&self, _: &str, _: &str) -> AppendLogValueStream {
-            Box::pin(stream::iter(
-                self.0.lock().clone().into_iter().map(Ok),
-            ))
+            Box::pin(stream::iter(self.0.lock().clone().into_iter().map(Ok)))
         }
 
         async fn rewrite_values(

@@ -1019,12 +1019,8 @@ mod tests {
     //!
     //! Original: `packages/agent-core-v2/test/app/capability/kimiCu.test.ts`.
 
-    use std::{
-        collections::VecDeque,
-        path::PathBuf,
-        time::Duration,
-    };
     use parking_lot::Mutex;
+    use std::{collections::VecDeque, path::PathBuf, time::Duration};
 
     use serde_json::json;
 
@@ -1319,11 +1315,11 @@ mod tests {
             let key = format!("{} {}", command, args.join(" "));
             self.calls.lock().push(key);
             if args.iter().any(|arg| arg == "-Command") {
-                let (code, stdout, stderr) = self
-                    .doctor_results
-                    .lock()
-                    .pop_front()
-                    .unwrap_or((1, String::new(), "unexpected doctor".to_owned()));
+                let (code, stdout, stderr) = self.doctor_results.lock().pop_front().unwrap_or((
+                    1,
+                    String::new(),
+                    "unexpected doctor".to_owned(),
+                ));
                 return Ok(Arc::new(FakeHostProcess {
                     code,
                     stdout,
@@ -1621,10 +1617,7 @@ mod tests {
             migrated["mcpServers"]["custom"],
             json!({ "command": "custom-mcp", "args": [] })
         );
-        assert_eq!(
-            step_names(&reports.lock()),
-            vec!["plugin", "mcp-config"]
-        );
+        assert_eq!(step_names(&reports.lock()), vec!["plugin", "mcp-config"]);
         rm_force(&root).await.unwrap();
     }
 

@@ -80,7 +80,10 @@ pub async fn read_stream(stream: SharedProcessReader) -> std::io::Result<String>
 #[cfg(test)]
 mod tests {
     use parking_lot::Mutex;
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     use async_trait::async_trait;
     use tokio::{

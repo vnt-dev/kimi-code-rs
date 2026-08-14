@@ -535,28 +535,26 @@ pub fn classify_api_error(error: &ChatProviderError) -> ApiErrorClassification {
     let kind = match error {
         ChatProviderError::ApiContextOverflow { .. } => ApiErrorKind::ContextOverflow,
         ChatProviderError::ApiProviderOverloaded { .. } => ApiErrorKind::Overloaded,
-        error if error.status_data().is_some() => {
-            match status_code {
-                Some(status) => {
-                    if is_context_overflow_status_error(status, error.message()) {
-                        ApiErrorKind::ContextOverflow
-                    } else if status == 429 {
-                        ApiErrorKind::RateLimit
-                    } else if status == 529 {
-                        ApiErrorKind::Overloaded
-                    } else if matches!(status, 401 | 403) {
-                        ApiErrorKind::Auth
-                    } else if status >= 500 {
-                        ApiErrorKind::Server5xx
-                    } else if status >= 400 {
-                        ApiErrorKind::Client4xx
-                    } else {
-                        ApiErrorKind::Other
-                    }
+        error if error.status_data().is_some() => match status_code {
+            Some(status) => {
+                if is_context_overflow_status_error(status, error.message()) {
+                    ApiErrorKind::ContextOverflow
+                } else if status == 429 {
+                    ApiErrorKind::RateLimit
+                } else if status == 529 {
+                    ApiErrorKind::Overloaded
+                } else if matches!(status, 401 | 403) {
+                    ApiErrorKind::Auth
+                } else if status >= 500 {
+                    ApiErrorKind::Server5xx
+                } else if status >= 400 {
+                    ApiErrorKind::Client4xx
+                } else {
+                    ApiErrorKind::Other
                 }
-                None => ApiErrorKind::Other,
             }
-        }
+            None => ApiErrorKind::Other,
+        },
         ChatProviderError::ApiConnection { .. } => ApiErrorKind::Network,
         ChatProviderError::ApiTimeout { .. } => ApiErrorKind::Timeout,
         ChatProviderError::ApiEmptyResponse { .. } => ApiErrorKind::EmptyResponse,

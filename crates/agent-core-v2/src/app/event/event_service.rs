@@ -89,15 +89,11 @@ mod tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let first = Arc::clone(&received);
         let subscription = service.subscribe(Arc::new(move |event| {
-            first
-                .lock()
-                .push(format!("sub:{}", event.event_type));
+            first.lock().push(format!("sub:{}", event.event_type));
         }));
         let second = Arc::clone(&received);
         let event_subscription = service.on_did_publish().subscribe(move |event| {
-            second
-                .lock()
-                .push(format!("event:{}", event.event_type));
+            second.lock().push(format!("event:{}", event.event_type));
         });
         service.publish(GlobalDomainEvent {
             event_type: "a".into(),

@@ -99,12 +99,9 @@ pub fn register_plugin_skill_source() {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        io,
-    };
-    use std::sync::{atomic::{AtomicUsize, Ordering}};
     use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{collections::HashMap, io};
 
     use super::*;
     use crate::{
@@ -257,10 +254,7 @@ mod tests {
             contribution.scanned_roots,
             Some(vec!["/plugins/demo/skills".into()])
         );
-        assert_eq!(
-            discovery.roots.lock().as_slice(),
-            plugins.roots.as_slice()
-        );
+        assert_eq!(discovery.roots.lock().as_slice(), plugins.roots.as_slice());
         plugins.reloaded.fire(&ReloadSummary::default());
         assert_eq!(changes.load(Ordering::Relaxed), 1);
         subscription.dispose().unwrap();

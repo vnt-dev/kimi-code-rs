@@ -372,10 +372,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            auths.lock()[0].api_key.as_deref(),
-            Some("request-token")
-        );
+        assert_eq!(auths.lock()[0].api_key.as_deref(), Some("request-token"));
         assert_eq!(captured.lock()[0].filename, "upload.mp4");
         assert_eq!(
             part,

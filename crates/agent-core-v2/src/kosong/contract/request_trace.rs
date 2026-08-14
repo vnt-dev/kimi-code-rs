@@ -2,9 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/kosong/contract/requestTrace.ts`.
 
-use std::fmt;
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

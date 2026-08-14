@@ -31,8 +31,8 @@ pub const BLOB_STORE_SERVICE_ID: ServiceIdentifier<BlobStoreHandle> =
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use parking_lot::Mutex;
+    use std::collections::HashMap;
 
     use futures_util::{StreamExt, stream};
 
@@ -53,11 +53,7 @@ mod tests {
         }
 
         async fn get(&self, scope: &str, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
-            Ok(self
-                .values
-                .lock()
-                .get(&(scope.into(), key.into()))
-                .cloned())
+            Ok(self.values.lock().get(&(scope.into(), key.into())).cloned())
         }
 
         fn get_stream(
@@ -66,25 +62,16 @@ mod tests {
             key: &str,
             _range: Option<BlobReadRange>,
         ) -> StorageByteStream {
-            let value = self
-                .values
-                .lock()
-                .get(&(scope.into(), key.into()))
-                .cloned();
+            let value = self.values.lock().get(&(scope.into(), key.into())).cloned();
             Box::pin(stream::iter(value.into_iter().map(Ok)))
         }
 
         async fn has(&self, scope: &str, key: &str) -> Result<bool, StorageError> {
-            Ok(self
-                .values
-                .lock()
-                .contains_key(&(scope.into(), key.into())))
+            Ok(self.values.lock().contains_key(&(scope.into(), key.into())))
         }
 
         async fn delete(&self, scope: &str, key: &str) -> Result<(), StorageError> {
-            self.values
-                .lock()
-                .remove(&(scope.into(), key.into()));
+            self.values.lock().remove(&(scope.into(), key.into()));
             Ok(())
         }
 

@@ -2,14 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/sessionAgentProfileCatalog/sessionAgentProfileCatalogService.ts`.
 
-
 use parking_lot::RwLock;
-use std::{
-    collections::HashMap,
-    error::Error,
-    fmt,
-};
 use std::sync::Arc;
+use std::{collections::HashMap, error::Error, fmt};
 
 use parking_lot::Mutex;
 
@@ -293,12 +288,7 @@ impl SessionAgentProfileCatalogContract for SessionAgentProfileCatalogService {
             .ok_or(MissingDefaultAgentProfile)
     }
     fn list(&self) -> Vec<Arc<AgentProfile>> {
-        self.state
-            .read()
-            .merged
-            .values()
-            .cloned()
-            .collect()
+        self.state.read().merged.values().cloned().collect()
     }
     async fn load(&self) -> Result<(), SessionAgentProfileCatalogError> {
         self.ensure_ready().await

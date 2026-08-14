@@ -7,13 +7,9 @@
 //! filesystem, network, and token work remains in the injected services and
 //! requester; model resolution itself is synchronous.
 
-use std::{
-    error::Error,
-    ops::Deref,
-    time::Instant,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{error::Error, ops::Deref, time::Instant};
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -161,9 +157,7 @@ impl ModelCatalog {
         ] {
             let cache = Arc::clone(&cache);
             disposables.add(event.subscribe(move |_| {
-                cache
-                    .lock()
-                    .clear();
+                cache.lock().clear();
             }));
         }
         Self {
@@ -180,18 +174,11 @@ impl ModelCatalog {
 
     // Original: ModelCatalog.notifyConfigChanged().
     pub fn notify_config_changed(&self) {
-        self.cache
-            .lock()
-            .clear();
+        self.cache.lock().clear();
     }
 
     fn entry(&self, id: &str) -> ModelCatalogResult<Arc<CatalogEntry>> {
-        if let Some(entry) = self
-            .cache
-            .lock()
-            .get(id)
-            .cloned()
-        {
+        if let Some(entry) = self.cache.lock().get(id).cloned() {
             return Ok(entry);
         }
         let mut trace = ResolutionTraceCollector::default();
@@ -205,9 +192,7 @@ impl ModelCatalog {
             requester,
             trace: Arc::new(trace),
         });
-        let mut cache = self
-            .cache
-            .lock();
+        let mut cache = self.cache.lock();
         Ok(cache
             .entry(id.to_owned())
             .or_insert_with(|| Arc::clone(&entry))

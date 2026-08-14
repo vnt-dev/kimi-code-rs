@@ -516,9 +516,9 @@ pub fn register_agent_swarm_tool() {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::{atomic::{AtomicUsize, Ordering}};
     use parking_lot::Mutex;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::{
@@ -570,9 +570,7 @@ mod tests {
         }
 
         async fn ensure_profile_allowed(&self, profile_name: &str) -> Result<(), BoxError> {
-            self.profile_checks
-                .lock()
-                .push(profile_name.into());
+            self.profile_checks.lock().push(profile_name.into());
             if let Some(error) = self.profile_error.lock().clone() {
                 Err(other_error(error))
             } else {
@@ -767,10 +765,7 @@ mod tests {
 
         assert!(!result.is_error);
         assert_eq!(services.enter_calls.load(Ordering::Relaxed), 1);
-        assert_eq!(
-            services.profile_checks.lock().as_slice(),
-            ["explore"]
-        );
+        assert_eq!(services.profile_checks.lock().as_slice(), ["explore"]);
         let calls = services.run_calls.lock();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].caller_agent_id, "main");

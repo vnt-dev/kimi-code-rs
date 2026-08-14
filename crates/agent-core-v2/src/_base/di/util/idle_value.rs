@@ -3,13 +3,13 @@
 //! Original: `packages/agent-core-v2/src/_base/di/util/idleValue.ts`,
 //! `GlobalIdleValue`.
 
+use parking_lot::{Condvar, Mutex};
+use std::sync::Arc;
 use std::{
     fmt,
     panic::{AssertUnwindSafe, catch_unwind},
     thread,
 };
-use std::sync::Arc;
-use parking_lot::{Condvar, Mutex};
 
 type Executor<T> = Box<dyn FnOnce() -> T + Send + 'static>;
 
@@ -78,8 +78,7 @@ where
     /// callback; a later `value()` call still evaluates the original executor.
     pub fn dispose(&self) {
         let (state, _) = &*self.state;
-        let mut state = state
-            .lock();
+        let mut state = state.lock();
         if !state.started && !state.initialized {
             state.cancelled = true;
         }
@@ -93,8 +92,7 @@ where
     pub fn value(&self) -> Result<Arc<T>, IdleValueError> {
         claim_and_run(&self.state, true);
         let (lock, ready) = &*self.state;
-        let mut state = lock
-            .lock();
+        let mut state = lock.lock();
         while !state.initialized {
             ready.wait(&mut state);
         }
@@ -109,10 +107,7 @@ where
 
     /// Original: `GlobalIdleValue.isInitialized`.
     pub fn is_initialized(&self) -> bool {
-        self.state
-            .0
-            .lock()
-            .initialized
+        self.state.0.lock().initialized
     }
 }
 
@@ -122,8 +117,7 @@ where
 {
     let executor = {
         let (lock, _) = &**state;
-        let mut state = lock
-            .lock();
+        let mut state = lock.lock();
         if state.initialized || state.started || (!force && state.cancelled) {
             return;
         }
@@ -135,8 +129,7 @@ where
     };
     let result = catch_unwind(AssertUnwindSafe(executor));
     let (lock, ready) = &**state;
-    let mut state = lock
-        .lock();
+    let mut state = lock.lock();
     match result {
         Ok(value) => state.value = Some(Arc::new(value)),
         Err(payload) => {

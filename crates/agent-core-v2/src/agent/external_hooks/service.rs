@@ -8,7 +8,10 @@
 //! notification tasks when the agent scope is disposed.
 
 use parking_lot::Mutex;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};

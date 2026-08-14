@@ -14,6 +14,7 @@ use crate::{
     agent::tool_registry::{ToolContributionOptions, register_tool},
     app::auth::web_search::{
         WEB_SEARCH_PROVIDER_SERVICE_ID, WebSearchOptions, WebSearchProviderHandle, WebSearchResult,
+        providers::moonshot_web_search::MoonshotWebSearchError,
     },
     kosong::contract::tool::Tool,
     tool::{
@@ -24,6 +25,7 @@ use crate::{
         rule_match::{literal_rule_pattern, matches_glob_rule_subject},
     },
 };
+use kimi_code_oauth::{OAuthError, OAuthErrorKind};
 
 const WEB_SEARCH_DESCRIPTION: &str = include_str!("web-search.md");
 
@@ -166,8 +168,10 @@ fn format_search_results(results: &[WebSearchResult]) -> ExecutableToolResult {
 
 fn classify_search_error(error: &(dyn Error + Send + Sync + 'static)) -> String {
     let message = error.to_string();
-    let lower = message.to_lowercase();
-    if lower.contains("abort") || lower.contains("cancel") {
+    if error
+        .downcast_ref::<MoonshotWebSearchError>()
+        .is_some_and(|error| matches!(error, MoonshotWebSearchError::Cancelled(_)))
+    {
         return format!("Search cancelled: {message}");
     }
     if error
@@ -176,24 +180,45 @@ fn classify_search_error(error: &(dyn Error + Send + Sync + 'static)) -> String 
         || error
             .downcast_ref::<std::io::Error>()
             .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
-        || lower.contains("timed out")
-        || lower.contains("timeout")
     {
         return format!("Search timed out: {message}");
     }
-    if lower.contains("401") || lower.contains("unauthorized") || lower.contains("auth") {
+    if is_auth_error(error) {
         return format!("Search failed (authentication): {message}");
     }
     if error
         .downcast_ref::<reqwest::Error>()
         .is_some_and(|error| !error.is_decode())
-        || lower.contains("http ")
-        || lower.contains("network")
-        || lower.contains("fetch")
     {
         return format!("Search failed (network): {message}");
     }
     format!("Search failed: {message}")
+}
+
+fn is_auth_error(error: &(dyn Error + 'static)) -> bool {
+    let mut current: Option<&(dyn Error + 'static)> = Some(error);
+    while let Some(candidate) = current {
+        if let Some(search) = candidate.downcast_ref::<MoonshotWebSearchError>()
+            && matches!(search, MoonshotWebSearchError::Unauthorized { .. })
+        {
+            return true;
+        }
+        if let Some(reqwest_error) = candidate.downcast_ref::<reqwest::Error>()
+            && matches!(
+                reqwest_error.status(),
+                Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
+            )
+        {
+            return true;
+        }
+        if let Some(oauth) = candidate.downcast_ref::<OAuthError>()
+            && oauth.kind() == OAuthErrorKind::Unauthorized
+        {
+            return true;
+        }
+        current = candidate.source();
+    }
+    false
 }
 
 fn preview_query(query: &str) -> String {
@@ -316,15 +341,47 @@ mod tests {
             format_search_results(&[]).output,
             ExecutableToolOutput::Text(ref output) if output == "No search results found."
         ));
-        let authentication = std::io::Error::other("HTTP 401 unauthorized");
-        assert!(
-            classify_search_error(&authentication).starts_with("Search failed (authentication):")
-        );
         let timeout = std::io::Error::new(std::io::ErrorKind::TimedOut, "request timed out");
         assert!(classify_search_error(&timeout).starts_with("Search timed out:"));
         assert_eq!(
             preview_query(&"a".repeat(41)),
             format!("{}…", "a".repeat(40))
+        );
+    }
+
+    #[test]
+    fn classifies_search_errors_by_type_not_message_text() {
+        let cancelled = MoonshotWebSearchError::Cancelled("aborted".into());
+        assert_eq!(
+            classify_search_error(&cancelled),
+            "Search cancelled: Search cancelled: aborted"
+        );
+
+        let unauthorized = MoonshotWebSearchError::Unauthorized {
+            status: 401,
+            detail: "invalid token".into(),
+        };
+        assert!(
+            classify_search_error(&unauthorized).starts_with("Search failed (authentication):")
+        );
+
+        let http_status = MoonshotWebSearchError::HttpStatus {
+            status: 500,
+            detail: "boom".into(),
+        };
+        assert_eq!(
+            classify_search_error(&http_status),
+            "Search failed: Moonshot search request failed: HTTP 500. boom"
+        );
+
+        // Regression: message text mentioning "auth" must not classify as an
+        // authentication failure on its own.
+        let mentions_auth = std::io::Error::other(
+            "the server body happens to mention auth and 401 without being a token problem",
+        );
+        assert_eq!(
+            classify_search_error(&mentions_auth),
+            format!("Search failed: {}", mentions_auth)
         );
     }
 }

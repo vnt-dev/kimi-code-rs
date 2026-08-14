@@ -230,11 +230,11 @@ pub async fn rm_force(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use parking_lot::Mutex;
     use std::{
         pin::Pin,
         task::{Context, Poll},
     };
-    use parking_lot::Mutex;
 
     use futures_util::stream;
     use tokio::{

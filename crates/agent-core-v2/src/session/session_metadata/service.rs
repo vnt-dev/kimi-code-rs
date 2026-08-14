@@ -3,12 +3,12 @@
 //! Original:
 //! `packages/agent-core-v2/src/session/sessionMetadata/sessionMetadataService.ts`.
 
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::{
     collections::BTreeMap,
     time::{SystemTime, UNIX_EPOCH},
 };
-use std::sync::{Arc};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -500,11 +500,7 @@ mod tests {
     #[async_trait]
     impl AtomicDocumentStoreService for Store {
         async fn get_value(&self, scope: &str, key: &str) -> Result<Option<Value>, StorageError> {
-            Ok(self
-                .values
-                .lock()
-                .get(&(scope.into(), key.into()))
-                .cloned())
+            Ok(self.values.lock().get(&(scope.into(), key.into())).cloned())
         }
         async fn set_value(
             &self,
@@ -519,9 +515,7 @@ mod tests {
                     "test write failed",
                 ));
             }
-            self.values
-                .lock()
-                .insert((scope.into(), key.into()), value);
+            self.values.lock().insert((scope.into(), key.into()), value);
             Ok(())
         }
         async fn delete(&self, _: &str, _: &str) -> Result<(), StorageError> {
@@ -694,9 +688,7 @@ mod tests {
         }
 
         async fn delete(&self, collection: &str, key: &str) -> Result<(), QueryStoreError> {
-            self.values
-                .lock()
-                .remove(&(collection.into(), key.into()));
+            self.values.lock().remove(&(collection.into(), key.into()));
             Ok(())
         }
 

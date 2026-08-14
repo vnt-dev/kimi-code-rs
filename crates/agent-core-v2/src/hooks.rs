@@ -7,7 +7,10 @@
 //! behavior while avoiding aliased mutable borrows across `await`.
 
 use parking_lot::Mutex;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use futures_util::future::BoxFuture;
 

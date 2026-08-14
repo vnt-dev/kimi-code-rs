@@ -9,13 +9,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/capability/capabilityService.ts`.
 
-use std::{
-    collections::HashMap,
-    error::Error,
-    panic::AssertUnwindSafe,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{collections::HashMap, error::Error, panic::AssertUnwindSafe};
 
 use async_trait::async_trait;
 use futures_util::FutureExt;

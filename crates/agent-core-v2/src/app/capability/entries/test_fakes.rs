@@ -3,12 +3,9 @@
 //! Mirrors the fakes in the original TS test files (scripted spawn results,
 //! upsert-plugin semantics, per-URL fetch routing).
 
-use std::{
-    collections::HashMap,
-    error::Error,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{collections::HashMap, error::Error};
 
 use async_trait::async_trait;
 use futures_util::stream;
@@ -273,12 +270,7 @@ impl FakePluginService {
 #[async_trait]
 impl PluginServiceContract for FakePluginService {
     async fn list_plugins(&self) -> PluginServiceResult<Vec<PluginSummary>> {
-        Ok(self
-            .installed
-            .lock()
-            .iter()
-            .map(summary_of)
-            .collect())
+        Ok(self.installed.lock().iter().map(summary_of).collect())
     }
 
     async fn install_plugin(
@@ -338,11 +330,9 @@ impl PluginServiceContract for FakePluginService {
         &self,
         input: SetPluginMcpServerEnabledInput,
     ) -> PluginServiceResult<()> {
-        self.mcp_enabled_calls.lock().push((
-            input.id.clone(),
-            input.server.clone(),
-            input.enabled,
-        ));
+        self.mcp_enabled_calls
+            .lock()
+            .push((input.id.clone(), input.server.clone(), input.enabled));
         if let Some(existing) = self
             .installed
             .lock()

@@ -2,13 +2,13 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/plugin/pluginService.ts`.
 
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
     panic::AssertUnwindSafe,
 };
-use std::sync::{Arc};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -317,8 +317,7 @@ impl PluginServiceContract for PluginService {
             let operations = Arc::clone(&self.install_operations);
             let progress_operation_id = operation_id.clone();
             let progress: PluginInstallProgressCallback = Arc::new(move |update| {
-                if let Some(operation) = operations.lock().get_mut(&progress_operation_id)
-                {
+                if let Some(operation) = operations.lock().get_mut(&progress_operation_id) {
                     operation.phase = update.phase;
                     operation.downloaded_bytes = update.downloaded_bytes;
                     operation.total_bytes = update.total_bytes;
@@ -351,27 +350,19 @@ impl PluginServiceContract for PluginService {
     }
 
     fn list_plugin_install_operations(&self) -> Vec<PluginInstallOperation> {
-        self.install_operations
-            .lock()
-            .values()
-            .cloned()
-            .collect()
+        self.install_operations.lock().values().cloned().collect()
     }
 
     async fn reserve_plugin_removal(&self, id: &str) -> PluginServiceResult<()> {
         self.start_initial_load().await;
         let _manager = self.manager.lock().await;
         self.assert_loaded()?;
-        self.removal_reservations
-            .lock()
-            .insert(id.to_lowercase());
+        self.removal_reservations.lock().insert(id.to_lowercase());
         Ok(())
     }
 
     fn release_plugin_removal(&self, id: &str) {
-        self.removal_reservations
-            .lock()
-            .remove(&id.to_lowercase());
+        self.removal_reservations.lock().remove(&id.to_lowercase());
     }
 
     async fn set_plugin_enabled(&self, input: SetPluginEnabledInput) -> PluginServiceResult<()> {

@@ -2,9 +2,9 @@
 //!
 //! Original: `stepRetryService.ts`.
 
+use parking_lot::Mutex;
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde::Serialize;

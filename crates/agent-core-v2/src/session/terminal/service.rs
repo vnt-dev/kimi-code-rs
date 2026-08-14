@@ -2,9 +2,9 @@
 //!
 //! Original: `session/terminal/terminalService.ts`, `SessionTerminalService`.
 
-use std::ops::Deref;
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::ops::Deref;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -471,8 +471,8 @@ pub fn register_session_terminal_service() {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
     use parking_lot::Mutex;
+    use std::path::{Path, PathBuf};
 
     use crate::{
         _base::event::{Emitter, Event},

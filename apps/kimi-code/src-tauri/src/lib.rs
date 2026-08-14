@@ -174,24 +174,40 @@ struct AgentInteractionsEvent {
 
 #[tauri::command]
 async fn auth_status(state: State<'_, AppState>) -> Result<DesktopAuthStatus, String> {
-    state.client.auth_status().await
+    state
+        .client
+        .auth_status()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn account_usage(state: State<'_, AppState>) -> Result<DesktopManagedUsage, String> {
-    state.client.managed_usage().await
+    state
+        .client
+        .managed_usage()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn get_usage_statistics(
     state: State<'_, AppState>,
 ) -> Result<DesktopUsageStatistics, String> {
-    state.client.usage_statistics().await
+    state
+        .client
+        .usage_statistics()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn account_profile(state: State<'_, AppState>) -> Result<DesktopManagedUserInfo, String> {
-    state.client.managed_user_info().await
+    state
+        .client
+        .managed_user_info()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -214,21 +230,34 @@ async fn login(app: AppHandle, state: State<'_, AppState>) -> Result<DesktopAuth
             }
         }))
         .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn logout(state: State<'_, AppState>) -> Result<DesktopAuthStatus, String> {
-    state.client.logout().await
+    state
+        .client
+        .logout()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn list_models(state: State<'_, AppState>) -> Result<Vec<DesktopModel>, String> {
-    state.client.list_models().await
+    state
+        .client
+        .list_models()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn refresh_models(state: State<'_, AppState>) -> Result<Vec<DesktopModel>, String> {
-    state.client.refresh_models().await
+    state
+        .client
+        .refresh_models()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -236,7 +265,11 @@ async fn list_skills(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<DesktopSkill>, String> {
-    state.client.list_session_skills(&session_id).await
+    state
+        .client
+        .list_session_skills(&session_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -249,6 +282,7 @@ async fn get_skill_content(
         .client
         .get_session_skill_content(&session_id, &name)
         .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -256,7 +290,11 @@ async fn list_custom_agents(
     state: State<'_, AppState>,
     workspace_id: String,
 ) -> Result<Vec<DesktopCustomAgent>, String> {
-    state.client.list_custom_agents(&workspace_id).await
+    state
+        .client
+        .list_custom_agents(&workspace_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -264,7 +302,11 @@ async fn save_custom_agent(
     state: State<'_, AppState>,
     input: DesktopSaveCustomAgentInput,
 ) -> Result<DesktopCustomAgent, String> {
-    state.client.save_custom_agent(input).await
+    state
+        .client
+        .save_custom_agent(input)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -272,7 +314,11 @@ async fn delete_custom_agent(
     state: State<'_, AppState>,
     input: DesktopDeleteCustomAgentInput,
 ) -> Result<(), String> {
-    state.client.delete_custom_agent(input).await
+    state
+        .client
+        .delete_custom_agent(input)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -280,7 +326,11 @@ async fn list_cron_tasks(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<DesktopCronTask>, String> {
-    state.client.list_cron_tasks(&session_id).await
+    state
+        .client
+        .list_cron_tasks(&session_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -288,7 +338,11 @@ async fn create_cron_task(
     state: State<'_, AppState>,
     input: DesktopCreateCronTaskInput,
 ) -> Result<DesktopCronTask, String> {
-    state.client.create_cron_task(input).await
+    state
+        .client
+        .create_cron_task(input)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -296,7 +350,11 @@ async fn delete_cron_task(
     state: State<'_, AppState>,
     input: DesktopDeleteCronTaskInput,
 ) -> Result<(), String> {
-    state.client.delete_cron_task(input).await
+    state
+        .client
+        .delete_cron_task(input)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -325,16 +383,25 @@ async fn upload_file(state: State<'_, AppState>, request: Request<'_>) -> Result
         .client
         .upload_file(&filename, &media_type, bytes)
         .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn set_default_model(state: State<'_, AppState>, model: String) -> Result<(), String> {
-    state.client.set_default_model(&model).await
+    state
+        .client
+        .set_default_model(&model)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn get_agent_settings(state: State<'_, AppState>) -> Result<DesktopAgentSettings, String> {
-    state.client.get_agent_settings().await
+    state
+        .client
+        .get_agent_settings()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -342,12 +409,20 @@ async fn update_agent_settings(
     state: State<'_, AppState>,
     patch: DesktopAgentSettingsPatch,
 ) -> Result<DesktopAgentSettings, String> {
-    state.client.update_agent_settings(patch).await
+    state
+        .client
+        .update_agent_settings(patch)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn list_workspaces(state: State<'_, AppState>) -> Result<Vec<DesktopWorkspace>, String> {
-    state.client.list_workspaces().await
+    state
+        .client
+        .list_workspaces()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -359,7 +434,8 @@ async fn create_or_touch_workspace(
     let workspace = state
         .client
         .create_or_touch_workspace(&root, name.as_deref())
-        .await?;
+        .await
+        .map_err(|error| error.to_string())?;
     state
         .web_server
         .desktop_state_changed(DesktopStateChange::WorkspaceUpserted {
@@ -370,7 +446,11 @@ async fn create_or_touch_workspace(
 
 #[tauri::command]
 async fn remove_workspace(state: State<'_, AppState>, workspace_id: String) -> Result<(), String> {
-    state.client.remove_workspace(&workspace_id).await?;
+    state
+        .client
+        .remove_workspace(&workspace_id)
+        .await
+        .map_err(|error| error.to_string())?;
     state
         .web_server
         .desktop_state_changed(DesktopStateChange::WorkspaceRemoved { workspace_id });
@@ -382,12 +462,20 @@ async fn list_workspace_sessions(
     state: State<'_, AppState>,
     workspace_id: String,
 ) -> Result<Vec<SessionSummary>, String> {
-    state.client.list_workspace_sessions(&workspace_id).await
+    state
+        .client
+        .list_workspace_sessions(&workspace_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn list_archived_sessions(state: State<'_, AppState>) -> Result<Vec<SessionSummary>, String> {
-    state.client.list_archived_sessions().await
+    state
+        .client
+        .list_archived_sessions()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -395,7 +483,11 @@ async fn delete_archived_sessions(
     state: State<'_, AppState>,
     session_ids: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    let session_ids = state.client.delete_archived_sessions(&session_ids).await?;
+    let session_ids = state
+        .client
+        .delete_archived_sessions(&session_ids)
+        .await
+        .map_err(|error| error.to_string())?;
     if !session_ids.is_empty() {
         state
             .web_server
@@ -408,7 +500,11 @@ async fn delete_archived_sessions(
 
 #[tauri::command]
 async fn fork_session(state: State<'_, AppState>, session_id: String) -> Result<String, String> {
-    let session_id = state.client.fork_session(&session_id).await?;
+    let session_id = state
+        .client
+        .fork_session(&session_id)
+        .await
+        .map_err(|error| error.to_string())?;
     state
         .web_server
         .desktop_state_changed(DesktopStateChange::SessionForked {
@@ -419,7 +515,11 @@ async fn fork_session(state: State<'_, AppState>, session_id: String) -> Result<
 
 #[tauri::command]
 async fn archive_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
-    state.client.archive_session(&session_id).await?;
+    state
+        .client
+        .archive_session(&session_id)
+        .await
+        .map_err(|error| error.to_string())?;
     state
         .web_server
         .desktop_state_changed(DesktopStateChange::SessionArchived { session_id });
@@ -431,7 +531,11 @@ async fn restore_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<SessionSummary, String> {
-    let session = state.client.restore_session(&session_id).await?;
+    let session = state
+        .client
+        .restore_session(&session_id)
+        .await
+        .map_err(|error| error.to_string())?;
     state
         .web_server
         .desktop_state_changed(DesktopStateChange::SessionRestored {
@@ -450,7 +554,11 @@ async fn prepare_session(
         .as_deref()
         .is_none_or(|session_id| session_id.trim().is_empty());
     let workspace_root = request.work_dir.clone();
-    let session = state.client.prepare_session(request).await?;
+    let session = state
+        .client
+        .prepare_session(request)
+        .await
+        .map_err(|error| error.to_string())?;
     if creating {
         state
             .web_server
@@ -467,7 +575,11 @@ async fn conversation_context_usage(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Option<DesktopContextUsage>, String> {
-    state.client.context_usage(&session_id).await
+    state
+        .client
+        .context_usage(&session_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -480,6 +592,7 @@ async fn list_conversation_messages(
         .client
         .list_messages(&session_id, agent_id.as_deref())
         .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -515,7 +628,11 @@ async fn set_web_server_settings(
 
 #[tauri::command]
 async fn list_providers(state: State<'_, AppState>) -> Result<Vec<DesktopProvider>, String> {
-    state.client.list_providers().await
+    state
+        .client
+        .list_providers()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -523,22 +640,38 @@ async fn save_provider(
     state: State<'_, AppState>,
     input: DesktopSaveProviderInput,
 ) -> Result<DesktopProvider, String> {
-    state.client.save_provider(input).await
+    state
+        .client
+        .save_provider(input)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn delete_provider(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.client.delete_provider(id).await
+    state
+        .client
+        .delete_provider(id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginSummary>, String> {
-    state.client.list_plugins().await
+    state
+        .client
+        .list_plugins()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn list_capabilities(state: State<'_, AppState>) -> Result<Vec<CapabilityStatus>, String> {
-    state.client.list_capabilities().await
+    state
+        .client
+        .list_capabilities()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -546,7 +679,11 @@ async fn get_capability(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<CapabilityStatus, String> {
-    state.client.get_capability(id).await
+    state
+        .client
+        .get_capability(id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -554,7 +691,11 @@ async fn install_capability(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<CapabilityStatus, String> {
-    state.client.install_capability(id).await
+    state
+        .client
+        .install_capability(id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -569,6 +710,7 @@ async fn install_plugin(
         .client
         .install_plugin_in_background(source, operation_id)
         .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -576,14 +718,22 @@ async fn get_plugin_install_progress(
     state: State<'_, AppState>,
     operation_id: String,
 ) -> Result<Option<PluginInstallOperation>, String> {
-    state.client.plugin_install_progress(operation_id).await
+    state
+        .client
+        .plugin_install_progress(operation_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn list_plugin_install_operations(
     state: State<'_, AppState>,
 ) -> Result<Vec<PluginInstallOperation>, String> {
-    state.client.list_plugin_install_operations().await
+    state
+        .client
+        .list_plugin_install_operations()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -592,7 +742,11 @@ async fn set_plugin_enabled(
     id: String,
     enabled: bool,
 ) -> Result<(), String> {
-    state.client.set_plugin_enabled(id, enabled).await
+    state
+        .client
+        .set_plugin_enabled(id, enabled)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -606,28 +760,45 @@ async fn set_plugin_mcp_server_enabled(
         .client
         .set_plugin_mcp_server_enabled(id, server, enabled)
         .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn remove_plugin(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.client.remove_plugin(id).await
+    state
+        .client
+        .remove_plugin(id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn reload_plugins(state: State<'_, AppState>) -> Result<ReloadSummary, String> {
-    state.client.reload_plugins().await
+    state
+        .client
+        .reload_plugins()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn get_plugin_info(state: State<'_, AppState>, id: String) -> Result<PluginInfo, String> {
-    state.client.get_plugin_info(id).await
+    state
+        .client
+        .get_plugin_info(id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn check_plugin_updates(
     state: State<'_, AppState>,
 ) -> Result<Vec<PluginUpdateStatus>, String> {
-    state.client.check_plugin_updates().await
+    state
+        .client
+        .check_plugin_updates()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -675,7 +846,8 @@ async fn subscribe_agent_events(
                 );
             }),
         )
-        .await?;
+        .await
+        .map_err(|error| error.to_string())?;
     state
         .subscriptions
         .lock()
@@ -711,6 +883,7 @@ async fn respond_interaction(
         .client
         .respond_interaction(&session_id, &interaction_id, response)
         .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

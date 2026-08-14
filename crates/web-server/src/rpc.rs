@@ -192,19 +192,29 @@ pub(crate) async fn dispatch_rpc(
             events.set_goal_mode(args.session_id, args.enabled);
             Ok(Value::Null)
         }
-        "auth_status" => encode(client.auth_status().await.map_err(RpcError::transport)?),
-        "account_usage" => encode(client.managed_usage().await.map_err(RpcError::transport)?),
+        "auth_status" => encode(
+            client
+                .auth_status()
+                .await
+                .map_err(|error| RpcError::transport(error.to_string()))?,
+        ),
+        "account_usage" => encode(
+            client
+                .managed_usage()
+                .await
+                .map_err(|error| RpcError::transport(error.to_string()))?,
+        ),
         "get_usage_statistics" => encode(
             client
                 .usage_statistics()
                 .await
-                .map_err(RpcError::transport)?,
+                .map_err(|error| RpcError::transport(error.to_string()))?,
         ),
         "account_profile" => encode(
             client
                 .managed_user_info()
                 .await
-                .map_err(RpcError::transport)?,
+                .map_err(|error| RpcError::transport(error.to_string()))?,
         ),
         "login" => {
             let events = Arc::clone(connection);
@@ -216,20 +226,40 @@ pub(crate) async fn dispatch_rpc(
                         }
                     }))
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
-        "logout" => encode(client.logout().await.map_err(RpcError::transport)?),
-        "list_models" => encode(client.list_models().await.map_err(RpcError::transport)?),
-        "refresh_models" => encode(client.refresh_models().await.map_err(RpcError::transport)?),
-        "list_providers" => encode(client.list_providers().await.map_err(RpcError::transport)?),
+        "logout" => encode(
+            client
+                .logout()
+                .await
+                .map_err(|error| RpcError::transport(error.to_string()))?,
+        ),
+        "list_models" => encode(
+            client
+                .list_models()
+                .await
+                .map_err(|error| RpcError::transport(error.to_string()))?,
+        ),
+        "refresh_models" => encode(
+            client
+                .refresh_models()
+                .await
+                .map_err(|error| RpcError::transport(error.to_string()))?,
+        ),
+        "list_providers" => encode(
+            client
+                .list_providers()
+                .await
+                .map_err(|error| RpcError::transport(error.to_string()))?,
+        ),
         "save_provider" => {
             let args: SaveProviderArgs = decode(args)?;
             encode(
                 client
                     .save_provider(args.input)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "delete_provider" => {
@@ -237,15 +267,20 @@ pub(crate) async fn dispatch_rpc(
             client
                 .delete_provider(args.id)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             Ok(Value::Null)
         }
-        "list_plugins" => encode(client.list_plugins().await.map_err(RpcError::transport)?),
+        "list_plugins" => encode(
+            client
+                .list_plugins()
+                .await
+                .map_err(|error| RpcError::transport(error.to_string()))?,
+        ),
         "list_capabilities" => encode(
             client
                 .list_capabilities()
                 .await
-                .map_err(RpcError::transport)?,
+                .map_err(|error| RpcError::transport(error.to_string()))?,
         ),
         "get_capability" => {
             let args: PluginIdArgs = decode(args)?;
@@ -253,7 +288,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .get_capability(args.id)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "install_capability" => {
@@ -262,7 +297,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .install_capability(args.id)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "install_plugin" => {
@@ -270,7 +305,7 @@ pub(crate) async fn dispatch_rpc(
             client
                 .install_plugin_in_background(args.source, args.operation_id)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             Ok(Value::Null)
         }
         "get_plugin_install_progress" => {
@@ -279,21 +314,21 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .plugin_install_progress(args.operation_id)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "list_plugin_install_operations" => encode(
             client
                 .list_plugin_install_operations()
                 .await
-                .map_err(RpcError::transport)?,
+                .map_err(|error| RpcError::transport(error.to_string()))?,
         ),
         "set_plugin_enabled" => {
             let args: SetPluginEnabledArgs = decode(args)?;
             client
                 .set_plugin_enabled(args.id, args.enabled)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             Ok(Value::Null)
         }
         "set_plugin_mcp_server_enabled" => {
@@ -301,7 +336,7 @@ pub(crate) async fn dispatch_rpc(
             client
                 .set_plugin_mcp_server_enabled(args.id, args.server, args.enabled)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             Ok(Value::Null)
         }
         "remove_plugin" => {
@@ -309,24 +344,29 @@ pub(crate) async fn dispatch_rpc(
             client
                 .remove_plugin(args.id)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             Ok(Value::Null)
         }
-        "reload_plugins" => encode(client.reload_plugins().await.map_err(RpcError::transport)?),
+        "reload_plugins" => encode(
+            client
+                .reload_plugins()
+                .await
+                .map_err(|error| RpcError::transport(error.to_string()))?,
+        ),
         "get_plugin_info" => {
             let args: PluginIdArgs = decode(args)?;
             encode(
                 client
                     .get_plugin_info(args.id)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "check_plugin_updates" => encode(
             client
                 .check_plugin_updates()
                 .await
-                .map_err(RpcError::transport)?,
+                .map_err(|error| RpcError::transport(error.to_string()))?,
         ),
         "get_plugin_marketplace" => encode(
             load_plugin_marketplace()
@@ -339,7 +379,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .list_session_skills(&args.session_id)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "get_skill_content" => {
@@ -348,7 +388,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .get_session_skill_content(&args.session_id, &args.name)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "list_custom_agents" => {
@@ -357,7 +397,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .list_custom_agents(&args.workspace_id)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "save_custom_agent" => {
@@ -366,7 +406,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .save_custom_agent(args.input)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "delete_custom_agent" => {
@@ -374,7 +414,7 @@ pub(crate) async fn dispatch_rpc(
             client
                 .delete_custom_agent(args.input)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             Ok(Value::Null)
         }
         "list_cron_tasks" => {
@@ -383,7 +423,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .list_cron_tasks(&args.session_id)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "create_cron_task" => {
@@ -392,7 +432,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .create_cron_task(args.input)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "delete_cron_task" => {
@@ -400,7 +440,7 @@ pub(crate) async fn dispatch_rpc(
             client
                 .delete_cron_task(args.input)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             Ok(Value::Null)
         }
         "upload_file" => {
@@ -409,7 +449,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .upload_file(&args.filename, &args.media_type, args.bytes)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "set_default_model" => {
@@ -417,14 +457,14 @@ pub(crate) async fn dispatch_rpc(
             client
                 .set_default_model(&args.model)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             Ok(Value::Null)
         }
         "get_agent_settings" => encode(
             client
                 .get_agent_settings()
                 .await
-                .map_err(RpcError::transport)?,
+                .map_err(|error| RpcError::transport(error.to_string()))?,
         ),
         "update_agent_settings" => {
             let args: AgentSettingsArgs = decode(args)?;
@@ -432,21 +472,21 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .update_agent_settings(args.patch)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "list_workspaces" => encode(
             client
                 .list_workspaces()
                 .await
-                .map_err(RpcError::transport)?,
+                .map_err(|error| RpcError::transport(error.to_string()))?,
         ),
         "create_or_touch_workspace" => {
             let args: CreateWorkspaceArgs = decode(args)?;
             let workspace = client
                 .create_or_touch_workspace(&args.root, args.name.as_deref())
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             events.desktop_state_changed(DesktopStateChange::WorkspaceUpserted {
                 workspace_id: workspace.id.clone(),
             });
@@ -457,7 +497,7 @@ pub(crate) async fn dispatch_rpc(
             client
                 .remove_workspace(&args.workspace_id)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             events.desktop_state_changed(DesktopStateChange::WorkspaceRemoved {
                 workspace_id: args.workspace_id,
             });
@@ -469,21 +509,21 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .list_workspace_sessions(&args.workspace_id)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "list_archived_sessions" => encode(
             client
                 .list_archived_sessions()
                 .await
-                .map_err(RpcError::transport)?,
+                .map_err(|error| RpcError::transport(error.to_string()))?,
         ),
         "delete_archived_sessions" => {
             let args: SessionsArgs = decode(args)?;
             let session_ids = client
                 .delete_archived_sessions(&args.session_ids)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             if !session_ids.is_empty() {
                 events.desktop_state_changed(DesktopStateChange::SessionsDeleted {
                     session_ids: session_ids.clone(),
@@ -496,7 +536,7 @@ pub(crate) async fn dispatch_rpc(
             let session_id = client
                 .fork_session(&args.session_id)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             events.desktop_state_changed(DesktopStateChange::SessionForked {
                 session_id: session_id.clone(),
             });
@@ -507,7 +547,7 @@ pub(crate) async fn dispatch_rpc(
             client
                 .archive_session(&args.session_id)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             events.desktop_state_changed(DesktopStateChange::SessionArchived {
                 session_id: args.session_id,
             });
@@ -518,7 +558,7 @@ pub(crate) async fn dispatch_rpc(
             let session = client
                 .restore_session(&args.session_id)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             events.desktop_state_changed(DesktopStateChange::SessionRestored {
                 session_id: session.id.clone(),
             });
@@ -535,7 +575,7 @@ pub(crate) async fn dispatch_rpc(
             let session = client
                 .prepare_session(args.request)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             if creating {
                 events.desktop_state_changed(DesktopStateChange::SessionCreated {
                     session_id: session.session_id.clone(),
@@ -550,7 +590,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .context_usage(&args.session_id)
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "list_conversation_messages" => {
@@ -559,7 +599,7 @@ pub(crate) async fn dispatch_rpc(
                 client
                     .list_messages(&args.session_id, args.agent_id.as_deref())
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         "agent_rpc" => {
@@ -601,7 +641,7 @@ pub(crate) async fn dispatch_rpc(
                     }),
                 )
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             encode(connection.add_subscription(subscription)?)
         }
         "unsubscribe_agent_events" => {
@@ -614,17 +654,22 @@ pub(crate) async fn dispatch_rpc(
             client
                 .respond_interaction(&args.session_id, &args.interaction_id, args.response)
                 .await
-                .map_err(RpcError::transport)?;
+                .map_err(|error| RpcError::transport(error.to_string()))?;
             Ok(Value::Null)
         }
-        "fs_home" => encode(client.folder_home().await.map_err(RpcError::transport)?),
+        "fs_home" => encode(
+            client
+                .folder_home()
+                .await
+                .map_err(|error| RpcError::transport(error.to_string()))?,
+        ),
         "fs_browse" => {
             let args: BrowseFoldersArgs = decode(args)?;
             encode(
                 client
                     .browse_folders(args.path.as_deref())
                     .await
-                    .map_err(RpcError::transport)?,
+                    .map_err(|error| RpcError::transport(error.to_string()))?,
             )
         }
         _ => Err(RpcError {

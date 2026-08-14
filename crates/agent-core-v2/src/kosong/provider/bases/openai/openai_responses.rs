@@ -1460,10 +1460,7 @@ mod tests {
             headers: Some(IndexMap::from([("x-request".into(), "yes".into())])),
         };
         provider.create_client(Some(&auth)).unwrap();
-        assert_eq!(
-            *received.lock(),
-            vec![ProviderRequestAuth::default(), auth]
-        );
+        assert_eq!(*received.lock(), vec![ProviderRequestAuth::default(), auth]);
     }
 
     #[test]

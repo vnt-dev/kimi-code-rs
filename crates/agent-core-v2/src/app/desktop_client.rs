@@ -3,22 +3,26 @@
 //! The facade owns application composition, session lifecycle, managed model
 //! configuration, streamed output, and host-mediated interactions.
 
+use parking_lot::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::{
     collections::HashSet,
     num::NonZeroU64,
     path::{Path, PathBuf},
 };
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use kimi_code_oauth::{
     AuthManagedUsageResult, AuthManagedUserInfoResult, AuthenticatedServiceOptions,
-    BoosterWalletInfo, CredentialKind, DeviceAuthorization, DeviceCodeObserver,
+    BoosterWalletInfo, CredentialKind, DeviceAuthorization, DeviceCodeObserver, IdentityError,
     KIMI_CODE_PROVIDER_NAME, KimiHostIdentity, KimiIdentityOptions, KimiOAuthLoginOptions,
-    ManagedKimiCodeApplyOptions, ManagedKimiCodeModelInfo, ManagedUserInfo, ManagedUserInfoPhone,
-    OAuthManagerError, UsageRow, apply_managed_kimi_code_config, create_kimi_default_headers_async,
+    ManagedConfigError, ManagedKimiCodeApplyOptions, ManagedKimiCodeModelInfo, ManagedModelsError,
+    ManagedUserInfo, ManagedUserInfoPhone, OAuthManagerError, UsageRow,
+    apply_managed_kimi_code_config, create_kimi_default_headers_async,
     fetch_managed_kimi_code_models, managed_usage::DEFAULT_KIMI_CODE_BASE_URL,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -30,6 +34,7 @@ pub use super::usage_statistics::{DesktopDailyTokenUsage, DesktopUsageStatistics
 use crate::{
     _base::{
         di::{
+            errors::DiError,
             lifecycle::{DisposableHandle, DisposableStore},
             scope::{Scope, ScopeHandle},
         },
@@ -58,10 +63,18 @@ use crate::{
             AgentFileSource, ManagedAgentFile, delete_managed_agent_file, list_managed_agent_files,
             resolve_agent_project_root, save_managed_agent_file,
         },
-        auth::{OAuthToolkitContract, OAuthToolkitService, config_section::SERVICES_SECTION},
-        bootstrap::{BootstrapInput, ensure_kimi_home, resolve_bootstrap_options},
+        auth::{
+            OAuthToolkitContract, OAuthToolkitService, config_section::SERVICES_SECTION,
+            contract::AuthOperationError,
+        },
+        bootstrap::{
+            BootstrapInput, BootstrapResolveError, ensure_kimi_home, resolve_bootstrap_options,
+        },
         capability::{CAPABILITY_SERVICE_ID, CapabilityStatus},
-        config::{CONFIG_SERVICE_ID, ConfigServiceContract, ConfigServiceHandle, ConfigTarget},
+        config::{
+            CONFIG_SERVICE_ID, ConfigServiceContract, ConfigServiceError, ConfigServiceHandle,
+            ConfigTarget,
+        },
         cron::{
             CRON_ID_REGEX, CronTask, CronTaskInit, compute_next_cron_run, cron_to_human,
             format_local_iso_with_offset, has_fire_within_years, parse_cron_expression,
@@ -78,8 +91,11 @@ use crate::{
         session_index::{SESSION_INDEX_SERVICE_ID, SessionListQuery, SessionSummary},
         session_lifecycle::{
             CreateSessionOptions, ForkSessionOptions, SESSION_LIFECYCLE_SERVICE_ID,
+            contract::SessionLifecycleError,
         },
-        skill_catalog::{SkillSource as CatalogSkillSource, is_user_activatable_skill_type},
+        skill_catalog::{
+            SkillSource as CatalogSkillSource, SkillSourceError, is_user_activatable_skill_type,
+        },
         workspace_registry::{
             WORKSPACE_QUERY_SERVICE_ID, WORKSPACE_REGISTRY_SERVICE_ID, Workspace,
         },
@@ -96,7 +112,7 @@ use crate::{
             config::PROVIDERS_SECTION,
         },
     },
-    os::interface::host_file_system::HOST_FILE_SYSTEM_SERVICE_ID,
+    os::interface::{host_file_system::HOST_FILE_SYSTEM_SERVICE_ID, host_fs_errors::HostFsError},
     session::{
         agent_lifecycle::{AGENT_LIFECYCLE_SERVICE_ID, MAIN_AGENT_ID, ensure_main_agent},
         agent_profile_catalog::SESSION_AGENT_PROFILE_CATALOG_ID,
@@ -110,6 +126,40 @@ use crate::{
         todo::SESSION_TODO_SERVICE_ID,
     },
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum DesktopClientError {
+    #[error(transparent)]
+    Di(#[from] DiError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Bootstrap(#[from] BootstrapResolveError),
+    #[error(transparent)]
+    OAuth(#[from] AuthOperationError),
+    #[error(transparent)]
+    OAuthManager(#[from] OAuthManagerError),
+    #[error(transparent)]
+    Identity(#[from] IdentityError),
+    #[error(transparent)]
+    ManagedModels(#[from] ManagedModelsError),
+    #[error(transparent)]
+    Config(#[from] ConfigServiceError),
+    #[error(transparent)]
+    Skill(#[from] SkillSourceError),
+    #[error(transparent)]
+    HostFs(#[from] HostFsError),
+    #[error(transparent)]
+    Session(#[from] SessionLifecycleError),
+    #[error(transparent)]
+    ManagedConfig(#[from] ManagedConfigError),
+    #[error("{0}")]
+    Message(String),
+    #[error(transparent)]
+    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
 
 pub struct KimiCodeDesktopClient {
     home_dir: PathBuf,
@@ -566,7 +616,7 @@ impl DeviceCodeObserver for CallbackObserver {
 }
 
 impl KimiCodeDesktopClient {
-    pub fn bootstrap(client_version: impl Into<String>) -> Result<Self, String> {
+    pub fn bootstrap(client_version: impl Into<String>) -> Result<Self, DesktopClientError> {
         Self::from_bootstrap_input(BootstrapInput {
             client_version: Some(client_version.into()),
             ..BootstrapInput::default()
@@ -576,7 +626,7 @@ impl KimiCodeDesktopClient {
     pub fn new(
         home_dir: impl Into<PathBuf>,
         client_version: impl Into<String>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, DesktopClientError> {
         Self::from_bootstrap_input(BootstrapInput {
             home_dir: Some(home_dir.into()),
             client_version: Some(client_version.into()),
@@ -584,13 +634,11 @@ impl KimiCodeDesktopClient {
         })
     }
 
-    fn from_bootstrap_input(input: BootstrapInput) -> Result<Self, String> {
-        let options =
-            resolve_bootstrap_options(input.clone()).map_err(|error| error.to_string())?;
-        ensure_kimi_home(&options.home_dir).map_err(|error| error.to_string())?;
-        let oauth =
-            OAuthToolkitService::new(&options.home_dir).map_err(|error| error.to_string())?;
-        let app = bootstrap_agent_app(input)?;
+    fn from_bootstrap_input(input: BootstrapInput) -> Result<Self, DesktopClientError> {
+        let options = resolve_bootstrap_options(input.clone())?;
+        ensure_kimi_home(&options.home_dir)?;
+        let oauth = OAuthToolkitService::new(&options.home_dir)?;
+        let app = bootstrap_agent_app(input).map_err(DesktopClientError::Message)?;
 
         Ok(Self {
             home_dir: options.home_dir,
@@ -604,24 +652,25 @@ impl KimiCodeDesktopClient {
         })
     }
 
-    pub async fn usage_statistics(&self) -> Result<DesktopUsageStatistics, String> {
+    pub async fn usage_statistics(&self) -> Result<DesktopUsageStatistics, DesktopClientError> {
         let _guard = self.usage_statistics_gate.lock().await;
-        super::usage_statistics::collect_usage_statistics(self.home_dir.clone()).await
+        super::usage_statistics::collect_usage_statistics(self.home_dir.clone())
+            .await
+            .map_err(DesktopClientError::Message)
     }
 
-    pub async fn auth_status(&self) -> Result<DesktopAuthStatus, String> {
+    pub async fn auth_status(&self) -> Result<DesktopAuthStatus, DesktopClientError> {
         let token = self
             .oauth
             .get_cached_access_token(Some(KIMI_CODE_PROVIDER_NAME), None)
-            .await
-            .map_err(|error| error.to_string())?;
+            .await?;
         Ok(DesktopAuthStatus {
             logged_in: token.is_some(),
             provider: KIMI_CODE_PROVIDER_NAME.to_owned(),
         })
     }
 
-    pub async fn managed_usage(&self) -> Result<DesktopManagedUsage, String> {
+    pub async fn managed_usage(&self) -> Result<DesktopManagedUsage, DesktopClientError> {
         match self
             .oauth
             .get_managed_usage(
@@ -639,11 +688,13 @@ impl KimiCodeDesktopClient {
                 limits: limits.into_iter().map(Into::into).collect(),
                 extra_usage: extra_usage.map(Into::into),
             }),
-            AuthManagedUsageResult::Error { message, .. } => Err(message),
+            AuthManagedUsageResult::Error { message, .. } => {
+                Err(DesktopClientError::Message(message))
+            }
         }
     }
 
-    pub async fn managed_user_info(&self) -> Result<DesktopManagedUserInfo, String> {
+    pub async fn managed_user_info(&self) -> Result<DesktopManagedUserInfo, DesktopClientError> {
         match self
             .oauth
             .get_managed_user_info(
@@ -653,14 +704,16 @@ impl KimiCodeDesktopClient {
             .await
         {
             AuthManagedUserInfoResult::Ok { user_info } => Ok((*user_info).into()),
-            AuthManagedUserInfoResult::Error { message, .. } => Err(message),
+            AuthManagedUserInfoResult::Error { message, .. } => {
+                Err(DesktopClientError::Message(message))
+            }
         }
     }
 
     pub async fn login(
         &self,
         on_device_code: Arc<dyn Fn(DesktopDeviceCode) + Send + Sync>,
-    ) -> Result<DesktopAuthStatus, String> {
+    ) -> Result<DesktopAuthStatus, DesktopClientError> {
         let observer = CallbackObserver {
             callback: on_device_code,
         };
@@ -672,43 +725,33 @@ impl KimiCodeDesktopClient {
                     ..KimiOAuthLoginOptions::default()
                 },
             )
-            .await
-            .map_err(|error| error.to_string())?;
+            .await?;
         self.models_configured.store(false, Ordering::Release);
         self.auth_status().await
     }
 
-    pub async fn logout(&self) -> Result<DesktopAuthStatus, String> {
+    pub async fn logout(&self) -> Result<DesktopAuthStatus, DesktopClientError> {
         self.oauth
             .logout(Some(KIMI_CODE_PROVIDER_NAME), None)
-            .await
-            .map_err(|error| error.to_string())?;
+            .await?;
         self.models_configured.store(false, Ordering::Release);
         self.auth_status().await
     }
 
-    pub async fn list_models(&self) -> Result<Vec<DesktopModel>, String> {
-        self.app
-            .get(CONFIG_SERVICE_ID)
-            .map_err(|error| error.to_string())?
-            .ready()
-            .await
-            .map_err(|error| error.to_string())?;
+    pub async fn list_models(&self) -> Result<Vec<DesktopModel>, DesktopClientError> {
+        self.app.get(CONFIG_SERVICE_ID)?.ready().await?;
         self.configured_desktop_models().await
     }
 
-    pub async fn refresh_models(&self) -> Result<Vec<DesktopModel>, String> {
+    pub async fn refresh_models(&self) -> Result<Vec<DesktopModel>, DesktopClientError> {
         let models = self.fetch_models().await?;
         self.configure_models(&models).await?;
         self.configured_desktop_models().await
     }
 
-    pub async fn list_providers(&self) -> Result<Vec<DesktopProvider>, String> {
-        let config = self
-            .app
-            .get(CONFIG_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        config.ready().await.map_err(|error| error.to_string())?;
+    pub async fn list_providers(&self) -> Result<Vec<DesktopProvider>, DesktopClientError> {
+        let config = self.app.get(CONFIG_SERVICE_ID)?;
+        config.ready().await?;
         let providers = user_section::<ProvidersSection>(&config, PROVIDERS_SECTION)?;
         let models = user_section::<ModelsSection>(&config, MODELS_SECTION)?;
         Ok(desktop_providers(&providers, &models))
@@ -717,14 +760,11 @@ impl KimiCodeDesktopClient {
     pub async fn save_provider(
         &self,
         input: DesktopSaveProviderInput,
-    ) -> Result<DesktopProvider, String> {
+    ) -> Result<DesktopProvider, DesktopClientError> {
         let input = validate_provider_input(input)?;
         let _guard = self.config_gate.lock().await;
-        let config = self
-            .app
-            .get(CONFIG_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        config.ready().await.map_err(|error| error.to_string())?;
+        let config = self.app.get(CONFIG_SERVICE_ID)?;
+        config.ready().await?;
 
         let old_providers_value = config.inspect(PROVIDERS_SECTION).user_value;
         let old_models_value = config.inspect(MODELS_SECTION).user_value;
@@ -733,22 +773,30 @@ impl KimiCodeDesktopClient {
         let mut models = section_from_value::<ModelsSection>(old_models_value.as_ref())?;
         let original_id = input.original_id.as_deref();
         if original_id.is_some_and(is_managed_provider_id) || is_managed_provider_id(&input.id) {
-            return Err("Managed OAuth providers cannot be edited here.".to_owned());
+            return Err(DesktopClientError::Message(
+                "Managed OAuth providers cannot be edited here.".to_owned(),
+            ));
         }
         if original_id.is_none() && providers.contains_key(&input.id) {
-            return Err(format!("Provider `{}` already exists.", input.id));
+            return Err(DesktopClientError::Message(format!(
+                "Provider `{}` already exists.",
+                input.id
+            )));
         }
         if let Some(original_id) = original_id
             && original_id != input.id
             && providers.contains_key(&input.id)
         {
-            return Err(format!("Provider `{}` already exists.", input.id));
+            return Err(DesktopClientError::Message(format!(
+                "Provider `{}` already exists.",
+                input.id
+            )));
         }
 
         let previous_provider = match original_id {
-            Some(original_id) => providers
-                .shift_remove(original_id)
-                .ok_or_else(|| format!("Provider `{original_id}` does not exist."))?,
+            Some(original_id) => providers.shift_remove(original_id).ok_or_else(|| {
+                DesktopClientError::Message(format!("Provider `{original_id}` does not exist."))
+            })?,
             None => ProviderConfig::default(),
         };
         if let Some(original_id) = original_id {
@@ -813,8 +861,8 @@ impl KimiCodeDesktopClient {
             &config,
             old_providers_value,
             old_models_value,
-            Some(serde_json::to_value(&providers).map_err(|error| error.to_string())?),
-            Some(serde_json::to_value(&models).map_err(|error| error.to_string())?),
+            Some(serde_json::to_value(&providers)?),
+            Some(serde_json::to_value(&models)?),
             next_default,
         )
         .await?;
@@ -822,23 +870,26 @@ impl KimiCodeDesktopClient {
         desktop_providers(&providers, &models)
             .into_iter()
             .find(|provider| provider.id == input.id)
-            .ok_or_else(|| "The saved provider could not be reloaded.".to_owned())
+            .ok_or_else(|| {
+                DesktopClientError::Message("The saved provider could not be reloaded.".to_owned())
+            })
     }
 
-    pub async fn delete_provider(&self, id: String) -> Result<(), String> {
+    pub async fn delete_provider(&self, id: String) -> Result<(), DesktopClientError> {
         let id = id.trim();
         if id.is_empty() {
-            return Err("A provider id is required.".to_owned());
+            return Err(DesktopClientError::Message(
+                "A provider id is required.".to_owned(),
+            ));
         }
         if is_managed_provider_id(id) {
-            return Err("Managed OAuth providers cannot be deleted here.".to_owned());
+            return Err(DesktopClientError::Message(
+                "Managed OAuth providers cannot be deleted here.".to_owned(),
+            ));
         }
         let _guard = self.config_gate.lock().await;
-        let config = self
-            .app
-            .get(CONFIG_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        config.ready().await.map_err(|error| error.to_string())?;
+        let config = self.app.get(CONFIG_SERVICE_ID)?;
+        config.ready().await?;
         let old_providers_value = config.inspect(PROVIDERS_SECTION).user_value;
         let old_models_value = config.inspect(MODELS_SECTION).user_value;
         let old_default_value = config.inspect(DEFAULT_MODEL_SECTION).user_value;
@@ -865,8 +916,8 @@ impl KimiCodeDesktopClient {
             &config,
             old_providers_value,
             old_models_value,
-            Some(serde_json::to_value(&providers).map_err(|error| error.to_string())?),
-            Some(serde_json::to_value(&models).map_err(|error| error.to_string())?),
+            Some(serde_json::to_value(&providers)?),
+            Some(serde_json::to_value(&models)?),
             next_default,
         )
         .await?;
@@ -875,15 +926,11 @@ impl KimiCodeDesktopClient {
         Ok(())
     }
 
-    async fn configured_desktop_models(&self) -> Result<Vec<DesktopModel>, String> {
-        let catalog = self
-            .app
-            .get(MODEL_CATALOG_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    async fn configured_desktop_models(&self) -> Result<Vec<DesktopModel>, DesktopClientError> {
+        let catalog = self.app.get(MODEL_CATALOG_SERVICE_ID)?;
         let default_model = self
             .app
-            .get(CONFIG_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(CONFIG_SERVICE_ID)?
             .get(DEFAULT_MODEL_SECTION)
             .and_then(|value| value.as_str().map(str::to_owned));
         let mut models = catalog
@@ -900,54 +947,48 @@ impl KimiCodeDesktopClient {
         Ok(models)
     }
 
-    pub async fn set_default_model(&self, model: &str) -> Result<(), String> {
+    pub async fn set_default_model(&self, model: &str) -> Result<(), DesktopClientError> {
         self.ensure_models_configured().await?;
         self.app
-            .get(MODEL_CATALOG_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(MODEL_CATALOG_SERVICE_ID)?
             .set_default_model(model)
             .await
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn get_agent_settings(&self) -> Result<DesktopAgentSettings, String> {
-        let config = self
-            .app
-            .get(CONFIG_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        config.ready().await.map_err(|error| error.to_string())?;
+    pub async fn get_agent_settings(&self) -> Result<DesktopAgentSettings, DesktopClientError> {
+        let config = self.app.get(CONFIG_SERVICE_ID)?;
+        config.ready().await?;
         Ok(agent_settings_from_config(config.0.as_ref()))
     }
 
     pub async fn update_agent_settings(
         &self,
         patch: DesktopAgentSettingsPatch,
-    ) -> Result<DesktopAgentSettings, String> {
+    ) -> Result<DesktopAgentSettings, DesktopClientError> {
         if let Some(model) = patch.default_model.as_deref() {
             let model = model.trim();
             if model.is_empty() {
-                return Err("A default model is required.".to_owned());
+                return Err(DesktopClientError::Message(
+                    "A default model is required.".to_owned(),
+                ));
             }
             self.set_default_model(model).await?;
         }
 
         let _guard = self.config_gate.lock().await;
-        let config = self
-            .app
-            .get(CONFIG_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        config.ready().await.map_err(|error| error.to_string())?;
+        let config = self.app.get(CONFIG_SERVICE_ID)?;
+        config.ready().await?;
 
         if let Some(permission) = patch.default_permission {
             config
                 .replace(
                     DEFAULT_PERMISSION_MODE_SECTION,
-                    Some(serde_json::to_value(permission).map_err(|error| error.to_string())?),
+                    Some(serde_json::to_value(permission)?),
                     ConfigTarget::User,
                 )
-                .await
-                .map_err(|error| error.to_string())?;
+                .await?;
         }
         if let Some(enabled) = patch.default_thinking {
             config
@@ -956,8 +997,7 @@ impl KimiCodeDesktopClient {
                     Some(serde_json::json!({ "enabled": enabled })),
                     ConfigTarget::User,
                 )
-                .await
-                .map_err(|error| error.to_string())?;
+                .await?;
         }
         if let Some(enabled) = patch.default_plan_mode {
             config
@@ -966,8 +1006,7 @@ impl KimiCodeDesktopClient {
                     Some(Value::Bool(enabled)),
                     ConfigTarget::User,
                 )
-                .await
-                .map_err(|error| error.to_string())?;
+                .await?;
         }
 
         Ok(agent_settings_from_config(config.0.as_ref()))
@@ -978,11 +1017,8 @@ impl KimiCodeDesktopClient {
         filename: &str,
         media_type: &str,
         data: Vec<u8>,
-    ) -> Result<FileMeta, String> {
-        let files = self
-            .app
-            .get(FILE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<FileMeta, DesktopClientError> {
+        let files = self.app.get(FILE_SERVICE_ID)?;
         let source: FileByteStream = Box::pin(futures_util::stream::once(async move {
             Ok::<_, FileServiceError>(data)
         }));
@@ -1000,103 +1036,90 @@ impl KimiCodeDesktopClient {
                 }),
             )
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn list_workspaces(&self) -> Result<Vec<DesktopWorkspace>, String> {
-        let registry = self
-            .app
-            .get(WORKSPACE_REGISTRY_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    pub async fn list_workspaces(&self) -> Result<Vec<DesktopWorkspace>, DesktopClientError> {
+        let registry = self.app.get(WORKSPACE_REGISTRY_SERVICE_ID)?;
         registry
             .list()
             .await
             .map(|workspaces| workspaces.into_iter().map(map_desktop_workspace).collect())
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn folder_home(&self) -> Result<FsHomeResponse, String> {
+    pub async fn folder_home(&self) -> Result<FsHomeResponse, DesktopClientError> {
         self.app
-            .get(FS_HOST_FOLDER_BROWSER_ID)
-            .map_err(|error| error.to_string())?
+            .get(FS_HOST_FOLDER_BROWSER_ID)?
             .home()
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
     pub async fn browse_folders(
         &self,
         absolute_path: Option<&str>,
-    ) -> Result<FsBrowseResponse, String> {
+    ) -> Result<FsBrowseResponse, DesktopClientError> {
         self.app
-            .get(FS_HOST_FOLDER_BROWSER_ID)
-            .map_err(|error| error.to_string())?
+            .get(FS_HOST_FOLDER_BROWSER_ID)?
             .browse(absolute_path)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
     pub async fn create_or_touch_workspace(
         &self,
         root: &str,
         name: Option<&str>,
-    ) -> Result<DesktopWorkspace, String> {
+    ) -> Result<DesktopWorkspace, DesktopClientError> {
         let root = root.trim();
         if root.is_empty() {
-            return Err("A workspace directory is required.".to_owned());
+            return Err(DesktopClientError::Message(
+                "A workspace directory is required.".to_owned(),
+            ));
         }
-        let registry = self
-            .app
-            .get(WORKSPACE_REGISTRY_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let registry = self.app.get(WORKSPACE_REGISTRY_SERVICE_ID)?;
         registry
             .create_or_touch(root, name)
             .await
             .map(map_desktop_workspace)
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn remove_workspace(&self, workspace_id: &str) -> Result<(), String> {
+    pub async fn remove_workspace(&self, workspace_id: &str) -> Result<(), DesktopClientError> {
         let workspace_id = workspace_id.trim();
         if workspace_id.is_empty() {
-            return Err("A workspace id is required.".to_owned());
+            return Err(DesktopClientError::Message(
+                "A workspace id is required.".to_owned(),
+            ));
         }
-        let registry = self
-            .app
-            .get(WORKSPACE_REGISTRY_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let registry = self.app.get(WORKSPACE_REGISTRY_SERVICE_ID)?;
         registry
             .delete(workspace_id)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
     pub async fn list_workspace_sessions(
         &self,
         workspace_id: &str,
-    ) -> Result<Vec<SessionSummary>, String> {
-        let query = self
-            .app
-            .get(WORKSPACE_QUERY_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<Vec<SessionSummary>, DesktopClientError> {
+        let query = self.app.get(WORKSPACE_QUERY_SERVICE_ID)?;
         query
             .list_recent_sessions(workspace_id)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn list_archived_sessions(&self) -> Result<Vec<SessionSummary>, String> {
-        let index = self
-            .app
-            .get(SESSION_INDEX_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    pub async fn list_archived_sessions(&self) -> Result<Vec<SessionSummary>, DesktopClientError> {
+        let index = self.app.get(SESSION_INDEX_SERVICE_ID)?;
         let page = index
             .list(SessionListQuery {
                 include_archived: Some(true),
                 ..SessionListQuery::default()
             })
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(DesktopClientError::from)?;
         Ok(page
             .items
             .into_iter()
@@ -1107,7 +1130,7 @@ impl KimiCodeDesktopClient {
     pub async fn delete_archived_sessions(
         &self,
         session_ids: &[String],
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>, DesktopClientError> {
         let mut seen = HashSet::new();
         let session_ids = session_ids
             .iter()
@@ -1120,37 +1143,31 @@ impl KimiCodeDesktopClient {
             return Ok(Vec::new());
         }
 
-        let index = self
-            .app
-            .get(SESSION_INDEX_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let index = self.app.get(SESSION_INDEX_SERVICE_ID)?;
         let mut existing = Vec::with_capacity(session_ids.len());
         for session_id in session_ids {
             let Some(session) = index
                 .get(&session_id)
                 .await
-                .map_err(|error| error.to_string())?
+                .map_err(DesktopClientError::from)?
             else {
                 continue;
             };
             if !session.archived {
-                return Err(format!(
+                return Err(DesktopClientError::Message(format!(
                     "Session `{session_id}` must be archived before it can be deleted."
-                ));
+                )));
             }
             existing.push(session_id);
         }
 
-        let lifecycle = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let lifecycle = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
         let mut deleted = Vec::with_capacity(existing.len());
         for session_id in existing {
             if lifecycle
                 .delete_archived(&session_id)
                 .await
-                .map_err(|error| error.to_string())?
+                .map_err(DesktopClientError::from)?
             {
                 deleted.push(session_id);
             }
@@ -1158,41 +1175,36 @@ impl KimiCodeDesktopClient {
         Ok(deleted)
     }
 
-    pub async fn fork_session(&self, session_id: &str) -> Result<String, String> {
+    pub async fn fork_session(&self, session_id: &str) -> Result<String, DesktopClientError> {
         let session_id = session_id.trim();
         if session_id.is_empty() {
-            return Err("A session id is required.".to_owned());
+            return Err(DesktopClientError::Message(
+                "A session id is required.".to_owned(),
+            ));
         }
 
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
         let forked = sessions
             .fork(ForkSessionOptions {
                 source_session_id: session_id.to_owned(),
                 ..ForkSessionOptions::default()
             })
             .await
-            .map_err(|error| error.to_string())?;
-        let context = forked
-            .get(SESSION_CONTEXT_ID)
-            .map_err(|error| error.to_string())?;
+            .map_err(DesktopClientError::from)?;
+        let context = forked.get(SESSION_CONTEXT_ID)?;
         Ok(context.session_id.clone())
     }
 
-    pub async fn list_session_skills(&self, session_id: &str) -> Result<Vec<DesktopSkill>, String> {
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "the session is not active; prepare it first".to_owned())?;
-        let skills = session
-            .get(SESSION_SKILL_CATALOG_ID)
-            .map_err(|error| error.to_string())?;
-        skills.ready().await.map_err(|error| error.to_string())?;
+    pub async fn list_session_skills(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<DesktopSkill>, DesktopClientError> {
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
+        let session = sessions.get(session_id).ok_or_else(|| {
+            DesktopClientError::Message("the session is not active; prepare it first".to_owned())
+        })?;
+        let skills = session.get(SESSION_SKILL_CATALOG_ID)?;
+        skills.ready().await?;
 
         Ok(skills
             .catalog()
@@ -1217,30 +1229,29 @@ impl KimiCodeDesktopClient {
         &self,
         session_id: &str,
         name: &str,
-    ) -> Result<DesktopSkillContent, String> {
+    ) -> Result<DesktopSkillContent, DesktopClientError> {
         let name = name.trim();
         if name.is_empty() {
-            return Err("A skill name is required.".to_owned());
+            return Err(DesktopClientError::Message(
+                "A skill name is required.".to_owned(),
+            ));
         }
 
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "the session is not active; prepare it first".to_owned())?;
-        let skills = session
-            .get(SESSION_SKILL_CATALOG_ID)
-            .map_err(|error| error.to_string())?;
-        skills.ready().await.map_err(|error| error.to_string())?;
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
+        let session = sessions.get(session_id).ok_or_else(|| {
+            DesktopClientError::Message("the session is not active; prepare it first".to_owned())
+        })?;
+        let skills = session.get(SESSION_SKILL_CATALOG_ID)?;
+        skills.ready().await?;
         let skill = skills
             .catalog()
             .get_skill(name)
-            .ok_or_else(|| format!("Skill `{name}` was not found."))?;
+            .ok_or_else(|| DesktopClientError::Message(format!("Skill `{name}` was not found.")))?;
 
         if !is_user_activatable_skill_type(skill.metadata.kind.as_deref()) {
-            return Err(format!("Skill `{name}` is not available for direct use."));
+            return Err(DesktopClientError::Message(format!(
+                "Skill `{name}` is not available for direct use."
+            )));
         }
 
         Ok(DesktopSkillContent {
@@ -1261,7 +1272,7 @@ impl KimiCodeDesktopClient {
     pub async fn list_custom_agents(
         &self,
         workspace_id: &str,
-    ) -> Result<Vec<DesktopCustomAgent>, String> {
+    ) -> Result<Vec<DesktopCustomAgent>, DesktopClientError> {
         let mut agents = Vec::new();
         for scope in [
             DesktopCustomAgentScope::App,
@@ -1271,7 +1282,8 @@ impl KimiCodeDesktopClient {
             let source = custom_agent_source(scope);
             agents.extend(
                 list_managed_agent_files(&root, source)
-                    .await?
+                    .await
+                    .map_err(DesktopClientError::Message)?
                     .into_iter()
                     .map(|file| map_desktop_custom_agent(scope, file)),
             );
@@ -1288,7 +1300,7 @@ impl KimiCodeDesktopClient {
     pub async fn save_custom_agent(
         &self,
         input: DesktopSaveCustomAgentInput,
-    ) -> Result<DesktopCustomAgent, String> {
+    ) -> Result<DesktopCustomAgent, DesktopClientError> {
         let root = self
             .custom_agent_root(&input.workspace_id, input.scope)
             .await?;
@@ -1298,7 +1310,8 @@ impl KimiCodeDesktopClient {
             input.relative_path.as_deref(),
             &input.content,
         )
-        .await?;
+        .await
+        .map_err(DesktopClientError::Message)?;
         self.reload_active_agent_catalogs().await?;
         Ok(map_desktop_custom_agent(input.scope, file))
     }
@@ -1306,15 +1319,20 @@ impl KimiCodeDesktopClient {
     pub async fn delete_custom_agent(
         &self,
         input: DesktopDeleteCustomAgentInput,
-    ) -> Result<(), String> {
+    ) -> Result<(), DesktopClientError> {
         let root = self
             .custom_agent_root(&input.workspace_id, input.scope)
             .await?;
-        delete_managed_agent_file(&root, &input.relative_path).await?;
+        delete_managed_agent_file(&root, &input.relative_path)
+            .await
+            .map_err(DesktopClientError::Message)?;
         self.reload_active_agent_catalogs().await
     }
 
-    pub async fn list_cron_tasks(&self, session_id: &str) -> Result<Vec<DesktopCronTask>, String> {
+    pub async fn list_cron_tasks(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<DesktopCronTask>, DesktopClientError> {
         let cron = self.session_cron_service(session_id)?;
         Ok(cron
             .list()
@@ -1326,43 +1344,48 @@ impl KimiCodeDesktopClient {
     pub async fn create_cron_task(
         &self,
         input: DesktopCreateCronTaskInput,
-    ) -> Result<DesktopCronTask, String> {
+    ) -> Result<DesktopCronTask, DesktopClientError> {
         let cron = self.session_cron_service(&input.session_id)?;
         if cron.is_disabled() {
-            return Err("Cron scheduling is disabled (KIMI_DISABLE_CRON=1).".into());
+            return Err(DesktopClientError::Message(
+                "Cron scheduling is disabled (KIMI_DISABLE_CRON=1).".into(),
+            ));
         }
         if input.prompt.is_empty() {
-            return Err("A non-empty prompt is required.".into());
+            return Err(DesktopClientError::Message(
+                "A non-empty prompt is required.".into(),
+            ));
         }
         let prompt_bytes = input.prompt.len();
         if prompt_bytes > MAX_CRON_PROMPT_BYTES {
-            return Err(format!(
+            return Err(DesktopClientError::Message(format!(
                 "Prompt exceeds {MAX_CRON_PROMPT_BYTES} bytes (got {prompt_bytes})."
-            ));
+            )));
         }
         if cron.list().len() >= MAX_CRON_JOBS_PER_SESSION {
-            return Err(format!(
+            return Err(DesktopClientError::Message(format!(
                 "Cron job cap reached (max {MAX_CRON_JOBS_PER_SESSION} per session)."
-            ));
+            )));
         }
 
         let normalized_cron = input.cron.split_whitespace().collect::<Vec<_>>().join(" ");
-        let parsed = parse_cron_expression(&normalized_cron)
-            .map_err(|error| format!("Invalid cron expression: {error}"))?;
+        let parsed = parse_cron_expression(&normalized_cron).map_err(|error| {
+            DesktopClientError::Message(format!("Invalid cron expression: {error}"))
+        })?;
         let now = cron.now();
         if !has_fire_within_years(&parsed, 5.0, now) {
-            return Err(format!(
+            return Err(DesktopClientError::Message(format!(
                 "Cron expression {normalized_cron:?} has no fire within 5 years; refusing to schedule."
-            ));
+            )));
         }
         if !input.recurring
             && let Some(first_fire) = compute_next_cron_run(&parsed, now)
             && first_fire - now > ONE_SHOT_MAX_FUTURE_MS
         {
-            return Err(format!(
+            return Err(DesktopClientError::Message(format!(
                 "One-shot cron {normalized_cron:?} would not fire until {} (more than a year out).",
                 format_local_iso_with_offset(first_fire)
-            ));
+            )));
         }
 
         let task = cron
@@ -1373,159 +1396,157 @@ impl KimiCodeDesktopClient {
                 last_fired_at: None,
                 tags: None,
             })
-            .map_err(|error| error.to_string())?;
+            .map_err(DesktopClientError::from)?;
         cron.emit_scheduled(&task, None);
         Ok(map_desktop_cron_task(&cron, task))
     }
 
-    pub async fn delete_cron_task(&self, input: DesktopDeleteCronTaskInput) -> Result<(), String> {
+    pub async fn delete_cron_task(
+        &self,
+        input: DesktopDeleteCronTaskInput,
+    ) -> Result<(), DesktopClientError> {
         let id = input.id.trim();
         if !CRON_ID_REGEX.is_match(id) {
-            return Err("The cron task id must be a valid ULID.".into());
+            return Err(DesktopClientError::Message(
+                "The cron task id must be a valid ULID.".into(),
+            ));
         }
         let cron = self.session_cron_service(&input.session_id)?;
         let removed = cron
             .remove_tasks(&[id.to_owned()])
-            .map_err(|error| error.to_string())?;
+            .map_err(DesktopClientError::from)?;
         if removed.is_empty() {
-            return Err(format!("No cron job with id {id}."));
+            return Err(DesktopClientError::Message(format!(
+                "No cron job with id {id}."
+            )));
         }
         cron.emit_deleted(id, None);
         Ok(())
     }
 
-    fn session_cron_service(&self, session_id: &str) -> Result<SessionCronServiceHandle, String> {
+    fn session_cron_service(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionCronServiceHandle, DesktopClientError> {
         let session_id = session_id.trim();
         if session_id.is_empty() {
-            return Err("A session id is required.".into());
+            return Err(DesktopClientError::Message(
+                "A session id is required.".into(),
+            ));
         }
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "the session is not active; prepare it first".to_owned())?;
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
+        let session = sessions.get(session_id).ok_or_else(|| {
+            DesktopClientError::Message("the session is not active; prepare it first".to_owned())
+        })?;
         session
             .get(SESSION_CRON_SERVICE_ID)
             .map(|service| (*service).clone())
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
     async fn custom_agent_root(
         &self,
         workspace_id: &str,
         scope: DesktopCustomAgentScope,
-    ) -> Result<PathBuf, String> {
+    ) -> Result<PathBuf, DesktopClientError> {
         match scope {
             DesktopCustomAgentScope::App => Ok(self.home_dir.join("agents")),
             DesktopCustomAgentScope::Project => {
                 let workspace_id = workspace_id.trim();
                 if workspace_id.is_empty() {
-                    return Err("A workspace id is required for project agents.".into());
+                    return Err(DesktopClientError::Message(
+                        "A workspace id is required for project agents.".into(),
+                    ));
                 }
-                let registry = self
-                    .app
-                    .get(WORKSPACE_REGISTRY_SERVICE_ID)
-                    .map_err(|error| error.to_string())?;
+                let registry = self.app.get(WORKSPACE_REGISTRY_SERVICE_ID)?;
                 let workspace = registry
                     .get(workspace_id)
                     .await
-                    .map_err(|error| error.to_string())?
-                    .ok_or_else(|| format!("Workspace `{workspace_id}` was not found."))?;
-                let fs = self
-                    .app
-                    .get(HOST_FILE_SYSTEM_SERVICE_ID)
-                    .map_err(|error| error.to_string())?;
+                    .map_err(DesktopClientError::from)?
+                    .ok_or_else(|| {
+                        DesktopClientError::Message(format!(
+                            "Workspace `{workspace_id}` was not found."
+                        ))
+                    })?;
+                let fs = self.app.get(HOST_FILE_SYSTEM_SERVICE_ID)?;
                 let project_root =
                     resolve_agent_project_root(fs.0.as_ref(), Path::new(&workspace.root), None)
-                        .await
-                        .map_err(|error| error.to_string())?;
+                        .await?;
                 Ok(project_root.join(".kimi-code/agents"))
             }
         }
     }
 
-    async fn reload_active_agent_catalogs(&self) -> Result<(), String> {
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    async fn reload_active_agent_catalogs(&self) -> Result<(), DesktopClientError> {
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
         for session in sessions.list() {
-            let catalog = session
-                .get(SESSION_AGENT_PROFILE_CATALOG_ID)
-                .map_err(|error| error.to_string())?;
+            let catalog = session.get(SESSION_AGENT_PROFILE_CATALOG_ID)?;
             catalog.reload().await.map_err(|error| {
-                format!(
+                DesktopClientError::Message(format!(
                     "Agent file was updated, but session {} could not reload it: {error}",
                     session.id()
-                )
+                ))
             })?;
         }
         Ok(())
     }
 
-    pub async fn list_plugins(&self) -> Result<Vec<PluginSummary>, String> {
+    pub async fn list_plugins(&self) -> Result<Vec<PluginSummary>, DesktopClientError> {
         self.app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(PLUGIN_SERVICE_ID)?
             .list_plugins()
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn install_plugin(&self, source: String) -> Result<PluginSummary, String> {
+    pub async fn install_plugin(
+        &self,
+        source: String,
+    ) -> Result<PluginSummary, DesktopClientError> {
         self.app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(PLUGIN_SERVICE_ID)?
             .install_plugin(InstallPluginInput { source })
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
     pub async fn install_plugin_in_background(
         &self,
         source: String,
         operation_id: String,
-    ) -> Result<(), String> {
-        let plugins = self
-            .app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<(), DesktopClientError> {
+        let plugins = self.app.get(PLUGIN_SERVICE_ID)?;
         Arc::clone(&plugins.0)
             .install_plugin_in_background(InstallPluginInput { source }, operation_id)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
     pub async fn plugin_install_progress(
         &self,
         operation_id: String,
-    ) -> Result<Option<PluginInstallOperation>, String> {
-        let plugins = self
-            .app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<Option<PluginInstallOperation>, DesktopClientError> {
+        let plugins = self.app.get(PLUGIN_SERVICE_ID)?;
         Ok(plugins.plugin_install_progress(&operation_id))
     }
 
     pub async fn list_plugin_install_operations(
         &self,
-    ) -> Result<Vec<PluginInstallOperation>, String> {
-        let plugins = self
-            .app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<Vec<PluginInstallOperation>, DesktopClientError> {
+        let plugins = self.app.get(PLUGIN_SERVICE_ID)?;
         Ok(plugins.list_plugin_install_operations())
     }
 
-    pub async fn set_plugin_enabled(&self, id: String, enabled: bool) -> Result<(), String> {
+    pub async fn set_plugin_enabled(
+        &self,
+        id: String,
+        enabled: bool,
+    ) -> Result<(), DesktopClientError> {
         self.app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(PLUGIN_SERVICE_ID)?
             .set_plugin_enabled(SetPluginEnabledInput { id, enabled })
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
     pub async fn set_plugin_mcp_server_enabled(
@@ -1533,145 +1554,149 @@ impl KimiCodeDesktopClient {
         id: String,
         server: String,
         enabled: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), DesktopClientError> {
         self.app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(PLUGIN_SERVICE_ID)?
             .set_plugin_mcp_server_enabled(SetPluginMcpServerEnabledInput {
                 id,
                 server,
                 enabled,
             })
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn remove_plugin(&self, id: String) -> Result<(), String> {
+    pub async fn remove_plugin(&self, id: String) -> Result<(), DesktopClientError> {
         self.app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(PLUGIN_SERVICE_ID)?
             .remove_plugin(RemovePluginInput { id })
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn reload_plugins(&self) -> Result<ReloadSummary, String> {
+    pub async fn reload_plugins(&self) -> Result<ReloadSummary, DesktopClientError> {
         self.app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(PLUGIN_SERVICE_ID)?
             .reload_plugins()
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn get_plugin_info(&self, id: String) -> Result<PluginInfo, String> {
+    pub async fn get_plugin_info(&self, id: String) -> Result<PluginInfo, DesktopClientError> {
         self.app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(PLUGIN_SERVICE_ID)?
             .get_plugin_info(GetPluginInfoInput { id })
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn check_plugin_updates(&self) -> Result<Vec<PluginUpdateStatus>, String> {
+    pub async fn check_plugin_updates(
+        &self,
+    ) -> Result<Vec<PluginUpdateStatus>, DesktopClientError> {
         self.app
-            .get(PLUGIN_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(PLUGIN_SERVICE_ID)?
             .check_updates()
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn list_capabilities(&self) -> Result<Vec<CapabilityStatus>, String> {
+    pub async fn list_capabilities(&self) -> Result<Vec<CapabilityStatus>, DesktopClientError> {
         self.app
-            .get(CAPABILITY_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(CAPABILITY_SERVICE_ID)?
             .list_capabilities()
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn get_capability(&self, id: String) -> Result<CapabilityStatus, String> {
+    pub async fn get_capability(&self, id: String) -> Result<CapabilityStatus, DesktopClientError> {
         self.app
-            .get(CAPABILITY_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(CAPABILITY_SERVICE_ID)?
             .get_capability(&id)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn install_capability(&self, id: String) -> Result<CapabilityStatus, String> {
+    pub async fn install_capability(
+        &self,
+        id: String,
+    ) -> Result<CapabilityStatus, DesktopClientError> {
         self.app
-            .get(CAPABILITY_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(CAPABILITY_SERVICE_ID)?
             .install_capability(&id)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn archive_session(&self, session_id: &str) -> Result<(), String> {
+    pub async fn archive_session(&self, session_id: &str) -> Result<(), DesktopClientError> {
         let session_id = session_id.trim();
         if session_id.is_empty() {
-            return Err("A session id is required.".to_owned());
+            return Err(DesktopClientError::Message(
+                "A session id is required.".to_owned(),
+            ));
         }
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
         if sessions
             .resume(session_id)
             .await
-            .map_err(|error| error.to_string())?
+            .map_err(DesktopClientError::from)?
             .is_none()
         {
-            return Err(format!("Session `{session_id}` was not found."));
+            return Err(DesktopClientError::Message(format!(
+                "Session `{session_id}` was not found."
+            )));
         }
         sessions
             .archive(session_id)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    pub async fn restore_session(&self, session_id: &str) -> Result<SessionSummary, String> {
+    pub async fn restore_session(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionSummary, DesktopClientError> {
         let session_id = session_id.trim();
         if session_id.is_empty() {
-            return Err("A session id is required.".to_owned());
+            return Err(DesktopClientError::Message(
+                "A session id is required.".to_owned(),
+            ));
         }
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
         if sessions
             .restore(session_id)
             .await
-            .map_err(|error| error.to_string())?
+            .map_err(DesktopClientError::from)?
             .is_none()
         {
-            return Err(format!("Session `{session_id}` was not found."));
+            return Err(DesktopClientError::Message(format!(
+                "Session `{session_id}` was not found."
+            )));
         }
         self.app
-            .get(SESSION_INDEX_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(SESSION_INDEX_SERVICE_ID)?
             .get(session_id)
             .await
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("Session `{session_id}` was not found after restoring it."))
+            .map_err(DesktopClientError::from)?
+            .ok_or_else(|| {
+                DesktopClientError::Message(format!(
+                    "Session `{session_id}` was not found after restoring it."
+                ))
+            })
     }
 
     pub async fn prepare_session(
         &self,
         request: DesktopPrepareSessionRequest,
-    ) -> Result<DesktopPreparedSession, String> {
+    ) -> Result<DesktopPreparedSession, DesktopClientError> {
         let work_dir = request.work_dir.trim();
         if work_dir.is_empty() {
-            return Err("A workspace directory is required.".to_owned());
+            return Err(DesktopClientError::Message(
+                "A workspace directory is required.".to_owned(),
+            ));
         }
         self.ensure_models_configured().await?;
 
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
         let requested_session_id = request
             .session_id
             .as_deref()
@@ -1684,8 +1709,12 @@ impl KimiCodeDesktopClient {
                 sessions
                     .resume(session_id)
                     .await
-                    .map_err(|error| error.to_string())?
-                    .ok_or_else(|| format!("Session `{session_id}` was not found."))?
+                    .map_err(DesktopClientError::from)?
+                    .ok_or_else(|| {
+                        DesktopClientError::Message(format!(
+                            "Session `{session_id}` was not found."
+                        ))
+                    })?
             }
         } else {
             sessions
@@ -1701,34 +1730,28 @@ impl KimiCodeDesktopClient {
                     ..CreateSessionOptions::default()
                 })
                 .await
-                .map_err(|error| error.to_string())?
+                .map_err(DesktopClientError::from)?
         };
 
         let agent = ensure_main_agent(&session, None)
             .await
-            .map_err(|error| error.to_string())?;
-        let rpc = agent
-            .get(AGENT_RPC_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+            .map_err(DesktopClientError::from)?;
+        let rpc = agent.get(AGENT_RPC_SERVICE_ID)?;
         if creating && let Some(permission) = request.permission {
             rpc.set_permission(SetPermissionPayload { mode: permission })
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(DesktopClientError::from)?;
         }
         let model = rpc
             .get_model(EmptyPayload {})
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(DesktopClientError::from)?;
         let thinking_level = agent
-            .get(AGENT_PROFILE_SERVICE_ID)
-            .map_err(|error| error.to_string())?
+            .get(AGENT_PROFILE_SERVICE_ID)?
             .get_effective_thinking_level()
-            .map_err(|error| error.to_string())?
+            .map_err(DesktopClientError::from)?
             .to_string();
-        let permission_mode = agent
-            .get(AGENT_PERMISSION_MODE_SERVICE_ID)
-            .map_err(|error| error.to_string())?
-            .mode();
+        let permission_mode = agent.get(AGENT_PERMISSION_MODE_SERVICE_ID)?.mode();
 
         Ok(DesktopPreparedSession {
             session_id: session.id().to_owned(),
@@ -1743,29 +1766,27 @@ impl KimiCodeDesktopClient {
         &self,
         session_id: &str,
         agent_id: &str,
-    ) -> Result<AgentRpcServiceHandle, String> {
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "the session is not active; prepare it first".to_owned())?;
+    ) -> Result<AgentRpcServiceHandle, DesktopClientError> {
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
+        let session = sessions.get(session_id).ok_or_else(|| {
+            DesktopClientError::Message("the session is not active; prepare it first".to_owned())
+        })?;
         let agent = if agent_id == MAIN_AGENT_ID {
             ensure_main_agent(&session, None)
                 .await
-                .map_err(|error| error.to_string())?
+                .map_err(DesktopClientError::from)?
         } else {
             session
-                .get(AGENT_LIFECYCLE_SERVICE_ID)
-                .map_err(|error| error.to_string())?
+                .get(AGENT_LIFECYCLE_SERVICE_ID)?
                 .get(agent_id)
-                .ok_or_else(|| format!("Agent `{agent_id}` was not found."))?
+                .ok_or_else(|| {
+                    DesktopClientError::Message(format!("Agent `{agent_id}` was not found."))
+                })?
         };
         agent
             .get(AGENT_RPC_SERVICE_ID)
             .map(|service| (*service).clone())
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
     pub async fn subscribe_agent_events(
@@ -1774,7 +1795,7 @@ impl KimiCodeDesktopClient {
         agent_id: &str,
         on_event: Arc<dyn Fn(String, Value) + Send + Sync>,
         on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
-    ) -> Result<DisposableHandle, String> {
+    ) -> Result<DisposableHandle, DesktopClientError> {
         self.subscribe_agent_events_inner(session_id, agent_id, on_event, on_interactions, false)
             .await
     }
@@ -1785,7 +1806,7 @@ impl KimiCodeDesktopClient {
         agent_id: &str,
         on_event: Arc<dyn Fn(String, Value) + Send + Sync>,
         on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
-    ) -> Result<DisposableHandle, String> {
+    ) -> Result<DisposableHandle, DesktopClientError> {
         self.subscribe_agent_events_inner(session_id, agent_id, on_event, on_interactions, true)
             .await
     }
@@ -1797,31 +1818,27 @@ impl KimiCodeDesktopClient {
         on_event: Arc<dyn Fn(String, Value) + Send + Sync>,
         on_interactions: Arc<dyn Fn(Vec<DesktopInteraction>) + Send + Sync>,
         replay: bool,
-    ) -> Result<DisposableHandle, String> {
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| "the session is not active; prepare it first".to_owned())?;
+    ) -> Result<DisposableHandle, DesktopClientError> {
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
+        let session = sessions.get(session_id).ok_or_else(|| {
+            DesktopClientError::Message("the session is not active; prepare it first".to_owned())
+        })?;
         let agent = if agent_id == MAIN_AGENT_ID {
             ensure_main_agent(&session, None)
                 .await
-                .map_err(|error| error.to_string())?
+                .map_err(DesktopClientError::from)?
         } else {
             session
-                .get(AGENT_LIFECYCLE_SERVICE_ID)
-                .map_err(|error| error.to_string())?
+                .get(AGENT_LIFECYCLE_SERVICE_ID)?
                 .get(agent_id)
-                .ok_or_else(|| format!("Agent `{agent_id}` was not found."))?
+                .ok_or_else(|| {
+                    DesktopClientError::Message(format!("Agent `{agent_id}` was not found."))
+                })?
         };
 
         let subscriptions = Arc::new(DisposableStore::new());
         if agent_id == MAIN_AGENT_ID {
-            let lifecycle = session
-                .get(AGENT_LIFECYCLE_SERVICE_ID)
-                .map_err(|error| error.to_string())?;
+            let lifecycle = session.get(AGENT_LIFECYCLE_SERVICE_ID)?;
             let attached = Arc::new(Mutex::new(HashSet::new()));
             let subscriptions_for_create = Arc::clone(&subscriptions);
             let attached_for_create = Arc::clone(&attached);
@@ -1840,9 +1857,7 @@ impl KimiCodeDesktopClient {
                 lifecycle
                     .on_did_dispose()
                     .subscribe(move |disposed_agent_id| {
-                        attached_for_dispose
-                            .lock()
-                            .remove(disposed_agent_id);
+                        attached_for_dispose.lock().remove(disposed_agent_id);
                     }),
             );
             for handle in lifecycle.list(None) {
@@ -1853,9 +1868,7 @@ impl KimiCodeDesktopClient {
             attach_desktop_agent_events(&subscriptions, &attached, &agent, &on_event, replay)?;
         }
 
-        let todo = session
-            .get(SESSION_TODO_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let todo = session.get(SESSION_TODO_SERVICE_ID)?;
         let todo_agent_id = agent_id.to_owned();
         subscriptions.add(todo.on_did_change().subscribe(move |todos| {
             on_event(
@@ -1867,9 +1880,7 @@ impl KimiCodeDesktopClient {
             );
         }));
 
-        let interaction = session
-            .get(SESSION_INTERACTION_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let interaction = session.get(SESSION_INTERACTION_SERVICE_ID)?;
         on_interactions(map_desktop_interactions(
             interaction.list_pending(None).await,
         ));
@@ -1891,63 +1902,45 @@ impl KimiCodeDesktopClient {
         &self,
         conversation_id: &str,
         agent_id: Option<&str>,
-    ) -> Result<DesktopMessagePage, String> {
-        let messages = self
-            .app
-            .get(MESSAGE_LEGACY_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<DesktopMessagePage, DesktopClientError> {
+        let messages = self.app.get(MESSAGE_LEGACY_SERVICE_ID)?;
         match messages.list_all(conversation_id, agent_id).await {
             Ok(items) => Ok(DesktopMessagePage {
                 items,
                 has_more: false,
             }),
-            Err(error)
-                if error
-                    .downcast_ref::<Error2>()
-                    .is_some_and(|error| error.code == "session.not_found") =>
-            {
-                Ok(DesktopMessagePage {
-                    items: Vec::new(),
-                    has_more: false,
-                })
-            }
-            Err(error) => Err(error.to_string()),
+            Err(error) if is_session_not_found(error.as_ref()) => Ok(DesktopMessagePage {
+                items: Vec::new(),
+                has_more: false,
+            }),
+            Err(error) => Err(error.into()),
         }
     }
 
     pub async fn context_usage(
         &self,
         conversation_id: &str,
-    ) -> Result<Option<DesktopContextUsage>, String> {
+    ) -> Result<Option<DesktopContextUsage>, DesktopClientError> {
         self.ensure_models_configured().await?;
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
         let session = if let Some(session) = sessions.get(conversation_id) {
             session
         } else {
             let Some(session) = sessions
                 .resume(conversation_id)
                 .await
-                .map_err(|error| error.to_string())?
+                .map_err(DesktopClientError::from)?
             else {
                 return Ok(None);
             };
             session
         };
-        let agents = session
-            .get(AGENT_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let agent = agents
-            .get(MAIN_AGENT_ID)
-            .ok_or_else(|| "the session did not create its main agent".to_owned())?;
-        let context_size = agent
-            .get(AGENT_CONTEXT_SIZE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let profile = agent
-            .get(AGENT_PROFILE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+        let agents = session.get(AGENT_LIFECYCLE_SERVICE_ID)?;
+        let agent = agents.get(MAIN_AGENT_ID).ok_or_else(|| {
+            DesktopClientError::Message("the session did not create its main agent".to_owned())
+        })?;
+        let context_size = agent.get(AGENT_CONTEXT_SIZE_SERVICE_ID)?;
+        let profile = agent.get(AGENT_PROFILE_SERVICE_ID)?;
         context_usage_snapshot(&context_size, &profile).map(Some)
     }
 
@@ -1956,30 +1949,27 @@ impl KimiCodeDesktopClient {
         conversation_id: &str,
         interaction_id: &str,
         response: Value,
-    ) -> Result<(), String> {
-        let sessions = self
-            .app
-            .get(SESSION_LIFECYCLE_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        let session = sessions
-            .get(conversation_id)
-            .ok_or_else(|| "the conversation session is not active".to_owned())?;
-        let interaction = session
-            .get(SESSION_INTERACTION_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<(), DesktopClientError> {
+        let sessions = self.app.get(SESSION_LIFECYCLE_SERVICE_ID)?;
+        let session = sessions.get(conversation_id).ok_or_else(|| {
+            DesktopClientError::Message("the conversation session is not active".to_owned())
+        })?;
+        let interaction = session.get(SESSION_INTERACTION_SERVICE_ID)?;
         let is_pending = interaction
             .list_pending(None)
             .await
             .iter()
             .any(|pending| pending.id == interaction_id);
         if !is_pending {
-            return Err("the interaction is no longer pending".to_owned());
+            return Err(DesktopClientError::Message(
+                "the interaction is no longer pending".to_owned(),
+            ));
         }
         interaction.respond(interaction_id, response).await;
         Ok(())
     }
 
-    async fn fetch_models(&self) -> Result<Vec<ManagedKimiCodeModelInfo>, String> {
+    async fn fetch_models(&self) -> Result<Vec<ManagedKimiCodeModelInfo>, DesktopClientError> {
         let token = self.fresh_token().await?;
         let headers = self.identity_headers().await?;
         fetch_managed_kimi_code_models(
@@ -1989,19 +1979,14 @@ impl KimiCodeDesktopClient {
             CredentialKind::OAuth,
         )
         .await
-        .map_err(|error| error.to_string())
+        .map_err(DesktopClientError::from)
     }
 
-    async fn ensure_models_configured(&self) -> Result<(), String> {
+    async fn ensure_models_configured(&self) -> Result<(), DesktopClientError> {
         if self.models_configured.load(Ordering::Acquire) {
             return Ok(());
         }
-        let configured = self
-            .app
-            .get(MODEL_CATALOG_SERVICE_ID)
-            .map_err(|error| error.to_string())?
-            .list_models()
-            .await;
+        let configured = self.app.get(MODEL_CATALOG_SERVICE_ID)?.list_models().await;
         if !configured.is_empty() {
             self.models_configured.store(true, Ordering::Release);
             return Ok(());
@@ -2010,13 +1995,13 @@ impl KimiCodeDesktopClient {
         self.configure_models(&models).await
     }
 
-    async fn configure_models(&self, models: &[ManagedKimiCodeModelInfo]) -> Result<(), String> {
+    async fn configure_models(
+        &self,
+        models: &[ManagedKimiCodeModelInfo],
+    ) -> Result<(), DesktopClientError> {
         let _guard = self.config_gate.lock().await;
-        let config = self
-            .app
-            .get(CONFIG_SERVICE_ID)
-            .map_err(|error| error.to_string())?;
-        config.ready().await.map_err(|error| error.to_string())?;
+        let config = self.app.get(CONFIG_SERVICE_ID)?;
+        config.ready().await?;
 
         let managed_sections = [
             PROVIDERS_SECTION,
@@ -2040,56 +2025,46 @@ impl KimiCodeDesktopClient {
                 oauth_host: None,
                 preserve_default_model: true,
             },
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
         generated
             .entry(THINKING_SECTION.to_owned())
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
-            .ok_or_else(|| "The thinking configuration must be an object.".to_owned())?
+            .ok_or_else(|| {
+                DesktopClientError::Message(
+                    "The thinking configuration must be an object.".to_owned(),
+                )
+            })?
             .insert("enabled".to_owned(), Value::Bool(true));
         for section in [PROVIDERS_SECTION, MODELS_SECTION, SERVICES_SECTION] {
             let next = generated.get(section).cloned();
             if config.inspect(section).user_value != next {
-                config
-                    .replace(section, next, ConfigTarget::User)
-                    .await
-                    .map_err(|error| error.to_string())?;
+                config.replace(section, next, ConfigTarget::User).await?;
             }
-            config
-                .replace(section, None, ConfigTarget::Memory)
-                .await
-                .map_err(|error| error.to_string())?;
+            config.replace(section, None, ConfigTarget::Memory).await?;
         }
         for section in [DEFAULT_MODEL_SECTION, THINKING_SECTION] {
             let next = generated.get(section).cloned();
             if config.inspect(section).user_value != next {
-                config
-                    .set(section, next, ConfigTarget::User)
-                    .await
-                    .map_err(|error| error.to_string())?;
+                config.set(section, next, ConfigTarget::User).await?;
             }
-            config
-                .replace(section, None, ConfigTarget::Memory)
-                .await
-                .map_err(|error| error.to_string())?;
+            config.replace(section, None, ConfigTarget::Memory).await?;
         }
         self.models_configured.store(true, Ordering::Release);
         Ok(())
     }
 
-    async fn fresh_token(&self) -> Result<String, String> {
+    async fn fresh_token(&self) -> Result<String, DesktopClientError> {
         let provider = self
             .oauth
-            .token_provider(Some(KIMI_CODE_PROVIDER_NAME), None)
-            .map_err(|error| error.to_string())?;
+            .token_provider(Some(KIMI_CODE_PROVIDER_NAME), None)?;
         provider
             .get_access_token(false)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(DesktopClientError::from)
     }
 
-    async fn identity_headers(&self) -> Result<IndexMap<String, String>, String> {
+    async fn identity_headers(&self) -> Result<IndexMap<String, String>, DesktopClientError> {
         self.identity_headers
             .get_or_try_init(|| async {
                 create_kimi_default_headers_async(&KimiIdentityOptions {
@@ -2101,7 +2076,7 @@ impl KimiCodeDesktopClient {
                     },
                 })
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(DesktopClientError::from)
             })
             .await
             .cloned()
@@ -2111,14 +2086,16 @@ impl KimiCodeDesktopClient {
 fn user_section<T: DeserializeOwned + Default>(
     config: &ConfigServiceHandle,
     domain: &str,
-) -> Result<T, String> {
+) -> Result<T, DesktopClientError> {
     section_from_value(config.inspect(domain).user_value.as_ref())
 }
 
-fn section_from_value<T: DeserializeOwned + Default>(value: Option<&Value>) -> Result<T, String> {
+fn section_from_value<T: DeserializeOwned + Default>(
+    value: Option<&Value>,
+) -> Result<T, DesktopClientError> {
     value.map_or_else(
         || Ok(T::default()),
-        |value| serde_json::from_value(value.clone()).map_err(|error| error.to_string()),
+        |value| serde_json::from_value(value.clone()).map_err(DesktopClientError::from),
     )
 }
 
@@ -2126,13 +2103,15 @@ fn is_managed_provider_id(id: &str) -> bool {
     id == KIMI_CODE_PROVIDER_NAME
 }
 
-fn protocol_for_provider_type(provider_type: &str) -> Result<Protocol, String> {
+fn protocol_for_provider_type(provider_type: &str) -> Result<Protocol, DesktopClientError> {
     match provider_type {
         "kimi" | "openai" => Ok(Protocol::OpenAi),
         "openai_responses" => Ok(Protocol::OpenAiResponses),
         "anthropic" => Ok(Protocol::Anthropic),
         "google-genai" => Ok(Protocol::GoogleGenAi),
-        _ => Err(format!("Unsupported provider protocol `{provider_type}`.")),
+        _ => Err(DesktopClientError::Message(format!(
+            "Unsupported provider protocol `{provider_type}`."
+        ))),
     }
 }
 
@@ -2142,7 +2121,7 @@ fn provider_model_config_id(provider_id: &str, model: &str) -> String {
 
 fn validate_provider_input(
     mut input: DesktopSaveProviderInput,
-) -> Result<DesktopSaveProviderInput, String> {
+) -> Result<DesktopSaveProviderInput, DesktopClientError> {
     input.id = input.id.trim().to_owned();
     input.original_id = input
         .original_id
@@ -2167,25 +2146,34 @@ fn validate_provider_input(
             .all(|character| character.is_alphanumeric() || matches!(character, '-' | '_' | ' '))
         || input.id == ENV_MODEL_PROVIDER_KEY
     {
-        return Err(
+        return Err(DesktopClientError::Message(
             "Provider name must start with a letter or number and contain only letters, numbers, spaces, '-' or '_'."
                 .to_owned(),
-        );
+        ));
     }
     protocol_for_provider_type(&input.provider_type)?;
-    let url = url::Url::parse(&input.base_url)
-        .map_err(|_| "Base URL must be a valid HTTP or HTTPS URL.".to_owned())?;
+    let url = url::Url::parse(&input.base_url).map_err(|_| {
+        DesktopClientError::Message("Base URL must be a valid HTTP or HTTPS URL.".to_owned())
+    })?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return Err("Base URL must be a valid HTTP or HTTPS URL.".to_owned());
+        return Err(DesktopClientError::Message(
+            "Base URL must be a valid HTTP or HTTPS URL.".to_owned(),
+        ));
     }
     if input.original_id.is_none() && input.api_key.is_none() {
-        return Err("API Key is required when adding a provider.".to_owned());
+        return Err(DesktopClientError::Message(
+            "API Key is required when adding a provider.".to_owned(),
+        ));
     }
     if input.models.is_empty() {
-        return Err("At least one model is required.".to_owned());
+        return Err(DesktopClientError::Message(
+            "At least one model is required.".to_owned(),
+        ));
     }
     if input.models.len() > 64 {
-        return Err("A provider can configure at most 64 models.".to_owned());
+        return Err(DesktopClientError::Message(
+            "A provider can configure at most 64 models.".to_owned(),
+        ));
     }
 
     let mut model_names = HashSet::new();
@@ -2204,29 +2192,35 @@ fn validate_provider_input(
             .map(|effort| effort.trim().to_owned())
             .filter(|effort| !effort.is_empty());
         if model.model.is_empty() {
-            return Err("Model ID cannot be empty.".to_owned());
+            return Err(DesktopClientError::Message(
+                "Model ID cannot be empty.".to_owned(),
+            ));
         }
         if model.model.len() > 128 {
-            return Err("Model ID cannot exceed 128 characters.".to_owned());
+            return Err(DesktopClientError::Message(
+                "Model ID cannot exceed 128 characters.".to_owned(),
+            ));
         }
         if model.max_context_size == 0 {
-            return Err("Model context size must be greater than zero.".to_owned());
+            return Err(DesktopClientError::Message(
+                "Model context size must be greater than zero.".to_owned(),
+            ));
         }
         if model
             .default_effort
             .as_ref()
             .is_some_and(|default| !model.support_efforts.iter().any(|effort| effort == default))
         {
-            return Err(format!(
+            return Err(DesktopClientError::Message(format!(
                 "Default effort for model `{}` must be one of its supported efforts.",
                 model.model
-            ));
+            )));
         }
         if !model_names.insert(model.model.clone()) {
-            return Err(format!(
+            return Err(DesktopClientError::Message(format!(
                 "Model `{}` is configured more than once.",
                 model.model
-            ));
+            )));
         }
     }
     if input
@@ -2234,7 +2228,9 @@ fn validate_provider_input(
         .as_ref()
         .is_some_and(|default| !model_names.contains(default))
     {
-        return Err("Default model must be one of the provider models.".to_owned());
+        return Err(DesktopClientError::Message(
+            "Default model must be one of the provider models.".to_owned(),
+        ));
     }
     if input.default_model.is_none() {
         input.default_model = input.models.first().map(|model| model.model.clone());
@@ -2310,11 +2306,10 @@ async fn replace_provider_sections(
     next_providers: Option<Value>,
     next_models: Option<Value>,
     next_default: Option<Value>,
-) -> Result<(), String> {
+) -> Result<(), DesktopClientError> {
     config
         .replace(PROVIDERS_SECTION, next_providers, ConfigTarget::User)
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
     if let Err(error) = config
         .replace(MODELS_SECTION, next_models, ConfigTarget::User)
         .await
@@ -2322,7 +2317,10 @@ async fn replace_provider_sections(
         let rollback = config
             .replace(PROVIDERS_SECTION, old_providers, ConfigTarget::User)
             .await;
-        return Err(rollback_message(error.to_string(), rollback.err()));
+        return Err(DesktopClientError::Message(rollback_message(
+            error.to_string(),
+            rollback.err(),
+        )));
     }
     if let Err(error) = config
         .replace(DEFAULT_MODEL_SECTION, next_default, ConfigTarget::User)
@@ -2335,7 +2333,10 @@ async fn replace_provider_sections(
             .replace(PROVIDERS_SECTION, old_providers, ConfigTarget::User)
             .await;
         let rollback = models_rollback.err().or_else(|| providers_rollback.err());
-        return Err(rollback_message(error.to_string(), rollback));
+        return Err(DesktopClientError::Message(rollback_message(
+            error.to_string(),
+            rollback,
+        )));
     }
     Ok(())
 }
@@ -2501,11 +2502,11 @@ fn custom_agent_scope_order(scope: DesktopCustomAgentScope) -> u8 {
 fn context_usage_snapshot(
     context_size: &AgentContextSizeServiceHandle,
     profile: &AgentProfileServiceHandle,
-) -> Result<DesktopContextUsage, String> {
+) -> Result<DesktopContextUsage, DesktopClientError> {
     let context = context_size.get(None, None);
     let max_context_tokens = profile
         .get_model_capabilities()
-        .map_err(|error| error.to_string())?
+        .map_err(DesktopClientError::from)?
         .max_context_tokens;
     Ok(context_usage_from_size(context, max_context_tokens))
 }
@@ -2531,7 +2532,7 @@ fn attach_desktop_agent_events(
     agent: &ScopeHandle,
     on_event: &Arc<dyn Fn(String, Value) + Send + Sync>,
     replay: bool,
-) -> Result<(), String> {
+) -> Result<(), DesktopClientError> {
     let agent_id = agent.id().to_owned();
     {
         let mut attached = attached.lock();
@@ -2543,7 +2544,7 @@ fn attach_desktop_agent_events(
         Ok(event_bus) => event_bus,
         Err(error) => {
             attached.lock().remove(&agent_id);
-            return Err(error.to_string());
+            return Err(error.into());
         }
     };
     let on_event = Arc::clone(on_event);
@@ -2556,6 +2557,19 @@ fn attach_desktop_agent_events(
         event_bus.subscribe(handler)
     });
     Ok(())
+}
+
+fn is_session_not_found(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(candidate) = current {
+        if let Some(inner) = candidate.downcast_ref::<Error2>()
+            && inner.code == kimi_code_protocol::ErrorCode::SessionNotFound.reason()
+        {
+            return true;
+        }
+        current = candidate.source();
+    }
+    false
 }
 
 fn agent_settings_from_config(config: &dyn ConfigServiceContract) -> DesktopAgentSettings {
@@ -2766,7 +2780,11 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(invalid_error.contains("must be one of its supported efforts"));
+        assert!(
+            invalid_error
+                .to_string()
+                .contains("must be one of its supported efforts")
+        );
 
         let models = client.list_models().await.unwrap();
         assert!(models.iter().any(|model| {
@@ -3101,7 +3119,7 @@ mod tests {
             .delete_archived_sessions(&[first.session_id.clone(), active.session_id.clone()])
             .await
             .unwrap_err();
-        assert!(preflight_error.contains("must be archived"));
+        assert!(preflight_error.to_string().contains("must be archived"));
         assert!(index.get(&first.session_id).await.unwrap().is_some());
         let lifecycle = client.app.get(SESSION_LIFECYCLE_SERVICE_ID).unwrap();
         let active_error = lifecycle

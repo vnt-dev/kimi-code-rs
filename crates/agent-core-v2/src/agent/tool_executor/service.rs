@@ -809,9 +809,7 @@ mod tests {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let observed_events = Arc::clone(&observed);
         let _subscription = events.subscribe(Arc::new(move |event| {
-            observed_events
-                .lock()
-                .push(event.event_type.clone());
+            observed_events.lock().push(event.event_type.clone());
         }));
         let service = AgentToolExecutorService::new(
             Arc::new(AgentToolRegistryService::new()),
@@ -842,10 +840,7 @@ mod tests {
             result.result.output,
             ExecutableToolOutput::Text("Tool \"Missing\" not found".into())
         );
-        assert_eq!(
-            *observed.lock(),
-            ["tool.call.started", "tool.result"]
-        );
+        assert_eq!(*observed.lock(), ["tool.call.started", "tool.result"]);
         assert!(stream.next().await.is_none());
     }
 

@@ -2,12 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/sessionToolPolicy/sessionToolPolicyService.ts`.
 
-use std::{
-    collections::HashSet,
-    io,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{collections::HashSet, io};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -197,11 +194,7 @@ mod tests {
     #[async_trait]
     impl AtomicDocumentStoreService for Store {
         async fn get_value(&self, scope: &str, key: &str) -> Result<Option<Value>, StorageError> {
-            Ok(self
-                .values
-                .lock()
-                .get(&(scope.into(), key.into()))
-                .cloned())
+            Ok(self.values.lock().get(&(scope.into(), key.into())).cloned())
         }
         async fn set_value(
             &self,
@@ -209,15 +202,11 @@ mod tests {
             key: &str,
             value: Value,
         ) -> Result<(), StorageError> {
-            self.values
-                .lock()
-                .insert((scope.into(), key.into()), value);
+            self.values.lock().insert((scope.into(), key.into()), value);
             Ok(())
         }
         async fn delete(&self, scope: &str, key: &str) -> Result<(), StorageError> {
-            self.values
-                .lock()
-                .remove(&(scope.into(), key.into()));
+            self.values.lock().remove(&(scope.into(), key.into()));
             Ok(())
         }
         async fn list(
@@ -256,13 +245,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(policy.disabled_tools(), vec!["Read", "Write"]);
-        let state = store
-            .values
-            .lock()
-            .values()
-            .next()
-            .cloned()
-            .unwrap();
+        let state = store.values.lock().values().next().cloned().unwrap();
         assert_eq!(state["disabledTools"], serde_json::json!(["Read", "Write"]));
         policy
             .set_disabled_tools(vec!["Read".into(), "Write".into()])

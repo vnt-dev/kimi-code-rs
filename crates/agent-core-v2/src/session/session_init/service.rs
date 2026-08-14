@@ -2,12 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/sessionInit/sessionInitService.ts`.
 
-use std::{
-    error::Error,
-    path::Path,
-};
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use parking_lot::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+use std::{error::Error, path::Path};
 
 use futures_util::{FutureExt, future::BoxFuture};
 

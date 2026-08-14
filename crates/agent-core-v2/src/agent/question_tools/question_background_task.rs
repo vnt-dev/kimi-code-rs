@@ -178,10 +178,7 @@ mod tests {
         };
 
         task.start(&sink).await.unwrap();
-        assert_eq!(
-            *sink.output.lock(),
-            vec!["{\"answers\":{\"q_0\":\"Yes\"}}"]
-        );
+        assert_eq!(*sink.output.lock(), vec!["{\"answers\":{\"q_0\":\"Yes\"}}"]);
         assert_eq!(
             sink.settlements.lock()[0].status,
             AgentTaskSettlementStatus::Completed

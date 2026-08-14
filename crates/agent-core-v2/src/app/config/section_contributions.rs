@@ -23,13 +23,11 @@ pub fn register_config_section(
     schema: ConfigSchema,
     options: RegisterSectionOptions,
 ) {
-    CONTRIBUTIONS
-        .write()
-        .push(ConfigSectionContribution {
-            domain: domain.into(),
-            schema,
-            options,
-        });
+    CONTRIBUTIONS.write().push(ConfigSectionContribution {
+        domain: domain.into(),
+        schema,
+        options,
+    });
 }
 
 // Original: getConfigSectionContributions().

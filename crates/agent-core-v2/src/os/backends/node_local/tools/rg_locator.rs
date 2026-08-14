@@ -2,6 +2,8 @@
 //!
 //! Original: `packages/agent-core-v2/src/os/backends/node-local/tools/rgLocator.ts`.
 
+use parking_lot::Mutex;
+use std::sync::{Arc, LazyLock};
 use std::{
     collections::HashMap,
     error::Error,
@@ -9,8 +11,6 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use std::sync::{Arc, LazyLock};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;

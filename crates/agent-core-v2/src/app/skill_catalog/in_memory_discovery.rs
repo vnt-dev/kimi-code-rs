@@ -55,8 +55,7 @@ impl InMemorySkillDiscovery {
     }
 
     fn presets_write(&self) -> parking_lot::RwLockWriteGuard<'_, PresetSkills> {
-        self.presets
-            .write()
+        self.presets.write()
     }
 }
 
@@ -64,9 +63,7 @@ impl InMemorySkillDiscovery {
 impl SkillDiscoveryContract for InMemorySkillDiscovery {
     // Original: InMemorySkillDiscovery.discover().
     async fn discover(&self, roots: &[SkillRoot]) -> SkillDiscoveryResult {
-        let presets = self
-            .presets
-            .read();
+        let presets = self.presets.read();
         let mut skills = Vec::new();
         if roots.is_empty() {
             skills.extend(presets.user.clone());

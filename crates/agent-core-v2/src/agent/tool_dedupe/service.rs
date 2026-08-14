@@ -2,12 +2,12 @@
 //!
 //! Original: `toolDedupeService.ts`.
 
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
 };
-use std::sync::{Arc, Weak};
-use parking_lot::Mutex;
 
 use futures_util::future::BoxFuture;
 use tokio::sync::oneshot;
@@ -392,12 +392,7 @@ impl AgentToolDedupeService {
                 trace_id: trace.and_then(|value| value.trace_id()),
             });
         }
-        let senders = self
-            .state
-            .lock()
-            .deferreds
-            .remove(&key)
-            .unwrap_or_default();
+        let senders = self.state.lock().deferreds.remove(&key).unwrap_or_default();
         for sender in senders {
             let _ = sender.send(final_result.clone());
         }

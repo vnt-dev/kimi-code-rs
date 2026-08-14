@@ -332,10 +332,10 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use futures_util::Stream;
+    use parking_lot::Mutex;
     use serde_json::Map;
     use std::collections::VecDeque;
     use std::pin::Pin;
-    use parking_lot::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Poll};
     use tokio_util::sync::CancellationToken;
@@ -471,10 +471,8 @@ mod tests {
             options: Option<&GenerateOptions>,
         ) -> Result<Box<dyn StreamedMessage>, ProviderError> {
             self.generate_calls.fetch_add(1, Ordering::SeqCst);
-            *self.sent_tool_names.lock() =
-                tools.iter().map(|tool| tool.name.clone()).collect();
-            *self.observed_cache_key.lock() =
-                options.and_then(|options| options.cache_key.clone());
+            *self.sent_tool_names.lock() = tools.iter().map(|tool| tool.name.clone()).collect();
+            *self.observed_cache_key.lock() = options.and_then(|options| options.cache_key.clone());
             Ok(Box::new(self.stream.lock().take().unwrap()))
         }
     }

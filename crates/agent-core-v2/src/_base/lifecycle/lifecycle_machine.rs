@@ -1,12 +1,7 @@
-use std::{
-    error::Error,
-    fmt,
-    future::Future,
-    pin::Pin,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
 use parking_lot::MutexGuard;
+use std::sync::Arc;
+use std::{error::Error, fmt, future::Future, pin::Pin};
 
 pub type BoxError = Box<dyn Error + Send + Sync>;
 pub type ActionFuture = Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>>;
@@ -221,8 +216,7 @@ where
     }
 
     fn lock(&self) -> MutexGuard<'_, MachineState<S>> {
-        self.inner
-            .lock()
+        self.inner.lock()
     }
 }
 
@@ -318,11 +312,7 @@ where
         LifecycleTransitionError {
             reason,
             operation: self.operation.clone(),
-            state: self
-                .machine
-                .lock()
-                .state
-                .clone(),
+            state: self.machine.lock().state.clone(),
             expected: None,
             active_operation: None,
         }
@@ -350,9 +340,7 @@ where
 
     fn finish(&self) {
         self.lock().finished = true;
-        self.machine
-            .lock()
-            .active_operation = None;
+        self.machine.lock().active_operation = None;
     }
 
     fn finish_without_state_change(&self) {
@@ -360,8 +348,7 @@ where
     }
 
     fn lock(&self) -> MutexGuard<'_, TransactionState<S>> {
-        self.inner
-            .lock()
+        self.inner.lock()
     }
 }
 
@@ -370,15 +357,11 @@ impl<S> Drop for LifecycleTransaction<S> {
         if Arc::strong_count(&self.inner) != 1 {
             return;
         }
-        let mut transaction = self
-            .inner
-            .lock();
+        let mut transaction = self.inner.lock();
         if transaction.finished {
             return;
         }
-        let mut machine = self
-            .machine
-            .lock();
+        let mut machine = self.machine.lock();
         if let Some(rollback) = transaction.rollback_state.take() {
             machine.state = rollback;
         }
@@ -474,8 +457,8 @@ fn aggregate_errors(mut errors: Vec<BoxError>, message: String) -> BoxError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::convert::Infallible;
     use parking_lot::Mutex as StdMutex;
+    use std::convert::Infallible;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum State {

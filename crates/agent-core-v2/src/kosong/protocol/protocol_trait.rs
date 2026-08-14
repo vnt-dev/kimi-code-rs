@@ -165,8 +165,8 @@ impl ProtocolTrait {
 mod tests {
     use super::*;
     use crate::kosong::protocol::identity::Protocol;
-    use std::io;
     use parking_lot::Mutex;
+    use std::io;
 
     fn context() -> TraitContext {
         TraitContext {
@@ -272,9 +272,7 @@ mod tests {
         let seen_by_hook = Arc::clone(&seen);
         let protocol_trait = ProtocolTrait {
             default_headers: Some(Arc::new(move |context| {
-                seen_by_hook
-                    .lock()
-                    .push(context.provider_id.clone());
+                seen_by_hook.lock().push(context.provider_id.clone());
                 Some(IndexMap::from([("x-a".to_owned(), "1".to_owned())]))
             })),
             ..ProtocolTrait::default()

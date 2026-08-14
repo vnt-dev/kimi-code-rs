@@ -3,9 +3,9 @@
 //! Original:
 //! `packages/agent-core-v2/src/agent/activityView/activityViewService.ts`.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::sync::{Arc, Weak};
 use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use indexmap::IndexMap;
 use serde::Deserialize;

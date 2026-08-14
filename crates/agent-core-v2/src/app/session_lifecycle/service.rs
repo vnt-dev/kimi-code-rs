@@ -3,13 +3,16 @@
 //! Original:
 //! `packages/agent-core-v2/src/app/sessionLifecycle/sessionLifecycleService.ts`.
 
+use parking_lot::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use futures_util::{
@@ -204,8 +207,10 @@ impl SessionLifecycleService {
         }
     }
 
-    async fn materialize_session(&self, options: MaterializeSessionOptions)
-    -> Result<SessionScopeHandle, SessionLifecycleError> {
+    async fn materialize_session(
+        &self,
+        options: MaterializeSessionOptions,
+    ) -> Result<SessionScopeHandle, SessionLifecycleError> {
         let workspace = self
             .inner
             .workspace_registry
@@ -761,10 +766,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
                 .get(SESSION_CONTEXT_ID)
                 .ok()
                 .map(|context| PathBuf::from(&context.session_dir));
-            self.inner
-                .sessions
-                .lock()
-                .shift_remove(&session_id);
+            self.inner.sessions.lock().shift_remove(&session_id);
             let _ = self.drain_agents(&handle).await;
             let _ = handle.dispose();
             if let Some(session_dir) = session_dir {
@@ -851,8 +853,7 @@ impl SessionLifecycleServiceContract for SessionLifecycleService {
             let mut resuming = self.inner.resuming.lock();
             if let Some(entry) = resuming.get(session_id) {
                 ResumeState::Existing(entry.future.clone())
-            } else if let Some(live) = self.inner.sessions.lock().get(session_id).cloned()
-            {
+            } else if let Some(live) = self.inner.sessions.lock().get(session_id).cloned() {
                 ResumeState::Live(live)
             } else {
                 resuming.insert(

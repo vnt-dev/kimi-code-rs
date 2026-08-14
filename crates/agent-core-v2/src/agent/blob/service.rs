@@ -97,9 +97,7 @@ impl AgentBlobService {
             .await
             .ok()??
             .into();
-        self.cache
-            .lock()
-            .set(hash.into(), Arc::clone(&payload));
+        self.cache.lock().set(hash.into(), Arc::clone(&payload));
         Some(payload)
     }
 

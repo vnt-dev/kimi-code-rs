@@ -93,8 +93,8 @@ pub fn rg_unavailable_message(cause: &(dyn Error + 'static)) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use parking_lot::Mutex;
+    use std::collections::VecDeque;
 
     use super::*;
 

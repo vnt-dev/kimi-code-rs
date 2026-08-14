@@ -2,13 +2,9 @@
 //!
 //! Original: `agent/fullCompaction/fullCompaction.ts`.
 
-use std::{
-    error::Error,
-    fmt,
-    ops::Deref,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{error::Error, fmt, ops::Deref};
 
 use crate::{
     _base::{

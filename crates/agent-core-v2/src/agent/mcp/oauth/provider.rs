@@ -317,8 +317,8 @@ fn registered_redirect_uri(info: Option<&Value>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use parking_lot::Mutex;
+    use std::collections::HashMap;
 
     use async_trait::async_trait;
 

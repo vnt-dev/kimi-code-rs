@@ -2,9 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/os/backends/node-local/hostFsWatchService.ts`.
 
-use std::path::{Component, Path};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::path::{Component, Path};
+use std::sync::Arc;
 
 use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,

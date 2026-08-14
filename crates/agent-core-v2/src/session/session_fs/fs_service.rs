@@ -2,14 +2,17 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/sessionFs/fsService.ts`.
 
+use parking_lot::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering as AtomicOrdering},
+};
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use std::sync::{Arc, atomic::{AtomicBool, Ordering as AtomicOrdering}};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -1521,12 +1524,12 @@ pub fn register_session_fs_service() {
 
 #[cfg(test)]
 mod tests {
+    use parking_lot::Mutex;
+    use std::sync::Arc;
     use std::{
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
-    use std::sync::{Arc};
-    use parking_lot::Mutex;
 
     use async_trait::async_trait;
 
@@ -1661,11 +1664,9 @@ mod tests {
             relative_path: &str,
             absolute_path: &str,
         ) -> crate::app::git::GitServiceResult<FsDiffResponse> {
-            self.diff_calls.lock().push((
-                cwd.into(),
-                relative_path.into(),
-                absolute_path.into(),
-            ));
+            self.diff_calls
+                .lock()
+                .push((cwd.into(), relative_path.into(), absolute_path.into()));
             Ok(FsDiffResponse {
                 path: relative_path.into(),
                 diff: "diff".into(),

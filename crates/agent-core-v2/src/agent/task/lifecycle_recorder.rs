@@ -258,9 +258,6 @@ mod tests {
         recorder
             .record_task_terminated(&info(AgentTaskStatus::Lost, None))
             .unwrap();
-        assert_eq!(
-            telemetry.0.lock()[0].1["duration_ms"],
-            Some(Value::Null)
-        );
+        assert_eq!(telemetry.0.lock()[0].1["duration_ms"], Some(Value::Null));
     }
 }

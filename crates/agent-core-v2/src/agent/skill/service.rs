@@ -286,13 +286,13 @@ fn publish_activation(telemetry: &TelemetryServiceHandle, origin: &SkillActivati
     };
 
     let _ = telemetry.track_event(&SkillInvokedEvent {
-            skill_name: origin.skill_name.clone(),
-            trigger: match origin.trigger {
-                SkillActivationTrigger::UserSlash => SkillTrigger::UserSlash,
-                SkillActivationTrigger::ModelTool => SkillTrigger::ModelTool,
-                SkillActivationTrigger::NestedSkill => SkillTrigger::NestedSkill,
-            },
-        });
+        skill_name: origin.skill_name.clone(),
+        trigger: match origin.trigger {
+            SkillActivationTrigger::UserSlash => SkillTrigger::UserSlash,
+            SkillActivationTrigger::ModelTool => SkillTrigger::ModelTool,
+            SkillActivationTrigger::NestedSkill => SkillTrigger::NestedSkill,
+        },
+    });
     if origin.skill_type.as_deref() == Some("flow") {
         let _ = telemetry.track_event(&FlowInvokedEvent {
             flow_name: origin.skill_name.clone(),

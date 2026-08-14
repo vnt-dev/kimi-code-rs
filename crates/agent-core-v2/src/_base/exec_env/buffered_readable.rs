@@ -3,13 +3,13 @@
 //! Original: `packages/agent-core-v2/src/_base/execEnv/bufferedReadable.ts`,
 //! `BufferedReadable`.
 
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::{
     io,
     pin::Pin,
     task::{Context, Poll},
 };
-use std::sync::{Arc};
-use parking_lot::Mutex;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, DuplexStream, ReadBuf, duplex};
 use tokio_util::sync::CancellationToken;
@@ -63,10 +63,7 @@ impl AsyncRead for BufferedReadable {
         let remaining = buffer.remaining();
         match Pin::new(&mut self.reader).poll_read(context, buffer) {
             Poll::Ready(Ok(())) if buffer.remaining() == remaining => {
-                let error = self
-                    .source_error
-                    .lock()
-                    .take();
+                let error = self.source_error.lock().take();
                 match error {
                     Some(error) => Poll::Ready(Err(error)),
                     None => Poll::Ready(Ok(())),
@@ -114,8 +111,7 @@ async fn forward<R>(
         && error.kind() != io::ErrorKind::BrokenPipe
         && !cancellation.is_cancelled()
     {
-        *source_error
-            .lock() = Some(error);
+        *source_error.lock() = Some(error);
     }
 }
 

@@ -4,6 +4,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    error::Error,
     path::PathBuf,
     sync::Arc,
     time::Instant,
@@ -473,10 +474,13 @@ impl McpConnectionManager {
             Ok::<_, McpClientError>(raw_tools)
         })
         .await;
-        let outcome = match result {
-            Ok(Ok(raw_tools)) => Ok(raw_tools),
-            Ok(Err(error)) => Err(format_startup_error(error.to_string(), &client).await),
-            Err(_) => Err(format!("Timed out after {timeout}ms")),
+        let (outcome, needs_auth) = match result {
+            Ok(Ok(raw_tools)) => (Ok(raw_tools), false),
+            Ok(Err(error)) => (
+                Err(format_startup_error(error.to_string(), &client).await),
+                needs_oauth_auth(error.as_ref()),
+            ),
+            Err(_) => (Err(format!("Timed out after {timeout}ms")), false),
         };
         let mut connected = false;
         {
@@ -511,7 +515,7 @@ impl McpConnectionManager {
                     }
                 }
                 Err(error) => {
-                    if self.should_mark_needs_auth(&entry.config, &error) {
+                    if needs_auth && self.supports_oauth(&entry.config) {
                         entry.status = McpServerStatus::NeedsAuth;
                         entry.error = Some(format!(
                             "{} requires OAuth — run /mcp-config login {}",
@@ -666,16 +670,13 @@ impl McpConnectionManager {
         }
     }
 
-    fn should_mark_needs_auth(&self, config: &McpServerConfig, error: &str) -> bool {
+    fn supports_oauth(&self, config: &McpServerConfig) -> bool {
         let (McpServerConfig::Http(remote) | McpServerConfig::Sse(remote)) = config else {
             return false;
         };
         self.options.oauth_service.is_some()
             && remote.bearer_token_env_var.is_none()
             && remote.headers.is_none()
-            && (error.contains("401")
-                || error.to_ascii_lowercase().contains("unauthorized")
-                || error.to_ascii_lowercase().contains("auth required"))
     }
 }
 
@@ -747,6 +748,33 @@ async fn format_startup_error(error: String, client: &Arc<dyn RuntimeMcpClient>)
         return error;
     }
     format!("{error}\nstderr: {}", stderr.trim_end())
+}
+
+/// Classifies startup failures that require OAuth re-authentication by
+/// downcasting the error chain instead of sniffing message text.
+fn needs_oauth_auth(error: &(dyn Error + 'static)) -> bool {
+    use rmcp::transport::streamable_http_client::StreamableHttpError;
+    let mut current: Option<&(dyn Error + 'static)> = Some(error);
+    while let Some(candidate) = current {
+        if let Some(reqwest_error) = candidate.downcast_ref::<reqwest::Error>()
+            && matches!(
+                reqwest_error.status(),
+                Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
+            )
+        {
+            return true;
+        }
+        if let Some(stream_error) = candidate.downcast_ref::<StreamableHttpError<reqwest::Error>>()
+            && matches!(
+                stream_error,
+                StreamableHttpError::AuthRequired(_) | StreamableHttpError::InsufficientScope(_)
+            )
+        {
+            return true;
+        }
+        current = candidate.source();
+    }
+    false
 }
 
 #[cfg(test)]
@@ -890,6 +918,34 @@ mod tests {
         assert_eq!(entry.status, McpServerStatus::Failed);
         assert!(entry.error.unwrap().contains("executor 'kaos'"));
         assert_eq!(*log.0.lock(), vec!["mcp server unavailable"]);
+    }
+
+    #[test]
+    fn classifies_oauth_required_failures_by_type_not_message_text() {
+        use rmcp::transport::streamable_http_client::{
+            AuthRequiredError, InsufficientScopeError, StreamableHttpError,
+        };
+
+        let auth_required: McpClientError =
+            Box::new(StreamableHttpError::<reqwest::Error>::AuthRequired(
+                AuthRequiredError::new("Bearer".into()),
+            ));
+        assert!(needs_oauth_auth(auth_required.as_ref()));
+
+        let insufficient_scope: McpClientError =
+            Box::new(StreamableHttpError::<reqwest::Error>::InsufficientScope(
+                InsufficientScopeError::new("Bearer".into(), Some("read".into())),
+            ));
+        assert!(needs_oauth_auth(insufficient_scope.as_ref()));
+
+        // A message that merely contains "401" / "unauthorized" must not be
+        // classified as an OAuth failure.
+        let unrelated: McpClientError = Box::new(crate::agent::mcp::McpHttpClientError::Runtime {
+            operation: "startup",
+            message: "HTTP 401 unauthorized".into(),
+            source: None,
+        });
+        assert!(!needs_oauth_auth(unrelated.as_ref()));
     }
 
     #[tokio::test]

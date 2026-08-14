@@ -2,7 +2,7 @@
 //!
 //! Original: `agent/mcp/client-http.ts`, `HttpMcpClient`.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, error::Error, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use http::{HeaderName, HeaderValue};
@@ -55,6 +55,8 @@ pub enum McpHttpClientError {
     Runtime {
         operation: &'static str,
         message: String,
+        #[source]
+        source: Option<Box<dyn Error + Send + Sync>>,
     },
 }
 
@@ -92,6 +94,7 @@ impl HttpMcpClient {
             .map_err(|error| McpHttpClientError::Runtime {
                 operation: "header setup",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })?
             .unwrap_or_default()
             .into_iter()
@@ -174,6 +177,7 @@ impl HttpMcpClient {
                 .map_err(|error| McpHttpClientError::Runtime {
                     operation: "connection startup",
                     message: error.to_string(),
+                    source: Some(Box::new(error)),
                 })?;
         let monitor = self.spawn_close_monitor(running.peer().clone());
         let mut state = self.state.lock().await;
@@ -205,6 +209,7 @@ impl HttpMcpClient {
                 .map_err(|error| McpHttpClientError::Runtime {
                     operation: "shutdown",
                     message: error.to_string(),
+                    source: Some(Box::new(error)),
                 })?;
         }
         Ok(())
@@ -282,23 +287,27 @@ impl HttpMcpClient {
             .map_err(|error| McpHttpClientError::Runtime {
                 operation: "tool request",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })?
             .await_response()
             .await
             .map_err(|error| McpHttpClientError::Runtime {
                 operation: "tool request",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })?;
         let ServerResult::CallToolResult(result) = result else {
             return Err(McpHttpClientError::Runtime {
                 operation: "tool request",
                 message: "received an unexpected MCP response".into(),
+                source: None,
             });
         };
         Ok(to_mcp_tool_result(&serde_json::to_value(result).map_err(
             |error| McpHttpClientError::Runtime {
                 operation: "tool result conversion",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             },
         )?))
     }
@@ -312,6 +321,7 @@ impl McpClient for HttpMcpClient {
             box_http_error(McpHttpClientError::Runtime {
                 operation: "tool listing",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })
         })?;
         result
@@ -322,6 +332,7 @@ impl McpClient for HttpMcpClient {
                     box_http_error(McpHttpClientError::Runtime {
                         operation: "tool definition conversion",
                         message: error.to_string(),
+                        source: Some(Box::new(error)),
                     })
                 })?;
                 if value.get("description").is_none() {
@@ -331,6 +342,7 @@ impl McpClient for HttpMcpClient {
                     box_http_error(McpHttpClientError::Runtime {
                         operation: "tool definition conversion",
                         message: error.to_string(),
+                        source: Some(Box::new(error)),
                     })
                 })
             })

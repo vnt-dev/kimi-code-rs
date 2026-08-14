@@ -2,9 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/contextProjector/contextProjectorService.ts`.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 

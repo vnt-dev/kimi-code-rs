@@ -6,12 +6,12 @@
 //! `ZipSource::take_reader()` transfers that single stable Tokio file handle to
 //! the archive writer; `close()` remains idempotent for failure cleanup before
 //! that transfer.
+use parking_lot::Mutex;
 use std::{
     io,
     path::{Path, PathBuf},
     time::SystemTime,
 };
-use parking_lot::Mutex;
 
 use tokio::fs::File;
 use tokio_util::sync::CancellationToken;

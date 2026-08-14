@@ -17,6 +17,8 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/capability/entries/kimiWebbridge.ts`.
 
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     error::Error,
@@ -24,8 +26,6 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use std::sync::{Arc};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -232,10 +232,7 @@ impl KimiWebbridgeEntry {
 
         let standalone_skills = self.standalone_skill_dirs().await;
         if !standalone_skills.is_empty() {
-            let migration_error = self
-                .standalone_skill_migration_error
-                .lock()
-                .clone();
+            let migration_error = self.standalone_skill_migration_error.lock().clone();
             steps.push(CapabilityStep {
                 id: "standalone-skill-migration".to_owned(),
                 state: CapabilityStepState::Missing,
@@ -527,8 +524,8 @@ mod tests {
     //!
     //! Original: `packages/agent-core-v2/test/app/capability/kimiWebbridge.test.ts`.
 
-    use std::path::PathBuf;
     use parking_lot::Mutex;
+    use std::path::PathBuf;
 
     use serde_json::json;
 

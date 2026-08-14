@@ -143,7 +143,7 @@ pub async fn dispatch_agent_rpc(
     let rpc = client
         .agent_rpc(&request.session_id, &request.agent_id)
         .await
-        .map_err(RpcError::transport)?;
+        .map_err(|error| RpcError::transport(error.to_string()))?;
     let payload = request.payload;
 
     match request.method {

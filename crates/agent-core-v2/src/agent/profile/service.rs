@@ -3,12 +3,9 @@
 //! This is the Rust counterpart of
 //! `packages/agent-core-v2/src/agent/profile/profileService.ts`.
 
-use std::{
-    collections::HashSet,
-    path::PathBuf,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{collections::HashSet, path::PathBuf};
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
@@ -422,13 +419,7 @@ impl AgentProfileService {
     }
 
     fn emit_status_updated(&self, include_thinking_effort: bool) {
-        if let Some(custom) = self
-            .state
-            .lock()
-            .options
-            .emit_status_updated
-            .clone()
-        {
+        if let Some(custom) = self.state.lock().options.emit_status_updated.clone() {
             custom();
             return;
         }
@@ -616,12 +607,7 @@ impl AgentProfileService {
             let is_known = |name: &str| known.contains(name);
             for issue in find_inactive_tool_patterns(&patterns, Some(&is_known)) {
                 let key = format!("{context}|{field}|{}", issue.pattern);
-                if !self
-                    .state
-                    .lock()
-                    .emitted_tool_pattern_warnings
-                    .insert(key)
-                {
+                if !self.state.lock().emitted_tool_pattern_warnings.insert(key) {
                     continue;
                 }
                 self.event_bus.publish(DomainEvent::new(

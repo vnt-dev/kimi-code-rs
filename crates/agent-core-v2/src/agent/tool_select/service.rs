@@ -2,12 +2,9 @@
 //!
 //! Original: `toolSelectService.ts`.
 
-use std::{
-    collections::BTreeSet,
-    ops::Deref,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{collections::BTreeSet, ops::Deref};
 
 use crate::{
     _base::di::{
@@ -306,9 +303,7 @@ impl AgentToolSelectServiceContract for AgentToolSelectService {
                 note: None,
                 attachments: Vec::new(),
             }]);
-            self.pending
-                .lock()
-                .extend(result.to_load.iter().cloned());
+            self.pending.lock().extend(result.to_load.iter().cloned());
         }
         result
     }

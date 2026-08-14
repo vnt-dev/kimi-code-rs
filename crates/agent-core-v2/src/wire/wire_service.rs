@@ -6,9 +6,9 @@
 //! reducers are synchronous. Blob transforms are serialized through a Tokio
 //! task chain, preserving journal order without holding model locks over await.
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -370,14 +370,12 @@ impl WireService {
                     )
                     .into());
                 } else {
-                    let version = source_record["protocol_version"]
-                        .as_str()
-                        .ok_or_else(|| {
-                            WireServiceError::Storage(StorageError::new(
-                                STORAGE_CORRUPTED,
-                                "Agent wire metadata is missing a protocol version",
-                            ))
-                        })?;
+                    let version = source_record["protocol_version"].as_str().ok_or_else(|| {
+                        WireServiceError::Storage(StorageError::new(
+                            STORAGE_CORRUPTED,
+                            "Agent wire metadata is missing a protocol version",
+                        ))
+                    })?;
                     if is_newer_wire_version(version) {
                         newer_version = true;
                     } else {
@@ -415,15 +413,12 @@ impl WireService {
     }
 
     fn replay_record(&self, record: WireRecord, index: usize) -> Result<(), WireServiceError> {
-        let op_type = record
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                WireServiceError::Storage(StorageError::new(
-                    STORAGE_CORRUPTED,
-                    "Agent wire record is missing a type",
-                ))
-            })?;
+        let op_type = record.get("type").and_then(Value::as_str).ok_or_else(|| {
+            WireServiceError::Storage(StorageError::new(
+                STORAGE_CORRUPTED,
+                "Agent wire record is missing a type",
+            ))
+        })?;
         let Some(descriptor) = registered_op(op_type) else {
             report_skipped_record(Some(op_type), index, false);
             return Ok(());

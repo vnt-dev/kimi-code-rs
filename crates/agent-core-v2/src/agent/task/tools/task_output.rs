@@ -410,9 +410,7 @@ mod tests {
             timeout_ms: u64,
             _signal: AbortSignal,
         ) -> AgentTaskServiceResult<Option<AgentTaskInfo>> {
-            self.calls
-                .lock()
-                .push(format!("wait:{timeout_ms}"));
+            self.calls.lock().push(format!("wait:{timeout_ms}"));
             Ok(Some(self.current.clone()))
         }
         async fn get_output_snapshot(

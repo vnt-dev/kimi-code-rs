@@ -6,13 +6,13 @@
 //! reference: hook execution, loop assignment, turn monitoring and steer
 //! assignment report results through `SchedulerEvent`.
 
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error,
     time::Duration,
 };
-use std::sync::{Arc, Weak};
-use parking_lot::Mutex;
 
 use chrono::Utc;
 use futures_util::{

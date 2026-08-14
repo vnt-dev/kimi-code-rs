@@ -2,9 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/event/eventBusService.ts`.
 
-use std::collections::HashMap;
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::_base::{
     di::{
@@ -357,9 +357,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let all_seen = Arc::clone(&seen);
         let _all = bus.subscribe(Arc::new(move |event| {
-            all_seen
-                .lock()
-                .push(format!("all:{}", event.event_type));
+            all_seen.lock().push(format!("all:{}", event.event_type));
         }));
         let typed_seen = Arc::clone(&seen);
         let typed = bus.subscribe_type(
@@ -481,9 +479,7 @@ mod tests {
         let after_end = Arc::new(Mutex::new(Vec::new()));
         let after_end_sink = Arc::clone(&after_end);
         let _after_end = bus.subscribe_with_replay(Arc::new(move |event| {
-            after_end_sink
-                .lock()
-                .push(event.event_type.clone());
+            after_end_sink.lock().push(event.event_type.clone());
         }));
         assert!(after_end.lock().is_empty());
 
@@ -491,9 +487,7 @@ mod tests {
         let next_turn = Arc::new(Mutex::new(Vec::new()));
         let next_turn_sink = Arc::clone(&next_turn);
         let _next_turn = bus.subscribe_with_replay(Arc::new(move |event| {
-            next_turn_sink
-                .lock()
-                .push(event.event_type.clone());
+            next_turn_sink.lock().push(event.event_type.clone());
         }));
         assert_eq!(*next_turn.lock(), ["turn.started"]);
     }
@@ -528,10 +522,7 @@ mod tests {
         let _subscription = bus.subscribe_with_replay(Arc::new(move |event| {
             sink.lock().push(event.event_type.clone());
         }));
-        assert_eq!(
-            *before_match.lock(),
-            ["prompt.submitted", "prompt.aborted"]
-        );
+        assert_eq!(*before_match.lock(), ["prompt.submitted", "prompt.aborted"]);
 
         bus.publish(DomainEvent::new(
             "prompt.completed",
@@ -601,8 +592,7 @@ mod tests {
         let sink = Arc::clone(&seen);
         let _subscription = bus.subscribe_with_replay(Arc::new(move |event| {
             if event.event_type == "assistant.delta" {
-                sink.lock()
-                    .push(event.fields["index"].as_u64().unwrap());
+                sink.lock().push(event.fields["index"].as_u64().unwrap());
             }
         }));
         publisher.join().unwrap();

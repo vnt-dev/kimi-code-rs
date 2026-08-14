@@ -2,9 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/persistence/backends/memory/inMemoryStorageService.ts`.
 
-use std::collections::HashMap;
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use async_trait::async_trait;
 use futures_util::stream;

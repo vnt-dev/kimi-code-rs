@@ -230,7 +230,10 @@ fn is_js_whitespace(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use parking_lot::Mutex;
-    use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
 
     use async_trait::async_trait;
     use serde_json::json;

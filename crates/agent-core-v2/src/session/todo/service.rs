@@ -2,9 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/todo/sessionTodoService.ts`.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
-use parking_lot::Mutex;
 
 use futures_util::FutureExt;
 

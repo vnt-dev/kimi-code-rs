@@ -2,9 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/os/backends/node-local/tools/bash.ts`.
 
-use std::collections::HashMap;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;

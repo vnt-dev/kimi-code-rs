@@ -165,9 +165,9 @@ pub fn register_workspace_file_skill_source() {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-    use std::sync::{atomic::{AtomicU64, Ordering}};
     use parking_lot::Mutex;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use serde_json::{Map, Value};
 
@@ -310,10 +310,7 @@ mod tests {
         assert_eq!(source.id(), "workspace");
         assert_eq!(source.priority(), 30);
         assert_eq!(result.scanned_roots.as_ref().unwrap().len(), 1);
-        assert_eq!(
-            discovery.roots.lock()[0].source,
-            SkillSource::Project
-        );
+        assert_eq!(discovery.roots.lock()[0].source, SkillSource::Project);
 
         let explicit = WorkspaceFileSkillSource::new(
             handle,

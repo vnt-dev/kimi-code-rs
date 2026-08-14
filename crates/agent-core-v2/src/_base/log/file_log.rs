@@ -1,11 +1,14 @@
+use parking_lot::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::{
     collections::VecDeque,
     io::Write,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use parking_lot::Mutex;
 
 use futures_util::future::BoxFuture;
 use tokio::{

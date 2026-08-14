@@ -2,9 +2,9 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/telemetry/cloudAppender.ts`.
 
-use std::time::Duration;
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -478,9 +478,7 @@ mod tests {
             _timeout: Duration,
             _signal: Option<&crate::_base::utils::abort::AbortSignal>,
         ) -> Result<u16, super::super::CloudHttpError> {
-            self.bodies
-                .lock()
-                .push(serde_json::from_str(body).unwrap());
+            self.bodies.lock().push(serde_json::from_str(body).unwrap());
             self.sent.notify_one();
             Ok(200)
         }

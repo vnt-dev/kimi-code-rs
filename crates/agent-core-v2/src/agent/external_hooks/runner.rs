@@ -1,10 +1,6 @@
-use std::{
-    collections::HashMap,
-    future::pending,
-    time::Duration,
-};
-use std::sync::{Arc};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::{collections::HashMap, future::pending, time::Duration};
 
 use serde_json::{Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -12,8 +8,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::{
     _base::utils::abort::AbortSignal,
     os::interface::host_process::{
-        HostProcess, HostProcessOptions, HostProcessService, ProcessShell, ProcessSignal,
-        SharedProcessReader,
+        HostProcess, HostProcessError, HostProcessOptions, HostProcessService, ProcessShell,
+        ProcessSignal, SharedProcessReader,
     },
 };
 
@@ -133,18 +129,18 @@ async fn complete_process(
     let completion = tokio::try_join!(
         async {
             write_input(process.stdin(), input).await;
-            Ok::<(), String>(())
+            Ok::<(), HookIoError>(())
         },
-        async { process.wait().await.map_err(|error| error.to_string()) },
+        async { process.wait().await.map_err(HookIoError::Wait) },
         async {
             collect_stream(process.stdout(), Arc::clone(&stdout))
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(HookIoError::Stdout)
         },
         async {
             collect_stream(process.stderr(), Arc::clone(&stderr))
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(HookIoError::Stderr)
         },
     );
     let stdout = buffer_text(&stdout);
@@ -153,11 +149,21 @@ async fn complete_process(
     let (_, exit_code, _, _) = match completion {
         Ok(completion) => completion,
         Err(error) => {
-            stderr_text.push_str(&error);
+            stderr_text.push_str(&error.to_string());
             return allow_result(None, Some(stdout), Some(stderr_text), None, None, None);
         }
     };
     result_from_exit_code(exit_code, stdout, stderr_text)
+}
+
+#[derive(Debug, thiserror::Error)]
+enum HookIoError {
+    #[error(transparent)]
+    Wait(#[from] HostProcessError),
+    #[error(transparent)]
+    Stdout(#[from] std::io::Error),
+    #[error(transparent)]
+    Stderr(std::io::Error),
 }
 
 async fn write_input(

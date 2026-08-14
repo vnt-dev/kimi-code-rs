@@ -2,14 +2,14 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/git/gitService.ts`.
 
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet},
     io,
     path::Path,
     time::{Duration, Instant},
 };
-use std::sync::{Arc};
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};

@@ -58,6 +58,7 @@ pub struct McpSseResponseRouter {
 }
 
 use std::{
+    error::Error,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -108,6 +109,8 @@ pub enum McpSseClientError {
     Runtime {
         operation: &'static str,
         message: String,
+        #[source]
+        source: Option<Box<dyn Error + Send + Sync>>,
     },
 }
 
@@ -147,6 +150,7 @@ impl SseMcpClient {
             .map_err(|error| McpSseClientError::Runtime {
                 operation: "header setup",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })?
             .unwrap_or_default();
         let mut header_map = reqwest::header::HeaderMap::new();
@@ -218,6 +222,7 @@ impl SseMcpClient {
             return Err(McpSseClientError::Runtime {
                 operation: "initialization",
                 message: json_rpc_error_message(&initialize),
+                source: None,
             });
         }
         self.send_notification("notifications/initialized", serde_json::json!({}))
@@ -240,11 +245,13 @@ impl SseMcpClient {
             .map_err(|error| McpSseClientError::Runtime {
                 operation: "event stream startup",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })?
             .error_for_status()
             .map_err(|error| McpSseClientError::Runtime {
                 operation: "event stream startup",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })?;
         let state = Arc::clone(&self.state);
         let router = Arc::clone(&self.router);
@@ -328,11 +335,13 @@ impl SseMcpClient {
             .map_err(|error| McpSseClientError::Runtime {
                 operation: "notification",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })?
             .error_for_status()
             .map_err(|error| McpSseClientError::Runtime {
                 operation: "notification",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })?;
         Ok(())
     }
@@ -351,17 +360,20 @@ impl SseMcpClient {
             .map_err(|error| McpSseClientError::Runtime {
                 operation: "request",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })?
             .error_for_status()
             .map_err(|error| McpSseClientError::Runtime {
                 operation: "request",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })?;
         drop(response);
         let await_response = async {
             receiver.await.map_err(|_| McpSseClientError::Runtime {
                 operation: "request",
                 message: "event stream closed before response".into(),
+                source: None,
             })
         };
         if let Some(timeout) = self.tool_call_timeout {
@@ -370,6 +382,7 @@ impl SseMcpClient {
                 .map_err(|_| McpSseClientError::Runtime {
                     operation: "request",
                     message: format!("timed out after {}ms", timeout.as_millis()),
+                    source: None,
                 })?
         } else {
             await_response.await
@@ -462,12 +475,14 @@ impl McpClient for SseMcpClient {
                 box_sse_error(McpSseClientError::Runtime {
                     operation: "tool listing",
                     message: json_rpc_error_message(&response),
+                    source: None,
                 })
             })?;
         serde_json::from_value(tools).map_err(|error| {
             box_sse_error(McpSseClientError::Runtime {
                 operation: "tool definition conversion",
                 message: error.to_string(),
+                source: Some(Box::new(error)),
             })
         })
     }
@@ -494,6 +509,7 @@ impl McpClient for SseMcpClient {
             box_sse_error(McpSseClientError::Runtime {
                 operation: "tool request",
                 message: json_rpc_error_message(&response),
+                source: None,
             })
         })?;
         Ok(to_mcp_tool_result(&result))

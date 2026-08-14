@@ -2,9 +2,12 @@
 //!
 //! Original: `packages/agent-core-v2/src/session/swarm/sessionSwarmService.ts`.
 
-use std::io;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use parking_lot::Mutex;
+use std::io;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use async_trait::async_trait;
 use futures_util::{FutureExt, future::BoxFuture};

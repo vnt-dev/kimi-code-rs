@@ -4,14 +4,14 @@
 //! `getTask()`, `list()`, `persistOutput()`, `loadFromDisk()`,
 //! `markLoadedTasksLost()`, `getOutputSnapshot()`, and `readOutput()`.
 
+use parking_lot::Mutex;
+use parking_lot::MutexGuard;
+use std::sync::Arc;
 use std::{
     collections::HashSet,
     panic::{AssertUnwindSafe, catch_unwind},
     time::Duration,
 };
-use std::sync::{Arc};
-use parking_lot::Mutex;
-use parking_lot::MutexGuard;
 
 use async_trait::async_trait;
 use futures_util::{
@@ -291,9 +291,7 @@ impl AgentTaskService {
     }
 
     fn state(&self) -> MutexGuard<'_, AgentTaskServiceState> {
-        self.inner
-            .state
-            .lock()
+        self.inner.state.lock()
     }
 
     // Wired into the public registerTask/track paths by the next service unit.
@@ -2051,9 +2049,7 @@ mod tests {
         }
 
         fn record_task_terminated(&self, info: &AgentTaskInfo) -> AgentTaskServiceResult<()> {
-            self.terminated
-                .lock()
-                .push(info.base.task_id.clone());
+            self.terminated.lock().push(info.base.task_id.clone());
             Ok(())
         }
 
@@ -2243,14 +2239,8 @@ mod tests {
                 .preview,
             "registered output"
         );
-        assert_eq!(
-            effects.started.lock().as_slice(),
-            [task_id.as_str()]
-        );
-        assert_eq!(
-            effects.terminated.lock().as_slice(),
-            [task_id.as_str()]
-        );
+        assert_eq!(effects.started.lock().as_slice(), [task_id.as_str()]);
+        assert_eq!(effects.terminated.lock().as_slice(), [task_id.as_str()]);
     }
 
     #[tokio::test]
@@ -2332,10 +2322,7 @@ mod tests {
                 .preview,
             "tracked output"
         );
-        assert_eq!(
-            effects.started.lock().as_slice(),
-            [entry.task_id.as_str()]
-        );
+        assert_eq!(effects.started.lock().as_slice(), [entry.task_id.as_str()]);
         assert_eq!(
             effects.terminated.lock().as_slice(),
             [entry.task_id.as_str()]
@@ -2516,10 +2503,7 @@ mod tests {
                 .status,
             AgentTaskStatus::Completed
         );
-        assert_eq!(
-            *effects.terminated.lock(),
-            ["bash-settle01".to_owned()]
-        );
+        assert_eq!(*effects.terminated.lock(), ["bash-settle01".to_owned()]);
         assert!(
             !service
                 .settle_task(
@@ -2603,10 +2587,7 @@ mod tests {
         assert_eq!(stopped.base.status, AgentTaskStatus::Killed);
         assert_eq!(stopped.base.stop_reason.as_deref(), Some("requested"));
         assert!(signal.aborted());
-        assert_eq!(
-            *effects.terminated.lock(),
-            ["bash-stop0001".to_owned()]
-        );
+        assert_eq!(*effects.terminated.lock(), ["bash-stop0001".to_owned()]);
         assert_eq!(
             service
                 .stop("bash-stop0001", Some("ignored"))
@@ -2792,10 +2773,7 @@ mod tests {
             info.base.status == AgentTaskStatus::Lost && info.base.ended_at == Some(50)
         }));
         assert!(service.state().notifications.is_delivered(&delivered[0]));
-        assert_eq!(
-            effects.terminated.lock().as_slice(),
-            ["bash-restore2"]
-        );
+        assert_eq!(effects.terminated.lock().as_slice(), ["bash-restore2"]);
     }
 
     #[tokio::test]
@@ -2822,10 +2800,7 @@ mod tests {
             service.get_task("bash-wire0001").unwrap().base.status,
             AgentTaskStatus::Lost
         );
-        assert_eq!(
-            effects.terminated.lock().as_slice(),
-            ["bash-wire0001"]
-        );
+        assert_eq!(effects.terminated.lock().as_slice(), ["bash-wire0001"]);
 
         service.dispose().unwrap();
         wire.dispatch([
@@ -2963,10 +2938,7 @@ mod tests {
         assert_eq!(detached.base.timeout_ms, Some(0));
         assert_eq!(release.await, ForegroundTaskReleaseReason::Detached);
         assert_eq!(detach_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            *effects.started.lock(),
-            ["task-detach01".to_owned()]
-        );
+        assert_eq!(*effects.started.lock(), ["task-detach01".to_owned()]);
         assert_eq!(
             service
                 .get_output_snapshot("task-detach01", 100)
@@ -3193,10 +3165,7 @@ mod tests {
 
         let lost = service.reconcile(100).await.unwrap();
         assert_eq!(lost.len(), 1);
-        assert_eq!(
-            *effects.terminated.lock(),
-            ["bash-running2".to_owned()]
-        );
+        assert_eq!(*effects.terminated.lock(), ["bash-running2".to_owned()]);
         assert_eq!(
             *effects.restored.lock(),
             ["bash-done0002".to_owned(), "bash-running2".to_owned()]
@@ -3209,10 +3178,7 @@ mod tests {
         let (_persistence, service, effects) = service_with_effects();
         let completed = task("bash-notify04", AgentTaskStatus::Completed, true);
         service.notify_agent_task(&completed).await.unwrap();
-        assert_eq!(
-            *effects.enqueued.lock(),
-            ["bash-notify04".to_owned()]
-        );
+        assert_eq!(*effects.enqueued.lock(), ["bash-notify04".to_owned()]);
         assert!(effects.restored.lock().is_empty());
     }
 

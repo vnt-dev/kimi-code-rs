@@ -1,6 +1,9 @@
-use std::cell::RefCell;
-use std::sync::{Arc, Weak, atomic::{AtomicBool, Ordering}};
 use parking_lot::Mutex;
+use std::cell::RefCell;
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, Ordering},
+};
 
 use super::{
     descriptors::SyncDescriptor,
@@ -152,10 +155,7 @@ impl InstantiationService {
             } else {
                 let value = Arc::clone(&created.value);
                 if let Some(disposable) = &created.disposable {
-                    owner
-                        .construction_order
-                        .lock()
-                        .push(Arc::clone(disposable));
+                    owner.construction_order.lock().push(Arc::clone(disposable));
                 }
                 services.set_erased(
                     id,

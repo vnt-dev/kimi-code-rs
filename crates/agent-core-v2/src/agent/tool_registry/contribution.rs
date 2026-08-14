@@ -2,7 +2,6 @@
 //!
 //! Original: `packages/agent-core-v2/src/agent/toolRegistry/toolContribution.ts`.
 
-
 use parking_lot::RwLock;
 use std::sync::{Arc, LazyLock};
 
