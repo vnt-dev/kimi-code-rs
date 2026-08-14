@@ -120,6 +120,42 @@ jobs:
           releaseAssetNamePattern: '[name]_[version]_linux_[arch][ext]'
           args: --bundles appimage,deb
 
+      - name: Upload missing Linux assets (fallback)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          failed=0
+          upload() {
+            local file="$1" asset="$2"
+            if [[ ! -f "$file" ]]; then
+              echo "::error::Built artifact not found: $file" >&2
+              failed=1
+              return
+            fi
+            if gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | grep -Fxq "$asset"; then
+              echo "Asset already uploaded: $asset"
+              return
+            fi
+            for attempt in 1 2 3; do
+              if gh release upload "$GITHUB_REF_NAME" "$file#$asset"; then
+                return
+              fi
+              echo "Upload of $asset failed (attempt $attempt), retrying..." >&2
+              sleep 10
+            done
+            echo "::error::Failed to upload $asset" >&2
+            failed=1
+          }
+          upload "target/release/bundle/deb/Kimi Code_${version}_amd64.deb" "Kimi Code_${version}_linux_amd64.deb"
+          upload "target/release/bundle/deb/Kimi Code_${version}_amd64.deb.sig" "Kimi Code_${version}_linux_amd64.deb.sig"
+          upload "target/release/bundle/appimage/Kimi Code_${version}_amd64.AppImage" "Kimi Code_${version}_linux_amd64.AppImage"
+          upload "target/release/bundle/appimage/Kimi Code_${version}_amd64.AppImage.sig" "Kimi Code_${version}_linux_amd64.AppImage.sig"
+          exit "$failed"
+
       - name: Finalize release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
