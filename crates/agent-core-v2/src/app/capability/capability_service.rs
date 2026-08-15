@@ -26,6 +26,7 @@ use crate::{
             scope::{InstantiationType, LifecycleScope, register_scoped_service},
         },
         errors::errors::{Error2, Error2Options},
+        utils::node_platform::{node_arch, node_platform},
     },
     app::{
         bootstrap::{BOOTSTRAP_SERVICE_ID, BootstrapServiceHandle},
@@ -119,8 +120,8 @@ impl CapabilityService {
                 .collect(),
             install_progress: Arc::new(Mutex::new(HashMap::new())),
             plugins: None,
-            platform: node_platform(),
-            arch: node_arch(),
+            platform: node_platform().to_owned(),
+            arch: node_arch().to_owned(),
         }
     }
 
@@ -373,31 +374,6 @@ fn coded_error(
             ..Error2Options::default()
         },
     ))
-}
-
-// Original: `process.platform` — the entry-override constructor has no
-// bootstrap snapshot, so fall back to the host's node-style name.
-fn node_platform() -> String {
-    match std::env::consts::OS {
-        "windows" => "win32",
-        "macos" => "darwin",
-        "illumos" => "sunos",
-        other => other,
-    }
-    .into()
-}
-
-fn node_arch() -> String {
-    match std::env::consts::ARCH {
-        "x86_64" => "x64",
-        "x86" => "ia32",
-        "aarch64" => "arm64",
-        "loongarch64" => "loong64",
-        "powerpc" => "ppc",
-        "powerpc64" => "ppc64",
-        other => other,
-    }
-    .into()
 }
 
 // Original: registerScopedService(..., ScopeActivation.OnScopeCreated, 'capability').

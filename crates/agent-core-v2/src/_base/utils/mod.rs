@@ -5,6 +5,7 @@ pub mod fs;
 pub mod hash;
 pub mod hero_slug;
 pub mod iso_date_time;
+pub mod node_platform;
 pub mod promise;
 pub mod proxy;
 pub mod render_prompt;

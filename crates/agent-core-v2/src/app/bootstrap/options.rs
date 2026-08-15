@@ -7,7 +7,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::_base::di::instantiation::ServiceIdentifier;
+use crate::_base::{
+    di::instantiation::ServiceIdentifier,
+    utils::node_platform::{node_arch, node_platform},
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BootstrapOptions {
@@ -77,8 +80,8 @@ pub fn resolve_bootstrap_options(
         home_dir,
         config_path,
         os_home_dir,
-        platform: input.platform.unwrap_or_else(node_platform),
-        arch: input.arch.unwrap_or_else(node_arch),
+        platform: input.platform.unwrap_or_else(|| node_platform().to_owned()),
+        arch: input.arch.unwrap_or_else(|| node_arch().to_owned()),
         cwd,
         env,
         client_version: input.client_version.unwrap_or_else(|| "unknown".into()),
@@ -155,29 +158,6 @@ fn current_environment() -> HashMap<String, String> {
 
 fn current_home_dir() -> Option<PathBuf> {
     dirs::home_dir()
-}
-
-fn node_platform() -> String {
-    match std::env::consts::OS {
-        "windows" => "win32",
-        "macos" => "darwin",
-        "illumos" => "sunos",
-        other => other,
-    }
-    .into()
-}
-
-fn node_arch() -> String {
-    match std::env::consts::ARCH {
-        "x86_64" => "x64",
-        "x86" => "ia32",
-        "aarch64" => "arm64",
-        "loongarch64" => "loong64",
-        "powerpc" => "ppc",
-        "powerpc64" => "ppc64",
-        other => other,
-    }
-    .into()
 }
 
 #[cfg(test)]

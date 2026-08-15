@@ -4,6 +4,11 @@
 //! macOS adds KimiCU.app + launchd + TCC permissions; Windows uses the
 //! official signed runtime installer and its built-in `doctor` command.
 //!
+//! The platform split is decided at compile time: the macOS entry and every
+//! macOS-only helper are `#[cfg(unix)]`, the Windows entry and its helpers
+//! `#[cfg(windows)]`, and `create_kimi_cu_entry` selects between them with
+//! attribute-level `cfg` instead of a runtime `cfg!` branch.
+//!
 //! The macOS path replicates the official `setup_macos.sh` step-for-step
 //! (stop old processes → ditto into /Applications → register service →
 //! request permissions) with structured progress and errors instead of a
@@ -22,18 +27,17 @@
 //!
 //! Original: `packages/agent-core-v2/src/app/capability/entries/kimiCu.ts`.
 
-use std::{
-    collections::HashMap,
-    error::Error,
-    io,
-    path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
-    time::Duration,
-};
+use std::{collections::HashMap, error::Error, path::Path, sync::Arc, time::Duration};
+
+#[cfg(unix)]
+use std::{io, path::PathBuf, sync::LazyLock};
 
 use async_trait::async_trait;
+#[cfg(unix)]
 use regex::Regex;
+#[cfg(unix)]
 use serde_json::{Map, Value};
+#[cfg(unix)]
 use tokio::io::AsyncWriteExt;
 
 use crate::{
@@ -53,29 +57,39 @@ use crate::{
     },
 };
 
-use super::{
-    PluginLayerConfig, context::CapabilityEntryContext, detect_plugin_layer, is_executable,
-    mkdtemp_in, now_millis, path_exists,
-};
+use super::{PluginLayerConfig, context::CapabilityEntryContext, detect_plugin_layer, mkdtemp_in};
+#[cfg(unix)]
+use super::{is_executable, now_millis, path_exists};
 
+#[cfg(unix)]
 const MAC_PLUGIN: PluginLayerConfig = PluginLayerConfig {
     id: "kimi-cu",
     zip_url: "https://cdn.kimi.com/kimi-computer-use/latest/kimi-cu-plugin.zip",
 };
+#[cfg(windows)]
 const WINDOWS_PLUGIN: PluginLayerConfig = PluginLayerConfig {
     id: "kimi-cu-win",
     zip_url: "https://cdn.kimi.com/kimi-computer-use-windows/latest/kimi-cu-win-plugin.zip",
 };
+#[cfg(unix)]
 const APP_ZIP_URL: &str = "https://cdn.kimi.com/kimi-computer-use/latest/KimiCU.app.zip";
+#[cfg(windows)]
 const WINDOWS_SETUP_URL: &str =
     "https://cdn.kimi.com/kimi-computer-use-windows/latest/setup_windows.ps1";
+#[cfg(unix)]
 const APP_BUNDLE: &str = "KimiCU.app";
+#[cfg(unix)]
 const LAUNCHD_LABEL: &str = "ai.kimi.cu.service";
+#[cfg(unix)]
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(unix)]
 const PERMISSIONS_TIMEOUT: Duration = Duration::from_secs(15);
 const DETECT_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(windows)]
 const WINDOWS_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
+#[cfg(windows)]
 const DEFAULT_WINDOWS_SYSTEM_ROOT: &str = "C:\\Windows";
+#[cfg(windows)]
 const WINDOWS_DOCTOR_SCRIPT: &str = "$candidates = @($env:KIMI_CU_WINDOWS_EXE); \
 if ($env:KIMI_CU_WINDOWS_HOME) { $candidates += (Join-Path $env:KIMI_CU_WINDOWS_HOME 'kimi-cu.exe') }; \
 if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'KimiCU\\kimi-cu.exe') }; \
@@ -83,17 +97,20 @@ if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'KimiCU\\ki
 $exe = $candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1; \
 if (-not $exe) { exit 3 }; & $exe doctor; exit $LASTEXITCODE";
 
+#[cfg(unix)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PermissionStatus {
     pub accessibility: bool,
     pub screen_recording: bool,
 }
 
+#[cfg(windows)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WindowsDoctorOutput {
     pub version: Option<String>,
 }
 
+#[cfg(unix)]
 #[derive(Debug)]
 struct LegacyMcpFile {
     raw: String,
@@ -101,6 +118,7 @@ struct LegacyMcpFile {
     servers: Map<String, Value>,
 }
 
+#[cfg(unix)]
 pub fn parse_permission_status(output: &str) -> Option<PermissionStatus> {
     static PERMISSIONS_RE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
@@ -115,6 +133,7 @@ pub fn parse_permission_status(output: &str) -> Option<PermissionStatus> {
     })
 }
 
+#[cfg(windows)]
 pub fn parse_windows_doctor_output(output: &str) -> Option<WindowsDoctorOutput> {
     let mut fields = std::collections::HashMap::new();
     for line in output.split('\n') {
@@ -136,11 +155,13 @@ pub fn parse_windows_doctor_output(output: &str) -> Option<WindowsDoctorOutput> 
 }
 
 /// Original: `windowsPowerShellPath()` — reads `SystemRoot` at call time.
+#[cfg(windows)]
 pub fn windows_power_shell_path() -> String {
     windows_power_shell_path_for_root(std::env::var("SystemRoot").ok().as_deref())
 }
 
 /// Original: `windowsPowerShellPath(systemRoot)` with an explicit root.
+#[cfg(windows)]
 pub fn windows_power_shell_path_for_root(system_root: Option<&str>) -> String {
     let system_root = system_root.unwrap_or(DEFAULT_WINDOWS_SYSTEM_ROOT);
     let root = if is_win32_absolute(system_root) {
@@ -155,6 +176,7 @@ pub fn windows_power_shell_path_for_root(system_root: Option<&str>) -> String {
 }
 
 /// Original: node `path.win32.isAbsolute`.
+#[cfg(windows)]
 fn is_win32_absolute(path: &str) -> bool {
     let bytes = path.as_bytes();
     if bytes.len() >= 3
@@ -167,6 +189,7 @@ fn is_win32_absolute(path: &str) -> bool {
     path.starts_with('\\') || path.starts_with('/')
 }
 
+#[cfg(unix)]
 pub async fn read_app_bundle_version(info_plist_path: &Path) -> Option<String> {
     static VERSION_RE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>").unwrap()
@@ -175,20 +198,24 @@ pub async fn read_app_bundle_version(info_plist_path: &Path) -> Option<String> {
     Some(VERSION_RE.captures(&xml)?.get(1)?.as_str().to_owned())
 }
 
+#[cfg(unix)]
 fn apple_script_quote(script: &str) -> String {
     script.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+#[cfg(unix)]
 fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+#[cfg(unix)]
 pub fn elevated_ditto_script(from: &str, to: &str) -> String {
     format!("/usr/bin/ditto {} {}", sh_quote(from), sh_quote(to))
 }
 
 // Original: parseLegacyMcpFile() — recognizes only the exact standalone
 // `kimi-cu` MCP registration shape written by older installers.
+#[cfg(unix)]
 fn parse_legacy_mcp_file(raw: &str, app_bin: &str) -> Option<LegacyMcpFile> {
     let value: Value = serde_json::from_str(raw).ok()?;
     let servers = value.as_object()?.get("mcpServers")?.as_object()?.clone();
@@ -221,6 +248,7 @@ fn boxed_error(message: impl Into<String>) -> Box<dyn Error + Send + Sync> {
     Box::new(ExpectedError::new(message))
 }
 
+#[cfg(unix)]
 fn non_empty_or_code(stderr: &str, code: i32) -> String {
     let trimmed = stderr.trim();
     if trimmed.is_empty() {
@@ -231,6 +259,7 @@ fn non_empty_or_code(stderr: &str, code: i32) -> String {
 }
 
 // Original: `stderr.trim() || stdout.trim() || `exit code ${code}``.
+#[cfg(windows)]
 fn trim_or_fallback(stderr: &str, stdout: &str, code: i32) -> String {
     let stderr = stderr.trim();
     if !stderr.is_empty() {
@@ -250,20 +279,10 @@ fn current_uid() -> String {
     unsafe { libc::getuid() }.to_string()
 }
 
-#[cfg(not(unix))]
-fn current_uid() -> String {
-    "501".to_owned()
-}
-
 #[cfg(unix)]
 async fn file_mode(path: &Path) -> io::Result<u32> {
     use std::os::unix::fs::MetadataExt;
     Ok(tokio::fs::metadata(path).await?.mode() & 0o777)
-}
-
-#[cfg(not(unix))]
-async fn file_mode(_: &Path) -> io::Result<u32> {
-    Ok(0o644)
 }
 
 // Original: installPluginLayer() — upsert the wiring plugin, re-enable it
@@ -310,6 +329,7 @@ async fn install_plugin_layer(
     Ok(())
 }
 
+#[cfg(unix)]
 struct MacKimiCuEntry {
     ctx: CapabilityEntryContext,
     applications_dir: PathBuf,
@@ -322,6 +342,7 @@ struct MacKimiCuEntry {
     user_mcp_config_path: PathBuf,
 }
 
+#[cfg(unix)]
 impl MacKimiCuEntry {
     fn new(ctx: CapabilityEntryContext) -> Self {
         let applications_dir = ctx
@@ -334,7 +355,7 @@ impl MacKimiCuEntry {
         Self {
             probe_timeout: ctx.detect_probe_timeout.unwrap_or(DETECT_PROBE_TIMEOUT),
             command_timeout: ctx.command_timeout.unwrap_or(COMMAND_TIMEOUT),
-            supported: ctx.platform == "darwin",
+            supported: cfg!(target_os = "macos"),
             user_mcp_config_path: ctx.kimi_home_dir.join("mcp.json"),
             applications_dir,
             app_path,
@@ -410,10 +431,7 @@ impl MacKimiCuEntry {
         let migrated = async {
             let mut options = tokio::fs::OpenOptions::new();
             options.write(true).create_new(true);
-            #[cfg(unix)]
             options.mode(mode);
-            #[cfg(not(unix))]
-            let _ = mode;
             let mut file = options.open(&temp_path).await?;
             file.write_all(format!("{}\n", serde_json::to_string_pretty(&next)?).as_bytes())
                 .await?;
@@ -748,6 +766,7 @@ impl MacKimiCuEntry {
     }
 }
 
+#[cfg(unix)]
 #[async_trait]
 impl CapabilityEntry for MacKimiCuEntry {
     fn id(&self) -> CapabilityId {
@@ -779,11 +798,13 @@ impl CapabilityEntry for MacKimiCuEntry {
     }
 }
 
+#[cfg(windows)]
 struct RuntimeDetection {
     step: CapabilityStep,
     version: Option<String>,
 }
 
+#[cfg(windows)]
 struct WindowsKimiCuEntry {
     ctx: CapabilityEntryContext,
     supported: bool,
@@ -792,10 +813,11 @@ struct WindowsKimiCuEntry {
     powershell_path: String,
 }
 
+#[cfg(windows)]
 impl WindowsKimiCuEntry {
     fn new(ctx: CapabilityEntryContext) -> Self {
         Self {
-            supported: ctx.platform == "win32" && ctx.arch == "x64",
+            supported: cfg!(windows) && cfg!(target_arch = "x86_64"),
             probe_timeout: ctx.detect_probe_timeout.unwrap_or(DETECT_PROBE_TIMEOUT),
             install_timeout: ctx.command_timeout.unwrap_or(WINDOWS_INSTALL_TIMEOUT),
             powershell_path: windows_power_shell_path(),
@@ -971,6 +993,7 @@ impl WindowsKimiCuEntry {
     }
 }
 
+#[cfg(windows)]
 #[async_trait]
 impl CapabilityEntry for WindowsKimiCuEntry {
     fn id(&self) -> CapabilityId {
@@ -1002,13 +1025,18 @@ impl CapabilityEntry for WindowsKimiCuEntry {
     }
 }
 
-/// Original: `createKimiCuEntry()` — platform dispatch at construction time.
+/// Original: `createKimiCuEntry()` — the host platform is fixed at compile
+/// time, so the entry itself is chosen by `cfg`, not at runtime: Windows gets
+/// its own entry, every unix host the macOS entry (which reports unsupported
+/// on non-macOS hosts).
+#[cfg(windows)]
 pub fn create_kimi_cu_entry(ctx: CapabilityEntryContext) -> Arc<dyn CapabilityEntry> {
-    if ctx.platform == "win32" {
-        Arc::new(WindowsKimiCuEntry::new(ctx))
-    } else {
-        Arc::new(MacKimiCuEntry::new(ctx))
-    }
+    Arc::new(WindowsKimiCuEntry::new(ctx))
+}
+
+#[cfg(unix)]
+pub fn create_kimi_cu_entry(ctx: CapabilityEntryContext) -> Arc<dyn CapabilityEntry> {
+    Arc::new(MacKimiCuEntry::new(ctx))
 }
 
 #[cfg(test)]
@@ -1020,8 +1048,15 @@ mod tests {
     //! Original: `packages/agent-core-v2/test/app/capability/kimiCu.test.ts`.
 
     use parking_lot::Mutex;
-    use std::{collections::VecDeque, path::PathBuf, time::Duration};
+    use std::path::PathBuf;
 
+    #[cfg(unix)]
+    use std::time::Duration;
+
+    #[cfg(windows)]
+    use std::collections::VecDeque;
+
+    #[cfg(unix)]
     use serde_json::json;
 
     use crate::{
@@ -1051,9 +1086,6 @@ mod tests {
             .unwrap();
     }
 
-    #[cfg(not(unix))]
-    async fn make_executable(_: &Path) {}
-
     #[cfg(unix)]
     async fn make_non_executable(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
@@ -1062,6 +1094,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(unix)]
     async fn fake_app_bundle(root: &Path) -> PathBuf {
         let applications_dir = root.join("Applications");
         let macos_dir = applications_dir
@@ -1105,6 +1138,23 @@ mod tests {
         }
     }
 
+    /// Test helper: an entry with the supported gate open, regardless of the
+    /// host CI platform. Production `supported` is decided by `cfg!`; these
+    /// tests exercise the detect/install flow and declare their precondition.
+    #[cfg(windows)]
+    fn windows_entry(ctx: CapabilityEntryContext) -> Arc<dyn CapabilityEntry> {
+        let mut entry = WindowsKimiCuEntry::new(ctx);
+        entry.supported = true;
+        Arc::new(entry)
+    }
+
+    #[cfg(unix)]
+    fn mac_entry(ctx: CapabilityEntryContext) -> Arc<dyn CapabilityEntry> {
+        let mut entry = MacKimiCuEntry::new(ctx);
+        entry.supported = true;
+        Arc::new(entry)
+    }
+
     type RecordedReports = Arc<Mutex<Vec<(String, Option<u32>)>>>;
 
     fn recording_reports() -> (CapabilityInstallReporter, RecordedReports) {
@@ -1118,6 +1168,7 @@ mod tests {
         )
     }
 
+    #[cfg(unix)]
     fn noop_reporter() -> CapabilityInstallReporter {
         Box::new(|_, _| {})
     }
@@ -1126,6 +1177,7 @@ mod tests {
         reports.iter().map(|(step, _)| step.clone()).collect()
     }
 
+    #[cfg(unix)]
     #[test]
     fn parses_the_machine_readable_request_permissions_output() {
         assert_eq!(
@@ -1153,6 +1205,7 @@ mod tests {
         assert_eq!(parse_permission_status(""), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn doctor_output_accepts_only_an_mcp_capable_embedded_runtime() {
         assert_eq!(
@@ -1173,6 +1226,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn powershell_path_always_resolves_the_system_executable_absolutely() {
         assert_eq!(
@@ -1184,6 +1238,7 @@ mod tests {
         ))));
     }
 
+    #[cfg(unix)]
     #[test]
     fn elevated_ditto_script_shell_quotes_both_paths_so_metacharacters_stay_literal() {
         // The elevated path runs the string through /bin/sh with administrator
@@ -1198,6 +1253,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn reads_cf_bundle_short_version_string_from_info_plist() {
         let root = temp_root("kimi-cu-version").await;
@@ -1219,34 +1275,41 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    /// The entry choice and its supported gate follow the host platform at
+    /// compile time: Windows gets the Windows entry (x64 only), every unix
+    /// host the macOS entry, which reports supported only on actual macOS.
+    /// Each CI runner asserts its own host's behavior.
+    #[cfg(windows)]
     #[tokio::test]
-    async fn supports_macos_and_windows_x64_under_one_capability_id() {
+    async fn dispatch_and_supported_follow_the_host_platform() {
         let root = temp_root("kimi-cu-entry").await;
         let plugins = FakePluginService::new(vec![]);
         let (host, _) = scripted_host(vec![]);
-        assert!(create_kimi_cu_entry(make_ctx(&root, plugins.handle(), host.clone())).supported());
-        let linux = create_kimi_cu_entry(CapabilityEntryContext {
-            platform: "linux".to_owned(),
-            ..make_ctx(&root, plugins.handle(), host.clone())
-        });
-        assert!(!linux.supported());
-        let windows = create_kimi_cu_entry(CapabilityEntryContext {
-            platform: "win32".to_owned(),
-            arch: "x64".to_owned(),
-            ..make_ctx(&root, plugins.handle(), host.clone())
-        });
-        assert_eq!(windows.id(), CapabilityId::KimiCu);
-        assert_eq!(windows.plugin_id(), Some("kimi-cu-win"));
-        assert!(windows.supported());
-        let windows_arm = create_kimi_cu_entry(CapabilityEntryContext {
-            platform: "win32".to_owned(),
-            arch: "arm64".to_owned(),
-            ..make_ctx(&root, plugins.handle(), host)
-        });
-        assert!(!windows_arm.supported());
+        let entry = create_kimi_cu_entry(make_ctx(&root, plugins.handle(), host));
+        assert_eq!(entry.id(), CapabilityId::KimiCu);
+        assert_eq!(entry.plugin_id(), Some("kimi-cu-win"));
+        assert_eq!(entry.supported(), cfg!(target_arch = "x86_64"));
         rm_force(&root).await.unwrap();
     }
 
+    /// The entry choice and its supported gate follow the host platform at
+    /// compile time: Windows gets the Windows entry (x64 only), every unix
+    /// host the macOS entry, which reports supported only on actual macOS.
+    /// Each CI runner asserts its own host's behavior.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dispatch_and_supported_follow_the_host_platform() {
+        let root = temp_root("kimi-cu-entry").await;
+        let plugins = FakePluginService::new(vec![]);
+        let (host, _) = scripted_host(vec![]);
+        let entry = create_kimi_cu_entry(make_ctx(&root, plugins.handle(), host));
+        assert_eq!(entry.id(), CapabilityId::KimiCu);
+        assert_eq!(entry.plugin_id(), Some("kimi-cu"));
+        assert_eq!(entry.supported(), cfg!(target_os = "macos"));
+        rm_force(&root).await.unwrap();
+    }
+
+    #[cfg(windows)]
     #[tokio::test]
     async fn detects_the_windows_plugin_and_signed_runtime_through_doctor() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1257,7 +1320,7 @@ mod tests {
             scripted_host(vec![SpawnScript::new("-Command", 0).stdout(
                 "version=0.2.14\r\nmcp=true\r\nhelper=embedded\r\nagent=running\r\n",
             )]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = windows_entry(CapabilityEntryContext {
             platform: "win32".to_owned(),
             arch: "x64".to_owned(),
             ..make_ctx(&root, plugins.handle(), host)
@@ -1299,6 +1362,7 @@ mod tests {
 
     /// Original: the inline spawn fake sequencing `doctor` results — first
     /// probe "not installed", post-install probe healthy.
+    #[cfg(windows)]
     struct DoctorSequenceSpawn {
         calls: Arc<Mutex<Vec<String>>>,
         doctor_results: Arc<Mutex<VecDeque<(i32, String, String)>>>,
@@ -1341,6 +1405,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[tokio::test]
     async fn installs_windows_with_the_official_setup_script_and_shared_plugin_wiring() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1361,7 +1426,7 @@ mod tests {
         let fetch: Arc<dyn FetchLike> = Arc::new(BytesFetch {
             bytes: b"Write-Host 'official setup'".to_vec(),
         });
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = windows_entry(CapabilityEntryContext {
             platform: "win32".to_owned(),
             arch: "x64".to_owned(),
             fetch_impl: Some(fetch),
@@ -1392,6 +1457,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(windows)]
     #[tokio::test]
     async fn does_not_reinstall_a_healthy_windows_runtime_when_only_the_plugin_is_missing() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1403,7 +1469,7 @@ mod tests {
         let fetch: Arc<dyn FetchLike> = Arc::new(FailingFetch {
             message: "download should be skipped",
         });
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = windows_entry(CapabilityEntryContext {
             platform: "win32".to_owned(),
             arch: "x64".to_owned(),
             fetch_impl: Some(fetch),
@@ -1418,6 +1484,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn detects_all_four_layers_with_details() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1431,7 +1498,7 @@ mod tests {
             SpawnScript::new("xpc-ping", 0)
                 .stdout("permissionStatus: accessibility=true screenRecording=false"),
         ]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             ..make_ctx(&root, plugins.handle(), host)
         });
@@ -1472,12 +1539,13 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn reports_missing_layers_on_a_bare_machine() {
         let root = temp_root("kimi-cu-entry").await;
         let plugins = FakePluginService::new(vec![]);
         let (host, _) = scripted_host(vec![]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(root.join("Applications")),
             ..make_ctx(&root, plugins.handle(), host)
         });
@@ -1500,15 +1568,15 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
-    async fn rejects_install_on_non_macos_before_any_side_effect() {
+    async fn rejects_install_on_an_unsupported_mac_entry_before_any_side_effect() {
         let root = temp_root("kimi-cu-entry").await;
         let plugins = FakePluginService::new(vec![]);
         let (host, _) = scripted_host(vec![]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
-            platform: "linux".to_owned(),
-            ..make_ctx(&root, plugins.handle(), host)
-        });
+        let mut entry = MacKimiCuEntry::new(make_ctx(&root, plugins.handle(), host));
+        entry.supported = false;
+        let entry: Arc<dyn CapabilityEntry> = Arc::new(entry);
         let error = entry.install(noop_reporter()).await.unwrap_err();
         assert!(
             error.to_string().contains("only supported on macOS"),
@@ -1518,6 +1586,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn resumes_a_partial_install_without_repeating_completed_runtime_layers() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1531,7 +1600,7 @@ mod tests {
         let fetch: Arc<dyn FetchLike> = Arc::new(FailingFetch {
             message: "download should be skipped",
         });
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             fetch_impl: Some(fetch),
             ..make_ctx(&root, plugins.handle(), host)
@@ -1552,6 +1621,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn migrates_the_exact_legacy_standalone_mcp_registration_after_installing_the_plugin() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1587,7 +1657,7 @@ mod tests {
             SpawnScript::new("xpc-ping", 0)
                 .stdout("permissionStatus: accessibility=true screenRecording=true"),
         ]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             ..make_ctx(&root, plugins.handle(), host)
         });
@@ -1621,6 +1691,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn leaves_the_legacy_mcp_config_untouched_when_it_changes_during_setup() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1670,7 +1741,7 @@ mod tests {
             SpawnScript::new("xpc-ping", 0)
                 .stdout("permissionStatus: accessibility=true screenRecording=true"),
         ]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             ..make_ctx(&root, plugins.handle(), host)
         });
@@ -1685,6 +1756,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn does_not_migrate_a_customized_standalone_mcp_registration() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1718,7 +1790,7 @@ mod tests {
             SpawnScript::new("xpc-ping", 0)
                 .stdout("permissionStatus: accessibility=true screenRecording=true"),
         ]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             ..make_ctx(&root, plugins.handle(), host)
         });
@@ -1731,6 +1803,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn marks_probe_steps_failed_instead_of_throwing_when_the_binary_is_wedged() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1740,7 +1813,7 @@ mod tests {
             SpawnScript::new("service-status", 0).hang(),
             SpawnScript::new("xpc-ping", 0).hang(),
         ]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             detect_probe_timeout: Some(Duration::from_millis(5)),
             ..make_ctx(&root, plugins.handle(), host)
@@ -1786,6 +1859,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn reenables_a_previously_disabled_wiring_plugin_during_setup() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1798,7 +1872,7 @@ mod tests {
             SpawnScript::new("xpc-ping", 0)
                 .stdout("permissionStatus: accessibility=true screenRecording=true"),
         ]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             ..make_ctx(&root, plugins.handle(), host)
         });
@@ -1813,6 +1887,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn refreshes_the_wiring_plugin_when_permissions_are_the_only_missing_layer() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1825,7 +1900,7 @@ mod tests {
             SpawnScript::new("xpc-ping", 0)
                 .stdout("permissionStatus: accessibility=true screenRecording=false"),
         ]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             ..make_ctx(&root, plugins.handle(), host)
         });
@@ -1842,11 +1917,13 @@ mod tests {
     /// Original: the wrapping spawn fake — the fake `ditto` must materialize
     /// the copied binary: moveAppIntoPlace rm's the old bundle first, and the
     /// post-install service check probes the new one.
+    #[cfg(unix)]
     struct DittoMaterializingSpawn {
         inner: HostProcessServiceHandle,
         app_bin: PathBuf,
     }
 
+    #[cfg(unix)]
     #[async_trait]
     impl HostProcessService for DittoMaterializingSpawn {
         async fn spawn(
@@ -1869,6 +1946,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn continues_the_replacement_when_the_old_binary_cleanup_hangs() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1894,7 +1972,7 @@ mod tests {
         let fetch: Arc<dyn FetchLike> = Arc::new(BytesFetch {
             bytes: vec![1, 2, 3],
         });
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             fetch_impl: Some(fetch),
             command_timeout: Some(Duration::from_millis(5)),
@@ -1920,6 +1998,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn reports_the_plugin_layer_missing_when_its_mcp_server_is_disabled() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1929,7 +2008,7 @@ mod tests {
                 .enabled_mcp(0),
         ]);
         let (host, _) = scripted_host(vec![]);
-        let entry = create_kimi_cu_entry(make_ctx(&root, plugins.handle(), host));
+        let entry = mac_entry(make_ctx(&root, plugins.handle(), host));
 
         // The plugin toggle is on but the stdio MCP wrapper is off: readiness
         // must not claim ready — new sessions would get no Computer Use tools.
@@ -1946,6 +2025,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn reenables_disabled_mcp_servers_during_setup() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1960,7 +2040,7 @@ mod tests {
             SpawnScript::new("xpc-ping", 0)
                 .stdout("permissionStatus: accessibility=true screenRecording=true"),
         ]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             ..make_ctx(&root, plugins.handle(), host)
         });
@@ -1975,6 +2055,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn never_stops_the_old_service_when_the_downloaded_archive_is_corrupt() {
         let root = temp_root("kimi-cu-entry").await;
@@ -1985,7 +2066,7 @@ mod tests {
         let fetch: Arc<dyn FetchLike> = Arc::new(BytesFetch {
             bytes: b"<html>captive portal</html>".to_vec(),
         });
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(root.join("Applications")),
             fetch_impl: Some(fetch),
             ..make_ctx(&root, plugins.handle(), host)
@@ -2002,6 +2083,7 @@ mod tests {
         rm_force(&root).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn reads_a_bundle_missing_its_info_plist_as_a_broken_install() {
         let root = temp_root("kimi-cu-entry").await;
@@ -2017,7 +2099,7 @@ mod tests {
         .unwrap();
         let plugins = FakePluginService::new(vec![]);
         let (host, _) = scripted_host(vec![]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             ..make_ctx(&root, plugins.handle(), host)
         });
@@ -2052,7 +2134,7 @@ mod tests {
         .await;
         let plugins = FakePluginService::new(vec![]);
         let (host, _) = scripted_host(vec![]);
-        let entry = create_kimi_cu_entry(CapabilityEntryContext {
+        let entry = mac_entry(CapabilityEntryContext {
             applications_dir: Some(applications_dir),
             ..make_ctx(&root, plugins.handle(), host)
         });

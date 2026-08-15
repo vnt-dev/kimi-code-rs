@@ -63,6 +63,7 @@ impl SpawnScript {
         self
     }
 
+    #[cfg(unix)]
     pub fn stderr(mut self, stderr: &'static str) -> Self {
         self.stderr = stderr;
         self
@@ -70,6 +71,7 @@ impl SpawnScript {
 
     /// Original: the fake whose `wait()` never settles — the caller's own
     /// timeout must fire.
+    #[cfg(unix)]
     pub fn hang(mut self) -> Self {
         self.hang = true;
         self
@@ -208,6 +210,7 @@ impl FakePlugin {
         self
     }
 
+    #[cfg(unix)]
     pub fn enabled_mcp(mut self, enabled_mcp: usize) -> Self {
         self.enabled_mcp = enabled_mcp;
         self

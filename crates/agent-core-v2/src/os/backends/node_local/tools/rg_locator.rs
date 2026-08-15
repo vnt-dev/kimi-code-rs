@@ -19,6 +19,7 @@ use tokio::{io::AsyncWriteExt, sync::watch};
 use crate::_base::utils::{
     abort::{AbortError, AbortSignal},
     hash::sha256_hex,
+    node_platform::node_platform,
 };
 
 const RG_VERSION: &str = "15.0.0";
@@ -283,12 +284,7 @@ async fn is_executable_file(path: &Path) -> bool {
 }
 
 pub fn detect_target() -> Option<String> {
-    let platform = match std::env::consts::OS {
-        "macos" => "darwin",
-        "windows" => "win32",
-        value => value,
-    };
-    detect_target_for(platform, std::env::consts::ARCH)
+    detect_target_for(node_platform(), std::env::consts::ARCH)
 }
 
 pub fn detect_target_for(platform: &str, arch: &str) -> Option<String> {
@@ -314,7 +310,9 @@ async fn download_and_install_rg(share_dir: &Path) -> Result<PathBuf, RgLocatorE
             std::env::consts::ARCH
         ))
     })?;
-    let windows = target.contains("windows");
+    // The download target always corresponds to the host, so the archive
+    // format is fixed at compile time.
+    let windows = cfg!(windows);
     let extension = if windows { "zip" } else { "tar.gz" };
     let archive_name = format!("ripgrep-{RG_VERSION}-{target}.{extension}");
     let expected = RG_ARCHIVE_SHA256
@@ -402,6 +400,9 @@ async fn download_extract_install(
             tokio::fs::copy(&extracted, &staged)
                 .await
                 .map_err(failure)?;
+            // The execute bit is a POSIX concept; the Windows rg.exe needs no
+            // chmod, so the step is compiled out there.
+            #[cfg(unix)]
             set_executable(&staged).await?;
             tokio::fs::rename(&staged, destination)
                 .await
@@ -501,11 +502,6 @@ async fn set_executable(path: &Path) -> Result<(), RgLocatorError> {
     tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
         .await
         .map_err(failure)
-}
-
-#[cfg(not(unix))]
-async fn set_executable(_: &Path) -> Result<(), RgLocatorError> {
-    Ok(())
 }
 
 fn failure(error: impl fmt::Display) -> RgLocatorError {

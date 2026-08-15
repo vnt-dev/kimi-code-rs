@@ -107,7 +107,9 @@ impl KimiWebbridgeEntry {
             .clone()
             .unwrap_or_else(|| DEFAULT_DAEMON_BASE_URL.to_owned());
         let bin_dir = ctx.user_home_dir.join(".kimi-webbridge").join("bin");
-        let bin_name = if ctx.platform == "win32" {
+        // The installed daemon binary follows the host's executable naming
+        // convention; the CDN asset for Windows is an `.exe` too.
+        let bin_name = if cfg!(windows) {
             "kimi-webbridge.exe"
         } else {
             "kimi-webbridge"
@@ -197,8 +199,10 @@ impl KimiWebbridgeEntry {
         let mut steps = Vec::new();
 
         let binary_present = path_exists(&self.bin_path).await;
-        let binary_usable =
-            binary_present && (self.ctx.platform == "win32" || is_executable(&self.bin_path).await);
+        // `is_executable` already encodes the platform semantics: the execute
+        // bit is a POSIX concept, while Windows degrades to an existence
+        // check (see `entries::is_executable`).
+        let binary_usable = binary_present && is_executable(&self.bin_path).await;
         steps.push(CapabilityStep {
             id: "daemon-binary".to_owned(),
             state: if binary_usable {
@@ -318,11 +322,7 @@ impl KimiWebbridgeEntry {
             "kimi-webbridge-{}-{}{}",
             now_millis(),
             &uuid::Uuid::new_v4().simple().to_string()[..6],
-            if self.ctx.platform == "win32" {
-                ".exe"
-            } else {
-                ""
-            }
+            if cfg!(windows) { ".exe" } else { "" }
         ));
         let result = async {
             let fetch = self.ctx.fetch_impl_or_default();
@@ -346,9 +346,10 @@ impl KimiWebbridgeEntry {
                     Err(error) => Err(Box::new(error) as Box<dyn Error + Send + Sync>),
                 };
             rename_result?;
-            if self.ctx.platform != "win32" {
-                chmod_755(&self.bin_path).await?;
-            }
+            // The execute bit is a POSIX concept; Windows binaries need no
+            // chmod, so the step is compiled out there.
+            #[cfg(unix)]
+            chmod_755(&self.bin_path).await?;
             Ok(())
         }
         .await;
@@ -484,11 +485,6 @@ async fn chmod_755(path: &Path) -> io::Result<()> {
     tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).await
 }
 
-#[cfg(not(unix))]
-async fn chmod_755(_: &Path) -> io::Result<()> {
-    Ok(())
-}
-
 // Original: node reports cross-device renames as EXDEV on every platform.
 #[cfg(unix)]
 fn is_cross_device(error: &io::Error) -> bool {
@@ -620,10 +616,20 @@ mod tests {
         )
     }
 
+    /// The entry's `bin_path` follows the host executable naming convention
+    /// (`.exe` on Windows), so the fixture must too.
+    fn test_bin_name() -> &'static str {
+        if cfg!(windows) {
+            "kimi-webbridge.exe"
+        } else {
+            "kimi-webbridge"
+        }
+    }
+
     async fn fake_binary(root: &Path) -> PathBuf {
         let bin_dir = root.join("user-home").join(".kimi-webbridge").join("bin");
         tokio::fs::create_dir_all(&bin_dir).await.unwrap();
-        let bin_path = bin_dir.join("kimi-webbridge");
+        let bin_path = bin_dir.join(test_bin_name());
         tokio::fs::write(&bin_path, "bin").await.unwrap();
         make_executable(&bin_path).await;
         bin_path
@@ -841,7 +847,7 @@ mod tests {
             .join("user-home")
             .join(".kimi-webbridge")
             .join("bin")
-            .join("kimi-webbridge");
+            .join(test_bin_name());
         assert!(path_exists(&bin_path).await);
         // Daemon started exactly once (start-if-down).
         assert_eq!(

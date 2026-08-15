@@ -353,15 +353,14 @@ fn system_hostname() -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
-const fn system_os_type() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "Windows_NT"
-    } else if cfg!(target_os = "macos") {
-        "Darwin"
-    } else if cfg!(target_os = "linux") {
-        "Linux"
-    } else {
-        std::env::consts::OS
+// Node's `os.type()` naming: Windows_NT / Darwin / Linux, with the raw Rust
+// target OS as the fallback for anything else.
+fn system_os_type() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => "Windows_NT",
+        "macos" => "Darwin",
+        "linux" => "Linux",
+        other => other,
     }
 }
 

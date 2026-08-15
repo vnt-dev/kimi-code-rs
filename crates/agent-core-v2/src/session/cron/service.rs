@@ -623,11 +623,8 @@ impl SessionCronService {
         *self.sigusr1.lock() = Some(task);
     }
 
-    #[cfg(not(unix))]
-    fn bind_sigusr1(self: &Arc<Self>) {}
-
+    #[cfg(unix)]
     fn unbind_sigusr1(&self) {
-        #[cfg(unix)]
         if let Some(task) = self.sigusr1.lock().take() {
             task.abort();
         }
@@ -808,6 +805,8 @@ impl SessionCronServiceContract for SessionCronService {
                 Duration::from_millis(interval),
             );
         }
+        // SIGUSR1 is a unix concept; Windows needs no signal binding.
+        #[cfg(unix)]
         if let Some(service) = self.self_weak.get().and_then(Weak::upgrade) {
             service.bind_sigusr1();
         }
@@ -815,6 +814,7 @@ impl SessionCronServiceContract for SessionCronService {
     }
 
     async fn stop(&self) -> SessionCronResult<()> {
+        #[cfg(unix)]
         self.unbind_sigusr1();
         self.timer.lock().cancel();
         {
@@ -902,6 +902,7 @@ impl SessionCronServiceContract for SessionCronService {
 
 impl Disposable for SessionCronService {
     fn dispose(&self) -> DisposeResult {
+        #[cfg(unix)]
         self.unbind_sigusr1();
         self.timer.lock().cancel();
         {

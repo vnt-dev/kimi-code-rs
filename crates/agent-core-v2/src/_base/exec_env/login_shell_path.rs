@@ -1,18 +1,29 @@
-use std::{collections::HashMap, time::Duration};
+//! Login-shell `PATH` overlay.
+//!
+//! A login shell is a unix concept; Windows has no login shell, so the whole
+//! probe/apply chain is compiled out there and call sites are gated with
+//! `#[cfg(unix)]`. `merge_login_shell_path` is platform-neutral and remains
+//! available everywhere.
 
+#[cfg(unix)]
+use std::collections::HashMap;
+
+#[cfg(unix)]
+use std::time::Duration;
+
+#[cfg(unix)]
 use super::environment_probe::ExecFileText;
 
+#[cfg(unix)]
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Probes the login shell's `PATH` by running a login shell.
+#[cfg(unix)]
 pub async fn probe_login_shell_path(
-    platform: &str,
     env: &HashMap<String, String>,
     user_shell: impl FnOnce() -> Option<String>,
     exec_file_text: &ExecFileText,
 ) -> Option<String> {
-    if platform == "win32" {
-        return None;
-    }
     let shell = env
         .get("SHELL")
         .map(String::as_str)
@@ -57,14 +68,13 @@ pub fn merge_login_shell_path(current_path: Option<&str>, login_shell_path: &str
     }
 }
 
+#[cfg(unix)]
 pub async fn apply_login_shell_path(
-    platform: &str,
     env: &mut HashMap<String, String>,
     user_shell: impl FnOnce() -> Option<String>,
     exec_file_text: &ExecFileText,
 ) {
-    let Some(login_path) = probe_login_shell_path(platform, env, user_shell, exec_file_text).await
-    else {
+    let Some(login_path) = probe_login_shell_path(env, user_shell, exec_file_text).await else {
         return;
     };
     let current = env.get("PATH").cloned();
@@ -76,11 +86,14 @@ pub async fn apply_login_shell_path(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use parking_lot::Mutex;
+    #[cfg(unix)]
     use std::sync::Arc;
 
     use super::*;
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn probes_last_path_and_uses_account_shell_fallback() {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -91,9 +104,7 @@ mod tests {
                 Box::pin(async { Some("PATH=/noise\nbanner\nPATH=/real:/usr/bin\n".into()) })
             }
         });
-        let path =
-            probe_login_shell_path("darwin", &HashMap::new(), || Some("/bin/zsh".into()), &exec)
-                .await;
+        let path = probe_login_shell_path(&HashMap::new(), || Some("/bin/zsh".into()), &exec).await;
         assert_eq!(path.as_deref(), Some("/real:/usr/bin"));
         assert_eq!(calls.lock()[0].0, "/bin/zsh");
         assert_eq!(calls.lock()[0].2, Duration::from_secs(5));

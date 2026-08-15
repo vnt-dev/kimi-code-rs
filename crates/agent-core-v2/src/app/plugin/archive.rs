@@ -129,6 +129,9 @@ fn extract_zip_blocking(buffer: &[u8], destination: &Path) -> Result<(), PluginA
             }
             file.write_all(&chunk[..count])?;
         }
+        // Unix permission bits are a POSIX concept; the Windows extract
+        // needs no chmod, so the step is compiled out there.
+        #[cfg(unix)]
         restore_file_permissions(&destination_path, entry.unix_mode())?;
     }
     Ok(())
@@ -168,11 +171,6 @@ fn restore_file_permissions(path: &Path, mode: Option<u32>) -> Result<(), std::i
         return Ok(());
     };
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(permissions))
-}
-
-#[cfg(not(unix))]
-fn restore_file_permissions(_path: &Path, _mode: Option<u32>) -> Result<(), std::io::Error> {
-    Ok(())
 }
 
 // Original: archive.ts, detectPluginRoot().

@@ -11,6 +11,11 @@ use std::{collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 use tokio::sync::OnceCell;
 
+#[cfg(unix)]
+use crate::{
+    _base::exec_env::environment_probe::{ExecFileText, exec_file_text},
+    _base::exec_env::login_shell_path::apply_login_shell_path,
+};
 use crate::{
     _base::{
         di::{
@@ -18,12 +23,9 @@ use crate::{
             scope::{InstantiationType, LifecycleScope, register_scoped_service},
         },
         errors::errors::BugIndicatingError,
-        exec_env::{
-            environment_probe::{
-                ExecFileText, HostEnvironmentInfo, HostEnvironmentProbeError, PathClass, ShellName,
-                exec_file_text, probe_host_environment_from_node,
-            },
-            login_shell_path::apply_login_shell_path,
+        exec_env::environment_probe::{
+            HostEnvironmentInfo, HostEnvironmentProbeError, PathClass, ShellName,
+            probe_host_environment_from_node,
         },
     },
     os::interface::host_environment::{
@@ -130,20 +132,25 @@ impl HostEnvironment for LocalHostEnvironmentService {
 }
 
 async fn enriched_process_environment() -> HashMap<String, String> {
-    let mut environment = std::env::vars().collect::<HashMap<_, _>>();
-    let platform = match std::env::consts::OS {
-        "windows" => "win32",
-        other => other,
-    };
-    let user_shell = tokio::task::spawn_blocking(account_shell)
-        .await
-        .ok()
-        .flatten();
-    let exec: ExecFileText = Arc::new(|file, args, timeout| {
-        Box::pin(async move { exec_file_text(file, &args, timeout).await })
-    });
-    apply_login_shell_path(platform, &mut environment, || user_shell, &exec).await;
-    environment
+    // A login shell is a unix concept; Windows keeps the plain process
+    // environment as-is.
+    #[cfg(unix)]
+    {
+        let mut environment = std::env::vars().collect::<HashMap<_, _>>();
+        let user_shell = tokio::task::spawn_blocking(account_shell)
+            .await
+            .ok()
+            .flatten();
+        let exec: ExecFileText = Arc::new(|file, args, timeout| {
+            Box::pin(async move { exec_file_text(file, &args, timeout).await })
+        });
+        apply_login_shell_path(&mut environment, || user_shell, &exec).await;
+        environment
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::vars().collect()
+    }
 }
 
 #[cfg(unix)]
@@ -153,11 +160,6 @@ fn account_shell() -> Option<String> {
     uzers::get_user_by_uid(uzers::get_current_uid())
         .map(|user| user.shell().to_string_lossy().into_owned())
         .filter(|shell| !shell.is_empty())
-}
-
-#[cfg(not(unix))]
-fn account_shell() -> Option<String> {
-    None
 }
 
 #[cfg(test)]

@@ -43,7 +43,6 @@ pub struct HostEnvironmentInfo {
 }
 
 pub struct HostEnvironmentProbeDeps {
-    pub platform: String,
     pub arch: String,
     pub release: String,
     pub home_dir: String,
@@ -65,19 +64,19 @@ const MINGW_PREFIXES: &[&str] = &["mingw32", "mingw64", "ucrt64", "clang64", "cl
 pub async fn probe_host_environment(
     deps: &HostEnvironmentProbeDeps,
 ) -> Result<HostEnvironmentInfo, HostEnvironmentProbeError> {
-    let os_kind = match deps.platform.as_str() {
-        "darwin" => "macOS",
+    let os_kind = match std::env::consts::OS {
+        "macos" => "macOS",
         "linux" => "Linux",
-        "win32" => "Windows",
+        "windows" => "Windows",
         other => other,
     }
     .to_owned();
-    let path_class = if deps.platform == "win32" {
+    let path_class = if cfg!(windows) {
         PathClass::Win32
     } else {
         PathClass::Posix
     };
-    let (shell_name, shell_path) = if deps.platform == "win32" {
+    let (shell_name, shell_path) = if cfg!(windows) {
         (ShellName::Bash, locate_windows_git_bash(deps).await?)
     } else {
         let mut found = None;
@@ -115,7 +114,6 @@ async fn locate_windows_git_bash(
     let git_executables = find_executables_on_path(
         "git.exe",
         environment_value(deps, "PATH").map(String::as_str),
-        "win32",
         Arc::clone(&deps.is_file),
     )
     .await;
@@ -178,7 +176,7 @@ fn non_blank(value: Option<&String>) -> Option<&str> {
 
 fn environment_value<'a>(deps: &'a HostEnvironmentProbeDeps, name: &str) -> Option<&'a String> {
     deps.env.get(name).or_else(|| {
-        (deps.platform == "win32")
+        cfg!(windows)
             .then(|| {
                 deps.env
                     .iter()
@@ -246,16 +244,11 @@ fn normalize_windows_path(path: &str) -> String {
     parts.join("\\")
 }
 
-async fn find_executables_on_path(
-    name: &str,
-    path: Option<&str>,
-    platform: &str,
-    is_file: IsFile,
-) -> Vec<String> {
+async fn find_executables_on_path(name: &str, path: Option<&str>, is_file: IsFile) -> Vec<String> {
     let Some(path) = path.filter(|path| !path.is_empty()) else {
         return Vec::new();
     };
-    let (list_separator, directory_separator) = if platform == "win32" {
+    let (list_separator, directory_separator) = if cfg!(windows) {
         (';', '\\')
     } else {
         (':', '/')
@@ -266,7 +259,7 @@ async fn find_executables_on_path(
         .map(str::trim)
         .filter(|p| !p.is_empty())
     {
-        if platform == "win32" && !is_absolute_windows_path(directory) {
+        if cfg!(windows) && !is_absolute_windows_path(directory) {
             continue;
         }
         let candidate = format!(
@@ -317,13 +310,8 @@ pub async fn probe_host_environment_from_node()
         OnceCell::const_new();
     CACHED
         .get_or_init(|| async {
-            let platform = match std::env::consts::OS {
-                "macos" => "darwin",
-                "windows" => "win32",
-                other => other,
-            };
             let env = std::env::vars().collect::<HashMap<_, _>>();
-            let release = if platform == "win32" {
+            let release = if cfg!(windows) {
                 exec_file_text("cmd", &["/C".into(), "ver".into()], Duration::from_secs(5)).await
             } else {
                 exec_file_text("uname", &["-r".into()], Duration::from_secs(5)).await
@@ -337,14 +325,13 @@ pub async fn probe_host_environment_from_node()
                 Box::pin(async move { exec_file_text(file, &args, timeout).await })
             });
             probe_host_environment(&HostEnvironmentProbeDeps {
-                platform: platform.into(),
                 arch: std::env::consts::ARCH.into(),
                 release,
                 home_dir: env
                     .get("HOME")
                     .or_else(|| env.get("USERPROFILE"))
                     .or_else(|| {
-                        (platform == "win32")
+                        cfg!(windows)
                             .then(|| {
                                 env.iter()
                                     .find(|(key, _)| key.eq_ignore_ascii_case("USERPROFILE"))
@@ -370,6 +357,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(windows)]
     #[tokio::test]
     async fn resolves_msys_native_git_through_exec_path() {
         for prefix in ["ucrt64", "clang64", "clangarm64"] {
@@ -388,7 +376,6 @@ mod tests {
                 Box::pin(async move { Some(output) })
             });
             let info = probe_host_environment(&HostEnvironmentProbeDeps {
-                platform: "win32".into(),
                 arch: "x86_64".into(),
                 release: "1.2.3".into(),
                 home_dir: r"C:\Users\me".into(),
@@ -403,6 +390,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[tokio::test]
     async fn windows_environment_keys_are_case_insensitive() {
         let git = r"D:\Program Files\Git\cmd\git.exe".to_owned();
@@ -413,7 +401,6 @@ mod tests {
             Box::pin(async move { existing.contains(&path) })
         });
         let info = probe_host_environment(&HostEnvironmentProbeDeps {
-            platform: "win32".into(),
             arch: "x86_64".into(),
             release: "1.2.3".into(),
             home_dir: r"C:\Users\me".into(),
@@ -428,7 +415,6 @@ mod tests {
         let override_path = r"D:\portable\bash.exe".to_owned();
         let override_file = override_path.clone();
         let overridden = probe_host_environment(&HostEnvironmentProbeDeps {
-            platform: "win32".into(),
             arch: "x86_64".into(),
             release: "1.2.3".into(),
             home_dir: r"C:\Users\me".into(),
@@ -444,10 +430,10 @@ mod tests {
         assert_eq!(overridden.shell_path, override_path);
     }
 
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn posix_prefers_bash_then_falls_back_to_sh() {
         let deps = |exists: bool| HostEnvironmentProbeDeps {
-            platform: "linux".into(),
             arch: "x64".into(),
             release: "6".into(),
             home_dir: "/home/u".into(),
