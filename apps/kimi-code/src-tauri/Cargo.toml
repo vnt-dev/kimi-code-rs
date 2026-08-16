@@ -1,6 +1,6 @@
 [package]
 name = "kimi-code-desktop"
-version = "0.2.12"
+version = "0.2.13"
 description = "Kimi Code desktop agent client"
 authors = ["vnt-dev"]
 edition = "2024"
