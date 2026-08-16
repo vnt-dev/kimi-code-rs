@@ -130,7 +130,7 @@ mod tests {
         let built = built();
         let message = notification_message(&built);
         assert_eq!(message.message.role, Role::User);
-        assert_eq!(message.message.content, built.content);
+        assert_eq!(message.message.content.as_ref(), &built.content);
         assert!(message.message.tool_calls.is_empty());
         assert_eq!(message.origin, Some(built.origin));
         assert_eq!(message.id, None);

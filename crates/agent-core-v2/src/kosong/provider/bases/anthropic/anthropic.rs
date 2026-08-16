@@ -321,7 +321,7 @@ pub fn convert_message(message: &Message, model: &str) -> Result<Value, ChatProv
     }
 
     let mut blocks = Vec::new();
-    for part in &message.content {
+    for part in message.content.iter() {
         match part {
             ContentPart::Text { text } => {
                 blocks.push(serde_json::json!({"type":"text","text":text}));
@@ -344,7 +344,7 @@ pub fn convert_message(message: &Message, model: &str) -> Result<Value, ChatProv
             }
         }
     }
-    for tool_call in &message.tool_calls {
+    for tool_call in message.tool_calls.iter() {
         let input = match tool_call.arguments.as_deref() {
             None | Some("") => Map::new(),
             Some(arguments) => match serde_json::from_str::<Value>(arguments) {
@@ -1454,7 +1454,7 @@ mod tests {
         assert_eq!(converted["content"][0]["signature"], "signature");
         assert_eq!(converted["content"][2]["input"]["path"], "a");
 
-        message.tool_calls[0].arguments = Some("[]".to_owned());
+        Arc::make_mut(&mut message.tool_calls)[0].arguments = Some("[]".to_owned());
         assert_eq!(
             convert_message(&message, "claude-opus-4-6")
                 .unwrap_err()

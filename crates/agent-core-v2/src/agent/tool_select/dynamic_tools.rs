@@ -56,7 +56,7 @@ pub fn strip_dynamic_tool_context(history: &[ContextMessage]) -> Vec<ContextMess
 pub fn collect_loaded_dynamic_tool_names(history: &[ContextMessage]) -> BTreeSet<String> {
     history
         .iter()
-        .flat_map(|message| message.message.tools.iter().flatten())
+        .flat_map(|message| message.message.tools.as_deref().into_iter().flatten())
         .map(|tool| tool.name.clone())
         .collect()
 }

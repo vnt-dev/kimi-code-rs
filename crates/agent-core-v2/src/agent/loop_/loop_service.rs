@@ -1307,7 +1307,7 @@ impl AgentLoopService {
         step_uuid: &str,
         response: &AgentLlmRequestFinish,
     ) -> Result<(), LoopValue> {
-        for part in &response.message.content {
+        for part in response.message.content.iter() {
             self.context
                 .append_loop_event(LoopRecordedEvent::ContentPart {
                     step_uuid: step_uuid.into(),
@@ -1361,7 +1361,7 @@ impl AgentLoopService {
             });
         });
         let mut stream = self.tool_executor.execute(
-            response.message.tool_calls.clone(),
+            response.message.tool_calls.as_ref().clone(),
             ToolExecutorExecuteOptions {
                 signal,
                 turn_id,

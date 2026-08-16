@@ -37,7 +37,7 @@ pub trait AgentContextSizeServiceContract: Send + Sync {
     fn get(&self, start: Option<isize>, end: Option<isize>) -> ContextSize;
     fn measured(
         &self,
-        input: &[Message],
+        input: &[ContextMessage],
         output: &[Message],
         usage: TokenUsage,
     ) -> Result<(), ContextSizeServiceError>;
@@ -139,7 +139,7 @@ impl AgentContextSizeServiceContract for AgentContextSizeService {
     // Original: contextSizeService.ts, measured().
     fn measured(
         &self,
-        input: &[Message],
+        input: &[ContextMessage],
         _output: &[Message],
         usage: TokenUsage,
     ) -> Result<(), ContextSizeServiceError> {
@@ -160,12 +160,12 @@ impl AgentContextSizeServiceContract for AgentContextSizeService {
 // Rust adaptation: JavaScript compares message object identity. Wire snapshots
 // are owned Rust values, so full Message equality is the stable equivalent and
 // still rejects stale or differently shaped request contexts.
-fn matches_context(input: &[Message], context: &[ContextMessage]) -> bool {
+fn matches_context(input: &[ContextMessage], context: &[ContextMessage]) -> bool {
     input.len() == context.len()
         && input
             .iter()
             .zip(context)
-            .all(|(input, context)| input == &context.message)
+            .all(|(input, context)| input.message == context.message)
 }
 
 fn estimate_context_range(context: &[ContextMessage], start: usize, end: usize) -> usize {
@@ -364,11 +364,7 @@ mod tests {
     async fn records_usage_only_when_input_matches_current_context() {
         let (context, size) = setup();
         context.append(vec![context_message("hello")]).unwrap();
-        let input = context
-            .get()
-            .iter()
-            .map(|message| message.message.clone())
-            .collect::<Vec<_>>();
+        let input = context.get();
         size.measured(
             &input,
             &[],
@@ -382,7 +378,15 @@ mod tests {
         .unwrap();
         assert_eq!(size.get(None, None).measured, 17);
 
-        let stale = vec![Message::new(Role::User, Vec::new(), Vec::new())];
+        let stale = vec![ContextMessage {
+            message: Message::new(Role::User, Vec::new(), Vec::new()),
+            id: None,
+            provider_message_id: None,
+            origin: None,
+            is_error: None,
+            note: None,
+            attachments: Vec::new(),
+        }];
         size.measured(
             &stale,
             &[],

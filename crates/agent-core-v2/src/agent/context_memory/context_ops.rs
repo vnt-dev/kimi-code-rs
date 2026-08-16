@@ -498,7 +498,7 @@ async fn transform_message_content(
     let content =
         serde_json::from_value(Value::Array(transformed)).map_err(|error| error.to_string())?;
     let mut replaced = message.clone();
-    replaced.message.content = content;
+    replaced.message.content = Arc::new(content);
     *message = replaced;
     Ok(true)
 }
@@ -656,12 +656,12 @@ mod tests {
     #[tokio::test]
     async fn blob_codec_transforms_persisted_records_and_surviving_state() {
         let mut message = user("image");
-        message.message.content = vec![ContentPart::ImageUrl {
+        message.message.content = Arc::new(vec![ContentPart::ImageUrl {
             image_url: MediaUrl {
                 url: "data:image/png;base64,AAAA".into(),
                 id: None,
             },
-        }];
+        }]);
         let op = context_append_message(message.clone()).unwrap();
         let record = op_to_wire_record_at(&op, 1);
         let dehydrated = ContextBlobCodec
@@ -679,12 +679,12 @@ mod tests {
             "blobref:image-1"
         );
 
-        message.message.content = vec![ContentPart::ImageUrl {
+        message.message.content = Arc::new(vec![ContentPart::ImageUrl {
             image_url: MediaUrl {
                 url: "blobref:image-1".into(),
                 id: None,
             },
-        }];
+        }]);
         let state = ContextBlobCodec
             .rehydrate(
                 LoopEventFold::new(vec![message]),

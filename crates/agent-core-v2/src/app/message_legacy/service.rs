@@ -264,8 +264,11 @@ async fn rehydrate(
     let blobs = agent.get(AGENT_BLOB_SERVICE_ID)?;
     let mut output = Vec::with_capacity(messages.len());
     for mut message in messages {
-        let content = std::mem::take(&mut message.message.content);
-        message.message.content = blobs.load_parts(content).await;
+        let content = {
+            let parts = Arc::make_mut(&mut message.message.content);
+            std::mem::take(parts)
+        };
+        message.message.content = Arc::new(blobs.load_parts(content).await);
         output.push(message);
     }
     Ok(output)

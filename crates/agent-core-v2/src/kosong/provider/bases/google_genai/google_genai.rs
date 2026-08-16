@@ -198,7 +198,7 @@ pub fn message_to_google_gen_ai(message: &Message) -> Result<Value, ChatProvider
         message.role.as_str()
     };
     let mut parts = Vec::new();
-    for part in &message.content {
+    for part in message.content.iter() {
         match part {
             ContentPart::Text { text } => parts.push(serde_json::json!({"text":text})),
             ContentPart::Think { think, encrypted } => {
@@ -225,7 +225,7 @@ pub fn message_to_google_gen_ai(message: &Message) -> Result<Value, ChatProvider
             }
         }
     }
-    for tool_call in &message.tool_calls {
+    for tool_call in message.tool_calls.iter() {
         let args = match tool_call.arguments.as_deref() {
             None | Some("") => Map::new(),
             Some(arguments) => match serde_json::from_str(arguments) {
@@ -276,7 +276,7 @@ pub fn tool_message_to_function_response_parts(
             })?;
     let mut text_output = String::new();
     let mut media_parts = Vec::new();
-    for part in &message.content {
+    for part in message.content.iter() {
         match part {
             ContentPart::Text { text } if !text.is_empty() => text_output.push_str(text),
             ContentPart::ImageUrl { image_url } => {

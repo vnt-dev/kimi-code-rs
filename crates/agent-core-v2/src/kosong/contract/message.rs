@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use super::tool::Tool;
 
@@ -131,14 +131,14 @@ pub struct Message {
     pub role: Role,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    pub content: Vec<ContentPart>,
-    pub tool_calls: Vec<ToolCall>,
+    pub content: Arc<Vec<ContentPart>>,
+    pub tool_calls: Arc<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partial: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Tool>>,
+    pub tools: Option<Arc<Vec<Tool>>>,
     #[serde(skip, default)]
     token_estimate_cache: OnceLock<usize>,
 }
@@ -148,8 +148,8 @@ impl Message {
         Self {
             role,
             name: None,
-            content,
-            tool_calls,
+            content: Arc::new(content),
+            tool_calls: Arc::new(tool_calls),
             tool_call_id: None,
             partial: None,
             tools: None,
@@ -164,14 +164,15 @@ impl Message {
 
 // Cloning a Rust value creates a new message identity. Its estimate must be
 // computed from the clone's current fields rather than shared with the source
-// object's WeakMap entry.
+// object's WeakMap entry. The heavy payloads are Arc-shared, so cloning is
+// O(1) reference counting instead of a deep copy.
 impl Clone for Message {
     fn clone(&self) -> Self {
         Self {
             role: self.role,
             name: self.name.clone(),
-            content: self.content.clone(),
-            tool_calls: self.tool_calls.clone(),
+            content: Arc::clone(&self.content),
+            tool_calls: Arc::clone(&self.tool_calls),
             tool_call_id: self.tool_call_id.clone(),
             partial: self.partial,
             tools: self.tools.clone(),
@@ -394,14 +395,14 @@ mod tests {
         assert!(is_tool_call_part(&delta));
 
         let mut message = create_assistant_message(Vec::new(), None);
-        message.tools = Some(vec![Tool {
+        message.tools = Some(Arc::new(vec![Tool {
             name: "read".to_owned(),
             description: "Read".to_owned(),
             parameters: Map::new(),
             deferred: None,
-        }]);
+        }]));
         assert!(is_tool_declaration_only_message(&message));
-        message.content.push(ContentPart::Text {
+        Arc::make_mut(&mut message.content).push(ContentPart::Text {
             text: String::new(),
         });
         assert!(!is_tool_declaration_only_message(&message));

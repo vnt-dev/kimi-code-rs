@@ -255,7 +255,11 @@ fn project(
         }
         let content = clean_content(source, anomalies)?;
         if source.message.tool_calls.is_empty()
-            && source.message.tools.as_ref().is_none_or(Vec::is_empty)
+            && source
+                .message
+                .tools
+                .as_ref()
+                .is_none_or(|tools| tools.is_empty())
         {
             if content.is_empty() {
                 continue;
@@ -271,15 +275,16 @@ fn project(
             source.message.role == Role::User && matches!(source.origin, Some(PromptOrigin::User));
         if can_merge && let Some(user_merge) = user_merge {
             let prior = &mut out[user_merge];
-            prior.content.push(ContentPart::Text {
+            let prior_content = Arc::make_mut(&mut prior.content);
+            prior_content.push(ContentPart::Text {
                 text: "\n\n".into(),
             });
-            prior.content.extend(content);
+            prior_content.extend(content);
             continue;
         }
         out.push(to_wire(source, content));
         user_merge = can_merge.then_some(out.len() - 1);
-        for call in &source.message.tool_calls {
+        for call in source.message.tool_calls.iter() {
             if let Some((slot, owner, _)) = slots.insert(call.id.clone(), (out.len(), index, false))
             {
                 out[slot] = interrupted_tool_result(&call.id);
@@ -307,7 +312,7 @@ fn project_strict(messages: Vec<Message>, anomalies: &mut Vec<ProjectionAnomaly>
     let mut out = Vec::new();
     for mut message in messages {
         if message.role == Role::Assistant {
-            message.tool_calls.retain(|call| {
+            Arc::make_mut(&mut message.tool_calls).retain(|call| {
                 if calls.insert(call.id.clone()) {
                     true
                 } else {
@@ -327,8 +332,8 @@ fn project_strict(messages: Vec<Message>, anomalies: &mut Vec<ProjectionAnomaly>
             previous.role == Role::Assistant && message.role == Role::Assistant
         }) {
             let previous = out.last_mut().unwrap();
-            previous.content.extend(message.content);
-            previous.tool_calls.extend(message.tool_calls);
+            Arc::make_mut(&mut previous.content).extend(message.content.iter().cloned());
+            Arc::make_mut(&mut previous.tool_calls).extend(message.tool_calls.iter().cloned());
             anomalies.push(ProjectionAnomaly::ConsecutiveAssistantsMerged);
         } else {
             out.push(message);
@@ -363,7 +368,7 @@ fn clean_content(
             is_error: source.is_error,
         })
     } else {
-        source.message.content.clone()
+        source.message.content.as_ref().clone()
     };
     let content: Vec<_> = raw
         .into_iter()
@@ -389,7 +394,7 @@ fn clean_content(
 
 fn to_wire(source: &ContextMessage, content: Vec<ContentPart>) -> Message {
     let mut message = source.message.clone();
-    message.content = content;
+    message.content = Arc::new(content);
     message
 }
 fn interrupted_tool_result(id: &str) -> Message {
@@ -447,8 +452,8 @@ pub fn strip_media_parts_by_snapshot(
         .iter()
         .cloned()
         .map(|mut message| {
-            message.content = message
-                .content
+            let content = Arc::make_mut(&mut message.content);
+            *content = std::mem::take(content)
                 .into_iter()
                 .map(|part| {
                     if media_key(&part).is_some_and(|key| snapshot.keys.contains(&key)) {
@@ -479,8 +484,8 @@ pub fn degrade_older_media_parts(
         .iter()
         .cloned()
         .map(|mut message| {
-            message.content = message
-                .content
+            let content = Arc::make_mut(&mut message.content);
+            *content = std::mem::take(content)
                 .into_iter()
                 .map(|part| {
                     if remaining > 0 && media_key(&part).is_some() {

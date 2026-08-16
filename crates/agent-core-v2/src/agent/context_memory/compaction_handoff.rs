@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use crate::kosong::contract::{
     message::{ContentPart, Message, Role},
@@ -399,10 +399,10 @@ fn truncate_text_to_tokens_from_end(text: &str, max_tokens: usize) -> &str {
 
 fn replace_message_text(message: &ContextMessage, text: &str) -> ContextMessage {
     let mut replaced = message.clone();
-    replaced.message.content = vec![ContentPart::Text {
+    replaced.message.content = Arc::new(vec![ContentPart::Text {
         text: text.to_owned(),
-    }];
-    replaced.message.tool_calls.clear();
+    }]);
+    Arc::make_mut(&mut replaced.message.tool_calls).clear();
     replaced.attachments.clear();
     replaced
 }

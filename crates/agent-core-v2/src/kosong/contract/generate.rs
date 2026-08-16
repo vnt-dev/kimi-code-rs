@@ -162,7 +162,7 @@ pub async fn generate(
     }
 
     if let Some(callback) = callbacks.and_then(|callbacks| callbacks.on_tool_call.as_ref()) {
-        for tool_call in &mut message.tool_calls {
+        for tool_call in Arc::make_mut(&mut message.tool_calls).iter_mut() {
             throw_if_aborted(options, Some(stream.as_mut())).await?;
             callback(tool_call).await;
         }
@@ -201,7 +201,7 @@ async fn consume_part(
         && !is_pending_tool_call_at_index(pending_part.as_ref(), index)
         && let Some(array_index) = tool_call_index_map.get(index).copied()
     {
-        if let Some(target) = message.tool_calls.get_mut(array_index)
+        if let Some(target) = Arc::make_mut(&mut message.tool_calls).get_mut(array_index)
             && let Some(arguments_part) = delta.arguments_part.as_ref()
         {
             if let Some(arguments) = target.arguments.as_mut() {
@@ -259,11 +259,11 @@ fn flush_part(
     tool_call_index_map: &mut HashMap<StreamIndex, usize>,
 ) {
     match part {
-        StreamedMessagePart::Content(content) => message.content.push(content),
+        StreamedMessagePart::Content(content) => Arc::make_mut(&mut message.content).push(content),
         StreamedMessagePart::ToolCall(mut tool_call) => {
             let stream_index = tool_call.stream_index.take();
             let ordinal = message.tool_calls.len();
-            message.tool_calls.push(tool_call);
+            Arc::make_mut(&mut message.tool_calls).push(tool_call);
             if let Some(stream_index) = stream_index {
                 tool_call_index_map.insert(stream_index, ordinal);
             }
@@ -526,8 +526,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            result.message.content,
-            vec![
+            result.message.content.as_ref(),
+            &vec![
                 ContentPart::Think {
                     think: "let me think".to_owned(),
                     encrypted: None,
@@ -606,8 +606,8 @@ mod tests {
             .unwrap();
         assert_eq!(seen_parts.lock().len(), 2);
         assert_eq!(
-            result.message.content,
-            vec![ContentPart::Text {
+            result.message.content.as_ref(),
+            &vec![ContentPart::Text {
                 text: "abc".to_owned()
             }]
         );

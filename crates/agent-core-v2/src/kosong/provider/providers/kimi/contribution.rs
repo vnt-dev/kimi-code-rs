@@ -426,12 +426,12 @@ mod tests {
                 stream_index: None,
             }],
         );
-        message.tools = Some(vec![Tool {
+        message.tools = Some(Arc::new(vec![Tool {
             name: "$web_search".to_owned(),
             description: String::new(),
             parameters: Map::new(),
             deferred: None,
-        }]);
+        }]));
         let converted = protocol_trait.convert_message.as_ref().unwrap()(
             &message,
             object(json!({"content":"  ","tool_calls":[{}]})),

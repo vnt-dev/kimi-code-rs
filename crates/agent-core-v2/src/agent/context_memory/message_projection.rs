@@ -188,6 +188,8 @@ pub fn to_protocol_message(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{
         agent::context_memory::types::PromptOrigin,
@@ -348,7 +350,7 @@ mod tests {
     #[test]
     fn parses_valid_tool_arguments_and_preserves_invalid_or_null_arguments() {
         let mut message = context_message(Role::Assistant, Vec::new());
-        message.message.tool_calls = vec![
+        message.message.tool_calls = Arc::new(vec![
             ToolCall {
                 call_type: ToolCallType::Function,
                 id: "one".into(),
@@ -373,7 +375,7 @@ mod tests {
                 extras: None,
                 stream_index: None,
             },
-        ];
+        ]);
         let projected = to_protocol_message("s", 0, &message, 0, Some(5_000)).unwrap();
         let value = serde_json::to_value(projected).unwrap();
         assert_eq!(value["created_at"], "1970-01-01T00:00:05.000Z");

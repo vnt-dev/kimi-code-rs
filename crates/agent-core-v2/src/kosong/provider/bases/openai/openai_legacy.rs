@@ -213,7 +213,7 @@ pub fn convert_message(
     let mut reasoning_content = String::new();
     let mut has_reasoning_part = false;
     let mut non_think_parts = Vec::new();
-    for part in &message.content {
+    for part in message.content.iter() {
         match part {
             ContentPart::Think { think, .. } => {
                 has_reasoning_part = true;
@@ -1276,12 +1276,12 @@ mod tests {
         );
         tool_result.tool_call_id = Some("call-1".to_owned());
         let mut declaration = Message::new(Role::User, Vec::new(), Vec::new());
-        declaration.tools = Some(vec![Tool {
+        declaration.tools = Some(Arc::new(vec![Tool {
             name: "ignored".to_owned(),
             description: "ignored".to_owned(),
             parameters: Map::new(),
             deferred: None,
-        }]);
+        }]));
         let user = Message::new(
             Role::User,
             vec![ContentPart::Text {
@@ -1430,12 +1430,12 @@ mod tests {
     #[test]
     fn request_builder_runs_trait_mode_and_build_params_last() {
         let mut declaration = Message::new(Role::User, Vec::new(), Vec::new());
-        declaration.tools = Some(vec![Tool {
+        declaration.tools = Some(Arc::new(vec![Tool {
             name: "declared".to_owned(),
             description: "declaration message".to_owned(),
             parameters: Map::new(),
             deferred: None,
-        }]);
+        }]));
         let user = Message::new(
             Role::User,
             vec![ContentPart::Text {

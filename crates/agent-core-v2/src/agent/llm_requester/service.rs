@@ -437,10 +437,6 @@ impl AgentLlmRequesterService {
                     .collect()
             })
             .unwrap_or_else(|| self.context.get());
-        let source_messages = history
-            .iter()
-            .map(|entry| entry.message.clone())
-            .collect::<Vec<_>>();
         let shaped = self.tool_select.shape_history(&history);
         let tools = overrides.tools.unwrap_or_else(|| self.default_tools());
         let system_prompt = overrides.system_prompt.unwrap_or(prompt);
@@ -501,7 +497,7 @@ impl AgentLlmRequesterService {
                         overrides.source.clone(),
                     );
                     let _ = self.context_size.measured(
-                        &source_messages,
+                        &history,
                         std::slice::from_ref(&finish.message),
                         finish.usage,
                     );

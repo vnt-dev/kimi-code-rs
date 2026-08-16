@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::kosong::contract::message::Message;
 use crate::kosong::contract::provider::ToolCallIdPolicy;
@@ -94,7 +95,7 @@ pub fn normalize_tool_call_ids_for_provider(
         }
 
         let mut normalized = message.clone();
-        for tool_call in &mut normalized.tool_calls {
+        for tool_call in Arc::make_mut(&mut normalized.tool_calls).iter_mut() {
             if let Some(mapped) = mapped_ids.get(&tool_call.id) {
                 tool_call.id.clone_from(mapped);
             }
@@ -109,7 +110,7 @@ fn collect_tool_call_ids(messages: &[Message]) -> Vec<String> {
     let mut ids = Vec::new();
     let mut seen = HashSet::new();
     for message in messages {
-        for tool_call in &message.tool_calls {
+        for tool_call in message.tool_calls.iter() {
             if seen.insert(tool_call.id.clone()) {
                 ids.push(tool_call.id.clone());
             }

@@ -251,7 +251,7 @@ impl AgentToolSelectServiceContract for AgentToolSelectService {
                     return Some(message.clone());
                 }
                 let mut message = message.clone();
-                message.message.tools = (!kept.is_empty()).then_some(kept);
+                message.message.tools = (!kept.is_empty()).then_some(Arc::new(kept));
                 (!message.message.content.is_empty() || !message.message.tool_calls.is_empty())
                     .then_some(message)
             })
@@ -291,7 +291,7 @@ impl AgentToolSelectServiceContract for AgentToolSelectService {
                 })
                 .collect();
             let mut message = Message::new(Role::System, Vec::new(), Vec::new());
-            message.tools = Some(tools);
+            message.tools = Some(Arc::new(tools));
             let _ = self.context.append(vec![ContextMessage {
                 message,
                 id: None,

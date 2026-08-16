@@ -80,6 +80,7 @@ mod tests {
     use super::*;
     use crate::kosong::contract::message::{MediaUrl, Role, ToolCallType, create_user_message};
     use serde_json::{Map, Value};
+    use std::sync::Arc;
 
     #[test]
     fn estimates_ascii_at_four_characters_and_non_ascii_per_scalar() {
@@ -117,7 +118,7 @@ mod tests {
     fn same_message_instance_is_memoized_after_mutation() {
         let mut message = create_user_message("hello world");
         let first = estimate_tokens_for_message(&message);
-        message.content.push(ContentPart::Text {
+        Arc::make_mut(&mut message.content).push(ContentPart::Text {
             text: "mutated after the fact".to_owned(),
         });
         assert_eq!(estimate_tokens_for_message(&message), first);
@@ -131,7 +132,7 @@ mod tests {
     fn clone_has_fresh_object_identity_and_recomputes_current_content() {
         let mut message = create_user_message("abcd");
         let before = estimate_tokens_for_message(&message);
-        message.content.push(ContentPart::Text {
+        Arc::make_mut(&mut message.content).push(ContentPart::Text {
             text: "a much longer second part".to_owned(),
         });
         let cloned = message.clone();

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use indexmap::IndexSet;
 use serde_json::Value;
@@ -249,7 +250,7 @@ impl ContextTranscriptReducer {
                 step_uuid, part, ..
             } => {
                 if let Some(message) = self.open_message_mut(&step_uuid) {
-                    message.message.content.push(part);
+                    Arc::make_mut(&mut message.message.content).push(part);
                 }
             }
             LoopRecordedEvent::ToolCall {
@@ -263,7 +264,7 @@ impl ContextTranscriptReducer {
                 let Some(message) = self.open_message_mut(&step_uuid) else {
                     return;
                 };
-                message.message.tool_calls.push(ToolCall {
+                Arc::make_mut(&mut message.message.tool_calls).push(ToolCall {
                     call_type: ToolCallType::Function,
                     id: tool_call_id.clone(),
                     name,
@@ -342,8 +343,8 @@ fn transcript_projection(message: ContextMessage) -> ContextMessage {
     let attachments = message.attachments;
     let mut projected = context_message(
         message.message.role,
-        message.message.content,
-        message.message.tool_calls,
+        message.message.content.as_ref().clone(),
+        message.message.tool_calls.as_ref().clone(),
         message.message.tool_call_id,
         message.is_error,
         message.origin,

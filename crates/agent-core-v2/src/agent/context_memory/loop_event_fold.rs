@@ -214,7 +214,9 @@ impl LoopEventFold {
                 self.flush_deferred();
             }
             LoopRecordedEvent::ContentPart { part, .. } => {
-                self.update_open_assistant(|message| message.message.content.push(part));
+                self.update_open_assistant(|message| {
+                    Arc::make_mut(&mut message.message.content).push(part)
+                });
             }
             LoopRecordedEvent::ToolCall {
                 tool_call_id,
@@ -226,7 +228,7 @@ impl LoopEventFold {
                 let arguments = args.map(|args| args.to_string());
                 self.pending.insert(tool_call_id.clone());
                 self.update_open_assistant(|message| {
-                    message.message.tool_calls.push(ToolCall {
+                    Arc::make_mut(&mut message.message.tool_calls).push(ToolCall {
                         call_type: ToolCallType::Function,
                         id: tool_call_id,
                         name,

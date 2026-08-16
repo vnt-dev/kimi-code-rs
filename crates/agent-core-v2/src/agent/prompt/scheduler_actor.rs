@@ -1058,7 +1058,7 @@ impl SchedulerActor {
             .collect::<Vec<_>>();
         let content = selected_messages
             .iter()
-            .flat_map(|message| message.message.content.clone())
+            .flat_map(|message| message.message.content.iter().cloned())
             .collect::<Vec<_>>();
         let attachments = selected_messages
             .into_iter()
@@ -1329,7 +1329,7 @@ async fn steer_job(
         runtime.reminders.0.clone(),
         Arc::new(move |materialized| {
             let seed = TurnSeed {
-                input: materialized.message.content.clone(),
+                input: materialized.message.content.as_ref().clone(),
                 origin: materialized.origin.clone().unwrap_or(PromptOrigin::User),
                 user_message: None,
             };
@@ -1403,7 +1403,7 @@ pub(super) async fn inject_runtime(
         runtime.reminders.0.clone(),
         Arc::new(move |materialized| {
             let seed = TurnSeed {
-                input: materialized.message.content.clone(),
+                input: materialized.message.content.as_ref().clone(),
                 origin: materialized.origin.clone().unwrap_or(PromptOrigin::User),
                 user_message: None,
             };
@@ -1568,9 +1568,8 @@ fn extract_message(message: &ContextMessage) -> (ContextMessage, Vec<String>) {
     }
     let mut result = message.clone();
     let mut captions = Vec::new();
-    result.message.content = result
-        .message
-        .content
+    let content = Arc::make_mut(&mut result.message.content);
+    *content = std::mem::take(content)
         .into_iter()
         .filter_map(|part| match part {
             ContentPart::Text { text } => {

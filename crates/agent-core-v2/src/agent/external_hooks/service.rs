@@ -475,7 +475,7 @@ impl AgentExternalHooksService {
         }
 
         let signal = AbortController::new().signal();
-        let input = context.prompt_message.message.content.clone();
+        let input = context.prompt_message.message.content.as_ref().clone();
         throw_if_aborted(&signal)?;
         let results = self
             .runner

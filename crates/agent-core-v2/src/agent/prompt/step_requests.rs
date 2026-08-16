@@ -39,7 +39,7 @@ impl UserMessageStepRequest {
         options: StepRequestOptions,
     ) -> Self {
         let mut message = message;
-        message.message.content = gate_image_format_parts(&message.message.content);
+        message.message.content = Arc::new(gate_image_format_parts(&message.message.content));
         Self {
             core: StepRequestCore::new(options),
             kind,
@@ -51,7 +51,7 @@ impl UserMessageStepRequest {
     }
     fn seed(&self) -> TurnSeed {
         TurnSeed {
-            input: self.message.message.content.clone(),
+            input: self.message.message.content.as_ref().clone(),
             origin: self.message.origin.clone().unwrap_or(PromptOrigin::User),
             user_message: self.user_message.clone(),
         }

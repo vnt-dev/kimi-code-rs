@@ -171,7 +171,7 @@ impl StepRequest for MessageStepRequest {
     // Original: MessageStepRequest.turnSeed.
     fn turn_seed(&self) -> Option<TurnSeed> {
         Some(TurnSeed {
-            input: self.message.message.content.clone(),
+            input: self.message.message.content.as_ref().clone(),
             origin: self.message.origin.clone().unwrap_or(PromptOrigin::User),
             user_message: None,
         })

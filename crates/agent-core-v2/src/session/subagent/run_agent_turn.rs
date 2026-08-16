@@ -397,8 +397,8 @@ mod tests {
         let message = user_message("delegate this".into());
         assert_eq!(message.message.role, Role::User);
         assert_eq!(
-            message.message.content,
-            [ContentPart::Text {
+            message.message.content.as_ref(),
+            &[ContentPart::Text {
                 text: "delegate this".into()
             }]
         );
