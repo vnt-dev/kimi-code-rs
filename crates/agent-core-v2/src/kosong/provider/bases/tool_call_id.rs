@@ -108,15 +108,15 @@ pub fn normalize_tool_call_ids_for_provider(
 
 fn collect_tool_call_ids(messages: &[Message]) -> Vec<String> {
     let mut ids = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen: HashSet<&str> = HashSet::new();
     for message in messages {
         for tool_call in message.tool_calls.iter() {
-            if seen.insert(tool_call.id.clone()) {
+            if seen.insert(tool_call.id.as_str()) {
                 ids.push(tool_call.id.clone());
             }
         }
         if let Some(id) = message.tool_call_id.as_ref()
-            && seen.insert(id.clone())
+            && seen.insert(id.as_str())
         {
             ids.push(id.clone());
         }

@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 
 use crate::kosong::contract::capability::ModelCapability;
 use crate::kosong::contract::errors::{
-    ChatProviderError, classify_base_api_error, normalize_api_status_error, parse_retry_after_ms,
+    ChatProviderError, convert_transport_error, normalize_api_status_error, parse_retry_after_ms,
 };
 use crate::kosong::contract::message::is_tool_declaration_only_message;
 use crate::kosong::contract::message::{
@@ -77,17 +77,7 @@ pub fn normalize_anthropic_stop_reason(raw: Option<&str>) -> NormalizedFinishRea
 // Cancellation is selected before the reqwest future, preserving the source
 // method's abort-first guard.
 pub fn convert_anthropic_error(error: reqwest::Error) -> ChatProviderError {
-    if error.is_timeout() {
-        ChatProviderError::timeout(error.to_string())
-    } else if error.is_connect() || error.is_request() || error.is_body() {
-        ChatProviderError::connection(error.to_string())
-    } else if error.is_decode() {
-        ChatProviderError::ChatProvider {
-            message: format!("Anthropic error: {error}"),
-        }
-    } else {
-        classify_base_api_error(&error.to_string())
-    }
+    convert_transport_error(error, "Anthropic", true)
 }
 
 pub fn convert_anthropic_status_error(

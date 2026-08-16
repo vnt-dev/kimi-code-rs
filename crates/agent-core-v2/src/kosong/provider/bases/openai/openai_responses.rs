@@ -844,11 +844,13 @@ impl OpenAiResponsesStreamedMessage {
         part: &str,
         event_type: &str,
     ) -> Result<(), ChatProviderError> {
-        let formatted = format_response_stream_index(index);
         let arguments = self.arguments_mut(index).ok_or_else(|| {
             responses_decode_error(
                 event_type,
-                &format!("received function-call arguments for unknown stream index {formatted}."),
+                &format!(
+                    "received function-call arguments for unknown stream index {}.",
+                    format_response_stream_index(index)
+                ),
             )
         })?;
         arguments.push_str(part);
@@ -861,12 +863,12 @@ impl OpenAiResponsesStreamedMessage {
         final_arguments: String,
         event_type: &str,
     ) -> Result<(), ChatProviderError> {
-        let formatted = format_response_stream_index(index.as_ref());
         let accumulated = self.arguments_mut(index.as_ref()).ok_or_else(|| {
             responses_decode_error(
                 event_type,
                 &format!(
-                    "received final function-call arguments for unknown stream index {formatted}."
+                    "received final function-call arguments for unknown stream index {}.",
+                    format_response_stream_index(index.as_ref())
                 ),
             )
         })?;
@@ -876,7 +878,8 @@ impl OpenAiResponsesStreamedMessage {
         let Some(suffix) = final_arguments.strip_prefix(accumulated.as_str()) else {
             return Err(ChatProviderError::ChatProvider {
                 message: format!(
-                    "OpenAI Responses final function-call arguments for stream index {formatted} do not match the streamed argument deltas."
+                    "OpenAI Responses final function-call arguments for stream index {} do not match the streamed argument deltas.",
+                    format_response_stream_index(index.as_ref())
                 ),
             });
         };

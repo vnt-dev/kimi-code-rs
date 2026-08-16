@@ -156,20 +156,22 @@ pub async fn send_anthropic_request(
     stream: bool,
     signal: Option<&CancellationToken>,
 ) -> Result<AnthropicHttpResponse, ProviderError> {
-    let mut headers = request_headers.cloned().unwrap_or_default();
-    if let Some(betas) = params
+    let merged_headers = params
         .remove("betas")
         .and_then(|value| value.as_array().cloned())
-    {
-        let joined = betas
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>()
-            .join(",");
-        if !joined.is_empty() {
-            headers.insert("anthropic-beta".to_owned(), joined);
-        }
-    }
+        .and_then(|betas| {
+            let joined = betas
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(",");
+            (!joined.is_empty()).then(|| {
+                let mut headers = request_headers.cloned().unwrap_or_default();
+                headers.insert("anthropic-beta".to_owned(), joined);
+                headers
+            })
+        });
+    let headers = merged_headers.as_ref().or(request_headers);
     params.insert("stream".to_owned(), Value::Bool(stream));
     let url = append_url_path_segments(base_url, &["v1", "messages"]).map_err(|error| {
         boxed(ChatProviderError::ChatProvider {
@@ -180,7 +182,7 @@ pub async fn send_anthropic_request(
         signal,
         client
             .post(url)
-            .headers(build_headers(api_key, default_headers, Some(&headers)).map_err(boxed)?)
+            .headers(build_headers(api_key, default_headers, headers).map_err(boxed)?)
             .json(&params)
             .send(),
     )

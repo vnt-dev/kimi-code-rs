@@ -73,27 +73,44 @@ impl Default for SseFrameDecoder {
 /// Locate the first event boundary (`\n\n` or `\r\n\r\n`, whichever comes
 /// first) in `buffer`, returning its position and delimiter length.
 pub fn find_event_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
-    let lf = buffer.windows(2).position(|window| window == b"\n\n");
-    let crlf = buffer.windows(4).position(|window| window == b"\r\n\r\n");
-    match (lf, crlf) {
-        (Some(lf), Some(crlf)) if lf < crlf => Some((lf, 2)),
-        (Some(_), Some(crlf)) => Some((crlf, 4)),
-        (Some(lf), None) => Some((lf, 2)),
-        (None, Some(crlf)) => Some((crlf, 4)),
-        (None, None) => None,
+    // Single linear scan: the first `\n\n` or `\r\n\r\n` encountered is the
+    // earliest boundary, matching the previous two-pass window search.
+    let mut index = 0;
+    while index + 1 < buffer.len() {
+        if buffer[index] == b'\n' && buffer[index + 1] == b'\n' {
+            return Some((index, 2));
+        }
+        if buffer[index] == b'\r'
+            && buffer.get(index + 1) == Some(&b'\n')
+            && buffer.get(index + 2) == Some(&b'\r')
+            && buffer.get(index + 3) == Some(&b'\n')
+        {
+            return Some((index, 4));
+        }
+        index += 1;
     }
+    None
 }
 
 /// Extract the `data:` payload of a single event frame: all `data:` lines
 /// concatenated with `\n`, each stripped of its leading whitespace.
 pub fn extract_data(frame: &[u8]) -> Result<String, std::str::Utf8Error> {
     let text = std::str::from_utf8(frame)?;
-    Ok(text
+    let mut data = None;
+    for line in text
         .lines()
         .filter_map(|line| line.strip_prefix("data:"))
         .map(str::trim_start)
-        .collect::<Vec<_>>()
-        .join("\n"))
+    {
+        match &mut data {
+            None => data = Some(line.to_owned()),
+            Some(joined) => {
+                joined.push('\n');
+                joined.push_str(line);
+            }
+        }
+    }
+    Ok(data.unwrap_or_default())
 }
 
 #[cfg(test)]

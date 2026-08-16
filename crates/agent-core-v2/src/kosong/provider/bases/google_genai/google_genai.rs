@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::kosong::contract::capability::ModelCapability;
 use crate::kosong::contract::errors::{
-    ChatProviderError, classify_base_api_error, normalize_api_status_error,
+    ChatProviderError, convert_transport_error, normalize_api_status_error,
 };
 use crate::kosong::contract::message::{
     ContentPart, Message, Role, StreamedMessagePart, ToolCall, ToolCallType,
@@ -66,17 +66,7 @@ pub fn normalize_google_gen_ai_finish_reason(raw: Option<&Value>) -> NormalizedF
 
 // Original: google-genai.ts, convertGoogleGenAIError()
 pub fn convert_google_gen_ai_error(error: reqwest::Error) -> ChatProviderError {
-    if error.is_timeout() {
-        ChatProviderError::timeout(error.to_string())
-    } else if error.is_connect() || error.is_request() || error.is_body() {
-        ChatProviderError::connection(error.to_string())
-    } else if error.is_decode() {
-        ChatProviderError::ChatProvider {
-            message: format!("GoogleGenAI error: {error}"),
-        }
-    } else {
-        classify_base_api_error(&error.to_string())
-    }
+    convert_transport_error(error, "GoogleGenAI", true)
 }
 
 pub fn convert_google_gen_ai_status_error(status_code: u16, message: &str) -> ChatProviderError {
@@ -753,17 +743,18 @@ impl GoogleGenAiStreamedMessage {
                 else {
                     continue;
                 };
-                let id = function_call
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                let entropy = uuid::Uuid::new_v4()
+                let call_uuid = uuid::Uuid::new_v4();
+                let entropy = call_uuid
                     .simple()
                     .to_string()
                     .chars()
                     .take(8)
                     .collect::<String>();
+                let id = function_call
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| call_uuid.to_string());
                 let arguments = function_call.get("args").map_or_else(
                     || "{}".to_owned(),
                     |args| {

@@ -298,6 +298,28 @@ pub fn classify_base_api_error(message: &str) -> ChatProviderError {
     }
 }
 
+/// Classify a reqwest transport error with the timeout / connection / body /
+/// decode ladder shared by the provider transports. `provider_label` is
+/// embedded in the decode error message and `decode` gates whether `is_decode`
+/// errors get that label (OpenAI legacy classifies them generically instead).
+pub fn convert_transport_error(
+    error: reqwest::Error,
+    provider_label: &str,
+    decode: bool,
+) -> ChatProviderError {
+    if error.is_timeout() {
+        ChatProviderError::timeout(error.to_string())
+    } else if error.is_connect() || error.is_request() || error.is_body() {
+        ChatProviderError::connection(error.to_string())
+    } else if decode && error.is_decode() {
+        ChatProviderError::ChatProvider {
+            message: format!("{provider_label} error: {error}"),
+        }
+    } else {
+        classify_base_api_error(&error.to_string())
+    }
+}
+
 static CONTEXT_OVERFLOW_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     compile_patterns(&[
         r"context[ _-]?length",

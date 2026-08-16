@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 
 use crate::kosong::contract::capability::ModelCapability;
 use crate::kosong::contract::errors::{
-    ChatProviderError, classify_base_api_error, normalize_api_status_error, parse_retry_after_ms,
+    ChatProviderError, convert_transport_error, normalize_api_status_error, parse_retry_after_ms,
     parse_trace_id,
 };
 use crate::kosong::contract::message::{ContentPart, MediaUrl, Message, extract_text};
@@ -75,13 +75,7 @@ pub fn tool_to_openai(tool: &Tool) -> OpenAiToolParam {
 //   Cancellation is guarded before reqwest futures are polled by each caller;
 //   it therefore remains impossible for an abort to reach this classifier.
 pub fn convert_openai_error(error: reqwest::Error) -> ChatProviderError {
-    if error.is_timeout() {
-        ChatProviderError::timeout(error.to_string())
-    } else if error.is_connect() || error.is_request() || error.is_body() {
-        ChatProviderError::connection(error.to_string())
-    } else {
-        classify_base_api_error(&error.to_string())
-    }
+    convert_transport_error(error, "OpenAI", false)
 }
 
 pub fn convert_openai_status_error(
