@@ -5,7 +5,7 @@
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::{
-    Arc,
+    Arc, LazyLock,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -61,6 +61,21 @@ const MAX_TIMEOUT_S: u64 = 5 * 60;
 const DEFAULT_BACKGROUND_TIMEOUT_S: u64 = 10 * 60;
 const MAX_BACKGROUND_TIMEOUT_S: u64 = 24 * 60 * 60;
 const BASH_DESCRIPTION_TEMPLATE: &str = include_str!("bash.md");
+
+static BACKGROUND_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?s)\r?\n\r?\nIf `run_in_background=true`,.*?point them to the `/tasks` command, which opens an interactive panel; it has no subcommands\.",
+    )
+    .expect("static regex")
+});
+static BACKGROUND_EFFICIENCY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?s)\r?\n- Prefer `run_in_background=true`.*?conversation to continue before the command finishes\.",
+    )
+    .expect("static regex")
+});
+static WINDOWS_NUL_REDIRECT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(\d?&?>+\s*)nul(\s|$|[|&;)\n])").expect("static regex"));
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct BashInput {
@@ -692,26 +707,18 @@ fn render_bash_description(shell_name: &str) -> String {
 }
 
 fn without_background_description(description: &str) -> String {
-    let background = Regex::new(
-        r"(?s)\r?\n\r?\nIf `run_in_background=true`,.*?point them to the `/tasks` command, which opens an interactive panel; it has no subcommands\.",
-    )
-    .expect("static regex");
     let safety = format!(
         " For possibly long-running foreground commands, set the `timeout` argument in seconds. Foreground commands default to {DEFAULT_TIMEOUT_S}s and allow up to {MAX_TIMEOUT_S}s. When a foreground command hits its timeout it is moved to the background instead of being killed, and you will be automatically notified when it completes."
     );
     let no_background_safety = format!(
         " For possibly long-running commands, set the `timeout` argument in seconds. The default is {DEFAULT_TIMEOUT_S}s; foreground commands allow up to {MAX_TIMEOUT_S}s; a foreground command that hits its timeout is killed."
     );
-    let efficiency = Regex::new(
-        r"(?s)\r?\n- Prefer `run_in_background=true`.*?conversation to continue before the command finishes\.",
-    )
-    .expect("static regex");
-    let description = background.replace(
+    let description = BACKGROUND_MARKER_RE.replace(
         description,
         "\n\nBackground execution is disabled for this agent. Do not set `run_in_background=true`.",
     );
     let description = description.replace(&safety, &no_background_safety);
-    efficiency
+    BACKGROUND_EFFICIENCY_RE
         .replace(
             &description,
             "\n- Do not set `run_in_background=true`; background task management tools are not available.",
@@ -786,8 +793,7 @@ fn windows_path_to_posix_path(path: &str) -> String {
 }
 
 fn rewrite_windows_null_redirect(command: &str) -> String {
-    Regex::new(r"(?i)(\d?&?>+\s*)nul(\s|$|[|&;)\n])")
-        .expect("static regex")
+    WINDOWS_NUL_REDIRECT_RE
         .replace_all(command, "${1}/dev/null$2")
         .into_owned()
 }

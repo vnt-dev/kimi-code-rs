@@ -4,13 +4,15 @@
 
 use std::{sync::Arc, time::Duration};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use crate::{
     _base::log::{LogPayload, Logger},
     os::interface::host_process::{ProcessSignal, SharedProcessReader},
     session::process::{ProcessExecOptions, SessionProcess, SessionProcessRunnerContract},
 };
+
+use super::fs_process::read_stream;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_DIRTY_FILES: usize = 20;
@@ -234,10 +236,7 @@ async fn collect_process(process: SessionProcess) -> Result<(String, String, i32
 }
 
 async fn collect_stream(stream: SharedProcessReader) -> Result<String, ()> {
-    let mut stream = stream.lock().await;
-    let mut bytes = Vec::new();
-    stream.read_to_end(&mut bytes).await.map_err(|_| ())?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    read_stream(stream).await.map_err(|_| ())
 }
 
 fn log_git_failure(cwd: &str, args: &[&str], failure: &GitResult, log: Option<&dyn Logger>) {
