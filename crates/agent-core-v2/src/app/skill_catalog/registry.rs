@@ -62,6 +62,10 @@ impl InMemorySkillCatalog {
     pub fn register(&mut self, skill: SkillDefinition, options: RegisterSkillOptions) {
         let key = normalize_skill_name(&skill.name);
         if options.replace || !self.by_name.contains_key(&key) {
+            if skill.plugin.is_none() {
+                self.by_name.insert(key, skill);
+                return;
+            }
             self.by_name.insert(key, skill.clone());
         }
         self.index_plugin_skill(skill, options);

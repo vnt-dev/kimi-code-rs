@@ -55,11 +55,7 @@ impl SkillSourceContract for PluginSkillSource {
             .await
             .map_err(SkillSourceError::Plugin)?;
         let result = self.discovery.discover(&roots).await;
-        Ok(SkillContribution {
-            skills: result.skills,
-            skipped: Some(result.skipped),
-            scanned_roots: Some(result.scanned_roots),
-        })
+        Ok(result.into())
     }
 }
 

@@ -16,6 +16,8 @@ use std::{
 use tokio::fs::File;
 use tokio_util::sync::CancellationToken;
 
+use super::{check, file_identity};
+
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,17 +91,6 @@ impl ZipSource {
     }
 }
 
-fn check(cancellation: Option<&CancellationToken>) -> io::Result<()> {
-    if cancellation.is_some_and(CancellationToken::is_cancelled) {
-        Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "session export cancelled",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 fn absolute_path(path: &Path) -> io::Result<PathBuf> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
@@ -117,23 +108,6 @@ fn file_mode(metadata: &std::fs::Metadata) -> u32 {
 #[cfg(not(unix))]
 fn file_mode(_: &std::fs::Metadata) -> u32 {
     0
-}
-
-#[cfg(unix)]
-fn file_identity(metadata: &std::fs::Metadata) -> ZipSourceIdentity {
-    use std::os::unix::fs::MetadataExt;
-    ZipSourceIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    }
-}
-
-#[cfg(not(unix))]
-fn file_identity(_: &std::fs::Metadata) -> ZipSourceIdentity {
-    ZipSourceIdentity {
-        device: 0,
-        inode: 0,
-    }
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use crate::_base::event::Event;
 use crate::app::config::ConfigServiceError;
 
+use super::discovery::SkillDiscoveryResult;
 use super::types::{SkillDefinition, SkippedSkill};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -14,6 +15,19 @@ pub struct SkillContribution {
     pub skills: Vec<SkillDefinition>,
     pub skipped: Option<Vec<SkippedSkill>>,
     pub scanned_roots: Option<Vec<String>>,
+}
+
+impl From<SkillDiscoveryResult> for SkillContribution {
+    // Every file-backed skill source load() reports the discovery's skipped
+    // and scanned-root lists, so a plain discovery always becomes a fully
+    // populated contribution.
+    fn from(result: SkillDiscoveryResult) -> Self {
+        Self {
+            skills: result.skills,
+            skipped: Some(result.skipped),
+            scanned_roots: Some(result.scanned_roots),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -111,11 +111,7 @@ impl SkillSourceContract for UserFileSkillSource {
         )
         .await?;
         let result = self.discovery.discover(&roots).await;
-        Ok(SkillContribution {
-            skills: result.skills,
-            skipped: Some(result.skipped),
-            scanned_roots: Some(result.scanned_roots),
-        })
+        Ok(result.into())
     }
 }
 

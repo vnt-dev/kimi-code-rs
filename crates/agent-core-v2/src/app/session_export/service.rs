@@ -18,8 +18,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     BuildExportManifestArgs, ExportSessionManifest, ExportSessionPayload, ExportZipError,
-    ExtraZipEntry, SessionZipEntry, ZipSource, build_export_manifest, collect_files_recursive,
-    open_zip_source, scan_session_wire, write_export_zip,
+    ExtraZipEntry, SessionZipEntry, ZipSource, build_export_manifest, check,
+    collect_files_recursive, open_zip_source, scan_session_wire, session_entry_path,
+    write_export_zip,
 };
 
 const SESSION_LOG_REL: &str = "logs/kimi-code.log";
@@ -193,25 +194,8 @@ async fn open_optional_zip_source(
     }
 }
 
-fn session_entry_path(entry: &SessionZipEntry) -> &Path {
-    match entry {
-        SessionZipEntry::Path(path) | SessionZipEntry::Source { path, .. } => path,
-    }
-}
-
 fn is_session_log_source(entry: &SessionZipEntry) -> bool {
     matches!(entry, SessionZipEntry::Source { path, .. } if path.ends_with(SESSION_LOG_REL))
-}
-
-fn check(cancellation: Option<&CancellationToken>) -> io::Result<()> {
-    if cancellation.is_some_and(CancellationToken::is_cancelled) {
-        Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "session export cancelled",
-        ))
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]

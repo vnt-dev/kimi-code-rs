@@ -18,7 +18,10 @@ use tokio::{fs, task};
 use tokio_util::sync::CancellationToken;
 use zip::{ZipWriter, write::SimpleFileOptions};
 
-use super::{ExportSessionManifest, ZipSource, ZipSourceIdentity, open_zip_source};
+use super::{
+    ExportSessionManifest, ZipSource, ZipSourceIdentity, file_identity, open_zip_source,
+    session_entry_path,
+};
 
 #[derive(Debug)]
 pub enum ExtraZipEntry {
@@ -331,12 +334,6 @@ fn same_file(left: ZipSourceIdentity, right: ZipSourceIdentity) -> bool {
     left.inode != 0 && left.device == right.device && left.inode == right.inode
 }
 
-fn session_entry_path(entry: &SessionZipEntry) -> &Path {
-    match entry {
-        SessionZipEntry::Path(path) | SessionZipEntry::Source { path, .. } => path,
-    }
-}
-
 async fn create_temp_dir(parent: &Path) -> io::Result<PathBuf> {
     for _ in 0..16 {
         let path = parent.join(format!(".kimi-session-export-{}", uuid::Uuid::new_v4()));
@@ -357,23 +354,6 @@ fn check(cancellation: Option<&CancellationToken>) -> Result<(), ExportZipError>
         Err(ExportZipError::Cancelled)
     } else {
         Ok(())
-    }
-}
-
-#[cfg(unix)]
-fn file_identity(metadata: &std::fs::Metadata) -> ZipSourceIdentity {
-    use std::os::unix::fs::MetadataExt;
-    ZipSourceIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    }
-}
-
-#[cfg(not(unix))]
-fn file_identity(_: &std::fs::Metadata) -> ZipSourceIdentity {
-    ZipSourceIdentity {
-        device: 0,
-        inode: 0,
     }
 }
 

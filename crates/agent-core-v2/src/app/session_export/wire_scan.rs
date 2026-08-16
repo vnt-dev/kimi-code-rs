@@ -1,6 +1,6 @@
 //! Persisted wire-log activity scanner.
 //! Original: `packages/agent-core-v2/src/app/sessionExport/wire-scan.ts`.
-use super::SessionWireScan;
+use super::{SessionWireScan, check};
 use serde_json::Value;
 use std::{
     io,
@@ -126,16 +126,6 @@ fn max(a: Option<i64>, b: Option<i64>) -> Option<i64> {
         (None, b) => b,
         (a, None) => a,
         (Some(a), Some(b)) => Some(a.max(b)),
-    }
-}
-fn check(cancellation: Option<&CancellationToken>) -> io::Result<()> {
-    if cancellation.is_some_and(CancellationToken::is_cancelled) {
-        Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "session export cancelled",
-        ))
-    } else {
-        Ok(())
     }
 }
 #[cfg(test)]
