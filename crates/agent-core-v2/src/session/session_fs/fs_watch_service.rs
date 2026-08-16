@@ -373,7 +373,9 @@ fn is_under_any(relative: &str, parents: &IndexSet<String>) -> bool {
         parent.is_empty()
             || parent == "."
             || relative == parent
-            || relative.starts_with(&format!("{parent}/"))
+            || relative
+                .strip_prefix(parent)
+                .is_some_and(|rest| rest.starts_with('/'))
     })
 }
 

@@ -405,10 +405,15 @@ fn file_accesses_overlap(left: &ToolFileAccess, right: &ToolFileAccess) -> bool 
     if left_path == right_path {
         return true;
     }
-    let left_prefix = format!("{left_path}/");
-    let right_prefix = format!("{right_path}/");
-    (left.recursive && right_path.starts_with(&left_prefix))
-        || (right.recursive && left_path.starts_with(&right_prefix))
+    (left.recursive && path_is_within(&right_path, &left_path))
+        || (right.recursive && path_is_within(&left_path, &right_path))
+}
+
+/// True when `path` sits directly under `parent` (i.e. `parent` is a path
+/// component prefix of `path`).
+fn path_is_within(path: &str, parent: &str) -> bool {
+    path.strip_prefix(parent)
+        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn normalize_path(path: &str) -> String {

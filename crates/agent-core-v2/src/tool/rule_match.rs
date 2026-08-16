@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use globset::GlobBuilder;
 
-use super::path_access::{PathClass, canonicalize_path};
+use super::path_access::{PathClass, canonicalize_path, expand_user_path};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PermissionPathMatchOptions<'a> {
@@ -591,31 +591,12 @@ fn canonicalize_path_pattern(
     semantics: PathMatchSemantics,
     options: PermissionPathMatchOptions<'_>,
 ) -> Option<String> {
-    let expanded = expand_user_path(value, semantics.path_class, options.home_dir);
+    let expanded = expand_user_path(value, options.home_dir, semantics.path_class);
     let cwd = options
         .cwd
         .map(str::to_owned)
         .or_else(|| default_cwd_for_path(&expanded));
     canonicalize_path(&expanded, cwd.as_deref()?, semantics.path_class).ok()
-}
-
-fn expand_user_path(value: &str, path_class: PathClass, home_dir: Option<&str>) -> String {
-    let Some(home_dir) = home_dir else {
-        return value.to_owned();
-    };
-    if value == "~" {
-        return home_dir.to_owned();
-    }
-    let windows_suffix = if path_class == PathClass::Win32 {
-        value.strip_prefix("~\\")
-    } else {
-        None
-    };
-    let suffix = value.strip_prefix("~/").or(windows_suffix);
-    suffix.map_or_else(
-        || value.to_owned(),
-        |suffix| format!("{}/{}", home_dir.trim_end_matches(['/', '\\']), suffix),
-    )
 }
 
 fn default_cwd_for_path(value: &str) -> Option<String> {

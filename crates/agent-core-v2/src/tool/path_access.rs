@@ -383,7 +383,11 @@ pub fn assert_path_allowed(
     .map(|access| access.path)
 }
 
-fn expand_user_path(path: &str, home_dir: Option<&str>, path_class: PathClass) -> String {
+pub(crate) fn expand_user_path(
+    path: &str,
+    home_dir: Option<&str>,
+    path_class: PathClass,
+) -> String {
     let Some(home) = home_dir else {
         return path.to_owned();
     };

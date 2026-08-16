@@ -8,7 +8,7 @@ pub fn to_error_message(error: &(dyn Error + 'static), verbose: bool) -> String 
         let mut message = format!("[{}] {}", error.code, error.message);
         if verbose && let Some(details) = &error.details {
             message.push(' ');
-            message.push_str(&serde_json::Value::Object(details.clone()).to_string());
+            message.push_str(&serde_json::to_string(details).unwrap_or_default());
         }
         return message;
     }
