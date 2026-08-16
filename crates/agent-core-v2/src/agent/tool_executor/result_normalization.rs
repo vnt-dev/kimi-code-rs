@@ -3,7 +3,7 @@
 //! Original: `toolExecutorService.ts`, `normalizeToolResult()`.
 
 use crate::{
-    kosong::contract::message::ContentPart,
+    kosong::contract::message::{ContentPart, content_text_parts},
     tool::{ExecutableToolOutput, ExecutableToolResult, ToolResult},
 };
 
@@ -42,13 +42,7 @@ pub fn normalize_tool_result(result: ExecutableToolResult) -> ToolResult {
                 }
                 ExecutableToolOutput::Content(parts)
             } else {
-                let text = parts
-                    .iter()
-                    .filter_map(|part| match part {
-                        ContentPart::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<String>();
+                let text = content_text_parts(&parts);
                 ExecutableToolOutput::Text(if text.is_empty() {
                     TOOL_OUTPUT_EMPTY.into()
                 } else {

@@ -392,7 +392,9 @@ fn read_context_compaction_raw_summary(
         return Ok(summary.to_owned());
     }
     read_legacy_summary_message(record)
-        .map(|message| text_of(&message))
+        .map(|message| {
+            crate::kosong::contract::message::content_text_parts(&message.message.content)
+        })
         .ok_or(ContextCompactionRecordError::MissingSummary)
 }
 
@@ -413,18 +415,6 @@ fn read_optional_string(record: &Map<String, Value>, key: &str) -> Option<String
 
 fn read_optional_boolean(record: &Map<String, Value>, key: &str) -> Option<bool> {
     record.get(key).and_then(Value::as_bool)
-}
-
-fn text_of(message: &ContextMessage) -> String {
-    message
-        .message
-        .content
-        .iter()
-        .filter_map(|part| match part {
-            crate::kosong::contract::message::ContentPart::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect()
 }
 
 #[async_trait]

@@ -1,7 +1,7 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Map, Value};
 
-use crate::kosong::contract::message::{ContentPart, Role};
+use crate::kosong::contract::message::{ContentPart, Role, content_text_parts};
 
 use super::{
     protocol_message::{ImageSource, MessageContent, MessageRole, ProtocolMessage},
@@ -96,17 +96,7 @@ pub(crate) fn to_protocol_message_content(
         let output = if has_media_part {
             serde_json::to_value(&message.message.content)?
         } else {
-            Value::String(
-                message
-                    .message
-                    .content
-                    .iter()
-                    .filter_map(|part| match part {
-                        ContentPart::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect(),
-            )
+            Value::String(content_text_parts(&message.message.content))
         };
         return Ok(vec![MessageContent::ToolResult {
             tool_call_id: tool_call_id.clone(),

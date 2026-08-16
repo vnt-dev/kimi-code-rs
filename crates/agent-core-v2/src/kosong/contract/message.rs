@@ -284,9 +284,20 @@ pub fn extract_text(message: &Message, separator: &str) -> String {
         .join(separator)
 }
 
+/// Concatenates the `Text` parts of `content` in order.
+pub fn content_text_parts(content: &[ContentPart]) -> String {
+    content
+        .iter()
+        .filter_map(|part| match part {
+            ContentPart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
 // Original: message.ts, getTextContent()
 pub fn get_text_content(message: &Message) -> String {
-    extract_text(message, "")
+    content_text_parts(&message.content)
 }
 
 // Original: message.ts, createUserMessage()

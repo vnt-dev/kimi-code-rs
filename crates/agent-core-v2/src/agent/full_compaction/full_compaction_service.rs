@@ -70,7 +70,7 @@ use crate::{
     kosong::{
         contract::{
             errors::{ChatProviderError, is_retryable_generate_error},
-            message::{ContentPart, Message, Role, create_user_message},
+            message::{Message, Role, content_text_parts, create_user_message},
             provider::{FinishReason, ThinkingEffort},
             tokens::{
                 estimate_tokens, estimate_tokens_for_message, estimate_tokens_for_messages,
@@ -1387,15 +1387,7 @@ fn collect_summary(
     if finish.provider_finish_reason == Some(FinishReason::Truncated) {
         return Err(Arc::new(CompactionTruncatedError));
     }
-    let summary = finish
-        .message
-        .content
-        .iter()
-        .filter_map(|part| match part {
-            ContentPart::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<String>()
+    let summary = content_text_parts(&finish.message.content)
         .trim()
         .to_owned();
     if summary.is_empty() {
@@ -1592,7 +1584,8 @@ mod tests {
         agent::context_memory::PromptOrigin,
         kosong::contract::{
             message::{
-                ToolOutput, create_assistant_message, create_tool_message, create_user_message,
+                ContentPart, ToolOutput, create_assistant_message, create_tool_message,
+                create_user_message,
             },
             usage::empty_usage,
         },

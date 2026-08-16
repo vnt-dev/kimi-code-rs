@@ -1,6 +1,5 @@
-use crate::kosong::contract::message::Role;
-
-use super::types::{ContextMessage, PluginCommandTrigger, PromptOrigin, SkillActivationTrigger};
+use super::compaction_handoff::is_real_user_input;
+use super::types::{ContextMessage, PromptOrigin};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UndoCut {
@@ -28,7 +27,7 @@ pub fn compute_undo_cut(state: &[ContextMessage], count: u32) -> UndoCut {
             stopped_at_compaction = true;
             break;
         }
-        if is_real_user_prompt(message) {
+        if is_real_user_input(message) {
             remaining -= 1;
             removed_count += 1;
             cut_index = i64::try_from(index).unwrap_or(i64::MAX);
@@ -103,26 +102,10 @@ pub fn format_undo_unavailable_message(precheck: UndoPrecheck) -> Option<String>
     })
 }
 
-fn is_real_user_prompt(message: &ContextMessage) -> bool {
-    if message.message.role != Role::User {
-        return false;
-    }
-    match message.origin.as_ref() {
-        None | Some(PromptOrigin::User) => true,
-        Some(PromptOrigin::SkillActivation { trigger, .. }) => {
-            *trigger == SkillActivationTrigger::UserSlash
-        }
-        Some(PromptOrigin::PluginCommand { trigger, .. }) => {
-            *trigger == PluginCommandTrigger::UserSlash
-        }
-        Some(_) => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kosong::contract::message::{ContentPart, Message};
+    use crate::kosong::contract::message::{ContentPart, Message, Role};
 
     fn message(role: Role, origin: Option<PromptOrigin>) -> ContextMessage {
         ContextMessage {

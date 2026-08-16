@@ -464,7 +464,7 @@ impl AgentLlmRequesterService {
             let input = ModelRequestInput {
                 system_prompt: system_prompt.clone(),
                 tools: tools.clone(),
-                messages: messages.clone(),
+                messages,
                 response_format: None,
             };
             let fields = request_fields(&base_fields, projection);

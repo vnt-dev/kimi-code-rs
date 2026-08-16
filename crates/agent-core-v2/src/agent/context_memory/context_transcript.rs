@@ -11,7 +11,7 @@ use crate::{
 
 use super::{
     compaction_handoff::{
-        COMPACT_USER_MESSAGE_MAX_TOKENS, collect_compactable_user_messages, is_real_user_input,
+        COMPACT_USER_MESSAGE_MAX_TOKENS, is_compaction_summary_message, is_real_user_input,
         select_recent_user_messages,
     },
     loop_event_fold::{LoopRecordedEvent, LoopToolResultOutput},
@@ -227,7 +227,7 @@ impl ContextTranscriptReducer {
         match event {
             LoopRecordedEvent::StepBegin { uuid, .. } => {
                 self.close_pending_tool_results(time);
-                if let Some(previous) = self.last_open_step_uuid.clone() {
+                if let Some(previous) = self.last_open_step_uuid.take() {
                     self.settle_step(&previous);
                 }
                 let entry = self.mutable_entry(
@@ -395,14 +395,11 @@ fn recover_folded_length(
     }
     let messages = transcript[clear_floor..]
         .iter()
+        .filter(|entry| is_real_user_input(&entry.message))
+        .filter(|entry| !is_compaction_summary_message(&entry.message))
         .map(|entry| entry.message.clone())
         .collect::<Vec<_>>();
-    select_recent_user_messages(
-        &collect_compactable_user_messages(&messages),
-        COMPACT_USER_MESSAGE_MAX_TOKENS,
-    )
-    .len() as u64
-        + 1
+    select_recent_user_messages(&messages, COMPACT_USER_MESSAGE_MAX_TOKENS).len() as u64 + 1
 }
 
 fn read_compaction_summary_text(record: &WireRecord) -> String {

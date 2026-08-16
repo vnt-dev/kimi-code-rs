@@ -1,7 +1,7 @@
 use std::sync::{Arc, LazyLock};
 
 use crate::kosong::contract::{
-    message::{ContentPart, Message, Role},
+    message::{ContentPart, Message, Role, content_text_parts},
     tokens::{estimate_tokens, estimate_tokens_for_message, estimate_tokens_for_messages},
 };
 
@@ -300,7 +300,7 @@ pub fn select_compaction_user_messages(
             head_end_exclusive = index;
             continue;
         }
-        let full_text = extract_text(&message.message.content);
+        let full_text = content_text_parts(&message.message.content);
         let kept_suffix = truncate_text_to_tokens_from_end(&full_text, tail_remaining);
         tail.push(replace_message_text(message, kept_suffix));
         head_end_exclusive = index;
@@ -343,16 +343,6 @@ pub fn select_compaction_user_messages(
         elided: true,
         omitted_tokens: total_tokens.saturating_sub(kept_tokens),
     }
-}
-
-fn extract_text(content: &[ContentPart]) -> String {
-    content
-        .iter()
-        .filter_map(|part| match part {
-            ContentPart::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect()
 }
 
 fn truncate_text_to_tokens(text: &str, max_tokens: usize) -> &str {
@@ -408,7 +398,7 @@ fn replace_message_text(message: &ContextMessage, text: &str) -> ContextMessage 
 }
 
 fn truncate_user_message(message: &ContextMessage, max_tokens: usize) -> ContextMessage {
-    let text = extract_text(&message.message.content);
+    let text = content_text_parts(&message.message.content);
     replace_message_text(message, truncate_text_to_tokens(&text, max_tokens))
 }
 
@@ -423,7 +413,7 @@ mod tests {
     }
 
     fn text(message: &ContextMessage) -> String {
-        extract_text(&message.message.content)
+        content_text_parts(&message.message.content)
     }
 
     #[test]

@@ -163,10 +163,23 @@ impl AgentContextMemoryService {
         messages: &[ContextMessage],
         tokens: Option<u64>,
     ) -> Result<(), serde_json::Error> {
+        let messages = serde_json::to_value(messages)?;
+        self.publish_splice_value(start, delete_count, messages, tokens)
+    }
+
+    /// Publishes a `context.spliced` event from a pre-serialized message list,
+    /// avoiding a clone of the messages when they are consumed elsewhere.
+    fn publish_splice_value(
+        &self,
+        start: usize,
+        delete_count: usize,
+        messages: Value,
+        tokens: Option<u64>,
+    ) -> Result<(), serde_json::Error> {
         let mut fields = Map::from_iter([
             ("start".into(), Value::from(start as u64)),
             ("deleteCount".into(), Value::from(delete_count as u64)),
-            ("messages".into(), serde_json::to_value(messages)?),
+            ("messages".into(), messages),
         ]);
         if let Some(tokens) = tokens {
             fields.insert("tokens".into(), serde_json::to_value(tokens)?);
@@ -229,13 +242,13 @@ impl AgentContextMemoryServiceContract for AgentContextMemoryService {
             return Ok(());
         }
         let start = self.get().len();
+        let splice_messages = serde_json::to_value(&messages)?;
         let ops = messages
-            .iter()
-            .cloned()
+            .into_iter()
             .map(context_append_message)
             .collect::<Result<Vec<_>, _>>()?;
         self.wire.dispatch(ops)?;
-        self.publish_splice(start, 0, &messages, None)?;
+        self.publish_splice_value(start, 0, splice_messages, None)?;
         Ok(())
     }
 

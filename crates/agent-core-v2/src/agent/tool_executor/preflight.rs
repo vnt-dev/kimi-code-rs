@@ -89,7 +89,7 @@ pub fn preflight_tool_call(
         };
     };
     let source = tool_registry
-        .list()
+        .list_references()
         .into_iter()
         .find(|entry| entry.name == tool_name)
         .map(|entry| entry.source)

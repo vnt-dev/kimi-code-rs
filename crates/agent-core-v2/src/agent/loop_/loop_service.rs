@@ -579,7 +579,13 @@ impl AgentLoopService {
                 return;
             };
             state.active_turn_job = Some(Arc::clone(&job));
-            let service = self.self_weak.upgrade().expect("loop service is alive");
+            let Some(service) = self.self_weak.upgrade() else {
+                // The owning Arc is gone; drop the claimed turn and release waiters
+                // instead of panicking on a closed service.
+                state.active_turn_job.take();
+                Self::settle_waiters(&mut state);
+                return;
+            };
             let worker_job = Arc::clone(&job);
             let (start_worker, worker_ready) = oneshot::channel();
             self.tasks.spawn(async move {
