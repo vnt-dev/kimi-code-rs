@@ -9,11 +9,9 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::SystemTime,
 };
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use indexmap::{IndexMap, IndexSet};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -26,6 +24,7 @@ use crate::{
             scope::{InstantiationType, LifecycleScope, register_scoped_service},
         },
         errors::errors::Error2,
+        utils::iso_date_time::now_millis,
         utils::workdir_slug::{encode_work_dir_key, workspace_root_key},
     },
     os::interface::{
@@ -484,8 +483,7 @@ fn is_absolute_path(path: &str) -> bool {
 }
 
 fn current_time_millis() -> i64 {
-    let now: DateTime<Utc> = SystemTime::now().into();
-    now.timestamp_millis()
+    now_millis()
 }
 
 pub fn register_workspace_registry_service() {

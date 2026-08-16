@@ -33,6 +33,7 @@ use crate::{
         errors::error_message::to_error_message,
         errors::unexpected_error::on_unexpected_error,
         utils::abort::{AbortError, AbortSignal, abort_error, abortable, user_cancellation_reason},
+        utils::iso_date_time::now_millis,
     },
     agent::{
         context_injector::{
@@ -1792,7 +1793,7 @@ fn javascript_timeout_duration(timeout_ms: u64) -> Duration {
 }
 
 fn current_time_millis() -> i64 {
-    chrono::Utc::now().timestamp_millis()
+    now_millis()
 }
 
 fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {

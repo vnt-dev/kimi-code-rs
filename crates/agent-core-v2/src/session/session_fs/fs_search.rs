@@ -11,6 +11,7 @@ use regress::{Flags as JsRegexFlags, Regex as JsRegex};
 use serde::Deserialize;
 
 use super::FsGrepRequest;
+use crate::_base::text::utf16_len;
 
 #[derive(Clone)]
 pub struct GitignoreMatcher {
@@ -75,7 +76,7 @@ pub fn compute_fuzzy_score(name: &str, query_lower: &str) -> f64 {
     if matched == 0 {
         return 0.0;
     }
-    let query_length = query_lower.encode_utf16().count();
+    let query_length = utf16_len(query_lower);
     let mut score = matched as f64 / query_length as f64;
     if name_lower.starts_with(query_lower) {
         score = (score + 0.2).min(1.0);

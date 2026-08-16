@@ -3,7 +3,7 @@
 //! Original:
 //! `packages/agent-core-v2/src/app/workspaceRegistry/fileWorkspacePersistence.ts`.
 
-use std::{sync::Arc, time::SystemTime};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
@@ -15,6 +15,7 @@ use crate::{
         instantiation::ServicesAccessorExt,
         scope::{InstantiationType, LifecycleScope, register_scoped_service},
     },
+    _base::utils::iso_date_time::now_millis,
     persistence::interface::atomic_document_store::{
         ATOMIC_DOCUMENT_STORE_SERVICE_ID, AtomicDocumentStoreService,
     },
@@ -202,8 +203,7 @@ fn timestamp_to_iso(millis: i64) -> Result<String, InvalidWorkspaceTimestamp> {
 }
 
 fn current_time_millis() -> i64 {
-    let now: DateTime<Utc> = SystemTime::now().into();
-    now.timestamp_millis()
+    now_millis()
 }
 
 pub fn register_workspace_persistence() {

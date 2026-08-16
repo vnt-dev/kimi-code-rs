@@ -8,6 +8,47 @@ pub enum LineEndingStyle {
     Mixed,
 }
 
+/// Incremental line-ending flags, updated per chunk of text and classified at the end.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LineEndingFlags {
+    pub has_crlf: bool,
+    pub has_lf: bool,
+    pub has_lone_cr: bool,
+}
+
+/// Records which line-ending kinds appear in `text` into `flags`.
+pub fn update_line_ending_flags(flags: &mut LineEndingFlags, text: &str) {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' {
+            if bytes.get(index + 1) == Some(&b'\n') {
+                flags.has_crlf = true;
+                index += 2;
+            } else {
+                flags.has_lone_cr = true;
+                index += 1;
+            }
+        } else {
+            if bytes[index] == b'\n' {
+                flags.has_lf = true;
+            }
+            index += 1;
+        }
+    }
+}
+
+/// Classifies accumulated line-ending flags into a style.
+pub fn classify_line_ending_style(flags: LineEndingFlags) -> LineEndingStyle {
+    if flags.has_lone_cr || (flags.has_crlf && flags.has_lf) {
+        LineEndingStyle::Mixed
+    } else if flags.has_crlf {
+        LineEndingStyle::CrLf
+    } else {
+        LineEndingStyle::Lf
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelTextView {
@@ -19,37 +60,34 @@ pub struct ModelTextView {
 //   packages/agent-core-v2/src/_base/text/line-endings.ts
 //   detectLineEndingStyle()
 pub fn detect_line_ending_style(text: &str) -> LineEndingStyle {
-    let bytes = text.as_bytes();
-    let mut has_cr_lf = false;
-    let mut has_lf = false;
-    let mut has_lone_cr = false;
-    let mut index = 0;
+    let mut flags = LineEndingFlags::default();
+    update_line_ending_flags(&mut flags, text);
+    classify_line_ending_style(flags)
+}
 
+/// Splits `text` into lines, keeping each line terminator (`\n`, `\r` or `\r\n`)
+/// attached to its line, mirroring JavaScript's `split(/\r\n|\r|\n/)` semantics.
+pub fn split_lines_with_breaks(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
     while index < bytes.len() {
-        match bytes[index] {
-            b'\r' if bytes.get(index + 1) == Some(&b'\n') => {
-                has_cr_lf = true;
-                index += 2;
-            }
-            b'\r' => {
-                has_lone_cr = true;
+        if matches!(bytes[index], b'\r' | b'\n') {
+            index += 1;
+            if bytes[index - 1] == b'\r' && bytes.get(index) == Some(&b'\n') {
                 index += 1;
             }
-            b'\n' => {
-                has_lf = true;
-                index += 1;
-            }
-            _ => index += 1,
+            lines.push(&text[start..index]);
+            start = index;
+        } else {
+            index += 1;
         }
     }
-
-    if has_lone_cr || (has_cr_lf && has_lf) {
-        LineEndingStyle::Mixed
-    } else if has_cr_lf {
-        LineEndingStyle::CrLf
-    } else {
-        LineEndingStyle::Lf
+    if start < text.len() {
+        lines.push(&text[start..]);
     }
+    lines
 }
 
 // Original:

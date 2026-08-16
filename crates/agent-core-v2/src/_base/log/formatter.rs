@@ -1,10 +1,10 @@
 use std::{collections::HashSet, sync::LazyLock};
 
-use chrono::{DateTime, SecondsFormat, Utc};
 use regex::Regex;
 use serde_json::Value;
 
 use super::contract::{LogContext, LogEntry, LogEntryError, LogLevel};
+use crate::_base::utils::iso_date_time::format_millis_rfc3339;
 
 pub const MSG_MAX_CHARS: usize = 200;
 pub const CTX_VALUE_MAX_CHARS: usize = 2048;
@@ -118,9 +118,7 @@ pub fn format_entry(entry: &LogEntry, options: &FormatOptions) -> FormattedEntry
         .filter(|(key, _)| !options.omit_context_keys.contains(*key))
         .map(|(key, value)| format_pair(key, value))
         .collect::<Vec<_>>();
-    let timestamp = DateTime::<Utc>::from_timestamp_millis(entry.timestamp_ms)
-        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
-        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    let timestamp = format_millis_rfc3339(entry.timestamp_ms);
     let label = match entry.level {
         LogLevel::Error => "ERROR",
         LogLevel::Warn => "WARN ",

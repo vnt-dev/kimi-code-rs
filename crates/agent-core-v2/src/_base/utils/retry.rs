@@ -2,7 +2,6 @@ use std::{error::Error, sync::Arc, time::Duration};
 
 use serde::Serialize;
 use serde_json::Value;
-use uuid::Uuid;
 
 use super::abort::{AbortError, AbortSignal, abortable};
 use crate::_base::errors::errors::Error2;
@@ -38,8 +37,9 @@ pub fn retry_backoff_delays_with(max_attempts: usize, mut random: impl FnMut() -
 }
 
 fn random_unit() -> f64 {
-    let bytes = Uuid::new_v4();
-    let raw = u64::from_le_bytes(bytes.as_bytes()[..8].try_into().expect("UUID has 16 bytes"));
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes).expect("operating system randomness is available");
+    let raw = u64::from_le_bytes(bytes);
     ((raw >> 11) as f64) / ((1_u64 << 53) as f64)
 }
 

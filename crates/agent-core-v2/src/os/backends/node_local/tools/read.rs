@@ -13,7 +13,11 @@ use crate::{
     _base::{
         di::instantiation::ServicesAccessorExt,
         exec_env::decode_text::{TextDecodeError, TextDecodeErrors, TextEncoding},
-        text::line_endings::{LineEndingStyle, make_carriage_returns_visible},
+        text::line_endings::{
+            LineEndingFlags, LineEndingStyle, classify_line_ending_style,
+            make_carriage_returns_visible, update_line_ending_flags,
+        },
+        text::truncate_utf16,
     },
     agent::{
         media::file_type::{DetectFileTypeMode, FileTypeKind, MEDIA_SNIFF_BYTES, detect_file_type},
@@ -86,13 +90,6 @@ pub fn read_parameters() -> Map<String, Value> {
         .cloned()
         .expect("Read schema is an object"),
     )
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct LineEndingFlags {
-    has_crlf: bool,
-    has_lf: bool,
-    has_lone_cr: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -303,7 +300,7 @@ impl ReadTool {
             }
         }
 
-        let style = line_ending_style_from_flags(flags);
+        let style = classify_line_ending_style(flags);
         let (rendered_lines, truncated_line_numbers, max_bytes_reached) =
             render_entries(&entries, style);
         Ok(finish_read_result(FinishReadResultInput {
@@ -464,54 +461,11 @@ fn render_read_description() -> String {
         .replace("${MAX_LINE_LENGTH}", &MAX_LINE_LENGTH.to_string())
 }
 
-fn truncate_line(line: &str, max_length: usize) -> String {
-    let units = line.encode_utf16().collect::<Vec<_>>();
-    if units.len() <= max_length {
-        return line.to_owned();
-    }
-    let marker = "...";
-    let target = max_length.max(marker.len());
-    let mut truncated = String::from_utf16_lossy(&units[..target - marker.len()]);
-    truncated.push_str(marker);
-    truncated
-}
-
 fn strip_trailing_lf(mut line: String) -> String {
     if line.ends_with('\n') {
         line.pop();
     }
     line
-}
-
-fn update_line_ending_flags(flags: &mut LineEndingFlags, text: &str) {
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'\r' {
-            if bytes.get(index + 1) == Some(&b'\n') {
-                flags.has_crlf = true;
-                index += 2;
-            } else {
-                flags.has_lone_cr = true;
-                index += 1;
-            }
-        } else {
-            if bytes[index] == b'\n' {
-                flags.has_lf = true;
-            }
-            index += 1;
-        }
-    }
-}
-
-fn line_ending_style_from_flags(flags: LineEndingFlags) -> LineEndingStyle {
-    if flags.has_lone_cr || (flags.has_crlf && flags.has_lf) {
-        LineEndingStyle::Mixed
-    } else if flags.has_crlf {
-        LineEndingStyle::CrLf
-    } else {
-        LineEndingStyle::Lf
-    }
 }
 
 fn render_line(entry: &ReadLineEntry, style: LineEndingStyle) -> RenderedLine {
@@ -523,7 +477,7 @@ fn render_line(entry: &ReadLineEntry, style: LineEndingStyle) -> RenderedLine {
     } else {
         &entry.raw_content
     };
-    let truncated = truncate_line(model_content, MAX_LINE_LENGTH);
+    let truncated = truncate_utf16(model_content, MAX_LINE_LENGTH, "...");
     let was_truncated = truncated != model_content;
     let content = if style == LineEndingStyle::Mixed {
         make_carriage_returns_visible(&truncated)
@@ -575,7 +529,7 @@ fn finish_tail_entries(
     total_lines: usize,
     requested_lines: usize,
 ) -> ExecutableToolResult {
-    let style = line_ending_style_from_flags(flags);
+    let style = classify_line_ending_style(flags);
     let mut candidates = entries
         .into_iter()
         .take(effective_limit)
@@ -705,9 +659,9 @@ mod tests {
     fn rendering_preserves_source_limits_and_line_endings() {
         let mut flags = LineEndingFlags::default();
         update_line_ending_flags(&mut flags, "a\r\nb\r");
-        assert_eq!(line_ending_style_from_flags(flags), LineEndingStyle::Mixed);
+        assert_eq!(classify_line_ending_style(flags), LineEndingStyle::Mixed);
         assert_eq!(
-            truncate_line(&"x".repeat(MAX_LINE_LENGTH + 1), MAX_LINE_LENGTH).len(),
+            truncate_utf16(&"x".repeat(MAX_LINE_LENGTH + 1), MAX_LINE_LENGTH, "...").len(),
             MAX_LINE_LENGTH
         );
         assert_eq!(

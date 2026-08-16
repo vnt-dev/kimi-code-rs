@@ -19,6 +19,7 @@ use tokio::io::AsyncWriteExt;
 use crate::{
     _base::{
         di::instantiation::ServicesAccessorExt,
+        text::{slice_utf16, utf16_len},
         utils::abort::{AbortSignal, user_cancellation_reason},
     },
     agent::{
@@ -743,11 +744,10 @@ fn foreground_description(args: &BashInput) -> String {
 }
 
 fn preview(value: &str, max_units: usize) -> String {
-    let units = value.encode_utf16().collect::<Vec<_>>();
-    if units.len() <= max_units {
-        value.into()
+    if utf16_len(value) <= max_units {
+        value.to_owned()
     } else {
-        format!("{}…", String::from_utf16_lossy(&units[..max_units]))
+        format!("{}…", slice_utf16(value, max_units))
     }
 }
 

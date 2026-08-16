@@ -1,3 +1,6 @@
+use crate::_base::text::line_endings::split_lines_with_breaks;
+use crate::_base::text::{truncate_utf16, utf16_len};
+
 const DEFAULT_MAX_CHARS: usize = 50_000;
 const DEFAULT_MAX_LINE_LENGTH: usize = 2000;
 const TRUNCATION_MARKER: &str = "[...truncated]";
@@ -30,7 +33,7 @@ impl ToolResultBuilder {
         let max_line_length = options
             .max_line_length
             .unwrap_or(Some(DEFAULT_MAX_LINE_LENGTH));
-        if max_line_length.is_some_and(|limit| limit <= js_len(TRUNCATION_MARKER)) {
+        if max_line_length.is_some_and(|limit| limit <= utf16_len(TRUNCATION_MARKER)) {
             return Err("maxLineLength must be greater than the truncation marker length.");
         }
         Ok(Self {
@@ -58,7 +61,7 @@ impl ToolResultBuilder {
             }
             return 0;
         }
-        let lines = split_lines(text);
+        let lines = split_lines_with_breaks(text);
         let mut written = 0;
         for original in lines {
             if self.n_chars >= self.max_chars {
@@ -72,15 +75,13 @@ impl ToolResultBuilder {
                 .max_line_length
                 .map_or(remaining, |line_limit| remaining.min(line_limit));
             let mut line = original.to_owned();
-            if js_len(&line) > limit {
+            if utf16_len(&line) > limit {
                 let break_start = line.trim_end_matches(['\r', '\n']).len();
-                let line_break = &line[break_start..];
-                let suffix = format!("{TRUNCATION_MARKER}{line_break}");
-                let effective = limit.max(js_len(&suffix));
-                line = slice_utf16(&line, effective - js_len(&suffix)) + &suffix;
+                let suffix = format!("{TRUNCATION_MARKER}{}", &line[break_start..]);
+                line = truncate_utf16(&line, limit, &suffix);
                 self.truncated = true;
             }
-            let count = js_len(&line);
+            let count = utf16_len(&line);
             self.buffer.push_str(&line);
             written += count;
             self.n_chars += count;
@@ -133,7 +134,7 @@ impl ToolResultBuilder {
 
     fn push_marker(&mut self) {
         self.buffer.push_str(TRUNCATION_MARKER);
-        self.n_chars += js_len(TRUNCATION_MARKER);
+        self.n_chars += utf16_len(TRUNCATION_MARKER);
         self.truncated = true;
     }
 }
@@ -160,37 +161,6 @@ fn append_message(output: &str, message: &str) -> String {
     } else {
         format!("{output}\n{message}")
     }
-}
-
-fn split_lines(text: &str) -> Vec<&str> {
-    let bytes = text.as_bytes();
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let mut index = 0;
-    while index < bytes.len() {
-        if matches!(bytes[index], b'\r' | b'\n') {
-            index += 1;
-            if bytes[index - 1] == b'\r' && bytes.get(index) == Some(&b'\n') {
-                index += 1;
-            }
-            lines.push(&text[start..index]);
-            start = index;
-        } else {
-            index += 1;
-        }
-    }
-    if start < text.len() {
-        lines.push(&text[start..]);
-    }
-    lines
-}
-
-fn js_len(value: &str) -> usize {
-    value.encode_utf16().count()
-}
-
-fn slice_utf16(value: &str, units: usize) -> String {
-    String::from_utf16_lossy(&value.encode_utf16().take(units).collect::<Vec<_>>())
 }
 
 #[cfg(test)]
@@ -225,7 +195,7 @@ mod tests {
         assert_eq!(builder.write("😀"), 2);
         assert_eq!(builder.write("x"), 0);
         assert_eq!(builder.write("y"), 0);
-        assert_eq!(builder.n_chars(), 2 + js_len(TRUNCATION_MARKER));
+        assert_eq!(builder.n_chars(), 2 + utf16_len(TRUNCATION_MARKER));
         assert_eq!(
             builder.error("failed", None).output,
             "😀[...truncated]\nfailed Output is truncated to fit in the message."

@@ -16,7 +16,7 @@ use std::{
 
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -31,6 +31,7 @@ use crate::{
         },
         errors::errors::{Error2, Error2Options},
         utils::abort::{AbortController, AbortSignal},
+        utils::iso_date_time::format_millis_rfc3339,
     },
     app::{
         git::{
@@ -1311,8 +1312,7 @@ fn build_fs_entry(relative: &str, name: &str, stat: &HostFileStat, with_mime: bo
         name: name.into(),
         kind,
         size: (kind == FsKind::File).then_some(stat.size),
-        modified_at: date_from_millis(stat.modified_millis.unwrap_or(0))
-            .to_rfc3339_opts(SecondsFormat::Millis, true),
+        modified_at: format_millis_rfc3339(stat.modified_millis.unwrap_or(0)),
         etag: Some(build_etag(stat)),
         mime: (with_mime && kind == FsKind::File).then(|| guess_mime(relative, false).to_owned()),
         language_id: (with_mime && kind == FsKind::File)
