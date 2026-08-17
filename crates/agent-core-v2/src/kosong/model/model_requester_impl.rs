@@ -716,6 +716,7 @@ mod tests {
             max_output_size: None,
             display_name: None,
             reasoning_key: None,
+            reasoning_history: None,
             support_efforts: None,
             default_effort: None,
             always_thinking: false,

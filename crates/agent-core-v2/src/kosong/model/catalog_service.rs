@@ -399,6 +399,7 @@ impl ModelCatalog {
             max_output_size: model.max_output_size.map(|size| size.get()),
             display_name: model.display_name,
             reasoning_key: model.reasoning_key,
+            reasoning_history: model.reasoning_history,
             support_efforts: model.support_efforts,
             default_effort: model.default_effort,
             always_thinking,

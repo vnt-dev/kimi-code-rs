@@ -17,7 +17,10 @@ use crate::{
         },
         event::Event,
     },
-    kosong::{protocol::identity::Protocol, provider::config::OAuthRef},
+    kosong::{
+        protocol::identity::{Protocol, ReasoningHistoryMode},
+        provider::config::OAuthRef,
+    },
 };
 
 pub const MODELS_SECTION: &str = "models";
@@ -38,6 +41,8 @@ pub struct ModelRecordOverride {
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_history: Option<ReasoningHistoryMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adaptive_thinking: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,6 +83,8 @@ pub struct ModelRecord {
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_history: Option<ReasoningHistoryMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adaptive_thinking: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -154,12 +161,14 @@ mod tests {
             "capabilities": ["thinking"],
             "displayName": "Sonnet",
             "reasoningKey": "reasoning",
+            "reasoningHistory": "required",
             "adaptiveThinking": true,
             "betaApi": false,
             "supportEfforts": ["low", "high"],
             "defaultEffort": "high",
             "overrides": {
                 "maxOutputSize": 4096,
+                "reasoningHistory": "when_present",
                 "supportEfforts": ["low"]
             },
             "vendorExtension": {"enabled": true}

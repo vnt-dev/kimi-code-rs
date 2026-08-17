@@ -16,7 +16,7 @@ use url::Url;
 
 use crate::kosong::{
     contract::{capability::ModelCapability, provider::ProviderRequestAuth, usage::TokenUsage},
-    protocol::identity::{Protocol, ProtocolProviderOptions},
+    protocol::identity::{Protocol, ProtocolProviderOptions, ReasoningHistoryMode},
     provider::{
         config::{ProviderConfig, ProviderType},
         provider_definition::{
@@ -95,6 +95,7 @@ pub struct Model {
     pub max_output_size: Option<u64>,
     pub display_name: Option<String>,
     pub reasoning_key: Option<String>,
+    pub reasoning_history: Option<ReasoningHistoryMode>,
     pub support_efforts: Option<Vec<String>>,
     pub default_effort: Option<String>,
     pub always_thinking: bool,
@@ -360,6 +361,7 @@ pub fn build_protocol_provider_options(
         Protocol::OpenAi => ProtocolProviderOptions {
             reasoning_key: super::model_auth::non_empty(model.reasoning_key.as_deref())
                 .map(str::to_owned),
+            reasoning_history: model.reasoning_history,
             ..ProtocolProviderOptions::default()
         },
         Protocol::GoogleGenAi => {
@@ -385,6 +387,7 @@ pub fn build_protocol_provider_options(
         Protocol::OpenAiResponses => ProtocolProviderOptions::default(),
     };
     (options.reasoning_key.is_some()
+        || options.reasoning_history.is_some()
         || options.default_max_tokens.is_some()
         || options.support_efforts.is_some()
         || options.adaptive_thinking.is_some()
@@ -561,6 +564,7 @@ mod tests {
             max_output_size: None,
             display_name: None,
             reasoning_key: None,
+            reasoning_history: None,
             support_efforts: Some(vec!["low".into(), "high".into()]),
             default_effort: Some("high".into()),
             always_thinking: false,
@@ -629,6 +633,23 @@ mod tests {
 
     #[test]
     fn protocol_options_and_vertex_location_keep_source_precedence() {
+        let openai = build_protocol_provider_options(
+            &ModelRecord {
+                reasoning_key: Some(" reasoning_content ".into()),
+                reasoning_history: Some(ReasoningHistoryMode::Required),
+                ..ModelRecord::default()
+            },
+            Protocol::OpenAi,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(openai.reasoning_key.as_deref(), Some("reasoning_content"));
+        assert_eq!(
+            openai.reasoning_history,
+            Some(ReasoningHistoryMode::Required)
+        );
+
         let anthropic = build_protocol_provider_options(
             &ModelRecord {
                 max_output_size: NonZeroU64::new(8192),

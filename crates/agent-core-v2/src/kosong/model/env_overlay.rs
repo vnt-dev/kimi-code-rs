@@ -84,6 +84,7 @@ impl ConfigEffectiveOverlay for KimiModelEnvOverlay {
             });
         let display_name = trimmed(get_env("KIMI_MODEL_DISPLAY_NAME").as_deref());
         let reasoning_key = trimmed(get_env("KIMI_MODEL_REASONING_KEY").as_deref());
+        let reasoning_history = trimmed(get_env("KIMI_MODEL_REASONING_HISTORY").as_deref());
         let adaptive_thinking = parse_boolean_var(
             get_env("KIMI_MODEL_ADAPTIVE_THINKING").as_deref(),
             "KIMI_MODEL_ADAPTIVE_THINKING",
@@ -112,6 +113,7 @@ impl ConfigEffectiveOverlay for KimiModelEnvOverlay {
             );
         }
         insert_string(&mut alias, "reasoningKey", reasoning_key);
+        insert_string(&mut alias, "reasoningHistory", reasoning_history);
         if let Some(adaptive_thinking) = adaptive_thinking {
             alias.insert("adaptiveThinking".into(), Value::Bool(adaptive_thinking));
         }

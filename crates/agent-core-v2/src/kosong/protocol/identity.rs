@@ -96,12 +96,28 @@ impl fmt::Display for ProtocolParseError {
 
 impl Error for ProtocolParseError {}
 
+/// Controls how assistant reasoning is replayed to OpenAI-compatible chat APIs.
+///
+/// Some compatible providers require the reasoning field on every historical
+/// assistant message, including messages whose reasoning payload is empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningHistoryMode {
+    Disabled,
+    WhenPresent,
+    #[default]
+    Auto,
+    Required,
+}
+
 // Original: protocol.ts, ProtocolProviderOptions
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtocolProviderOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_history: Option<ReasoningHistoryMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_max_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -282,6 +298,27 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn reasoning_history_mode_uses_stable_snake_case_values() {
+        let options: ProtocolProviderOptions = serde_json::from_value(json!({
+            "reasoningKey": "reasoning_content",
+            "reasoningHistory": "required"
+        }))
+        .unwrap();
+        assert_eq!(
+            options.reasoning_history,
+            Some(ReasoningHistoryMode::Required)
+        );
+        assert_eq!(
+            serde_json::to_value(options).unwrap(),
+            json!({
+                "reasoningKey": "reasoning_content",
+                "reasoningHistory": "required"
+            })
+        );
+        assert!(serde_json::from_value::<ReasoningHistoryMode>(json!("sometimes")).is_err());
     }
 
     #[test]

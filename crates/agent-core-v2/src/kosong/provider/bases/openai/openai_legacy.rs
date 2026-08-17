@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use std::task::{Context, Poll};
 
 use crate::kosong::contract::capability::ModelCapability;
@@ -18,6 +18,7 @@ use crate::kosong::contract::provider::{
 };
 use crate::kosong::contract::tool::Tool;
 use crate::kosong::contract::usage::TokenUsage;
+use crate::kosong::protocol::identity::ReasoningHistoryMode;
 use crate::kosong::provider::bases::http_client::default_provider_http_client;
 use crate::kosong::provider::bases::openai::chat_completions_stream::{
     BufferedChatCompletionToolCall, ChatCompletionStreamToolCallDelta,
@@ -53,14 +54,83 @@ pub static OPENAI_CHAT_TOOL_CALL_ID_POLICY: LazyLock<ToolCallIdPolicy> = LazyLoc
 
 pub type OpenAiLegacyGenerationKwargs = Map<String, Value>;
 
-// Original: openai-legacy.ts, extractReasoningContent()
-pub fn extract_reasoning_content(source: &Value, explicit_key: Option<&str>) -> Option<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedReasoning {
+    pub key: String,
+    pub value: String,
+}
+
+fn extract_reasoning(source: &Value, key: Option<&str>) -> Option<ExtractedReasoning> {
     let record = source.as_object()?;
-    match explicit_key {
-        Some(key) => record.get(key).and_then(Value::as_str).map(str::to_owned),
+    let (key, value) = match key {
+        Some(key) => (key, record.get(key)?.as_str()?),
         None => KNOWN_REASONING_KEYS
             .iter()
-            .find_map(|key| record.get(*key).and_then(Value::as_str).map(str::to_owned)),
+            .find_map(|key| record.get(*key)?.as_str().map(|value| (*key, value)))?,
+    };
+    Some(ExtractedReasoning {
+        key: key.to_owned(),
+        value: value.to_owned(),
+    })
+}
+
+// Original: openai-legacy.ts, extractReasoningContent()
+pub fn extract_reasoning_content(source: &Value, explicit_key: Option<&str>) -> Option<String> {
+    extract_reasoning(source, explicit_key).map(|reasoning| reasoning.value)
+}
+
+/// Tracks the OpenAI-compatible reasoning field used by one provider instance.
+/// An explicit configured key is authoritative; otherwise the first inbound
+/// reasoning field establishes the dialect for subsequent history replay.
+#[derive(Debug)]
+pub struct ReasoningKeyDialect {
+    explicit_key: Option<String>,
+    detected_key: RwLock<Option<String>>,
+}
+
+impl ReasoningKeyDialect {
+    pub fn new(explicit_key: Option<String>) -> Self {
+        Self {
+            explicit_key,
+            detected_key: RwLock::new(None),
+        }
+    }
+
+    pub fn observe(&self, source: &Value) -> Option<String> {
+        let lookup_key = self.explicit_key.as_deref().map(str::to_owned).or_else(|| {
+            self.detected_key
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        });
+        let reasoning = extract_reasoning(source, lookup_key.as_deref())?;
+        if self.explicit_key.is_none() {
+            let mut detected = self
+                .detected_key
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if detected.is_none() {
+                *detected = Some(reasoning.key);
+            }
+        }
+        Some(reasoning.value)
+    }
+
+    pub fn outbound_key(&self) -> String {
+        self.explicit_key.clone().unwrap_or_else(|| {
+            self.detected_key
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+                .unwrap_or_else(|| DEFAULT_OUTBOUND_REASONING_KEY.to_owned())
+        })
+    }
+
+    pub fn has_detected_key(&self) -> bool {
+        self.detected_key
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
     }
 }
 
@@ -210,6 +280,29 @@ pub fn convert_message(
     preserve_thinking: bool,
     allow_tool_result_extraction: bool,
 ) -> Map<String, Value> {
+    let mode = if preserve_thinking {
+        ReasoningHistoryMode::Auto
+    } else {
+        ReasoningHistoryMode::WhenPresent
+    };
+    convert_message_with_reasoning(
+        message,
+        reasoning_key.unwrap_or(DEFAULT_OUTBOUND_REASONING_KEY),
+        tool_message_conversion,
+        mode,
+        preserve_thinking,
+        allow_tool_result_extraction,
+    )
+}
+
+fn convert_message_with_reasoning(
+    message: &Message,
+    reasoning_key: &str,
+    tool_message_conversion: ToolMessageConversion,
+    reasoning_history: ReasoningHistoryMode,
+    replay_all_assistant_reasoning: bool,
+    allow_tool_result_extraction: bool,
+) -> Map<String, Value> {
     let mut reasoning_content = String::new();
     let mut has_reasoning_part = false;
     let mut non_think_parts = Vec::new();
@@ -292,13 +385,17 @@ pub fn convert_message(
     {
         result.insert("content".to_owned(), Value::String(String::new()));
     }
-    if has_reasoning_part || (preserve_thinking && message.role == Role::Assistant) {
-        result.insert(
-            reasoning_key
-                .unwrap_or(DEFAULT_OUTBOUND_REASONING_KEY)
-                .to_owned(),
-            Value::String(reasoning_content),
-        );
+    let emit_reasoning = match reasoning_history {
+        ReasoningHistoryMode::Disabled => false,
+        ReasoningHistoryMode::WhenPresent => has_reasoning_part,
+        ReasoningHistoryMode::Auto => {
+            has_reasoning_part
+                || (replay_all_assistant_reasoning && message.role == Role::Assistant)
+        }
+        ReasoningHistoryMode::Required => message.role == Role::Assistant,
+    };
+    if emit_reasoning {
+        result.insert(reasoning_key.to_owned(), Value::String(reasoning_content));
     }
     result
 }
@@ -337,6 +434,27 @@ pub fn convert_history_messages(
     tool_message_conversion: ToolMessageConversion,
     preserve_thinking: bool,
 ) -> Vec<Map<String, Value>> {
+    let mode = if preserve_thinking {
+        ReasoningHistoryMode::Auto
+    } else {
+        ReasoningHistoryMode::WhenPresent
+    };
+    convert_history_messages_with_reasoning(
+        history,
+        reasoning_key.unwrap_or(DEFAULT_OUTBOUND_REASONING_KEY),
+        tool_message_conversion,
+        mode,
+        preserve_thinking,
+    )
+}
+
+fn convert_history_messages_with_reasoning(
+    history: &[Message],
+    reasoning_key: &str,
+    tool_message_conversion: ToolMessageConversion,
+    reasoning_history: ReasoningHistoryMode,
+    replay_all_assistant_reasoning: bool,
+) -> Vec<Map<String, Value>> {
     let mut messages = Vec::new();
     let mut pending_tool_result_media = Vec::new();
     for message in history {
@@ -346,11 +464,12 @@ pub fn convert_history_messages(
         if message.role != Role::Tool {
             append_tool_result_media_message(&mut messages, &mut pending_tool_result_media);
         }
-        messages.push(convert_message(
+        messages.push(convert_message_with_reasoning(
             message,
             reasoning_key,
             tool_message_conversion,
-            preserve_thinking,
+            reasoning_history,
+            replay_all_assistant_reasoning,
             true,
         ));
         if message.role == Role::Tool {
@@ -506,6 +625,38 @@ pub fn build_openai_legacy_request(
     history: &[Message],
     options: Option<&GenerateOptions>,
 ) -> Result<Map<String, Value>, ToolCallIdError> {
+    let dialect = ReasoningKeyDialect::new(reasoning_key.map(str::to_owned));
+    build_openai_legacy_request_with_reasoning(
+        model,
+        stream,
+        &dialect,
+        ReasoningHistoryMode::Auto,
+        generation_kwargs,
+        default_thinking_effort,
+        tool_message_conversion,
+        hooks,
+        system_prompt,
+        tools,
+        history,
+        options,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_openai_legacy_request_with_reasoning(
+    model: &str,
+    stream: bool,
+    reasoning_dialect: &ReasoningKeyDialect,
+    reasoning_history: ReasoningHistoryMode,
+    generation_kwargs: &OpenAiLegacyGenerationKwargs,
+    default_thinking_effort: Option<&ThinkingEffort>,
+    tool_message_conversion: ToolMessageConversion,
+    hooks: Option<&OpenAiChatHooks>,
+    system_prompt: &str,
+    tools: &[Tool],
+    history: &[Message],
+    options: Option<&GenerateOptions>,
+) -> Result<Map<String, Value>, ToolCallIdError> {
     let resolved = resolve_request_kwargs(
         model,
         generation_kwargs,
@@ -514,7 +665,7 @@ pub fn build_openai_legacy_request(
         history,
         options,
     );
-    let preserve_thinking = hooks
+    let hook_preserves_thinking = hooks
         .and_then(|hooks| hooks.preserve_thinking.as_ref())
         .and_then(|hook| hook(&resolved.kwargs))
         .unwrap_or(false);
@@ -523,6 +674,20 @@ pub fn build_openai_legacy_request(
         .and_then(|hook| hook())
         .unwrap_or_else(|| OPENAI_CHAT_TOOL_CALL_ID_POLICY.clone());
     let normalized_history = normalize_tool_call_ids_for_provider(history.to_vec(), &policy)?;
+    let history_has_reasoning = normalized_history.iter().any(|message| {
+        message
+            .content
+            .iter()
+            .any(|part| matches!(part, ContentPart::Think { .. }))
+    });
+    let replay_all_assistant_reasoning = match reasoning_history {
+        ReasoningHistoryMode::Disabled | ReasoningHistoryMode::WhenPresent => false,
+        ReasoningHistoryMode::Auto => {
+            hook_preserves_thinking || reasoning_dialect.has_detected_key() || history_has_reasoning
+        }
+        ReasoningHistoryMode::Required => true,
+    };
+    let outbound_reasoning_key = reasoning_dialect.outbound_key();
 
     let mut messages = Vec::new();
     if !system_prompt.is_empty() {
@@ -536,11 +701,12 @@ pub fn build_openai_legacy_request(
     }
     if let Some(convert_message_hook) = hooks.and_then(|hooks| hooks.convert_message.as_ref()) {
         for message in &normalized_history {
-            let converted = convert_message(
+            let converted = convert_message_with_reasoning(
                 message,
-                reasoning_key,
+                &outbound_reasoning_key,
                 ToolMessageConversion::Parts,
-                preserve_thinking,
+                reasoning_history,
+                replay_all_assistant_reasoning,
                 false,
             );
             if let Some(shaped) = convert_message_hook(message, converted) {
@@ -548,11 +714,12 @@ pub fn build_openai_legacy_request(
             }
         }
     } else {
-        messages.extend(convert_history_messages(
+        messages.extend(convert_history_messages_with_reasoning(
             &normalized_history,
-            reasoning_key,
+            &outbound_reasoning_key,
             tool_message_conversion,
-            preserve_thinking,
+            reasoning_history,
+            replay_all_assistant_reasoning,
         ));
     }
     if let Some(merge_history) = hooks.and_then(|hooks| hooks.merge_history.as_ref()) {
@@ -671,7 +838,7 @@ pub struct OpenAiLegacyStreamedMessage {
     source: Pin<Box<dyn Stream<Item = Result<OpenAiLegacyEvent, ProviderError>> + Send>>,
     pending: VecDeque<StreamedMessagePart>,
     buffered_tool_calls: HashMap<StreamIndex, BufferedChatCompletionToolCall>,
-    reasoning_key: Option<String>,
+    reasoning_dialect: Arc<ReasoningKeyDialect>,
     extract_usage_hook: Option<BoundExtractUsageHook>,
     id: Option<String>,
     usage: Option<TokenUsage>,
@@ -687,9 +854,23 @@ impl OpenAiLegacyStreamedMessage {
         trace_id: Option<String>,
         extract_usage_hook: Option<BoundExtractUsageHook>,
     ) -> Self {
+        Self::from_completion_with_dialect(
+            response,
+            Arc::new(ReasoningKeyDialect::new(reasoning_key)),
+            trace_id,
+            extract_usage_hook,
+        )
+    }
+
+    pub fn from_completion_with_dialect(
+        response: OpenAiLegacyCompletion,
+        reasoning_dialect: Arc<ReasoningKeyDialect>,
+        trace_id: Option<String>,
+        extract_usage_hook: Option<BoundExtractUsageHook>,
+    ) -> Self {
         Self::new(
             futures_util::stream::iter([Ok(OpenAiLegacyEvent::Completion(response))]),
-            reasoning_key,
+            reasoning_dialect,
             trace_id,
             extract_usage_hook,
         )
@@ -704,9 +885,26 @@ impl OpenAiLegacyStreamedMessage {
     where
         S: Stream<Item = Result<OpenAiLegacyChunk, ProviderError>> + Send + 'static,
     {
+        Self::from_stream_with_dialect(
+            response,
+            Arc::new(ReasoningKeyDialect::new(reasoning_key)),
+            trace_id,
+            extract_usage_hook,
+        )
+    }
+
+    pub fn from_stream_with_dialect<S>(
+        response: S,
+        reasoning_dialect: Arc<ReasoningKeyDialect>,
+        trace_id: Option<String>,
+        extract_usage_hook: Option<BoundExtractUsageHook>,
+    ) -> Self
+    where
+        S: Stream<Item = Result<OpenAiLegacyChunk, ProviderError>> + Send + 'static,
+    {
         Self::new(
             response.map(|result| result.map(OpenAiLegacyEvent::Chunk)),
-            reasoning_key,
+            reasoning_dialect,
             trace_id,
             extract_usage_hook,
         )
@@ -714,7 +912,7 @@ impl OpenAiLegacyStreamedMessage {
 
     fn new<S>(
         source: S,
-        reasoning_key: Option<String>,
+        reasoning_dialect: Arc<ReasoningKeyDialect>,
         trace_id: Option<String>,
         extract_usage_hook: Option<BoundExtractUsageHook>,
     ) -> Self
@@ -725,7 +923,7 @@ impl OpenAiLegacyStreamedMessage {
             source: Box::pin(source),
             pending: VecDeque::new(),
             buffered_tool_calls: HashMap::new(),
-            reasoning_key,
+            reasoning_dialect,
             extract_usage_hook,
             id: None,
             usage: None,
@@ -767,10 +965,10 @@ impl OpenAiLegacyStreamedMessage {
         let Some(message) = choice.message.as_ref() else {
             return;
         };
-        if let Some(reasoning) = extract_reasoning_content(
-            &Value::Object(message.fields.clone()),
-            self.reasoning_key.as_deref(),
-        ) {
+        if let Some(reasoning) = self
+            .reasoning_dialect
+            .observe(&Value::Object(message.fields.clone()))
+        {
             self.pending
                 .push_back(StreamedMessagePart::Content(ContentPart::Think {
                     think: reasoning,
@@ -821,10 +1019,10 @@ impl OpenAiLegacyStreamedMessage {
         let Some(delta) = choice.delta.as_ref() else {
             return;
         };
-        if let Some(reasoning) = extract_reasoning_content(
-            &Value::Object(delta.fields.clone()),
-            self.reasoning_key.as_deref(),
-        ) {
+        if let Some(reasoning) = self
+            .reasoning_dialect
+            .observe(&Value::Object(delta.fields.clone()))
+        {
             self.pending
                 .push_back(StreamedMessagePart::Content(ContentPart::Think {
                     think: reasoning,
@@ -899,6 +1097,7 @@ pub struct OpenAiLegacyOptions {
     pub base_url: Option<String>,
     pub default_headers: Option<IndexMap<String, String>>,
     pub reasoning_key: Option<String>,
+    pub reasoning_history: Option<ReasoningHistoryMode>,
     pub thinking_effort: Option<ThinkingEffort>,
     pub max_tokens: Option<u64>,
     pub tool_message_conversion: Option<ToolMessageConversion>,
@@ -915,6 +1114,7 @@ impl OpenAiLegacyOptions {
             base_url: None,
             default_headers: None,
             reasoning_key: None,
+            reasoning_history: None,
             thinking_effort: None,
             max_tokens: None,
             tool_message_conversion: None,
@@ -939,7 +1139,8 @@ pub struct OpenAiLegacyChatProvider {
     api_key: Option<String>,
     base_url: String,
     default_headers: Option<IndexMap<String, String>>,
-    reasoning_key: Option<String>,
+    reasoning_dialect: Arc<ReasoningKeyDialect>,
+    reasoning_history: ReasoningHistoryMode,
     thinking_effort: Option<ThinkingEffort>,
     generation_kwargs: OpenAiLegacyGenerationKwargs,
     tool_message_conversion: ToolMessageConversion,
@@ -984,7 +1185,8 @@ impl OpenAiLegacyChatProvider {
                 .base_url
                 .unwrap_or_else(|| "https://api.openai.com/v1".to_owned()),
             default_headers: options.default_headers,
-            reasoning_key: normalized_reasoning_key,
+            reasoning_dialect: Arc::new(ReasoningKeyDialect::new(normalized_reasoning_key)),
+            reasoning_history: options.reasoning_history.unwrap_or_default(),
             thinking_effort: options.thinking_effort,
             generation_kwargs,
             tool_message_conversion: options
@@ -1037,10 +1239,11 @@ impl ChatProvider for OpenAiLegacyChatProvider {
                 .and_then(|options| options.auth.as_ref())
                 .and_then(|auth| auth.headers.as_ref()),
         );
-        let params = build_openai_legacy_request(
+        let params = build_openai_legacy_request_with_reasoning(
             &self.model,
             self.stream,
-            self.reasoning_key.as_deref(),
+            &self.reasoning_dialect,
+            self.reasoning_history,
             &self.generation_kwargs,
             self.thinking_effort.as_ref(),
             self.tool_message_conversion,
@@ -1069,17 +1272,17 @@ impl ChatProvider for OpenAiLegacyChatProvider {
             .and_then(|hooks| hooks.extract_usage.clone());
         let message: Box<dyn StreamedMessage> = match response {
             OpenAiLegacyHttpResponse::Completion { value, trace_id } => {
-                Box::new(OpenAiLegacyStreamedMessage::from_completion(
+                Box::new(OpenAiLegacyStreamedMessage::from_completion_with_dialect(
                     value,
-                    self.reasoning_key.clone(),
+                    self.reasoning_dialect.clone(),
                     trace_id,
                     extract_usage,
                 ))
             }
             OpenAiLegacyHttpResponse::Stream { value, trace_id } => {
-                Box::new(OpenAiLegacyStreamedMessage::from_stream(
+                Box::new(OpenAiLegacyStreamedMessage::from_stream_with_dialect(
                     value,
-                    self.reasoning_key.clone(),
+                    self.reasoning_dialect.clone(),
                     trace_id,
                     extract_usage,
                 ))
@@ -1130,6 +1333,138 @@ mod tests {
         );
         assert_eq!(extract_reasoning_content(&source, Some("missing")), None);
         assert_eq!(extract_reasoning_content(&Value::Null, None), None);
+    }
+
+    #[test]
+    fn reasoning_dialect_prefers_configuration_then_stably_detects_provider_key() {
+        let detected = ReasoningKeyDialect::new(None);
+        assert_eq!(detected.outbound_key(), "reasoning_content");
+        assert_eq!(
+            detected.observe(&json!({"reasoning_details": "details"})),
+            Some("details".to_owned())
+        );
+        assert_eq!(detected.outbound_key(), "reasoning_details");
+        assert_eq!(
+            detected.observe(&json!({"reasoning_details": "next"})),
+            Some("next".to_owned())
+        );
+
+        let explicit = ReasoningKeyDialect::new(Some("custom_reasoning".to_owned()));
+        assert_eq!(
+            explicit.observe(&json!({
+                "custom_reasoning": "configured",
+                "reasoning_content": "ignored"
+            })),
+            Some("configured".to_owned())
+        );
+        assert_eq!(explicit.outbound_key(), "custom_reasoning");
+    }
+
+    #[test]
+    fn reasoning_history_modes_have_distinct_replay_semantics() {
+        let plain_assistant = Message::new(
+            Role::Assistant,
+            vec![ContentPart::Text {
+                text: "plain".to_owned(),
+            }],
+            Vec::new(),
+        );
+        let thinking_assistant = Message::new(
+            Role::Assistant,
+            vec![
+                ContentPart::Think {
+                    think: "thought".to_owned(),
+                    encrypted: None,
+                },
+                ContentPart::Text {
+                    text: "answer".to_owned(),
+                },
+            ],
+            Vec::new(),
+        );
+        let history = [plain_assistant, thinking_assistant];
+
+        let convert = |mode| {
+            convert_history_messages_with_reasoning(
+                &history,
+                "reasoning_content",
+                ToolMessageConversion::Parts,
+                mode,
+                matches!(
+                    mode,
+                    ReasoningHistoryMode::Auto | ReasoningHistoryMode::Required
+                ),
+            )
+        };
+
+        let disabled = convert(ReasoningHistoryMode::Disabled);
+        assert!(
+            disabled
+                .iter()
+                .all(|message| !message.contains_key("reasoning_content"))
+        );
+
+        let present = convert(ReasoningHistoryMode::WhenPresent);
+        assert!(!present[0].contains_key("reasoning_content"));
+        assert_eq!(present[1]["reasoning_content"], "thought");
+
+        for mode in [ReasoningHistoryMode::Auto, ReasoningHistoryMode::Required] {
+            let replayed = convert(mode);
+            assert_eq!(replayed[0]["reasoning_content"], "");
+            assert_eq!(replayed[1]["reasoning_content"], "thought");
+        }
+    }
+
+    #[test]
+    fn required_history_repairs_every_assistant_message_without_retrying() {
+        let dialect = ReasoningKeyDialect::new(Some("reasoning_content".to_owned()));
+        let history = vec![
+            Message::new(
+                Role::Assistant,
+                vec![ContentPart::Text {
+                    text: "first answer".to_owned(),
+                }],
+                Vec::new(),
+            ),
+            Message::new(
+                Role::User,
+                vec![ContentPart::Text {
+                    text: "continue".to_owned(),
+                }],
+                Vec::new(),
+            ),
+            Message::new(
+                Role::Assistant,
+                vec![ContentPart::Text {
+                    text: "second answer".to_owned(),
+                }],
+                Vec::new(),
+            ),
+        ];
+        let request = build_openai_legacy_request_with_reasoning(
+            "compatible-model",
+            true,
+            &dialect,
+            ReasoningHistoryMode::Required,
+            &Map::new(),
+            None,
+            ToolMessageConversion::Parts,
+            None,
+            "",
+            &[],
+            &history,
+            None,
+        )
+        .unwrap();
+        let messages = request["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["reasoning_content"], "");
+        assert!(
+            !messages[1]
+                .as_object()
+                .unwrap()
+                .contains_key("reasoning_content")
+        );
+        assert_eq!(messages[2]["reasoning_content"], "");
     }
 
     #[test]
@@ -1508,7 +1843,7 @@ mod tests {
                 choices: vec![OpenAiLegacyChoice {
                     delta: Some(OpenAiLegacyDelta {
                         fields: Map::from_iter([(
-                            "reasoning_content".to_owned(),
+                            "reasoning_details".to_owned(),
                             Value::String("think".to_owned()),
                         )]),
                         tool_calls: vec![ChatCompletionStreamToolCallDelta {
@@ -1557,9 +1892,10 @@ mod tests {
                 ..OpenAiLegacyChunk::default()
             }),
         ]);
-        let mut streamed = OpenAiLegacyStreamedMessage::from_stream(
+        let stream_dialect = Arc::new(ReasoningKeyDialect::new(None));
+        let mut streamed = OpenAiLegacyStreamedMessage::from_stream_with_dialect(
             chunks,
-            None,
+            stream_dialect.clone(),
             Some("trace-1".to_owned()),
             None,
         );
@@ -1586,6 +1922,7 @@ mod tests {
         assert_eq!(streamed.finish_reason(), Some(FinishReason::Completed));
         assert_eq!(streamed.raw_finish_reason(), Some("stop"));
         assert_eq!(streamed.trace_id(), TraceId::Present(Some("trace-1")));
+        assert_eq!(stream_dialect.outbound_key(), "reasoning_details");
 
         let response = OpenAiLegacyCompletion {
             id: "complete-1".to_owned(),
@@ -1603,13 +1940,19 @@ mod tests {
             }],
             ..OpenAiLegacyCompletion::default()
         };
-        let mut non_stream =
-            OpenAiLegacyStreamedMessage::from_completion(response, None, None, None);
+        let completion_dialect = Arc::new(ReasoningKeyDialect::new(None));
+        let mut non_stream = OpenAiLegacyStreamedMessage::from_completion_with_dialect(
+            response,
+            completion_dialect.clone(),
+            None,
+            None,
+        );
         let mut count = 0;
         while non_stream.next().await.transpose().unwrap().is_some() {
             count += 1;
         }
         assert_eq!(count, 2);
         assert_eq!(non_stream.finish_reason(), Some(FinishReason::Truncated));
+        assert_eq!(completion_dialect.outbound_key(), "reasoning");
     }
 }

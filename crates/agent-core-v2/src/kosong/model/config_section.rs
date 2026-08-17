@@ -150,7 +150,12 @@ mod tests {
                 "base_url": "https://api.example.test/v1",
                 "max_context_size": 262144,
                 "capabilities": ["image_in", "thinking"],
-                "overrides": {"max_output_size": 8192},
+                "reasoning_key": "reasoning_content",
+                "reasoning_history": "required",
+                "overrides": {
+                    "max_output_size": 8192,
+                    "reasoning_history": "when_present"
+                },
                 "future_field": {"keep": true}
             }
         });
@@ -158,7 +163,12 @@ mod tests {
         let memory = models_from_toml(&raw);
         assert_eq!(memory["kimi-k2"]["baseUrl"], "https://api.example.test/v1");
         assert_eq!(memory["kimi-k2"]["maxContextSize"], 262144);
+        assert_eq!(memory["kimi-k2"]["reasoningHistory"], "required");
         assert_eq!(memory["kimi-k2"]["overrides"]["maxOutputSize"], 8192);
+        assert_eq!(
+            memory["kimi-k2"]["overrides"]["reasoningHistory"],
+            "when_present"
+        );
         assert_eq!(memory["kimi-k2"]["futureField"], json!({"keep": true}));
 
         let written = models_to_toml(&memory, &raw).unwrap();
@@ -167,6 +177,11 @@ mod tests {
             "https://api.example.test/v1"
         );
         assert_eq!(written["kimi-k2"]["overrides"]["max_output_size"], 8192);
+        assert_eq!(written["kimi-k2"]["reasoning_history"], "required");
+        assert_eq!(
+            written["kimi-k2"]["overrides"]["reasoning_history"],
+            "when_present"
+        );
         assert_eq!(written["kimi-k2"]["future_field"], json!({"keep": true}));
     }
 
@@ -185,6 +200,11 @@ mod tests {
         assert!(
             MODELS_SCHEMA
                 .parse(&json!({"kimi-k2": {"maxContextSize": 0}}))
+                .is_err()
+        );
+        assert!(
+            MODELS_SCHEMA
+                .parse(&json!({"kimi-k2": {"reasoningHistory": "sometimes"}}))
                 .is_err()
         );
     }

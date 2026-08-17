@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use std::sync::{Arc, OnceLock};
 
 use crate::kosong::contract::provider::{ChatProvider, ThinkingEffort};
-use crate::kosong::protocol::identity::Protocol;
+use crate::kosong::protocol::identity::{Protocol, ReasoningHistoryMode};
 use crate::kosong::protocol::protocol_base::{
     ProtocolBaseContext, ProtocolBaseDefinition, ProtocolBaseRegistryError, register_protocol_base,
 };
@@ -44,6 +44,10 @@ fn options_from_provides(values: Option<&Map<String, Value>>, model: &str) -> Op
     options.base_url = string_field(values, "baseUrl");
     options.default_headers = headers_field(values, "defaultHeaders");
     options.reasoning_key = string_field(values, "reasoningKey");
+    options.reasoning_history = values
+        .get("reasoningHistory")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ReasoningHistoryMode>(value).ok());
     options.thinking_effort = string_field(values, "thinkingEffort").map(ThinkingEffort::new);
     options.max_tokens = number_field(values, "maxTokens");
     options.tool_message_conversion = match values.get("toolMessageConversion") {
@@ -109,6 +113,9 @@ pub fn openai_legacy_base_definition() -> ProtocolBaseDefinition {
                 }
                 if let Some(reasoning_key) = provider_options.reasoning_key.as_ref() {
                     options.reasoning_key = Some(reasoning_key.clone());
+                }
+                if let Some(reasoning_history) = provider_options.reasoning_history {
+                    options.reasoning_history = Some(reasoning_history);
                 }
             }
             options.hooks = compose_openai_chat_hooks(&context.traits);

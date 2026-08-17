@@ -24,7 +24,7 @@ use crate::kosong::{
             CapturedResolutionValue, InspectionSource, InspectionSourceKind, ResolutionTrace,
         },
     },
-    protocol::identity::{Protocol, ProtocolProviderOptions},
+    protocol::identity::{Protocol, ProtocolProviderOptions, ReasoningHistoryMode},
     provider::{
         config::{ModelSource, ProviderConfig},
         provider_definition::{
@@ -134,6 +134,8 @@ pub struct InspectedResolvedModel {
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_history: Option<ReasoningHistoryMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub support_efforts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -388,6 +390,11 @@ pub fn attribute_provider_options(
                 .get("model.effective.reasoningKey")
                 .cloned()
                 .unwrap_or_else(|| source(InspectionSourceKind::Config, "[models.*] section")),
+            "reasoningHistory" => trace
+                .sources()
+                .get("model.effective.reasoningHistory")
+                .cloned()
+                .unwrap_or_else(|| source(InspectionSourceKind::Config, "[models.*] section")),
             _ => source(InspectionSourceKind::Config, "[models.*] section"),
         };
         trace.record(&path, value);
@@ -445,6 +452,7 @@ pub fn assemble_model_inspection(
         "maxOutputSize",
         "displayName",
         "reasoningKey",
+        "reasoningHistory",
         "supportEfforts",
         "defaultEffort",
         "aliases",
@@ -637,6 +645,7 @@ pub fn assemble_model_inspection(
             max_output_size: model.max_output_size,
             display_name: model.display_name.clone(),
             reasoning_key: model.reasoning_key.clone(),
+            reasoning_history: model.reasoning_history,
             support_efforts: model.support_efforts.clone(),
             default_effort: model.default_effort.clone(),
             always_thinking: model.always_thinking,
@@ -931,6 +940,7 @@ mod tests {
             max_output_size: None,
             display_name: None,
             reasoning_key: None,
+            reasoning_history: None,
             support_efforts: None,
             default_effort: None,
             always_thinking: false,

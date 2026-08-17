@@ -189,6 +189,9 @@ fn apply_model_overrides(model: &mut ModelRecord, overrides: &ModelRecordOverrid
     if let Some(value) = &overrides.reasoning_key {
         model.reasoning_key = Some(value.clone());
     }
+    if let Some(value) = overrides.reasoning_history {
+        model.reasoning_history = Some(value);
+    }
     if let Some(value) = overrides.adaptive_thinking {
         model.adaptive_thinking = Some(value);
     }
@@ -311,7 +314,10 @@ mod tests {
     use super::*;
     use crate::kosong::{
         contract::inspection::CapturedResolutionValue,
-        protocol::{identity::Protocol, protocol_trait::ProtocolEndpoint},
+        protocol::{
+            identity::{Protocol, ReasoningHistoryMode},
+            protocol_trait::ProtocolEndpoint,
+        },
         provider::{
             config::{OAuthRef, OAuthStorage, ProviderType},
             provider_definition::{ProviderDefinition, register_provider_definition},
@@ -531,11 +537,13 @@ mod tests {
             name: Some("not-an-anthropic-model".into()),
             max_context_size: NonZeroU64::new(100),
             display_name: Some("base".into()),
+            reasoning_history: Some(ReasoningHistoryMode::Auto),
             support_efforts: Some(vec!["low".into(), "high".into()]),
             default_effort: Some("high".into()),
             overrides: Some(ModelRecordOverride {
                 max_context_size: NonZeroU64::new(200),
                 display_name: Some("override".into()),
+                reasoning_history: Some(ReasoningHistoryMode::Required),
                 support_efforts: Some(vec!["low".into()]),
                 ..ModelRecordOverride::default()
             }),
@@ -546,6 +554,10 @@ mod tests {
         assert_eq!(effective.provider_id.as_deref(), Some("provider-id"));
         assert_eq!(effective.max_context_size, NonZeroU64::new(200));
         assert_eq!(effective.display_name.as_deref(), Some("override"));
+        assert_eq!(
+            effective.reasoning_history,
+            Some(ReasoningHistoryMode::Required)
+        );
         assert_eq!(effective.support_efforts, Some(vec!["low".into()]));
         assert_eq!(effective.default_effort, None);
         assert_eq!(effective.overrides, None);
