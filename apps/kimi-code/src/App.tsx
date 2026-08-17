@@ -2,7 +2,6 @@ import {
   Bot,
   CalendarClock,
   Folder,
-  Menu,
   SquarePen
 } from "lucide-react";
 import {
@@ -2975,18 +2974,6 @@ export default function App() {
           <>
             <header className="chat-header">
               <div className="chat-heading">
-                {sidebarCollapsed && (
-                  <button
-                    className="icon-button"
-                    ref={mobileMenuButtonRef}
-                    type="button"
-                    aria-label={t("sidebar.expand")}
-                    aria-expanded={mobileSidebarOpen}
-                    onClick={openSidebar}
-                  >
-                    <Menu size={18} />
-                  </button>
-                )}
                 <div>
                   <ChatHeaderTitle
                     title={activeConversation.title}
