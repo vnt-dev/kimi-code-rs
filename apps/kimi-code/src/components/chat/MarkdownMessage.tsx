@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { Check, Copy } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { t } from "../../i18n";
@@ -56,6 +56,60 @@ function MarkdownCodeBlock({ children }: { children: ReactNode }) {
   );
 }
 
+const MARKDOWN_COMPONENTS: Components = {
+  pre({ children }) {
+    return <MarkdownCodeBlock>{children}</MarkdownCodeBlock>;
+  },
+  code({ className, children, ...props }) {
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  },
+  table({ children }) {
+    return (
+      <div className="markdown-table-wrap">
+        <table>{children}</table>
+      </div>
+    );
+  },
+  img({ src, alt, ...props }) {
+    if (!src) return <img {...props} alt={alt ?? ""} />;
+    return (
+      <PreviewableImage
+        {...props}
+        src={src}
+        alt={alt ?? ""}
+        path={src}
+      />
+    );
+  },
+  a({ children, href, ...props }) {
+    const externalUrl = resolveMarkdownExternalUrl(href);
+    return (
+      <a
+        {...props}
+        href={externalUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(event) => {
+          if (!externalUrl) {
+            event.preventDefault();
+            return;
+          }
+          event.preventDefault();
+          void openExternalUrl(externalUrl).catch((error) => {
+            console.error("failed to open Markdown link", error);
+          });
+        }}
+      >
+        {children}
+      </a>
+    );
+  },
+};
+
 export const MarkdownMessage = memo(function MarkdownMessage({
   content,
 }: {
@@ -64,59 +118,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      components={{
-        pre({ children }) {
-          return <MarkdownCodeBlock>{children}</MarkdownCodeBlock>;
-        },
-        code({ className, children, ...props }) {
-          return (
-            <code className={className} {...props}>
-              {children}
-            </code>
-          );
-        },
-        table({ children }) {
-          return (
-            <div className="markdown-table-wrap">
-              <table>{children}</table>
-            </div>
-          );
-        },
-        img({ src, alt, ...props }) {
-          if (!src) return <img {...props} alt={alt ?? ""} />;
-          return (
-            <PreviewableImage
-              {...props}
-              src={src}
-              alt={alt ?? ""}
-              path={src}
-            />
-          );
-        },
-        a({ children, href, ...props }) {
-          const externalUrl = resolveMarkdownExternalUrl(href);
-          return (
-            <a
-              {...props}
-              href={externalUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(event) => {
-                if (!externalUrl) {
-                  event.preventDefault();
-                  return;
-                }
-                event.preventDefault();
-                void openExternalUrl(externalUrl).catch((error) => {
-                  console.error("failed to open Markdown link", error);
-                });
-              }}
-            >
-              {children}
-            </a>
-          );
-        },
-      }}
+      components={MARKDOWN_COMPONENTS}
     >
       {content}
     </ReactMarkdown>

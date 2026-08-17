@@ -839,6 +839,10 @@ button.plugin-command-message:focus-visible {
   margin-bottom: 28px;
 }
 
+.live-turn {
+  animation: none;
+}
+
 .live-steered-message {
   margin: 24px 0 14px;
 }
@@ -870,7 +874,6 @@ button.plugin-command-message:focus-visible {
   min-width: 0;
   flex-direction: column;
   gap: 10px;
-  animation: message-in 150ms ease-out both;
 }
 
 .live-step + .live-step {
@@ -885,8 +888,4 @@ button.plugin-command-message:focus-visible {
 
 .live-text + .live-text {
   margin-top: 2px;
-}
-
-.live-text {
-  animation: content-in 120ms ease-out both;
 }
