@@ -12,6 +12,7 @@ import {
 } from "react";
 import {
   conversationTurnScrollTarget,
+  isChatAtBottom,
   isUpwardChatScrollKey,
   resolveChatFollowState,
 } from "../chatScroll";
@@ -87,11 +88,9 @@ export function useChatScroll({
   const messageStackRef = useRef<HTMLDivElement>(null);
   const followLatestMessageRef = useRef(true);
   const lastChatScrollTopRef = useRef(0);
-  const lastChatScrollHeightRef = useRef(0);
   const chatScrollFrameRef = useRef<number | undefined>(undefined);
   const chatScrollUpIntentRef = useRef(false);
   const chatScrollIntentFrameRef = useRef<number | undefined>(undefined);
-  const chatDisclosureReflowRef = useRef(false);
   const chatDisclosureTimerRef = useRef<number | undefined>(undefined);
   const chatPointerScrollingRef = useRef(false);
   const chatPointerStartRef = useRef<
@@ -118,7 +117,7 @@ export function useChatScroll({
     const distanceFromBottom =
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
     let nextId = anchors.at(-1)?.dataset.conversationTurnId;
-    if (distanceFromBottom > 48) {
+    if (!isChatAtBottom(distanceFromBottom)) {
       const scrollRect = scroll.getBoundingClientRect();
       const viewportMiddle = scrollRect.top + scrollRect.height / 2;
       nextId = anchors[0]?.dataset.conversationTurnId;
@@ -142,12 +141,16 @@ export function useChatScroll({
   }, [updateActiveOutlineTurn]);
 
   useLayoutEffect(() => {
+    if (chatDisclosureTimerRef.current !== undefined) {
+      window.clearTimeout(chatDisclosureTimerRef.current);
+      chatDisclosureTimerRef.current = undefined;
+    }
     followLatestMessageRef.current = true;
     const scroll = scrollRef.current;
     if (scroll) {
+      scroll.style.removeProperty("overflow-anchor");
       scroll.scrollTop = scroll.scrollHeight;
       lastChatScrollTopRef.current = scroll.scrollTop;
-      lastChatScrollHeightRef.current = scroll.scrollHeight;
     }
   }, [conversationId, historyLoading]);
 
@@ -168,7 +171,6 @@ export function useChatScroll({
         if (!followLatestMessageRef.current) return;
         scroll.scrollTop = scroll.scrollHeight;
         lastChatScrollTopRef.current = scroll.scrollTop;
-        lastChatScrollHeightRef.current = scroll.scrollHeight;
       });
     };
 
@@ -253,18 +255,15 @@ export function useChatScroll({
     scheduleActiveOutlineTurnUpdate();
     const distanceFromBottom =
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
-    const contentHeightChanged =
-      Math.abs(scroll.scrollHeight - lastChatScrollHeightRef.current) > 1;
     const scrollingUp = scroll.scrollTop < lastChatScrollTopRef.current - 1;
+    const userScrollingUp =
+      chatScrollUpIntentRef.current || chatPointerScrollingRef.current;
     lastChatScrollTopRef.current = scroll.scrollTop;
     followLatestMessageRef.current = resolveChatFollowState({
       currentlyFollowing: followLatestMessageRef.current,
       distanceFromBottom,
-      contentHeightChanged,
       scrollingUp,
-      userScrollingUp:
-        chatScrollUpIntentRef.current || chatPointerScrollingRef.current,
-      userTogglingDisclosure: chatDisclosureReflowRef.current,
+      userScrollingUp,
     });
   };
 
@@ -277,25 +276,19 @@ export function useChatScroll({
     if (!disclosure || !event.currentTarget.contains(disclosure)) return;
 
     const scroll = event.currentTarget;
-    const wasFollowing = followLatestMessageRef.current;
     followLatestMessageRef.current = false;
-    chatDisclosureReflowRef.current = true;
     scroll.style.overflowAnchor = "none";
     lastChatScrollTopRef.current = scroll.scrollTop;
-    lastChatScrollHeightRef.current = scroll.scrollHeight;
     if (chatDisclosureTimerRef.current !== undefined) {
       window.clearTimeout(chatDisclosureTimerRef.current);
     }
     chatDisclosureTimerRef.current = window.setTimeout(() => {
       chatDisclosureTimerRef.current = undefined;
-      chatDisclosureReflowRef.current = false;
       scroll.style.removeProperty("overflow-anchor");
       lastChatScrollTopRef.current = scroll.scrollTop;
-      lastChatScrollHeightRef.current = scroll.scrollHeight;
       const distanceFromBottom =
         scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
-      followLatestMessageRef.current =
-        wasFollowing && distanceFromBottom <= 48;
+      followLatestMessageRef.current = isChatAtBottom(distanceFromBottom);
     }, 240);
   };
 

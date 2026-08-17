@@ -3,33 +3,42 @@ import test from "node:test";
 
 import {
   conversationTurnScrollTarget,
+  isChatAtBottom,
   isUpwardChatScrollKey,
   resolveChatFollowState,
 } from "../src/chatScroll.ts";
 
-test("explicit upward input leaves follow mode while content is changing", () => {
+test("explicit upward input leaves follow mode after moving away from the bottom", () => {
   assert.equal(
     resolveChatFollowState({
       currentlyFollowing: true,
-      distanceFromBottom: 12,
-      contentHeightChanged: true,
+      distanceFromBottom: 120,
       scrollingUp: true,
       userScrollingUp: true,
-      userTogglingDisclosure: false,
     }),
     false,
   );
 });
 
-test("content reflow does not leave follow mode without upward input", () => {
+test("automatic upward reflow does not look like user scrolling", () => {
   assert.equal(
     resolveChatFollowState({
       currentlyFollowing: true,
       distanceFromBottom: 120,
-      contentHeightChanged: true,
       scrollingUp: true,
       userScrollingUp: false,
-      userTogglingDisclosure: false,
+    }),
+    true,
+  );
+});
+
+test("upward input within the bottom threshold keeps follow mode", () => {
+  assert.equal(
+    resolveChatFollowState({
+      currentlyFollowing: true,
+      distanceFromBottom: 12,
+      scrollingUp: true,
+      userScrollingUp: true,
     }),
     true,
   );
@@ -40,27 +49,28 @@ test("scrolling back to the bottom resumes follow mode", () => {
     resolveChatFollowState({
       currentlyFollowing: false,
       distanceFromBottom: 24,
-      contentHeightChanged: false,
       scrollingUp: false,
       userScrollingUp: false,
-      userTogglingDisclosure: false,
     }),
     true,
   );
 });
 
-test("toggling conversation details pauses follow mode during reflow", () => {
+test("remaining away from the bottom keeps follow mode paused", () => {
   assert.equal(
     resolveChatFollowState({
-      currentlyFollowing: true,
-      distanceFromBottom: 0,
-      contentHeightChanged: true,
+      currentlyFollowing: false,
+      distanceFromBottom: 120,
       scrollingUp: false,
       userScrollingUp: false,
-      userTogglingDisclosure: true,
     }),
     false,
   );
+});
+
+test("bottom detection uses the shared follow threshold", () => {
+  assert.equal(isChatAtBottom(48), true);
+  assert.equal(isChatAtBottom(49), false);
 });
 
 test("upward keyboard scrolling is recognized", () => {

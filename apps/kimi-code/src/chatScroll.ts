@@ -1,23 +1,22 @@
 export type ChatFollowDecision = {
   currentlyFollowing: boolean;
   distanceFromBottom: number;
-  contentHeightChanged: boolean;
   scrollingUp: boolean;
   userScrollingUp: boolean;
-  userTogglingDisclosure: boolean;
 };
+
+export function isChatAtBottom(distanceFromBottom: number): boolean {
+  return distanceFromBottom <= 48;
+}
 
 export function resolveChatFollowState({
   currentlyFollowing,
   distanceFromBottom,
-  contentHeightChanged,
   scrollingUp,
   userScrollingUp,
-  userTogglingDisclosure,
 }: ChatFollowDecision): boolean {
-  if (userTogglingDisclosure) return false;
-  if (scrollingUp && (userScrollingUp || !contentHeightChanged)) return false;
-  if (distanceFromBottom <= 48) return true;
+  if (isChatAtBottom(distanceFromBottom)) return true;
+  if (scrollingUp && userScrollingUp) return false;
   return currentlyFollowing;
 }
 
