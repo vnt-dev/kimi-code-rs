@@ -240,6 +240,20 @@
   white-space: nowrap;
 }
 
+.compaction-live-divider button {
+  padding: 0;
+  border: 0;
+  color: var(--accent-2);
+  background: transparent;
+  cursor: pointer;
+  font-size: calc(11px * var(--font-scale));
+  white-space: nowrap;
+}
+
+.compaction-live-divider button:hover {
+  color: var(--accent);
+}
+
 .compaction-live-divider .spinner {
   width: 13px;
   height: 13px;

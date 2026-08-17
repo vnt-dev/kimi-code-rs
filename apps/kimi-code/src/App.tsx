@@ -89,6 +89,10 @@ import {
   type RenderMessage
 } from "./chat/history";
 import {
+  compactionSummaryForLiveTurn,
+  type LiveCompactionEvent,
+} from "./chat/conversationTimeline";
+import {
   isTurnRunning,
   liveTurnStatusFromSubmit,
   newInFlightTurn,
@@ -210,7 +214,6 @@ import type {
   AgentUsageStatus,
   AuthStatus,
   BackgroundTaskView,
-  CompactionEvent,
   ContextUsage,
   DesktopState,
   DeviceCode,
@@ -306,7 +309,7 @@ export default function App() {
     useState<Record<string, true>>({});
   const [resolvingInteraction, setResolvingInteraction] = useState<string>();
   const [compactions, setCompactions] = useState<
-    Record<string, CompactionEvent>
+    Record<string, LiveCompactionEvent>
   >({});
   const [compactionHistoryReady, setCompactionHistoryReady] = useState<
     Record<string, boolean>
@@ -741,6 +744,10 @@ export default function App() {
   const activeCompaction = activeConversation
     ? compactions[activeConversation.id]
     : undefined;
+  const activeLiveCompactionSummary =
+    activeCompaction?.phase === "completed" && activeTurn && activeHistory
+      ? compactionSummaryForLiveTurn(activeHistory.items, activeTurn)
+      : undefined;
   const activeContextUsage = activeConversation
     ? contextUsages[activeConversation.id]
     : undefined;
@@ -3094,6 +3101,8 @@ export default function App() {
                   {activeTurn && (
                     <LiveTurnView
                       turn={activeTurn}
+                      liveCompaction={activeCompaction}
+                      compactionSummary={activeLiveCompactionSummary}
                       outlineId={liveOutlineTurnId}
                       subagentRuns={activeSubagentRuns}
                       subagentLiveTurns={activeSubagentLiveTurns}
@@ -3101,9 +3110,11 @@ export default function App() {
                         void openSkillDetail({ name })
                       }
                       onPluginCommandOpen={openPluginCommandDetail}
+                      onCompactionSummaryOpen={openCompactionSummary}
                     />
                   )}
-                  {activeCompaction &&
+                  {!activeTurn &&
+                    activeCompaction &&
                     (activeCompaction.phase !== "completed" ||
                       !compactionHistoryReady[activeConversation.id]) && (
                     <CompactionNotice event={activeCompaction} />

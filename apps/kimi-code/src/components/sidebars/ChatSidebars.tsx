@@ -25,6 +25,7 @@ import {
   MarkdownMessage,
   StreamingMarkdownMessage,
 } from "../chat/MarkdownMessage";
+import { CompactionNotice } from "../ChatHeader";
 
 export interface SkillDetailTarget {
   name: string;
@@ -155,6 +156,11 @@ function SideChatTurnView({ turn }: { turn: InFlightTurn }) {
                     content={block.content}
                     key={`content-${index}`}
                   />
+                );
+              }
+              if (block.kind === "compaction") {
+                return (
+                  <CompactionNotice event={block.event} key={block.id} />
                 );
               }
               return (

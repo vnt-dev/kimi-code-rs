@@ -691,7 +691,13 @@ export function compactionTokenTransition(
   )} → ${formatCompactionTokenCount(event.tokensAfter)} tokens`;
 }
 
-export function CompactionNotice({ event }: { event: CompactionEvent }) {
+export function CompactionNotice({
+  event,
+  onSummaryOpen,
+}: {
+  event: CompactionEvent;
+  onSummaryOpen?: () => void;
+}) {
   const tokenTransition = compactionTokenTransition(event);
 
   return (
@@ -713,6 +719,11 @@ export function CompactionNotice({ event }: { event: CompactionEvent }) {
           ? t("compaction.tokens", { transition: tokenTransition })
           : ""}
       </strong>
+      {event.phase === "completed" && onSummaryOpen && (
+        <button type="button" onClick={onSummaryOpen}>
+          {t("compaction.viewSummary")}
+        </button>
+      )}
       <span aria-hidden="true" />
     </div>
   );

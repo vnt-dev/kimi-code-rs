@@ -48,6 +48,10 @@ import {
   type ToolResultContent,
 } from "../../chat/history";
 import {
+  liveTurnKey,
+  type LiveCompactionEvent,
+} from "../../chat/conversationTimeline";
+import {
   isTurnRunning,
   liveStepKey,
   type InFlightTurn,
@@ -101,7 +105,7 @@ import {
   inputTokenUsage,
 } from "../../utils/format";
 import { Collapsible } from "../Collapsible";
-import { compactionTokenTransition } from "../ChatHeader";
+import { CompactionNotice, compactionTokenTransition } from "../ChatHeader";
 import { MarkdownMessage, StreamingMarkdownMessage } from "./MarkdownMessage";
 import { PreviewableImage } from "./PreviewableImage";
 
@@ -171,18 +175,24 @@ export function Welcome({
 
 export function LiveTurnView({
   turn,
+  liveCompaction,
+  compactionSummary,
   outlineId,
   subagentRuns,
   subagentLiveTurns,
   onSkillOpen,
   onPluginCommandOpen,
+  onCompactionSummaryOpen,
 }: {
   turn: InFlightTurn;
+  liveCompaction?: LiveCompactionEvent;
+  compactionSummary?: RenderMessage;
   outlineId?: string;
   subagentRuns?: SubagentRunsByTool;
   subagentLiveTurns?: Record<string, InFlightTurn>;
   onSkillOpen: (name: string) => void;
   onPluginCommandOpen: (command: PluginCommandDetail) => void;
+  onCompactionSummaryOpen?: (message: RenderMessage) => void;
 }) {
   const hasBlocks = turn.steps.some((step) => step.blocks.length > 0);
   const visibleSteps = turn.steps.filter((step) =>
@@ -196,6 +206,21 @@ export function LiveTurnView({
     () => liveTurnFileChanges(turn),
     [fileChangeRevision],
   );
+  const liveCompactionAnchor =
+    liveCompaction?.liveAnchor?.turnKey === liveTurnKey(turn)
+      ? liveCompaction.liveAnchor
+      : undefined;
+  const hasAnchoredCompactionStep = Boolean(
+    liveCompactionAnchor &&
+      visibleSteps.some(
+        (step) =>
+          liveStepKey(step.step, step.stepId) === liveCompactionAnchor.stepKey,
+      ),
+  );
+  const openLiveCompactionSummary =
+    compactionSummary && onCompactionSummaryOpen
+      ? () => onCompactionSummaryOpen(compactionSummary)
+      : undefined;
 
   return (
     <section
@@ -243,6 +268,10 @@ export function LiveTurnView({
             const steeredPrompts = turn.steeredPrompts.filter(
               (item) => item.anchorStepKey === stepKey,
             );
+            const anchoredCompaction =
+              liveCompactionAnchor?.stepKey === stepKey
+                ? liveCompaction
+                : undefined;
             return (
               <section
                 className={`live-step ${step.status}`}
@@ -257,6 +286,13 @@ export function LiveTurnView({
                       key={item.promptId}
                     />
                   ))}
+                {anchoredCompaction &&
+                  liveCompactionAnchor?.afterBlockIndex === -1 && (
+                    <CompactionNotice
+                      event={anchoredCompaction}
+                      onSummaryOpen={openLiveCompactionSummary}
+                    />
+                  )}
                 {step.blocks.map((block, index) => {
                   let blockView: ReactNode;
                   if (block.kind === "text") {
@@ -279,6 +315,11 @@ export function LiveTurnView({
                         content={block.content}
                       />
                     );
+                  } else if (block.kind === "compaction") {
+                    blockView =
+                      block.id === liveCompactionAnchor?.liveBlockId
+                        ? null
+                        : <CompactionNotice event={block.event} />;
                   } else {
                     blockView = (
                       <LiveToolBlock
@@ -296,6 +337,13 @@ export function LiveTurnView({
                   return (
                     <Fragment key={blockKey}>
                       {blockView}
+                      {anchoredCompaction &&
+                        liveCompactionAnchor?.afterBlockIndex === index && (
+                          <CompactionNotice
+                            event={anchoredCompaction}
+                            onSummaryOpen={openLiveCompactionSummary}
+                          />
+                        )}
                       {steeredPrompts
                         .filter((item) => item.afterBlockIndex === index)
                         .map((item) => (
@@ -308,6 +356,14 @@ export function LiveTurnView({
                     </Fragment>
                   );
                 })}
+                {anchoredCompaction &&
+                  liveCompactionAnchor &&
+                  liveCompactionAnchor.afterBlockIndex >= step.blocks.length && (
+                    <CompactionNotice
+                      event={anchoredCompaction}
+                      onSummaryOpen={openLiveCompactionSummary}
+                    />
+                  )}
                 {step.interruption && (
                   <div className="live-step-interruption">
                     {step.interruption}
@@ -316,6 +372,14 @@ export function LiveTurnView({
               </section>
             );
           })}
+          {liveCompaction &&
+            liveCompactionAnchor &&
+            !hasAnchoredCompactionStep && (
+              <CompactionNotice
+                event={liveCompaction}
+                onSummaryOpen={openLiveCompactionSummary}
+              />
+            )}
           {turn.steeredPrompts
             .filter((item) => item.anchorStepKey === undefined)
             .map((item) => (
@@ -1220,6 +1284,14 @@ function SubagentLiveTimeline({
                 />
               );
             }
+            if (block.kind === "compaction") {
+              return (
+                <CompactionNotice
+                  event={block.event}
+                  key={block.id}
+                />
+              );
+            }
             return (
               <LiveToolBlock
                 tool={block}
@@ -1337,8 +1409,25 @@ export const HistoryTurnView = memo(function HistoryTurnView({
   const processResponses = finalResponse
     ? turn.responses.filter((message) => message.id !== finalResponse.id)
     : [];
+  const processGroups: Array<
+    | { kind: "messages"; messages: RenderMessage[] }
+    | { kind: "compaction"; message: RenderMessage }
+  > = [];
+  for (const message of processResponses) {
+    if (messageOriginKind(message) === "compaction_summary") {
+      processGroups.push({ kind: "compaction", message });
+      continue;
+    }
+    const previous = processGroups.at(-1);
+    if (previous?.kind === "messages") {
+      previous.messages.push(message);
+    } else {
+      processGroups.push({ kind: "messages", messages: [message] });
+    }
+  }
   const hasCollapsedProcess =
-    finalResponse !== undefined && processResponses.length > 0;
+    finalResponse !== undefined &&
+    processGroups.some((group) => group.kind === "messages");
   const recordedDuration = finalResponse
     ? messageDurations[finalResponse.id]
     : undefined;
@@ -1399,15 +1488,15 @@ export const HistoryTurnView = memo(function HistoryTurnView({
                     <ChevronRight size={14} />
                   )}
                 </button>
-                <Collapsible
-                  open={processOpen}
-                  className="turn-process-collapsible"
-                >
-                  <div className="turn-process-messages">
-                    {processResponses.map((message) => (
+                {processGroups.map((group, index) =>
+                  group.kind === "compaction" ? (
+                    <Collapsible
+                      open={processOpen}
+                      className="turn-process-collapsible"
+                      key={group.message.id}
+                    >
                       <AssistantMessagePart
-                        key={message.id}
-                        message={message}
+                        message={group.message}
                         toolResults={toolResults}
                         subagentRuns={subagentRuns}
                         subagentHistories={subagentHistories}
@@ -1415,9 +1504,30 @@ export const HistoryTurnView = memo(function HistoryTurnView({
                         onCompactionSummaryOpen={onCompactionSummaryOpen}
                         compactionEvent={compactionEvent}
                       />
-                    ))}
-                  </div>
-                </Collapsible>
+                    </Collapsible>
+                  ) : (
+                    <Collapsible
+                      open={processOpen}
+                      className="turn-process-collapsible"
+                      key={`process-${index}`}
+                    >
+                      <div className="turn-process-messages">
+                        {group.messages.map((message) => (
+                          <AssistantMessagePart
+                            key={message.id}
+                            message={message}
+                            toolResults={toolResults}
+                            subagentRuns={subagentRuns}
+                            subagentHistories={subagentHistories}
+                            onLoadSubagentHistory={onLoadSubagentHistory}
+                            onCompactionSummaryOpen={onCompactionSummaryOpen}
+                            compactionEvent={compactionEvent}
+                          />
+                        ))}
+                      </div>
+                    </Collapsible>
+                  ),
+                )}
                 <AssistantMessagePart
                   message={finalResponse}
                   toolResults={toolResults}

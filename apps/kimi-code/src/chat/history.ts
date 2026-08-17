@@ -3,6 +3,12 @@ import { parseSkillPromptDisplay } from "../prompt/skills";
 import type { MessageContent, ProtocolMessage } from "../types";
 import type { InFlightTurn } from "./liveTurns";
 import { displayMessageText, messageText } from "./messages";
+import {
+  groupHistoryMessages,
+  messageOriginKind,
+} from "./conversationTimeline";
+
+export { groupHistoryMessages, messageOriginKind } from "./conversationTimeline";
 
 export type RenderMessage = ProtocolMessage & {
   status?: "streaming" | "done" | "error";
@@ -22,13 +28,6 @@ export interface HistoryConversationTurn {
   id: string;
   user?: RenderMessage;
   responses: RenderMessage[];
-}
-
-export function messageOriginKind(message: ProtocolMessage): string | undefined {
-  const origin = message.metadata?.origin;
-  return origin && typeof origin === "object" && "kind" in origin
-    ? String(origin.kind)
-    : undefined;
 }
 
 export function isDirectUserMessage(message: ProtocolMessage): boolean {
@@ -138,48 +137,6 @@ export function mergeHistoryToolResults(
   });
 
   return { messages: mergedMessages, results };
-}
-
-export function groupHistoryMessages(
-  messages: ProtocolMessage[],
-): HistoryConversationTurn[] {
-  const turns: HistoryConversationTurn[] = [];
-
-  for (const message of messages) {
-    if (messageOriginKind(message) === "compaction_summary") {
-      turns.push({
-        id: message.id,
-        responses: [message],
-      });
-      continue;
-    }
-    if (message.role === "user") {
-      turns.push({
-        id: message.prompt_id ?? message.id,
-        user: message,
-        responses: [],
-      });
-      continue;
-    }
-
-    let turn = turns.at(-1);
-    if (
-      !turn ||
-      turn.responses.some(
-        (response) =>
-          messageOriginKind(response) === "compaction_summary",
-      )
-    ) {
-      turn = {
-        id: message.prompt_id ?? message.id,
-        responses: [],
-      };
-      turns.push(turn);
-    }
-    turn.responses.push(message);
-  }
-
-  return turns;
 }
 
 export function finalResponseMessage(

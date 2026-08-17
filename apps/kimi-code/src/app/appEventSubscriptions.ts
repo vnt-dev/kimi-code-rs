@@ -1,6 +1,10 @@
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { createAgentClient } from "../agentRpc";
 import {
+  currentLiveCompactionAnchor,
+  type LiveCompactionEvent,
+} from "../chat/conversationTimeline";
+import {
   MAIN_AGENT_ID,
   inFlightTurnFromUserMessage,
   isTurnRunning,
@@ -8,6 +12,7 @@ import {
   reduceAgentChatEvent,
   reduceQueuedAgentChatEvents,
   reduceQueuedSubagentChatEvents,
+  updateLiveCompaction,
   type GoalModeChangedEvent,
   type InFlightTurn,
   type QueuedPrompt,
@@ -87,7 +92,7 @@ interface AppEventSubscriptions {
   setAgentUsages: Setter<Record<string, AgentUsageStatus>>;
   setBackgroundTasks: Setter<Record<string, BackgroundTaskView[]>>;
   setCompactionHistoryReady: Setter<Record<string, boolean>>;
-  setCompactions: Setter<Record<string, CompactionEvent>>;
+  setCompactions: Setter<Record<string, LiveCompactionEvent>>;
   setContextUsages: Setter<Record<string, ContextUsage>>;
   setDesktop: Setter<DesktopState>;
   setDeviceCode: Setter<DeviceCode | undefined>;
@@ -616,27 +621,83 @@ export function subscribeToAppEvents({
               typeof payload.event.result === "object"
                 ? (payload.event.result as Record<string, unknown>)
                 : undefined;
+            const compactionEvent: CompactionEvent = {
+              phase,
+              trigger:
+                payload.event.trigger === "manual" ||
+                payload.event.trigger === "auto"
+                  ? payload.event.trigger
+                  : undefined,
+              compactedCount:
+                typeof result?.compactedCount === "number"
+                  ? result.compactedCount
+                  : undefined,
+              tokensBefore:
+                typeof result?.tokensBefore === "number"
+                  ? result.tokensBefore
+                  : undefined,
+              tokensAfter:
+                typeof result?.tokensAfter === "number"
+                  ? result.tokensAfter
+                  : undefined,
+            };
+
+            // Chat deltas are reduced on the next animation frame. Flush this
+            // session first so the divider lands exactly after pre-compaction
+            // output, rather than moving behind later deltas.
+            const precedingEvents = queuedAgentChatEvents.current.filter(
+              (queued) =>
+                queued.agentId === MAIN_AGENT_ID &&
+                queued.sessionId === payload.sessionId,
+            );
+            if (precedingEvents.length > 0) {
+              queuedAgentChatEvents.current =
+                queuedAgentChatEvents.current.filter(
+                  (queued) =>
+                    queued.agentId !== MAIN_AGENT_ID ||
+                    queued.sessionId !== payload.sessionId,
+                );
+            }
+            const projectedTurns =
+              precedingEvents.length > 0
+                ? reduceQueuedAgentChatEvents(
+                    inFlightTurnsRef.current,
+                    precedingEvents,
+                  )
+                : inFlightTurnsRef.current;
+            const projectedTurn = projectedTurns[payload.sessionId];
+            const startedAnchor =
+              phase === "started" && projectedTurn
+                ? currentLiveCompactionAnchor(projectedTurn)
+                : undefined;
+            setInFlightTurns((current) => {
+              const reduced =
+                precedingEvents.length > 0
+                  ? reduceQueuedAgentChatEvents(current, precedingEvents)
+                  : current;
+              const turn = reduced[payload.sessionId];
+              if (!turn) {
+                inFlightTurnsRef.current = reduced;
+                return reduced;
+              }
+              const next = {
+                ...reduced,
+                [payload.sessionId]: updateLiveCompaction(
+                  turn,
+                  compactionEvent,
+                ),
+              };
+              inFlightTurnsRef.current = next;
+              return next;
+            });
             setCompactions((current) => ({
               ...current,
               [payload.sessionId]: {
-                phase,
-                trigger:
-                  payload.event.trigger === "manual" ||
-                  payload.event.trigger === "auto"
-                    ? payload.event.trigger
-                    : undefined,
-                compactedCount:
-                  typeof result?.compactedCount === "number"
-                    ? result.compactedCount
-                    : undefined,
-                tokensBefore:
-                  typeof result?.tokensBefore === "number"
-                    ? result.tokensBefore
-                    : undefined,
-                tokensAfter:
-                  typeof result?.tokensAfter === "number"
-                    ? result.tokensAfter
-                    : undefined,
+                ...compactionEvent,
+                liveAnchor:
+                  phase === "started"
+                    ? startedAnchor
+                    : current[payload.sessionId]?.liveAnchor,
               },
             }));
           }

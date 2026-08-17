@@ -43,7 +43,6 @@ import type {
   AgentInteraction,
   AgentUsageStatus,
   BackgroundTaskView,
-  CompactionEvent,
   ContextUsage,
   Conversation,
   DesktopState,
@@ -55,6 +54,7 @@ import type {
   SkillDescriptor,
   TodoItem
 } from "../types";
+import type { LiveCompactionEvent } from "../chat/conversationTimeline";
 import { conciseError } from "../utils/errors";
 import {
   omitSessionKeys,
@@ -95,7 +95,7 @@ interface WorkspaceActionOptions {
   setAgentUsages: Setter<Record<string, AgentUsageStatus>>;
   setBackgroundTasks: Setter<Record<string, BackgroundTaskView[]>>;
   setCompactionHistoryReady: Setter<Record<string, boolean>>;
-  setCompactions: Setter<Record<string, CompactionEvent>>;
+  setCompactions: Setter<Record<string, LiveCompactionEvent>>;
   setContextUsages: Setter<Record<string, ContextUsage>>;
   setDirectoryPickerOpen: Setter<boolean>;
   setGoalEditBusy: Setter<boolean>;

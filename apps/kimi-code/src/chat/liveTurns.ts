@@ -2,11 +2,13 @@ import type { AgentPromptSubmitStatus } from "../agentRpc";
 import { projectLiveUserMessage } from "../liveUserMessage";
 import { parseSkillPromptDisplay } from "../prompt/skills";
 import { conciseError } from "../utils/errors";
+export { updateLiveCompaction } from "./conversationTimeline";
 import type { PluginCommandDisplay } from "./messages";
 import { clearRetryStatus, normalizeRetryAttempt } from "./retryStatus";
 import type {
   AgentChatEvent,
   AgentContentPart,
+  CompactionEvent,
   LiveUserMessage,
   PromptSubmittedEvent,
   SkillDescriptor,
@@ -31,6 +33,7 @@ export type LiveBlock =
   | { kind: "text"; content: string }
   | { kind: "thinking"; content: string }
   | { kind: "content"; content: AgentContentPart }
+  | { kind: "compaction"; id: string; event: CompactionEvent }
   | {
       kind: "tool";
       toolCallId: string;
