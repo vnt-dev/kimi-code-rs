@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import {
+  conversationTurnScrollTarget,
   isUpwardChatScrollKey,
   resolveChatFollowState,
 } from "../chatScroll";
@@ -352,7 +353,10 @@ export function useChatScroll({
     if (!target) return;
     followLatestMessageRef.current = false;
     setActiveOutlineTurnId(turnId);
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    conversationTurnScrollTarget(target).scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   };
 
   return {

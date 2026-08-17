@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  conversationTurnScrollTarget,
   isUpwardChatScrollKey,
   resolveChatFollowState,
 } from "../src/chatScroll.ts";
@@ -69,4 +70,26 @@ test("upward keyboard scrolling is recognized", () => {
   assert.equal(isUpwardChatScrollKey(" ", true), true);
   assert.equal(isUpwardChatScrollKey(" ", false), false);
   assert.equal(isUpwardChatScrollKey("PageDown", false), false);
+});
+
+test("conversation outline targets the user message inside a turn", () => {
+  const userMessage = {} as HTMLElement;
+  const turn = {
+    querySelector(selector: string) {
+      assert.equal(selector, "[data-conversation-user-message]");
+      return userMessage;
+    },
+  } as unknown as HTMLElement;
+
+  assert.equal(conversationTurnScrollTarget(turn), userMessage);
+});
+
+test("conversation outline falls back to the turn when no user message is visible", () => {
+  const turn = {
+    querySelector() {
+      return null;
+    },
+  } as unknown as HTMLElement;
+
+  assert.equal(conversationTurnScrollTarget(turn), turn);
 });

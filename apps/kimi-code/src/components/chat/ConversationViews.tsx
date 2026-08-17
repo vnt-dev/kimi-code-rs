@@ -203,7 +203,10 @@ export function LiveTurnView({
       data-conversation-turn-id={outlineId}
     >
       {showUserMessage && (
-        <article className={`message user-message live-user-message${cronFire ? " cron-fire-message" : ""}`}>
+        <article
+          className={`message user-message live-user-message${cronFire ? " cron-fire-message" : ""}`}
+          data-conversation-user-message
+        >
           <div className="message-meta">
             <time>{formatTime(turn.createdAt)}</time>
           </div>
@@ -1662,7 +1665,10 @@ function UserMessageView({
   const structured = messageStructuredContent(message);
   const cronFire = parseCronFireMessage(text);
   return (
-    <article className={`message user-message${cronFire ? " cron-fire-message" : ""}`}>
+    <article
+      className={`message user-message${cronFire ? " cron-fire-message" : ""}`}
+      data-conversation-user-message
+    >
       <div className="message-meta">
         <time>{formatTime(message.created_at)}</time>
       </div>

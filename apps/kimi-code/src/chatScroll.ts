@@ -32,3 +32,9 @@ export function isUpwardChatScrollKey(
     (key === " " && shiftKey)
   );
 }
+
+export function conversationTurnScrollTarget(turn: HTMLElement): HTMLElement {
+  return (
+    turn.querySelector<HTMLElement>("[data-conversation-user-message]") ?? turn
+  );
+}
