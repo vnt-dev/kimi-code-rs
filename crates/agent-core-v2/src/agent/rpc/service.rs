@@ -92,10 +92,10 @@ use super::{
     CreateGoalPayload, DetachTaskPayload, EmptyPayload, EnterSwarmPayload,
     GenerateConversationTitlePayload, GetTaskOutputPayload, GetTasksPayload,
     PromptMetadataUpdateTarget, PromptPayload, PromptSubmitResult, PromptSubmitStatus,
-    RegisterToolPayload, RenameSessionPayload, RunShellCommandPayload, SessionMetaPatchPayload,
-    SessionMetaUpdatedPayload, SetActiveToolsPayload, SetModelPayload, SetModelResult,
-    SetPermissionPayload, SetThinkingPayload, ShellCommandResult, SteerPayload, StopTaskPayload,
-    UndoHistoryPayload, UnregisterToolPayload, apply_prompt_metadata_update,
+    RegisterToolPayload, RenameSessionPayload, ResumeGoalInput, RunShellCommandPayload,
+    SessionMetaPatchPayload, SessionMetaUpdatedPayload, SetActiveToolsPayload, SetModelPayload,
+    SetModelResult, SetPermissionPayload, SetThinkingPayload, ShellCommandResult, SteerPayload,
+    StopTaskPayload, UndoHistoryPayload, UnregisterToolPayload, apply_prompt_metadata_update,
     prompt_metadata_text_from_content_parts, prompt_metadata_text_from_plugin_command,
     prompt_metadata_text_from_skill, resolve_prompt_attachments,
 };
@@ -748,8 +748,8 @@ impl AgentRpcServiceContract for AgentRpcService {
         Ok(self.goal.pause_goal(None, None).await?)
     }
 
-    async fn resume_goal(&self, _payload: EmptyPayload) -> AgentRpcResult<GoalSnapshot> {
-        Ok(self.goal.resume_goal(None, None).await?)
+    async fn resume_goal(&self, payload: ResumeGoalInput) -> AgentRpcResult<GoalSnapshot> {
+        Ok(self.goal.resume_goal(Some(payload), None).await?)
     }
 
     async fn cancel_goal(&self, _payload: EmptyPayload) -> AgentRpcResult<GoalSnapshot> {

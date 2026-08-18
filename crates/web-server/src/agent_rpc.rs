@@ -220,7 +220,7 @@ pub async fn dispatch_agent_rpc(
         AgentRpcMethod::CreateGoal => invoke!(rpc, payload, create_goal, CreateGoalPayload),
         AgentRpcMethod::GetGoal => invoke!(rpc, payload, get_goal, EmptyPayload),
         AgentRpcMethod::PauseGoal => invoke!(rpc, payload, pause_goal, EmptyPayload),
-        AgentRpcMethod::ResumeGoal => invoke!(rpc, payload, resume_goal, EmptyPayload),
+        AgentRpcMethod::ResumeGoal => invoke!(rpc, payload, resume_goal, ResumeGoalInput),
         AgentRpcMethod::CancelGoal => invoke!(rpc, payload, cancel_goal, EmptyPayload),
         AgentRpcMethod::GetTaskOutput => {
             invoke!(rpc, payload, get_task_output, GetTaskOutputPayload)

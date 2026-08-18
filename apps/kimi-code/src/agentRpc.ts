@@ -257,8 +257,13 @@ export function createAgentClient(scope: AgentScope) {
     pauseGoal() {
       return callAgentRpc<GoalSnapshot>(scope, "pauseGoal");
     },
-    resumeGoal() {
-      return callAgentRpc<GoalSnapshot>(scope, "resumeGoal");
+    resumeGoal(
+      options: {
+        continueIfPaused?: boolean;
+        continueIfBlocked?: boolean;
+      } = {},
+    ) {
+      return callAgentRpc<GoalSnapshot>(scope, "resumeGoal", options);
     },
     cancelGoal() {
       return callAgentRpc<GoalSnapshot>(scope, "cancelGoal");

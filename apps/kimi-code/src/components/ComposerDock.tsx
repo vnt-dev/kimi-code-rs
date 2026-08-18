@@ -352,6 +352,17 @@ export function ComposerDock({
                       >
                         {activeGoal.objective}
                       </span>
+                      {(activeGoal.status === "paused" ||
+                        activeGoal.status === "blocked") &&
+                        activeGoal.terminalReason && (
+                          <span
+                            className="composer-goal-reason"
+                            title={activeGoal.terminalReason}
+                          >
+                            <strong>{t("goal.stopReason")}</strong>
+                            {activeGoal.terminalReason}
+                          </span>
+                        )}
                     </span>
                     <span className="composer-goal-actions">
                       <button

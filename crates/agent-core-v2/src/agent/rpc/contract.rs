@@ -93,7 +93,7 @@ pub trait AgentRpcServiceContract: Send + Sync {
     async fn create_goal(&self, payload: CreateGoalPayload) -> AgentRpcResult<GoalSnapshot>;
     async fn get_goal(&self, payload: EmptyPayload) -> AgentRpcResult<GoalToolResult>;
     async fn pause_goal(&self, payload: EmptyPayload) -> AgentRpcResult<GoalSnapshot>;
-    async fn resume_goal(&self, payload: EmptyPayload) -> AgentRpcResult<GoalSnapshot>;
+    async fn resume_goal(&self, payload: ResumeGoalInput) -> AgentRpcResult<GoalSnapshot>;
     async fn cancel_goal(&self, payload: EmptyPayload) -> AgentRpcResult<GoalSnapshot>;
     async fn get_task_output(&self, payload: GetTaskOutputPayload) -> AgentRpcResult<String>;
     async fn get_context(&self, payload: EmptyPayload) -> AgentRpcResult<AgentContextData>;

@@ -1570,13 +1570,13 @@ impl AgentGoalServiceContract for AgentGoalService {
         actor: Option<GoalActor>,
     ) -> GoalServiceResult<Option<GoalSnapshot>> {
         self.assert_supported_agent()?;
-        let Some(state) = self
-            .goal_state()
-            .filter(|state| state.status == GoalStatus::Active)
-        else {
+        let actor = actor.unwrap_or(GoalActor::Model);
+        let Some(state) = self.goal_state().filter(|state| {
+            state.status == GoalStatus::Active
+                || (actor == GoalActor::Model && state.status == GoalStatus::Paused)
+        }) else {
             return Ok(None);
         };
-        let actor = actor.unwrap_or(GoalActor::Model);
         let reason = input.unwrap_or_default().reason;
         self.wire.dispatch([update_goal(UpdateGoalPayload {
             status: Some(GoalStatus::Complete),
@@ -2364,6 +2364,38 @@ mod tests {
         }));
         let events = events.lock();
         assert!(events.iter().any(|event| {
+            event.event_type == "goal.updated" && event.fields.get("snapshot") == Some(&Value::Null)
+        }));
+    }
+
+    #[tokio::test]
+    async fn in_flight_model_can_complete_a_goal_paused_by_the_user() {
+        let (service, _, events) = service_fixture();
+        service
+            .create_goal(
+                CreateGoalInput {
+                    objective: "finish immediately".into(),
+                    completion_criterion: None,
+                    replace: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        service
+            .pause_goal(None, Some(GoalActor::User))
+            .await
+            .unwrap();
+
+        let completed = service
+            .mark_complete(None, Some(GoalActor::Model))
+            .await
+            .unwrap()
+            .expect("the in-flight model turn should complete its paused goal");
+
+        assert_eq!(completed.status, GoalStatus::Complete);
+        assert!(service.get_goal().unwrap().goal.is_none());
+        assert!(events.lock().iter().any(|event| {
             event.event_type == "goal.updated" && event.fields.get("snapshot") == Some(&Value::Null)
         }));
     }

@@ -15,6 +15,7 @@ use serde_json::{Map, Number, Value};
 
 pub use crate::{
     agent::{
+        goal::ResumeGoalInput,
         goal::types::{
             GoalBudgetLimits, GoalBudgetReport, GoalChange, GoalChangeStats, GoalSnapshot,
             GoalStatus, GoalToolResult,
@@ -784,7 +785,7 @@ pub trait AgentApi {
     fn create_goal(&self, payload: CreateGoalPayload) -> GoalSnapshot;
     fn get_goal(&self, payload: EmptyPayload) -> GoalToolResult;
     fn pause_goal(&self, payload: EmptyPayload) -> GoalSnapshot;
-    fn resume_goal(&self, payload: EmptyPayload) -> GoalSnapshot;
+    fn resume_goal(&self, payload: ResumeGoalInput) -> GoalSnapshot;
     fn cancel_goal(&self, payload: EmptyPayload) -> GoalSnapshot;
     fn get_task_output(&self, payload: GetTaskOutputPayload) -> String;
     fn get_context(&self, payload: EmptyPayload) -> AgentContextData;
@@ -1137,6 +1138,23 @@ mod tests {
         assert_eq!(
             serde_json::to_value(EmptyPayload::default()).unwrap(),
             json!({})
+        );
+    }
+
+    #[test]
+    fn resume_goal_input_preserves_continuation_flags() {
+        let payload = ResumeGoalInput {
+            continue_if_paused: Some(true),
+            continue_if_blocked: Some(true),
+            ..ResumeGoalInput::default()
+        };
+
+        assert_eq!(
+            serde_json::to_value(payload).unwrap(),
+            json!({
+                "continueIfPaused": true,
+                "continueIfBlocked": true
+            })
         );
     }
 }

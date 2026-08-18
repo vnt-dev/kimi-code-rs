@@ -651,7 +651,10 @@ export function createWorkspaceActions({
         action === "pause"
           ? await agent.pauseGoal()
           : action === "resume"
-            ? await agent.resumeGoal()
+            ? await agent.resumeGoal({
+                continueIfPaused: true,
+                continueIfBlocked: true,
+              })
             : await agent.cancelGoal();
       setGoals((current) => ({
         ...current,

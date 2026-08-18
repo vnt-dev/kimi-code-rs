@@ -256,6 +256,26 @@
   white-space: nowrap;
 }
 
+.composer-goal-reason {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: calc(11px * var(--font-scale));
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.composer-goal-reason strong {
+  margin-right: 4px;
+  color: currentColor;
+  font-weight: 600;
+}
+
+.composer-goal-card.blocked .composer-goal-reason {
+  color: var(--danger, #cf7777);
+}
+
 .composer-goal-actions {
   display: flex;
   align-items: center;

@@ -164,9 +164,9 @@ impl ExecutableTool for UpdateGoalTool {
     }
     async fn resolve_execution(&self, args: UpdateGoalInput) -> ToolExecution {
         let current = self.goal.get_goal().ok().and_then(|result| result.goal);
-        let goal_is_active = current
+        let should_stop_batch = current
             .as_ref()
-            .is_some_and(|goal| matches!(goal.status, crate::agent::goal::GoalStatus::Active));
+            .is_some_and(|goal| terminal_update_stops_batch(args.status, goal.status));
         let goal = Arc::clone(&self.goal);
         let execute = Arc::new(move |context: ExecutableToolContext| {
             let goal = Arc::clone(&goal);
@@ -210,8 +210,7 @@ impl ExecutableTool for UpdateGoalTool {
         });
         let mut execution = RunnableToolExecution::new("UpdateGoal", execute);
         execution.description = Some(format!("Setting goal status: {}", args.status.as_str()));
-        execution.stop_batch_after_this =
-            (args.status != UpdateGoalStatus::Active && goal_is_active).then_some(true);
+        execution.stop_batch_after_this = should_stop_batch.then_some(true);
         ToolExecution::Runnable(execution)
     }
 }
@@ -221,6 +220,17 @@ fn stop_result(output: String) -> ExecutableToolResult {
     result.stop_turn = Some(true);
     result
 }
+
+fn terminal_update_stops_batch(
+    update: UpdateGoalStatus,
+    current: crate::agent::goal::GoalStatus,
+) -> bool {
+    update != UpdateGoalStatus::Active
+        && (current == crate::agent::goal::GoalStatus::Active
+            || (update == UpdateGoalStatus::Complete
+                && current == crate::agent::goal::GoalStatus::Paused))
+}
+
 fn missing_goal_output(status: UpdateGoalStatus) -> &'static str {
     match status {
         UpdateGoalStatus::Active => "Goal not resumed: no current goal.",
@@ -265,5 +275,17 @@ mod tests {
             missing_goal_output(UpdateGoalStatus::Complete),
             "Goal not completed: no active goal."
         );
+    }
+
+    #[test]
+    fn paused_goal_completion_stops_the_remaining_tool_batch() {
+        assert!(terminal_update_stops_batch(
+            UpdateGoalStatus::Complete,
+            crate::agent::goal::GoalStatus::Paused,
+        ));
+        assert!(!terminal_update_stops_batch(
+            UpdateGoalStatus::Blocked,
+            crate::agent::goal::GoalStatus::Paused,
+        ));
     }
 }
