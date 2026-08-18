@@ -88,6 +88,28 @@ export const PROVIDER_CAPABILITIES = [
 
 export const PROVIDER_EFFORTS = ["low", "medium", "high", "max"] as const;
 
+export function parseContextSize(input: string): number | undefined {
+  const match = /^(\d+(?:\.\d+)?)\s*([kKmM])?$/.exec(input.trim());
+  if (!match) return undefined;
+  const multiplier = match[2]?.toLowerCase() === "k"
+    ? 1024
+    : match[2]?.toLowerCase() === "m"
+      ? 1024 * 1024
+      : 1;
+  const size = Math.round(Number(match[1]) * multiplier);
+  return size >= 1 ? size : undefined;
+}
+
+export function formatContextSize(size: number): string {
+  if (size >= 1024 * 1024 && size % (1024 * 1024) === 0) {
+    return `${size / (1024 * 1024)}M`;
+  }
+  if (size >= 1024 && size % 1024 === 0) {
+    return `${size / 1024}K`;
+  }
+  return String(size);
+}
+
 export function createProviderModelDraft(): ProviderModelDraft {
   return {
     model: "",
@@ -123,7 +145,7 @@ export function providerDraft(provider: ProviderSummary): ProviderDraft {
     models: provider.models.map((model) => ({
       model: model.model,
       displayName: model.displayName ?? "",
-      maxContextSize: model.maxContextSize ? String(model.maxContextSize) : "",
+      maxContextSize: model.maxContextSize ? formatContextSize(model.maxContextSize) : "",
       capabilities: [...model.capabilities],
       supportEfforts: [...model.supportEfforts],
       defaultEffort: model.defaultEffort ?? "",
@@ -158,7 +180,7 @@ export function validateProviderDraft(
     if (modelIds.has(id)) return "modelDuplicate";
     modelIds.add(id);
     if (!model.maxContextSize.trim()) return "contextRequired";
-    if (!/^\d+$/.test(model.maxContextSize.trim()) || Number(model.maxContextSize) < 1) {
+    if (parseContextSize(model.maxContextSize) === undefined) {
       return "contextInvalid";
     }
     if (
@@ -187,7 +209,7 @@ export function saveProviderInput(
     models: draft.models.map((model) => ({
       model: model.model.trim(),
       displayName: model.displayName.trim() || undefined,
-      maxContextSize: Number(model.maxContextSize.trim()),
+      maxContextSize: parseContextSize(model.maxContextSize) ?? 0,
       capabilities: [...model.capabilities],
       supportEfforts: [...model.supportEfforts],
       defaultEffort: model.defaultEffort || undefined,

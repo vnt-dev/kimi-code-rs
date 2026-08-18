@@ -103,15 +103,31 @@ function ProviderForm({
   const [busy, setBusy] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [expandedModels, setExpandedModels] = useState<Record<number, boolean>>(() =>
+    Object.fromEntries(
+      (provider ? providerDraft(provider) : createProviderDraft()).models
+        .map((model, index) => [index, model.model.trim() === ""]),
+    ),
+  );
   const mutationRef = useRef(false);
 
   useEffect(() => {
-    setDraft(provider ? providerDraft(provider) : createProviderDraft());
+    const next = provider ? providerDraft(provider) : createProviderDraft();
+    setDraft(next);
+    setExpandedModels(Object.fromEntries(
+      next.models.map((model, index) => [index, model.model.trim() === ""]),
+    ));
     setError(undefined);
     setShowKey(false);
     setConfirmDelete(false);
     onChanged(false);
   }, [provider, onChanged]);
+
+  const isModelExpanded = (index: number): boolean =>
+    expandedModels[index] ?? (draft.models[index]?.model.trim() ?? "") === "";
+
+  const toggleModel = (index: number): void =>
+    setExpandedModels((current) => ({ ...current, [index]: !isModelExpanded(index) }));
 
   const markChanged = (update: (current: ProviderDraft) => ProviderDraft): void => {
     setDraft(update);
@@ -285,66 +301,91 @@ function ProviderForm({
       </label>
 
       <div className="provider-models-heading">
-        <div><strong>{t("providers.fieldModels")}</strong><small>{t("providers.modelsHint")}</small></div>
+        <div><strong>{t("providers.fieldModels")}</strong></div>
         <button
           type="button"
           disabled={busy}
-          onClick={() => markChanged((current) => ({
-            ...current,
-            models: [...current.models, createProviderModelDraft()],
-          }))}
+          onClick={() => {
+            setExpandedModels((current) => ({ ...current, [draft.models.length]: true }));
+            markChanged((current) => ({
+              ...current,
+              models: [...current.models, createProviderModelDraft()],
+            }));
+          }}
         >
           <Plus size={14} /> {t("providers.addModel")}
         </button>
       </div>
       <div className="provider-models">
-        <div className="provider-model-row header" aria-hidden="true">
+        <div className="provider-models-col-header" aria-hidden="true">
+          <span />
           <span>{t("providers.modelId")}</span>
-          <span>{t("providers.contextSize")}</span>
           <span>{t("providers.displayName")}</span>
+          <span>{t("providers.contextSize")}</span>
           <span />
         </div>
-        {draft.models.map((model, index) => (
-          <div className="provider-model-entry" key={index}>
-            <div className="provider-model-row">
-              <input
-                aria-label={t("providers.modelId")}
-                value={model.model}
-                disabled={busy}
-                placeholder="model-id"
-                onChange={(event) => updateModel(index, (current) => ({ ...current, model: event.target.value }))}
-              />
-              <input
-                aria-label={t("providers.contextSize")}
-                inputMode="numeric"
-                value={model.maxContextSize}
-                disabled={busy}
-                placeholder="262144"
-                onChange={(event) => updateModel(index, (current) => ({ ...current, maxContextSize: event.target.value }))}
-              />
-              <input
-                aria-label={t("providers.displayName")}
-                value={model.displayName}
-                disabled={busy}
-                placeholder={t("providers.optional")}
-                onChange={(event) => updateModel(index, (current) => ({ ...current, displayName: event.target.value }))}
-              />
-              <button
-                className="provider-remove-model"
-                type="button"
-                aria-label={t("providers.removeModel")}
-                disabled={busy || draft.models.length === 1}
-                onClick={() => markChanged((current) => ({
-                  ...current,
-                  models: current.models.filter((_, modelIndex) => modelIndex !== index),
-                }))}
-              ><Trash2 size={14} /></button>
-            </div>
-            <div className="provider-model-options">
+        {draft.models.map((model, index) => {
+          const expanded = isModelExpanded(index);
+          return (
+            <div className={`provider-model-entry ${expanded ? "expanded" : "collapsed"}`} key={index}>
+              <div className="provider-model-card-header">
+                <button
+                  className="provider-model-toggle"
+                  type="button"
+                  aria-expanded={expanded}
+                  aria-label={t(expanded ? "providers.collapseModel" : "providers.expandModel")}
+                  onClick={() => toggleModel(index)}
+                >
+                  {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                </button>
+                <input
+                  aria-label={t("providers.modelId")}
+                  value={model.model}
+                  disabled={busy}
+                  placeholder="model-id"
+                  onChange={(event) => updateModel(index, (current) => ({ ...current, model: event.target.value }))}
+                />
+                <input
+                  aria-label={t("providers.displayName")}
+                  value={model.displayName}
+                  disabled={busy}
+                  placeholder={t("providers.optional")}
+                  onChange={(event) => updateModel(index, (current) => ({ ...current, displayName: event.target.value }))}
+                />
+                <input
+                  aria-label={t("providers.contextSize")}
+                  value={model.maxContextSize}
+                  disabled={busy}
+                  placeholder="256K"
+                  onChange={(event) => updateModel(index, (current) => ({ ...current, maxContextSize: event.target.value }))}
+                />
+                <button
+                  className="provider-remove-model"
+                  type="button"
+                  aria-label={t("providers.removeModel")}
+                  disabled={busy || draft.models.length === 1}
+                  onClick={() => {
+                    setExpandedModels((current) => {
+                      const next: Record<number, boolean> = {};
+                      for (const [key, value] of Object.entries(current)) {
+                        const modelIndex = Number(key);
+                        if (modelIndex === index) continue;
+                        next[modelIndex > index ? modelIndex - 1 : modelIndex] = value;
+                      }
+                      return next;
+                    });
+                    markChanged((current) => ({
+                      ...current,
+                      models: current.models.filter((_, modelIndex) => modelIndex !== index),
+                    }));
+                  }}
+                ><Trash2 size={14} /></button>
+              </div>
+              {expanded && (
+              <div className="provider-model-options">
               <div className="provider-model-option">
                 <div className="provider-model-option-label">
                   <strong>{t("providers.modelCapabilities")}</strong>
-                  <small>{t("providers.capabilitiesHint")}</small>
                 </div>
                 <div className="provider-option-chips">
                   {Array.from(new Set([...PROVIDER_CAPABILITIES, ...model.capabilities])).map((capability) => (
@@ -368,7 +409,6 @@ function ProviderForm({
               <div className="provider-model-option provider-effort-option">
                 <div className="provider-model-option-label">
                   <strong>{t("providers.supportEfforts")}</strong>
-                  <small>{t("providers.effortsHint")}</small>
                 </div>
                 <div className="provider-option-chips">
                   {Array.from(new Set([...PROVIDER_EFFORTS, ...model.supportEfforts])).map((effort) => (
@@ -398,31 +438,33 @@ function ProviderForm({
                       {effortLabel(effort)}
                     </button>
                   ))}
-                </div>
-                <div className="provider-effort-default">
-                  <span>{t("providers.defaultEffort")}</span>
-                  <SettingsSelect
-                    className="provider-select provider-effort-select"
-                    value={model.defaultEffort}
-                    disabled={busy || model.supportEfforts.length === 0}
-                    ariaLabel={t("providers.defaultEffort")}
-                    options={[
-                      { value: "", label: t("providers.automaticEffort") },
-                      ...model.supportEfforts.map((effort) => ({
-                        value: effort,
-                        label: effortLabel(effort),
-                      })),
-                    ]}
-                    onChange={(defaultEffort) => updateModel(index, (current) => ({
-                      ...current,
-                      defaultEffort,
-                    }))}
-                  />
+                  <div className="provider-effort-default">
+                    <span>{t("providers.defaultEffort")}</span>
+                    <SettingsSelect
+                      className="provider-select provider-effort-select"
+                      value={model.defaultEffort}
+                      disabled={busy || model.supportEfforts.length === 0}
+                      ariaLabel={t("providers.defaultEffort")}
+                      options={[
+                        { value: "", label: t("providers.automaticEffort") },
+                        ...model.supportEfforts.map((effort) => ({
+                          value: effort,
+                          label: effortLabel(effort),
+                        })),
+                      ]}
+                      onChange={(defaultEffort) => updateModel(index, (current) => ({
+                        ...current,
+                        defaultEffort,
+                      }))}
+                    />
+                  </div>
                 </div>
               </div>
+              </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <label className="provider-field provider-default-model">
