@@ -20,7 +20,10 @@ import {
   type RemoteQueuedPrompt,
   type SubagentLiveTurns,
 } from "../chat/liveTurns";
-import type { RenderMessage } from "../chat/history";
+import {
+  completedTurnMessageId,
+  type RenderMessage,
+} from "../chat/history";
 import {
   isAgentChatEvent,
   isTaskLifecycleEventType,
@@ -185,6 +188,44 @@ export function subscribeToAppEvents({
         setDesktop((current) => mergeDesktopInventory(current, inventory));
       } catch {
         // A later state-change event or explicit action will retry the refresh.
+      }
+    };
+    const refreshHistoryForTurnHandoff = async (
+      conversationId: string,
+    ): Promise<void> => {
+      const request = (historyRequests.current[conversationId] ?? 0) + 1;
+      historyRequests.current[conversationId] = request;
+      try {
+        const page = await fetchConversationHistory(conversationId);
+        if (request !== historyRequests.current[conversationId]) return;
+        setHistoryByConversation((current) => ({
+          ...current,
+          [conversationId]: {
+            conversationId,
+            items: page.items,
+            loading: false,
+          },
+        }));
+        setInFlightTurns((current) => {
+          const turn = current[conversationId];
+          if (!turn?.handoffTurns?.length) return current;
+          const handoffTurns = turn.handoffTurns.filter(
+            (handoff) => !completedTurnMessageId(page.items, handoff),
+          );
+          if (handoffTurns.length === turn.handoffTurns.length) return current;
+          const next = {
+            ...current,
+            [conversationId]: {
+              ...turn,
+              handoffTurns:
+                handoffTurns.length > 0 ? handoffTurns : undefined,
+            },
+          };
+          inFlightTurnsRef.current = next;
+          return next;
+        });
+      } catch {
+        // Keep rendering the completed live turn until a later history refresh succeeds.
       }
     };
     const refreshConversationAfterUndo = async (
@@ -490,6 +531,15 @@ export function subscribeToAppEvents({
               ),
             }));
           }
+          if (isMainAgentEvent && chatEvent.type === "turn.started") {
+            const previous = inFlightTurnsRef.current[payload.sessionId];
+            if (
+              previous?.turnId !== undefined &&
+              previous.turnId !== chatEvent.turnId
+            ) {
+              void refreshHistoryForTurnHandoff(payload.sessionId);
+            }
+          }
           if (isSideChatEvent) {
             setSideChat((current) => {
               if (
@@ -526,9 +576,14 @@ export function subscribeToAppEvents({
                     (queued) => queued.agentId !== MAIN_AGENT_ID,
                   );
                   if (mainEvents.length > 0) {
-                    setInFlightTurns((current) =>
-                      reduceQueuedAgentChatEvents(current, mainEvents),
-                    );
+                    setInFlightTurns((current) => {
+                      const next = reduceQueuedAgentChatEvents(
+                        current,
+                        mainEvents,
+                      );
+                      inFlightTurnsRef.current = next;
+                      return next;
+                    });
                   }
                   if (subagentEvents.length > 0) {
                     setSubagentLiveTurns((current) =>

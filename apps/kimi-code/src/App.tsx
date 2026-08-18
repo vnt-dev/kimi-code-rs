@@ -78,6 +78,7 @@ import {
   type FontSize,
 } from "./appearance";
 import {
+  completedTurnMessageId,
   finalResponseMessage,
   groupHistoryMessages,
   historyBeforeInFlightTurn,
@@ -628,19 +629,32 @@ export default function App() {
   useEffect(() => {
     queuedPromptsRef.current = queuedPrompts;
   }, [queuedPrompts]);
+  const pendingHandoffTurns = useMemo(
+    () =>
+      (activeTurn?.handoffTurns ?? []).filter(
+        (turn) =>
+          !activeHistory ||
+          completedTurnMessageId(activeHistory.items, turn) === undefined,
+      ),
+    [activeHistory?.items, activeTurn?.handoffTurns],
+  );
+  const liveHistoryBoundaryTurn = pendingHandoffTurns[0] ?? activeTurn;
   const visibleHistoryMessages = useMemo(
     () =>
       (activeHistory
-        ? activeTurn
-          ? historyBeforeInFlightTurn(activeHistory.items, activeTurn)
+        ? liveHistoryBoundaryTurn
+          ? historyBeforeInFlightTurn(
+              activeHistory.items,
+              liveHistoryBoundaryTurn,
+            )
           : activeHistory.items
         : []
       ).filter(isVisibleHistoryMessage),
     [
       activeHistory?.items,
-      activeTurn?.historyBoundaryId,
-      activeTurn?.userMessageId,
-      activeTurn?.prompt,
+      liveHistoryBoundaryTurn?.historyBoundaryId,
+      liveHistoryBoundaryTurn?.userMessageId,
+      liveHistoryBoundaryTurn?.prompt,
     ],
   );
   const historyToolPresentation = useMemo(
@@ -3083,6 +3097,18 @@ export default function App() {
                           ? activeCompaction
                           : undefined
                       }
+                    />
+                  ))}
+                  {pendingHandoffTurns.map((turn) => (
+                    <LiveTurnView
+                      key={`handoff-${turn.turnId ?? turn.createdAt}`}
+                      turn={turn}
+                      outlineId={`handoff-${turn.turnId ?? turn.createdAt}`}
+                      subagentRuns={activeSubagentRuns}
+                      subagentLiveTurns={activeSubagentLiveTurns}
+                      onSkillOpen={(name) => void openSkillDetail({ name })}
+                      onPluginCommandOpen={openPluginCommandDetail}
+                      onCompactionSummaryOpen={openCompactionSummary}
                     />
                   ))}
                   {activeTurn && (

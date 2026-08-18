@@ -1,10 +1,10 @@
 import type { AgentPromptSubmitStatus } from "../agentRpc";
-import { projectLiveUserMessage } from "../liveUserMessage";
-import { parseSkillPromptDisplay } from "../prompt/skills";
-import { conciseError } from "../utils/errors";
-export { updateLiveCompaction } from "./conversationTimeline";
+import { projectLiveUserMessage } from "../liveUserMessage.ts";
+import { parseSkillPromptDisplay } from "../prompt/skills.ts";
+import { conciseError } from "../utils/errors.ts";
+export { updateLiveCompaction } from "./conversationTimeline.ts";
 import type { PluginCommandDisplay } from "./messages";
-import { clearRetryStatus, normalizeRetryAttempt } from "./retryStatus";
+import { clearRetryStatus, normalizeRetryAttempt } from "./retryStatus.ts";
 import type {
   AgentChatEvent,
   AgentContentPart,
@@ -79,6 +79,7 @@ export interface InFlightTurn {
   historyBoundaryId?: string;
   pluginCommand?: PluginCommandDisplay;
   pluginCommandContent?: string;
+  handoffTurns?: readonly InFlightTurn[];
 }
 
 export interface QueuedAgentChatEvent {
@@ -585,7 +586,11 @@ export function reduceQueuedAgentChatEvents(
         reduced.turnId !== event.turnId &&
         !isTurnRunning(reduced)
       ) {
-        reduced = newSubagentTurn(event);
+        const { handoffTurns = [], ...completedTurn } = reduced;
+        reduced = {
+          ...newSubagentTurn(event),
+          handoffTurns: [...handoffTurns, completedTurn],
+        };
       }
       reduced = reduceAgentChatEvent(reduced, event);
     }
