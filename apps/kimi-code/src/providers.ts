@@ -64,9 +64,10 @@ export type ProviderValidationError =
   | "baseUrlInvalid"
   | "modelRequired"
   | "modelDuplicate"
-  | "contextRequired"
   | "contextInvalid"
   | "defaultEffortInvalid";
+
+export const DEFAULT_CONTEXT_SIZE = 256 * 1024;
 
 export const PROVIDER_PROTOCOLS: readonly ProviderProtocol[] = [
   "kimi",
@@ -179,7 +180,7 @@ export function validateProviderDraft(
     if (!id) return "modelRequired";
     if (modelIds.has(id)) return "modelDuplicate";
     modelIds.add(id);
-    if (!model.maxContextSize.trim()) return "contextRequired";
+    if (!model.maxContextSize.trim()) continue;
     if (parseContextSize(model.maxContextSize) === undefined) {
       return "contextInvalid";
     }
@@ -209,7 +210,7 @@ export function saveProviderInput(
     models: draft.models.map((model) => ({
       model: model.model.trim(),
       displayName: model.displayName.trim() || undefined,
-      maxContextSize: parseContextSize(model.maxContextSize) ?? 0,
+      maxContextSize: parseContextSize(model.maxContextSize) ?? DEFAULT_CONTEXT_SIZE,
       capabilities: [...model.capabilities],
       supportEfforts: [...model.supportEfforts],
       defaultEffort: model.defaultEffort || undefined,

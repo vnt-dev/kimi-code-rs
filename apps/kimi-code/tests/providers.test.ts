@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_CONTEXT_SIZE,
   createProviderDraft,
   formatContextSize,
   parseContextSize,
@@ -69,6 +70,19 @@ test("context size accepts plain numbers and K/M units", () => {
   draft.models[0]!.maxContextSize = "256K";
   assert.equal(validateProviderDraft(draft, true), undefined);
   assert.equal(saveProviderInput(draft).models[0]!.maxContextSize, 262144);
+});
+
+test("context size is optional and defaults to 256K", () => {
+  const draft = createProviderDraft();
+  draft.id = "example-provider";
+  draft.apiKey = "YOUR_API_KEY";
+  draft.baseUrl = "https://api.example.test/v1";
+  draft.models[0]!.model = "example-model";
+  assert.equal(validateProviderDraft(draft, true), undefined);
+  assert.equal(saveProviderInput(draft).models[0]!.maxContextSize, DEFAULT_CONTEXT_SIZE);
+
+  draft.models[0]!.maxContextSize = "abc";
+  assert.equal(validateProviderDraft(draft, true), "contextInvalid");
 });
 
 test("editing a provider never requires or returns its stored key", () => {
