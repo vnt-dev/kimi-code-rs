@@ -9,6 +9,7 @@ import {
   formatTokenCount,
   HEATMAP_WEEKS,
   heatmapTooltipDatum,
+  usageStatisticsForModels,
 } from "../src/usageStatistics.ts";
 
 const today = new Date(2026, 7, 11, 12, 0, 0);
@@ -114,4 +115,48 @@ test("formats heatmap tokens with Chinese and English unit conventions", () => {
   assert.equal(formatHeatmapTokenCount(1_234_567, "en-US"), "1.2M");
   assert.equal(formatHeatmapDate("2026-07-26", "zh-CN"), "2026年7月26日");
   assert.equal(formatHeatmapDate("2026-07-26", "en-US"), "July 26, 2026");
+});
+
+test("combines any selected models into one usage series", () => {
+  const statistics = {
+    totalTokens: 65,
+    peakDailyTokens: 35,
+    longestTaskMs: 120_000,
+    currentStreakDays: 3,
+    longestStreakDays: 3,
+    days: [
+      { date: "2026-08-09", totalTokens: 10 },
+      { date: "2026-08-10", totalTokens: 20 },
+      { date: "2026-08-11", totalTokens: 35 },
+    ],
+    byModel: {
+      a: {
+        totalTokens: 35,
+        peakDailyTokens: 30,
+        days: [
+          { date: "2026-08-09", totalTokens: 5 },
+          { date: "2026-08-11", totalTokens: 30 },
+        ],
+      },
+      b: {
+        totalTokens: 30,
+        peakDailyTokens: 20,
+        days: [
+          { date: "2026-08-09", totalTokens: 5 },
+          { date: "2026-08-10", totalTokens: 20 },
+          { date: "2026-08-11", totalTokens: 5 },
+        ],
+      },
+    },
+  };
+
+  const oneModel = usageStatisticsForModels(statistics, ["a"], today);
+  assert.equal(oneModel.totalTokens, 35);
+  assert.equal(oneModel.peakDailyTokens, 30);
+  assert.equal(oneModel.currentStreakDays, 1);
+  assert.equal(oneModel.longestStreakDays, 1);
+  assert.equal(oneModel.longestTaskMs, 120_000);
+
+  const allModels = usageStatisticsForModels(statistics, ["a", "b"], today);
+  assert.equal(allModels, statistics);
 });

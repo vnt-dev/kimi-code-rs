@@ -1446,6 +1446,159 @@ html[data-color-scheme="light"] .settings-dialog {
   padding: 16px 0 24px;
 }
 
+.settings-usage-filter {
+  display: flex;
+  min-height: 34px;
+  margin-bottom: 12px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: var(--muted);
+  font-size: calc(12px * var(--font-scale));
+}
+
+.settings-usage-model-picker {
+  position: relative;
+}
+
+.settings-usage-model-trigger {
+  display: flex;
+  width: min(240px, 42vw);
+  min-height: 32px;
+  padding: 0 9px 0 11px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 0.5px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--sd-surface);
+  cursor: pointer;
+  font-size: calc(12px * var(--font-scale));
+}
+
+.settings-usage-model-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-usage-model-trigger svg {
+  flex: 0 0 auto;
+  color: var(--subtle);
+}
+
+.settings-usage-model-trigger:hover {
+  border-color: var(--line-strong);
+  background: var(--sd-hover);
+}
+
+.settings-usage-model-trigger:focus-visible,
+.settings-usage-model-option:focus-visible,
+.settings-usage-model-only:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.settings-usage-model-menu {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 5px);
+  right: 0;
+  width: min(300px, 72vw);
+  max-height: min(340px, 48vh);
+  padding: 5px;
+  overflow-y: auto;
+  border: 0.5px solid var(--line);
+  border-radius: 10px;
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
+}
+
+.settings-usage-model-row {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.settings-usage-model-row:hover,
+.settings-usage-model-option.all:hover {
+  background: var(--sd-hover);
+}
+
+.settings-usage-model-option {
+  display: flex;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 7px;
+  align-items: center;
+  flex: 1;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  font-size: calc(12px * var(--font-scale));
+  text-align: left;
+}
+
+.settings-usage-model-option > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-usage-model-option small {
+  margin-left: auto;
+  color: var(--subtle);
+  font-size: calc(11px * var(--font-scale));
+}
+
+.settings-usage-model-check {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 0.5px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--accent);
+  background: var(--sd-surface);
+}
+
+.settings-usage-model-only {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--subtle);
+  background: transparent;
+  cursor: pointer;
+  font-size: calc(11px * var(--font-scale));
+  opacity: 0;
+}
+
+.settings-usage-model-row:hover .settings-usage-model-only,
+.settings-usage-model-only:focus-visible {
+  opacity: 1;
+}
+
+.settings-usage-model-only:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.settings-usage-model-divider {
+  height: 0.5px;
+  margin: 4px 7px;
+  background: var(--line);
+}
+
 .settings-usage-summary {
   display: grid;
   min-height: 76px;
@@ -1487,6 +1640,10 @@ html[data-color-scheme="light"] .settings-dialog {
   font-size: calc(12px * var(--font-scale));
   line-height: 1.35;
   white-space: nowrap;
+}
+
+.settings-usage-metric-placeholder {
+  display: none;
 }
 
 .settings-usage-activity-header {
@@ -1736,6 +1893,24 @@ html[data-color-scheme="light"] .settings-dialog {
     padding: 8px 20px 20px;
   }
 
+  .settings-usage-filter {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .settings-usage-model-trigger {
+    width: 100%;
+  }
+
+  .settings-usage-model-menu {
+    width: min(100%, calc(100vw - 40px));
+  }
+
+  .settings-usage-model-only {
+    opacity: 1;
+  }
+
   .settings-usage-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1743,15 +1918,19 @@ html[data-color-scheme="light"] .settings-dialog {
   .settings-usage-metric {
     min-height: 64px;
     border-top: 0.5px solid var(--line);
-    border-left: 0.5px solid var(--line);
+    border-left: 0;
   }
 
   .settings-usage-metric:nth-child(-n + 2) {
     border-top: 0;
   }
 
-  .settings-usage-metric:nth-child(odd) {
-    border-left: 0;
+  .settings-usage-metric:nth-child(even) {
+    border-left: 0.5px solid var(--line);
+  }
+
+  .settings-usage-metric-placeholder {
+    display: block;
   }
 
   .settings-usage-activity-header {

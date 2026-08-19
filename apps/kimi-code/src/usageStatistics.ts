@@ -3,6 +3,12 @@ export interface DailyTokenUsage {
   totalTokens: number;
 }
 
+export interface ModelTokenUsage {
+  totalTokens: number;
+  peakDailyTokens: number;
+  days: DailyTokenUsage[];
+}
+
 export interface UsageStatistics {
   totalTokens: number;
   peakDailyTokens: number;
@@ -10,6 +16,7 @@ export interface UsageStatistics {
   currentStreakDays: number;
   longestStreakDays: number;
   days: DailyTokenUsage[];
+  byModel: Record<string, ModelTokenUsage>;
 }
 
 export type HeatmapMode = "daily" | "weekly" | "cumulative";
@@ -64,6 +71,101 @@ function startOfDay(date: Date): Date {
 
 function addDays(date: Date, count: number): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + count);
+}
+
+function dateKeyToUtcDay(dateKey: string): number | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const date = new Date(timestamp);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+  return Math.floor(timestamp / 86_400_000);
+}
+
+function usageStreaks(
+  days: DailyTokenUsage[],
+  todayInput: Date,
+): { current: number; longest: number } {
+  const activeDays = Array.from(
+    new Set(
+      days
+        .filter((day) => Number.isFinite(day.totalTokens) && day.totalTokens > 0)
+        .map((day) => dateKeyToUtcDay(day.date))
+        .filter((day): day is number => day !== undefined),
+    ),
+  ).sort((left, right) => left - right);
+  if (!activeDays.length) return { current: 0, longest: 0 };
+
+  let longest = 1;
+  let run = 1;
+  for (let index = 1; index < activeDays.length; index += 1) {
+    if (activeDays[index] === activeDays[index - 1] + 1) {
+      run += 1;
+      longest = Math.max(longest, run);
+    } else {
+      run = 1;
+    }
+  }
+
+  const today = dateKeyToUtcDay(localDateKey(todayInput));
+  const latest = activeDays.at(-1)!;
+  if (today === undefined || (latest !== today && latest !== today - 1)) {
+    return { current: 0, longest };
+  }
+  let current = 1;
+  for (let index = activeDays.length - 1; index > 0; index -= 1) {
+    if (activeDays[index] !== activeDays[index - 1] + 1) break;
+    current += 1;
+  }
+  return { current, longest };
+}
+
+export function usageStatisticsForModels(
+  statistics: UsageStatistics,
+  models: string[],
+  today = new Date(),
+): UsageStatistics {
+  const allModels = Object.keys(statistics.byModel ?? {});
+  if (
+    models.length === allModels.length &&
+    allModels.every((model) => models.includes(model))
+  ) {
+    return statistics;
+  }
+
+  const tokensByDay = new Map<string, number>();
+  for (const model of models) {
+    for (const day of statistics.byModel?.[model]?.days ?? []) {
+      if (!Number.isFinite(day.totalTokens) || day.totalTokens <= 0) continue;
+      tokensByDay.set(day.date, (tokensByDay.get(day.date) ?? 0) + day.totalTokens);
+    }
+  }
+  const days = Array.from(tokensByDay, ([date, totalTokens]) => ({
+    date,
+    totalTokens,
+  })).sort((left, right) => left.date.localeCompare(right.date));
+  const streaks = usageStreaks(days, today);
+  return {
+    totalTokens: days.reduce((total, day) => total + day.totalTokens, 0),
+    peakDailyTokens: days.reduce(
+      (peak, day) => Math.max(peak, day.totalTokens),
+      0,
+    ),
+    longestTaskMs: statistics.longestTaskMs,
+    currentStreakDays: streaks.current,
+    longestStreakDays: streaks.longest,
+    days,
+    byModel: statistics.byModel,
+  };
 }
 
 function intensityLevel(value: number, max: number): number {

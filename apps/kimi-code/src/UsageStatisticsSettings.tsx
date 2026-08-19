@@ -1,6 +1,6 @@
-import { useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { RefreshCw } from "lucide-react";
+import { Check, ChevronDown, RefreshCw } from "lucide-react";
 
 import { t, type Language } from "./i18n";
 import {
@@ -10,6 +10,7 @@ import {
   formatTaskDuration,
   formatTokenCount,
   heatmapTooltipDatum,
+  usageStatisticsForModels,
   type HeatmapCell,
   type HeatmapMode,
   type UsageStatistics,
@@ -22,6 +23,7 @@ const CELL_STEP = CELL_SIZE + CELL_GAP;
 const GRID_WIDTH = 53 * CELL_STEP - CELL_GAP;
 const GRID_HEIGHT = 7 * CELL_STEP - CELL_GAP;
 const LABEL_HEIGHT = 18;
+const UNKNOWN_MODEL = "__unknown__";
 
 interface TooltipState {
   text: string;
@@ -45,11 +47,46 @@ export default function UsageStatisticsSettings({
   const [mode, setMode] = useState<HeatmapMode>("daily");
   const [tooltip, setTooltip] = useState<TooltipState>();
   const [hoveredWeek, setHoveredWeek] = useState<number>();
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [modelSelection, setModelSelection] = useState<string[]>();
+  const modelMenuRef = useRef<HTMLDivElement>(null);
   const locale = language === "zh" ? "zh-CN" : "en-US";
-  const heatmap = useMemo(
-    () => buildHeatmap(statistics?.days ?? [], mode, new Date(), locale),
-    [locale, mode, statistics?.days],
+  const availableModels = useMemo(
+    () => Object.keys(statistics?.byModel ?? {}).sort((left, right) => left.localeCompare(right)),
+    [statistics?.byModel],
   );
+  const selectedModels = useMemo(() => {
+    if (!modelSelection) return availableModels;
+    const available = new Set(availableModels);
+    const valid = modelSelection.filter((model) => available.has(model));
+    return valid.length ? valid : availableModels;
+  }, [availableModels, modelSelection]);
+  const filteredStatistics = useMemo(
+    () => statistics && usageStatisticsForModels(statistics, selectedModels),
+    [selectedModels, statistics],
+  );
+  const heatmap = useMemo(
+    () => buildHeatmap(filteredStatistics?.days ?? [], mode, new Date(), locale),
+    [filteredStatistics?.days, locale, mode],
+  );
+
+  useEffect(() => {
+    if (!modelMenuOpen) return;
+    const closeMenu = (event: PointerEvent): void => {
+      if (!modelMenuRef.current?.contains(event.target as Node)) {
+        setModelMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setModelMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeMenu);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenu);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [modelMenuOpen]);
 
   if (!statistics && busy) {
     return (
@@ -79,29 +116,56 @@ export default function UsageStatisticsSettings({
     currentStreakDays: 0,
     longestStreakDays: 0,
     days: [],
+    byModel: {},
   };
+  const displayedData = filteredStatistics ?? data;
   const metrics = [
     {
-      value: formatTokenCount(data.totalTokens, locale),
+      value: formatTokenCount(displayedData.totalTokens, locale),
       label: t("settings.usageTotalTokens"),
     },
     {
-      value: formatTokenCount(data.peakDailyTokens, locale),
+      value: formatTokenCount(displayedData.peakDailyTokens, locale),
       label: t("settings.usagePeakTokens"),
     },
     {
-      value: formatTaskDuration(data.longestTaskMs, locale),
+      value: formatTaskDuration(displayedData.longestTaskMs, locale),
       label: t("settings.usageLongestTask"),
     },
     {
-      value: t("settings.usageDaysValue", { count: data.currentStreakDays }),
+      value: t("settings.usageDaysValue", { count: displayedData.currentStreakDays }),
       label: t("settings.usageCurrentStreak"),
     },
     {
-      value: t("settings.usageDaysValue", { count: data.longestStreakDays }),
+      value: t("settings.usageDaysValue", { count: displayedData.longestStreakDays }),
       label: t("settings.usageLongestStreak"),
     },
   ];
+  const allModelsSelected = selectedModels.length === availableModels.length;
+  const modelLabel = (model: string): string =>
+    model === UNKNOWN_MODEL ? t("settings.usageUnknownModel") : model;
+  const selectionLabel = allModelsSelected
+    ? t("settings.usageAllModels")
+    : selectedModels.length === 1
+      ? modelLabel(selectedModels[0])
+      : t("settings.usageSelectedModels", { count: selectedModels.length });
+
+  const selectOnlyModel = (model: string): void => {
+    setModelSelection([model]);
+    setModelMenuOpen(false);
+    setHoveredWeek(undefined);
+    setTooltip(undefined);
+  };
+
+  const toggleModel = (model: string): void => {
+    const next = selectedModels.includes(model)
+      ? selectedModels.filter((selected) => selected !== model)
+      : [...selectedModels, model];
+    if (!next.length) return;
+    setModelSelection(next.length === availableModels.length ? undefined : next);
+    setHoveredWeek(undefined);
+    setTooltip(undefined);
+  };
 
   const showTooltip = (
     event: MouseEvent<SVGRectElement>,
@@ -165,6 +229,71 @@ export default function UsageStatisticsSettings({
 
   return (
     <section className="settings-usage" aria-labelledby="usage-heatmap-heading">
+      {availableModels.length > 0 && (
+        <div className="settings-usage-filter">
+          <span>{t("settings.usageModelFilter")}</span>
+          <div className="settings-usage-model-picker" ref={modelMenuRef}>
+            <button
+              className="settings-usage-model-trigger"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={modelMenuOpen}
+              onClick={() => setModelMenuOpen((open) => !open)}
+            >
+              <span title={selectionLabel}>{selectionLabel}</span>
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
+            {modelMenuOpen && (
+              <div className="settings-usage-model-menu" role="menu">
+                <button
+                  className="settings-usage-model-option all"
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={allModelsSelected}
+                  onClick={() => {
+                    setModelSelection(undefined);
+                    setHoveredWeek(undefined);
+                    setTooltip(undefined);
+                  }}
+                >
+                  <span className="settings-usage-model-check">
+                    {allModelsSelected && <Check size={12} aria-hidden="true" />}
+                  </span>
+                  <span>{t("settings.usageAllModels")}</span>
+                  <small>{availableModels.length}</small>
+                </button>
+                <div className="settings-usage-model-divider" />
+                {availableModels.map((model) => (
+                  <div className="settings-usage-model-row" key={model}>
+                    <button
+                      className="settings-usage-model-option"
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={selectedModels.includes(model)}
+                      onClick={() => toggleModel(model)}
+                    >
+                      <span className="settings-usage-model-check">
+                        {selectedModels.includes(model) && (
+                          <Check size={12} aria-hidden="true" />
+                        )}
+                      </span>
+                      <span title={modelLabel(model)}>{modelLabel(model)}</span>
+                    </button>
+                    <button
+                      className="settings-usage-model-only"
+                      type="button"
+                      onClick={() => selectOnlyModel(model)}
+                    >
+                      {t("settings.usageOnlyModel")}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="settings-usage-summary">
         {metrics.map((metric) => (
           <div className="settings-usage-metric" key={metric.label}>
@@ -172,6 +301,10 @@ export default function UsageStatisticsSettings({
             <span>{metric.label}</span>
           </div>
         ))}
+        <div
+          className="settings-usage-metric settings-usage-metric-placeholder"
+          aria-hidden="true"
+        />
       </div>
 
       {error && (

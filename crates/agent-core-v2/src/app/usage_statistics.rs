@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 use crate::_base::utils::fs::atomic_write;
 use crate::agent::TurnId;
 
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 const CACHE_RELATIVE_PATH: &str = "cache/usage-statistics-v1.json";
 const WIRE_FILENAME: &str = "wire.jsonl";
+const UNKNOWN_MODEL: &str = "__unknown__";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +33,15 @@ pub struct DesktopUsageStatistics {
     pub current_streak_days: u32,
     pub longest_streak_days: u32,
     pub days: Vec<DesktopDailyTokenUsage>,
+    pub by_model: BTreeMap<String, DesktopModelTokenUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopModelTokenUsage {
+    pub total_tokens: u64,
+    pub peak_daily_tokens: u64,
+    pub days: Vec<DesktopDailyTokenUsage>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
@@ -45,7 +55,7 @@ struct UsageStatisticsCache {
 #[serde(rename_all = "camelCase")]
 struct CachedWireUsage {
     signature: FileSignature,
-    daily_tokens: BTreeMap<String, u64>,
+    daily_tokens_by_model: BTreeMap<String, BTreeMap<String, u64>>,
     longest_task_ms: u64,
 }
 
@@ -64,6 +74,8 @@ struct WireRecord {
     record_type: String,
     #[serde(default)]
     time: Option<i64>,
+    #[serde(default)]
+    model: Option<String>,
     #[serde(default)]
     usage: Option<WireTokenUsage>,
     #[serde(default)]
@@ -298,7 +310,7 @@ fn parse_stable_wire_file(
 
 fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
     let reader = BufReader::new(File::open(path)?);
-    let mut daily_tokens = BTreeMap::<String, u64>::new();
+    let mut daily_tokens_by_model = BTreeMap::<String, BTreeMap<String, u64>>::new();
     let mut turn_spans = HashMap::<TurnId, (i64, i64)>::new();
     let mut ended_durations = HashMap::<TurnId, u64>::new();
 
@@ -319,7 +331,15 @@ fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
                 };
                 let total = usage.grand_total();
                 if total > 0 {
-                    *daily_tokens.entry(date).or_default() += total;
+                    let model = record
+                        .model
+                        .filter(|model| !model.trim().is_empty())
+                        .unwrap_or_else(|| UNKNOWN_MODEL.to_owned());
+                    *daily_tokens_by_model
+                        .entry(model)
+                        .or_default()
+                        .entry(date)
+                        .or_default() += total;
                 }
             }
             "context.append_loop_event" => {
@@ -362,7 +382,7 @@ fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
 
     Ok(CachedWireUsage {
         signature: file_signature(path)?,
-        daily_tokens,
+        daily_tokens_by_model,
         longest_task_ms,
     })
 }
@@ -397,11 +417,16 @@ fn aggregate_statistics(
     today: NaiveDate,
 ) -> DesktopUsageStatistics {
     let mut daily_tokens = BTreeMap::<String, u64>::new();
+    let mut daily_tokens_by_model = BTreeMap::<String, BTreeMap<String, u64>>::new();
     let mut longest_task_ms = 0_u64;
     for cached in files.values() {
         longest_task_ms = longest_task_ms.max(cached.longest_task_ms);
-        for (date, total) in &cached.daily_tokens {
-            *daily_tokens.entry(date.clone()).or_default() += total;
+        for (model, model_days) in &cached.daily_tokens_by_model {
+            let aggregate_model_days = daily_tokens_by_model.entry(model.clone()).or_default();
+            for (date, total) in model_days {
+                *daily_tokens.entry(date.clone()).or_default() += total;
+                *aggregate_model_days.entry(date.clone()).or_default() += total;
+            }
         }
     }
 
@@ -417,6 +442,25 @@ fn aggregate_statistics(
         .into_iter()
         .map(|(date, total_tokens)| DesktopDailyTokenUsage { date, total_tokens })
         .collect();
+    let by_model = daily_tokens_by_model
+        .into_iter()
+        .map(|(model, daily_tokens)| {
+            let total_tokens = daily_tokens.values().sum();
+            let peak_daily_tokens = daily_tokens.values().copied().fold(0, u64::max);
+            let days = daily_tokens
+                .into_iter()
+                .map(|(date, total_tokens)| DesktopDailyTokenUsage { date, total_tokens })
+                .collect();
+            (
+                model,
+                DesktopModelTokenUsage {
+                    total_tokens,
+                    peak_daily_tokens,
+                    days,
+                },
+            )
+        })
+        .collect();
 
     DesktopUsageStatistics {
         total_tokens,
@@ -425,6 +469,7 @@ fn aggregate_statistics(
         current_streak_days,
         longest_streak_days,
         days,
+        by_model,
     }
 }
 
@@ -517,7 +562,7 @@ mod tests {
             &home,
             "main",
             &[
-                json!({"type":"usage.record","time":today_ms,"usage":{"inputOther":1,"output":2,"inputCacheRead":3,"inputCacheCreation":4}}),
+                json!({"type":"usage.record","time":today_ms,"model":"kimi-k2.5","usage":{"inputOther":1,"output":2,"inputCacheRead":3,"inputCacheCreation":4}}),
                 json!({"type":"context.append_loop_event","time":1_000,"event":{"turnId":"0"}}),
                 json!({"type":"context.append_loop_event","time":5_000,"event":{"turnId":"0"}}),
                 json!({"type":"turn.ended","turnId":"0","durationMs":15_000}),
@@ -527,7 +572,7 @@ mod tests {
             &home,
             "agent-0",
             &[
-                json!({"type":"usage.record","time":yesterday_ms,"usage":{"inputOther":10,"output":20,"inputCacheRead":30,"inputCacheCreation":40}}),
+                json!({"type":"usage.record","time":yesterday_ms,"model":"kimi-k2-thinking","usage":{"inputOther":10,"output":20,"inputCacheRead":30,"inputCacheCreation":40}}),
                 json!({"type":"context.append_loop_event","time":1_000,"event":{"turnId":"0"}}),
                 json!({"type":"context.append_loop_event","time":12_000,"event":{"turnId":"0"}}),
             ],
@@ -541,6 +586,12 @@ mod tests {
         assert_eq!(outcome.statistics.current_streak_days, 2);
         assert_eq!(outcome.statistics.longest_streak_days, 2);
         assert_eq!(outcome.statistics.days.len(), 2);
+        assert_eq!(outcome.statistics.by_model.len(), 2);
+        assert_eq!(outcome.statistics.by_model["kimi-k2.5"].total_tokens, 10);
+        assert_eq!(
+            outcome.statistics.by_model["kimi-k2-thinking"].total_tokens,
+            100
+        );
         fs::remove_dir_all(home).unwrap();
     }
 
@@ -552,12 +603,16 @@ mod tests {
         let main = write_wire(
             &home,
             "main",
-            &[json!({"type":"usage.record","time":timestamp,"usage":{"output":5}})],
+            &[
+                json!({"type":"usage.record","time":timestamp,"model":"model-a","usage":{"output":5}}),
+            ],
         );
         let child = write_wire(
             &home,
             "agent-0",
-            &[json!({"type":"usage.record","time":timestamp,"usage":{"output":7}})],
+            &[
+                json!({"type":"usage.record","time":timestamp,"model":"model-b","usage":{"output":7}}),
+            ],
         );
         let first = scan_usage_statistics(&home, today).unwrap();
         assert_eq!(first.reparsed_files, 2);
@@ -571,14 +626,16 @@ mod tests {
             &child,
             format!(
                 "{}\n{}\n",
-                json!({"type":"usage.record","time":timestamp,"usage":{"output":7}}),
-                json!({"type":"usage.record","time":timestamp,"usage":{"output":11}})
+                json!({"type":"usage.record","time":timestamp,"model":"model-b","usage":{"output":7}}),
+                json!({"type":"usage.record","time":timestamp,"model":"model-c","usage":{"output":11}})
             ),
         )
         .unwrap();
         let changed = scan_usage_statistics(&home, today).unwrap();
         assert_eq!(changed.reparsed_files, 1);
         assert_eq!(changed.statistics.total_tokens, 23);
+        assert_eq!(changed.statistics.by_model["model-b"].total_tokens, 7);
+        assert_eq!(changed.statistics.by_model["model-c"].total_tokens, 11);
         persist_cache(&home, &changed);
 
         fs::remove_file(main).unwrap();
@@ -597,7 +654,9 @@ mod tests {
         let wire = write_wire(
             &home,
             "main",
-            &[json!({"type":"usage.record","time":timestamp,"usage":{"output":9}})],
+            &[
+                json!({"type":"usage.record","time":timestamp,"model":"model-a","usage":{"output":9}}),
+            ],
         );
         let mut file = fs::OpenOptions::new().append(true).open(wire).unwrap();
         writeln!(file, "not-json").unwrap();
