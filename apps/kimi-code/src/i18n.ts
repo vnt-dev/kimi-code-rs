@@ -531,6 +531,7 @@ const zh = {
   "dialog.pickProjectDirectory": "选择一个项目目录",
 
   "sidebar.workspace": "工作区",
+  "sidebar.openWorkspace": "打开工作区",
   "sidebar.expand": "展开侧栏",
   "sidebar.collapse": "收起侧栏",
   "sidebar.openProject": "打开项目",
@@ -1402,6 +1403,7 @@ const en: Record<TranslationKey, string> = {
   "dialog.pickProjectDirectory": "Choose a project directory",
 
   "sidebar.workspace": "Workspace",
+  "sidebar.openWorkspace": "Open workspace",
   "sidebar.expand": "Expand sidebar",
   "sidebar.collapse": "Collapse sidebar",
   "sidebar.openProject": "Open project",

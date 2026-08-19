@@ -110,6 +110,7 @@ import {
 import {
   type RemovalTarget
 } from "./components/AppDialogs";
+import { AccountAvatar } from "./components/AccountAvatar";
 import { AppOverlays } from "./components/AppOverlays";
 import { AppSidebar } from "./components/AppSidebar";
 import {
@@ -2987,6 +2988,17 @@ export default function App() {
         {activeProject && activeConversation ? (
           <>
             <header className="chat-header">
+              <button
+                className="mobile-workspace-trigger"
+                ref={mobileMenuButtonRef}
+                type="button"
+                title={t("sidebar.openWorkspace")}
+                aria-label={t("sidebar.openWorkspace")}
+                aria-expanded={mobileSidebarOpen}
+                onClick={openSidebar}
+              >
+                <AccountAvatar profile={accountProfile} size={28} />
+              </button>
               <div className="chat-heading">
                 <div>
                   <ChatHeaderTitle
