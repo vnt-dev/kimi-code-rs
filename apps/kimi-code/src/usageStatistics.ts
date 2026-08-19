@@ -1,4 +1,10 @@
-export interface DailyTokenUsage {
+export interface TokenUsageBreakdown {
+  inputUncachedTokens: number;
+  inputCachedTokens: number;
+  outputTokens: number;
+}
+
+export interface DailyTokenUsage extends TokenUsageBreakdown {
   date: string;
   totalTokens: number;
 }
@@ -27,6 +33,8 @@ export interface HeatmapCell {
   column: number;
   row: number;
   dayTokens: number;
+  dayUsage: TokenUsageBreakdown;
+  intensityUsage: TokenUsageBreakdown;
   intensityValue: number;
   level: number;
 }
@@ -41,9 +49,11 @@ export interface WeeklyHeatmapColumn {
   weekStartDate: string;
   weekEndDate: string;
   totalTokens: number;
+  usage: TokenUsageBreakdown;
   filledCells: number;
   level: number;
   cumulativeTokens: number;
+  cumulativeUsage: TokenUsageBreakdown;
   cumulativeFilledCells: number;
   cumulativeLevel: number;
 }
@@ -71,6 +81,59 @@ function startOfDay(date: Date): Date {
 
 function addDays(date: Date, count: number): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + count);
+}
+
+function safeTokenCount(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, value ?? 0) : 0;
+}
+
+export function normalizedTokenUsage(
+  usage: Partial<TokenUsageBreakdown> & { totalTokens?: number },
+): TokenUsageBreakdown {
+  const hasBreakdown =
+    usage.inputUncachedTokens !== undefined ||
+    usage.inputCachedTokens !== undefined ||
+    usage.outputTokens !== undefined;
+  return {
+    inputUncachedTokens: hasBreakdown
+      ? safeTokenCount(usage.inputUncachedTokens)
+      : safeTokenCount(usage.totalTokens),
+    inputCachedTokens: safeTokenCount(usage.inputCachedTokens),
+    outputTokens: safeTokenCount(usage.outputTokens),
+  };
+}
+
+export function addTokenUsage(
+  left: TokenUsageBreakdown,
+  right: TokenUsageBreakdown,
+): TokenUsageBreakdown {
+  return {
+    inputUncachedTokens: left.inputUncachedTokens + right.inputUncachedTokens,
+    inputCachedTokens: left.inputCachedTokens + right.inputCachedTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+  };
+}
+
+export function inputTokenCount(usage: TokenUsageBreakdown): number {
+  return usage.inputUncachedTokens + usage.inputCachedTokens;
+}
+
+export function totalTokenCount(usage: TokenUsageBreakdown): number {
+  return inputTokenCount(usage) + usage.outputTokens;
+}
+
+export function cacheHitRate(usage: TokenUsageBreakdown): number {
+  const input = inputTokenCount(usage);
+  return input > 0 ? usage.inputCachedTokens / input : 0;
+}
+
+export function summarizeTokenUsage(
+  days: DailyTokenUsage[],
+): TokenUsageBreakdown {
+  return days.reduce(
+    (total, day) => addTokenUsage(total, normalizedTokenUsage(day)),
+    { inputUncachedTokens: 0, inputCachedTokens: 0, outputTokens: 0 },
+  );
 }
 
 function dateKeyToUtcDay(dateKey: string): number | undefined {
@@ -142,16 +205,28 @@ export function usageStatisticsForModels(
     return statistics;
   }
 
-  const tokensByDay = new Map<string, number>();
+  const usageByDay = new Map<string, TokenUsageBreakdown>();
   for (const model of models) {
     for (const day of statistics.byModel?.[model]?.days ?? []) {
-      if (!Number.isFinite(day.totalTokens) || day.totalTokens <= 0) continue;
-      tokensByDay.set(day.date, (tokensByDay.get(day.date) ?? 0) + day.totalTokens);
+      const usage = normalizedTokenUsage(day);
+      if (totalTokenCount(usage) <= 0) continue;
+      usageByDay.set(
+        day.date,
+        addTokenUsage(
+          usageByDay.get(day.date) ?? {
+            inputUncachedTokens: 0,
+            inputCachedTokens: 0,
+            outputTokens: 0,
+          },
+          usage,
+        ),
+      );
     }
   }
-  const days = Array.from(tokensByDay, ([date, totalTokens]) => ({
+  const days = Array.from(usageByDay, ([date, usage]) => ({
     date,
-    totalTokens,
+    totalTokens: totalTokenCount(usage),
+    ...usage,
   })).sort((left, right) => left.date.localeCompare(right.date));
   const streaks = usageStreaks(days, today);
   return {
@@ -179,6 +254,11 @@ export function buildHeatmap(
   todayInput = new Date(),
   locale = "zh-CN",
 ): HeatmapData {
+  const emptyUsage = (): TokenUsageBreakdown => ({
+    inputUncachedTokens: 0,
+    inputCachedTokens: 0,
+    outputTokens: 0,
+  });
   const today = startOfDay(todayInput);
   const daysSinceMonday = (today.getDay() + 6) % HEATMAP_ROWS;
   const currentWeekMonday = addDays(today, -daysSinceMonday);
@@ -187,32 +267,39 @@ export function buildHeatmap(
     -(HEATMAP_WEEKS - 1) * HEATMAP_ROWS,
   );
   const gridStartKey = localDateKey(gridStart);
-  const tokensByDay = new Map<string, number>();
+  const usageByDay = new Map<string, TokenUsageBreakdown>();
   for (const day of days) {
-    if (!Number.isFinite(day.totalTokens) || day.totalTokens <= 0) continue;
-    tokensByDay.set(
+    const usage = normalizedTokenUsage(day);
+    if (totalTokenCount(usage) <= 0) continue;
+    usageByDay.set(
       day.date,
-      (tokensByDay.get(day.date) ?? 0) + day.totalTokens,
+      addTokenUsage(usageByDay.get(day.date) ?? emptyUsage(), usage),
     );
   }
 
-  const weekTotals = Array.from({ length: HEATMAP_WEEKS }, (_, column) => {
-    let total = 0;
+  const weekUsages = Array.from({ length: HEATMAP_WEEKS }, (_, column) => {
+    let usage = emptyUsage();
     for (let row = 0; row < HEATMAP_ROWS; row += 1) {
       const date = addDays(gridStart, column * HEATMAP_ROWS + row);
-      if (date <= today) total += tokensByDay.get(localDateKey(date)) ?? 0;
+      if (date <= today) {
+        usage = addTokenUsage(
+          usage,
+          usageByDay.get(localDateKey(date)) ?? emptyUsage(),
+        );
+      }
     }
-    return total;
+    return usage;
   });
+  const weekTotals = weekUsages.map(totalTokenCount);
 
   const cumulativeBeforeGrid = days.reduce(
     (total, day) =>
-      day.date < gridStartKey && Number.isFinite(day.totalTokens)
-        ? total + Math.max(0, day.totalTokens)
+      day.date < gridStartKey
+        ? addTokenUsage(total, normalizedTokenUsage(day))
         : total,
-    0,
+    emptyUsage(),
   );
-  let cumulative = cumulativeBeforeGrid;
+  let cumulativeUsage = cumulativeBeforeGrid;
   const rawCells: Omit<HeatmapCell, "level">[] = [];
   for (let column = 0; column < HEATMAP_WEEKS; column += 1) {
     for (let row = 0; row < HEATMAP_ROWS; row += 1) {
@@ -222,20 +309,29 @@ export function buildHeatmap(
       const weekStartDate = localDateKey(
         addDays(gridStart, column * HEATMAP_ROWS),
       );
-      const dayTokens = tokensByDay.get(dateKey) ?? 0;
-      cumulative += dayTokens;
+      const dayUsage = usageByDay.get(dateKey) ?? emptyUsage();
+      const dayTokens = totalTokenCount(dayUsage);
+      cumulativeUsage = addTokenUsage(cumulativeUsage, dayUsage);
       const intensityValue =
         mode === "weekly"
           ? weekTotals[column]
           : mode === "cumulative"
-            ? cumulative
+            ? totalTokenCount(cumulativeUsage)
             : dayTokens;
+      const intensityUsage =
+        mode === "weekly"
+          ? weekUsages[column]
+          : mode === "cumulative"
+            ? cumulativeUsage
+            : dayUsage;
       rawCells.push({
         date: dateKey,
         weekStartDate,
         column,
         row,
         dayTokens,
+        dayUsage,
+        intensityUsage,
         intensityValue,
       });
     }
@@ -255,10 +351,11 @@ export function buildHeatmap(
     0,
   );
   let cumulativeByWeek = cumulativeBeforeGrid;
-  const cumulativeWeekTotals = weekTotals.map((totalTokens) => {
-    cumulativeByWeek += totalTokens;
+  const cumulativeWeekUsages = weekUsages.map((usage) => {
+    cumulativeByWeek = addTokenUsage(cumulativeByWeek, usage);
     return cumulativeByWeek;
   });
+  const cumulativeWeekTotals = cumulativeWeekUsages.map(totalTokenCount);
   const maxCumulativeTokens = cumulativeWeekTotals.reduce(
     (max, total) => Math.max(max, total),
     0,
@@ -271,12 +368,14 @@ export function buildHeatmap(
       weekStartDate: localDateKey(weekStart),
       weekEndDate: localDateKey(addDays(weekStart, HEATMAP_ROWS - 1)),
       totalTokens,
+      usage: weekUsages[column],
       filledCells:
         totalTokens > 0 && maxWeeklyTokens > 0
           ? Math.max(1, Math.ceil((totalTokens / maxWeeklyTokens) * HEATMAP_ROWS))
           : 0,
       level: intensityLevel(totalTokens, maxWeeklyTokens),
       cumulativeTokens,
+      cumulativeUsage: cumulativeWeekUsages[column],
       cumulativeFilledCells:
         cumulativeTokens > 0 && maxCumulativeTokens > 0
           ? Math.max(
@@ -344,13 +443,27 @@ export function formatHeatmapTokenCount(value: number, locale: string): string {
   }).format(normalized);
 }
 
+export function formatUsageCacheHitRate(
+  usage: TokenUsageBreakdown,
+  locale: string,
+): string {
+  return new Intl.NumberFormat(locale, {
+    style: "percent",
+    maximumFractionDigits: 1,
+  }).format(cacheHitRate(usage));
+}
+
 export function heatmapTooltipDatum(
   cell: HeatmapCell,
   mode: HeatmapMode,
-): { date: string; tokens: number } {
+): { date: string; tokens: number; usage: TokenUsageBreakdown } {
   return mode === "weekly"
-    ? { date: cell.weekStartDate, tokens: cell.intensityValue }
-    : { date: cell.date, tokens: cell.dayTokens };
+    ? {
+        date: cell.weekStartDate,
+        tokens: cell.intensityValue,
+        usage: cell.intensityUsage,
+      }
+    : { date: cell.date, tokens: cell.dayTokens, usage: cell.dayUsage };
 }
 
 export function formatHeatmapDate(dateKey: string, locale: string): string {

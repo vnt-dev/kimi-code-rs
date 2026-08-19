@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::_base::utils::fs::atomic_write;
 use crate::agent::TurnId;
 
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 4;
 const CACHE_RELATIVE_PATH: &str = "cache/usage-statistics-v1.json";
 const WIRE_FILENAME: &str = "wire.jsonl";
 const UNKNOWN_MODEL: &str = "__unknown__";
@@ -22,6 +22,9 @@ const UNKNOWN_MODEL: &str = "__unknown__";
 pub struct DesktopDailyTokenUsage {
     pub date: String,
     pub total_tokens: u64,
+    pub input_uncached_tokens: u64,
+    pub input_cached_tokens: u64,
+    pub output_tokens: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -55,8 +58,16 @@ struct UsageStatisticsCache {
 #[serde(rename_all = "camelCase")]
 struct CachedWireUsage {
     signature: FileSignature,
-    daily_tokens_by_model: BTreeMap<String, BTreeMap<String, u64>>,
+    daily_tokens_by_model: BTreeMap<String, BTreeMap<String, CachedTokenUsage>>,
     longest_task_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CachedTokenUsage {
+    input_uncached_tokens: u64,
+    input_cached_tokens: u64,
+    output_tokens: u64,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
@@ -310,7 +321,7 @@ fn parse_stable_wire_file(
 
 fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
     let reader = BufReader::new(File::open(path)?);
-    let mut daily_tokens_by_model = BTreeMap::<String, BTreeMap<String, u64>>::new();
+    let mut daily_tokens_by_model = BTreeMap::<String, BTreeMap<String, CachedTokenUsage>>::new();
     let mut turn_spans = HashMap::<TurnId, (i64, i64)>::new();
     let mut ended_durations = HashMap::<TurnId, u64>::new();
 
@@ -329,17 +340,18 @@ fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
                 let Some(date) = local_date_key(time) else {
                     continue;
                 };
-                let total = usage.grand_total();
-                if total > 0 {
+                let usage = usage.breakdown();
+                if usage.total_tokens() > 0 {
                     let model = record
                         .model
                         .filter(|model| !model.trim().is_empty())
                         .unwrap_or_else(|| UNKNOWN_MODEL.to_owned());
-                    *daily_tokens_by_model
+                    daily_tokens_by_model
                         .entry(model)
                         .or_default()
                         .entry(date)
-                        .or_default() += total;
+                        .or_default()
+                        .add_assign(usage);
                 }
             }
             "context.append_loop_event" => {
@@ -388,17 +400,39 @@ fn parse_wire_file(path: &Path) -> io::Result<CachedWireUsage> {
 }
 
 impl WireTokenUsage {
-    fn grand_total(&self) -> u64 {
-        [
-            self.input_other,
-            self.output,
-            self.input_cache_read,
-            self.input_cache_creation,
-        ]
-        .into_iter()
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .map(|value| value.trunc() as u64)
-        .sum()
+    fn breakdown(&self) -> CachedTokenUsage {
+        CachedTokenUsage {
+            input_uncached_tokens: positive_tokens(self.input_other)
+                .saturating_add(positive_tokens(self.input_cache_creation)),
+            input_cached_tokens: positive_tokens(self.input_cache_read),
+            output_tokens: positive_tokens(self.output),
+        }
+    }
+}
+
+impl CachedTokenUsage {
+    fn add_assign(&mut self, other: Self) {
+        self.input_uncached_tokens = self
+            .input_uncached_tokens
+            .saturating_add(other.input_uncached_tokens);
+        self.input_cached_tokens = self
+            .input_cached_tokens
+            .saturating_add(other.input_cached_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+    }
+
+    fn total_tokens(self) -> u64 {
+        self.input_uncached_tokens
+            .saturating_add(self.input_cached_tokens)
+            .saturating_add(self.output_tokens)
+    }
+}
+
+fn positive_tokens(value: f64) -> u64 {
+    if value.is_finite() && value > 0.0 {
+        value.trunc() as u64
+    } else {
+        0
     }
 }
 
@@ -416,40 +450,62 @@ fn aggregate_statistics(
     files: &BTreeMap<String, CachedWireUsage>,
     today: NaiveDate,
 ) -> DesktopUsageStatistics {
-    let mut daily_tokens = BTreeMap::<String, u64>::new();
-    let mut daily_tokens_by_model = BTreeMap::<String, BTreeMap<String, u64>>::new();
+    let mut daily_tokens = BTreeMap::<String, CachedTokenUsage>::new();
+    let mut daily_tokens_by_model = BTreeMap::<String, BTreeMap<String, CachedTokenUsage>>::new();
     let mut longest_task_ms = 0_u64;
     for cached in files.values() {
         longest_task_ms = longest_task_ms.max(cached.longest_task_ms);
         for (model, model_days) in &cached.daily_tokens_by_model {
             let aggregate_model_days = daily_tokens_by_model.entry(model.clone()).or_default();
-            for (date, total) in model_days {
-                *daily_tokens.entry(date.clone()).or_default() += total;
-                *aggregate_model_days.entry(date.clone()).or_default() += total;
+            for (date, usage) in model_days {
+                daily_tokens
+                    .entry(date.clone())
+                    .or_default()
+                    .add_assign(*usage);
+                aggregate_model_days
+                    .entry(date.clone())
+                    .or_default()
+                    .add_assign(*usage);
             }
         }
     }
 
-    let total_tokens = daily_tokens.values().sum();
-    let peak_daily_tokens = daily_tokens.values().copied().fold(0, u64::max);
+    let total_tokens = daily_tokens
+        .values()
+        .copied()
+        .map(CachedTokenUsage::total_tokens)
+        .sum();
+    let peak_daily_tokens = daily_tokens
+        .values()
+        .copied()
+        .map(CachedTokenUsage::total_tokens)
+        .fold(0, u64::max);
     let active_dates = daily_tokens
         .iter()
-        .filter(|(_, total)| **total > 0)
+        .filter(|(_, usage)| usage.total_tokens() > 0)
         .filter_map(|(date, _)| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
         .collect::<Vec<_>>();
     let (current_streak_days, longest_streak_days) = streaks(&active_dates, today);
     let days = daily_tokens
         .into_iter()
-        .map(|(date, total_tokens)| DesktopDailyTokenUsage { date, total_tokens })
+        .map(|(date, usage)| desktop_daily_usage(date, usage))
         .collect();
     let by_model = daily_tokens_by_model
         .into_iter()
         .map(|(model, daily_tokens)| {
-            let total_tokens = daily_tokens.values().sum();
-            let peak_daily_tokens = daily_tokens.values().copied().fold(0, u64::max);
+            let total_tokens = daily_tokens
+                .values()
+                .copied()
+                .map(CachedTokenUsage::total_tokens)
+                .sum();
+            let peak_daily_tokens = daily_tokens
+                .values()
+                .copied()
+                .map(CachedTokenUsage::total_tokens)
+                .fold(0, u64::max);
             let days = daily_tokens
                 .into_iter()
-                .map(|(date, total_tokens)| DesktopDailyTokenUsage { date, total_tokens })
+                .map(|(date, usage)| desktop_daily_usage(date, usage))
                 .collect();
             (
                 model,
@@ -470,6 +526,16 @@ fn aggregate_statistics(
         longest_streak_days,
         days,
         by_model,
+    }
+}
+
+fn desktop_daily_usage(date: String, usage: CachedTokenUsage) -> DesktopDailyTokenUsage {
+    DesktopDailyTokenUsage {
+        date,
+        total_tokens: usage.total_tokens(),
+        input_uncached_tokens: usage.input_uncached_tokens,
+        input_cached_tokens: usage.input_cached_tokens,
+        output_tokens: usage.output_tokens,
     }
 }
 
@@ -588,6 +654,13 @@ mod tests {
         assert_eq!(outcome.statistics.days.len(), 2);
         assert_eq!(outcome.statistics.by_model.len(), 2);
         assert_eq!(outcome.statistics.by_model["kimi-k2.5"].total_tokens, 10);
+        assert_eq!(outcome.statistics.days[1].input_uncached_tokens, 5);
+        assert_eq!(outcome.statistics.days[1].input_cached_tokens, 3);
+        assert_eq!(outcome.statistics.days[1].output_tokens, 2);
+        assert_eq!(
+            outcome.statistics.by_model["kimi-k2-thinking"].days[0].input_uncached_tokens,
+            50
+        );
         assert_eq!(
             outcome.statistics.by_model["kimi-k2-thinking"].total_tokens,
             100

@@ -9,10 +9,14 @@ import {
   formatHeatmapTokenCount,
   formatTaskDuration,
   formatTokenCount,
+  formatUsageCacheHitRate,
   heatmapTooltipDatum,
+  inputTokenCount,
+  summarizeTokenUsage,
   usageStatisticsForModels,
   type HeatmapCell,
   type HeatmapMode,
+  type TokenUsageBreakdown,
   type UsageStatistics,
   type WeeklyHeatmapColumn,
 } from "./usageStatistics";
@@ -26,7 +30,8 @@ const LABEL_HEIGHT = 18;
 const UNKNOWN_MODEL = "__unknown__";
 
 interface TooltipState {
-  text: string;
+  title: string;
+  usage: TokenUsageBreakdown;
   left: number;
   top: number;
 }
@@ -119,14 +124,19 @@ export default function UsageStatisticsSettings({
     byModel: {},
   };
   const displayedData = filteredStatistics ?? data;
+  const usageTotals = summarizeTokenUsage(displayedData.days);
   const metrics = [
     {
-      value: formatTokenCount(displayedData.totalTokens, locale),
-      label: t("settings.usageTotalTokens"),
+      value: formatTokenCount(inputTokenCount(usageTotals), locale),
+      label: t("settings.usageInputTokens"),
     },
     {
-      value: formatTokenCount(displayedData.peakDailyTokens, locale),
-      label: t("settings.usagePeakTokens"),
+      value: formatTokenCount(usageTotals.outputTokens, locale),
+      label: t("settings.usageOutputTokens"),
+    },
+    {
+      value: formatUsageCacheHitRate(usageTotals, locale),
+      label: t("settings.usageCacheHitRate"),
     },
     {
       value: formatTaskDuration(displayedData.longestTaskMs, locale),
@@ -173,23 +183,14 @@ export default function UsageStatisticsSettings({
   ): void => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const datum = heatmapTooltipDatum(cell, mode);
-    const text =
-      datum.tokens > 0
-        ? t(mode === "weekly" ? "settings.usageHeatmapWeeklyTooltip" : "settings.usageHeatmapTooltip", {
-            date:
-              mode === "weekly"
-                ? formatHeatmapDate(datum.date, locale)
-                : datum.date,
-            tokens: formatHeatmapTokenCount(datum.tokens, locale),
-          })
-        : t(mode === "weekly" ? "settings.usageHeatmapWeeklyEmpty" : "settings.usageHeatmapEmpty", {
-            date:
-              mode === "weekly"
-                ? formatHeatmapDate(datum.date, locale)
-                : datum.date,
-          });
     setTooltip({
-      text,
+      title:
+        mode === "weekly"
+          ? t("settings.usageTooltipWeek", {
+              date: formatHeatmapDate(datum.date, locale),
+            })
+          : formatHeatmapDate(datum.date, locale),
+      usage: datum.usage,
       left: bounds.left + bounds.width / 2,
       top: bounds.top,
     });
@@ -201,27 +202,16 @@ export default function UsageStatisticsSettings({
   ): void => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const cumulativeMode = mode === "cumulative";
-    const tokens = cumulativeMode ? week.cumulativeTokens : week.totalTokens;
-    const text = cumulativeMode
-      ? tokens > 0
-        ? t("settings.usageHeatmapCumulativeTooltip", {
-            date: formatHeatmapDate(week.weekEndDate, locale),
-            tokens: formatHeatmapTokenCount(tokens, locale),
-          })
-        : t("settings.usageHeatmapCumulativeEmpty", {
-            date: formatHeatmapDate(week.weekEndDate, locale),
-          })
-      : tokens > 0
-        ? t("settings.usageHeatmapWeeklyTooltip", {
-            date: formatHeatmapDate(week.weekStartDate, locale),
-            tokens: formatHeatmapTokenCount(tokens, locale),
-          })
-        : t("settings.usageHeatmapWeeklyEmpty", {
-            date: formatHeatmapDate(week.weekStartDate, locale),
-          });
     setHoveredWeek(week.column);
     setTooltip({
-      text,
+      title: cumulativeMode
+        ? t("settings.usageTooltipCumulative", {
+            date: formatHeatmapDate(week.weekEndDate, locale),
+          })
+        : t("settings.usageTooltipWeek", {
+            date: formatHeatmapDate(week.weekStartDate, locale),
+          }),
+      usage: cumulativeMode ? week.cumulativeUsage : week.usage,
       left: bounds.left + bounds.width / 2,
       top: bounds.top,
     });
@@ -301,10 +291,6 @@ export default function UsageStatisticsSettings({
             <span>{metric.label}</span>
           </div>
         ))}
-        <div
-          className="settings-usage-metric settings-usage-metric-placeholder"
-          aria-hidden="true"
-        />
       </div>
 
       {error && (
@@ -433,7 +419,35 @@ export default function UsageStatisticsSettings({
             role="tooltip"
             style={{ left: tooltip.left, top: tooltip.top }}
           >
-            {tooltip.text}
+            <strong>{tooltip.title}</strong>
+            <div className="settings-usage-tooltip-row input">
+              <span>{t("settings.usageInputTokens")}</span>
+              <b>
+                {formatHeatmapTokenCount(inputTokenCount(tooltip.usage), locale)}
+              </b>
+              <small>
+                {t("settings.usageInputBreakdown", {
+                  uncached: formatHeatmapTokenCount(
+                    tooltip.usage.inputUncachedTokens,
+                    locale,
+                  ),
+                  cached: formatHeatmapTokenCount(
+                    tooltip.usage.inputCachedTokens,
+                    locale,
+                  ),
+                })}
+              </small>
+            </div>
+            <div className="settings-usage-tooltip-row">
+              <span>{t("settings.usageOutputTokens")}</span>
+              <b>
+                {formatHeatmapTokenCount(tooltip.usage.outputTokens, locale)}
+              </b>
+            </div>
+            <div className="settings-usage-tooltip-row">
+              <span>{t("settings.usageCacheHitRate")}</span>
+              <b>{formatUsageCacheHitRate(tooltip.usage, locale)}</b>
+            </div>
           </div>,
           document.body,
         )}

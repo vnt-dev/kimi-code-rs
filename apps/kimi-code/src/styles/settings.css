@@ -1601,8 +1601,8 @@ html[data-color-scheme="light"] .settings-dialog {
 
 .settings-usage-summary {
   display: grid;
-  min-height: 76px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  min-height: 84px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   overflow: hidden;
   border: 0.5px solid var(--line);
   border-radius: 16px;
@@ -1640,10 +1640,6 @@ html[data-color-scheme="light"] .settings-dialog {
   font-size: calc(12px * var(--font-scale));
   line-height: 1.35;
   white-space: nowrap;
-}
-
-.settings-usage-metric-placeholder {
-  display: none;
 }
 
 .settings-usage-activity-header {
@@ -1758,8 +1754,10 @@ html[data-color-scheme="light"] .settings-dialog {
 .settings-usage-tooltip {
   position: fixed;
   z-index: 120;
-  max-width: 260px;
-  padding: 6px 9px;
+  width: max-content;
+  min-width: 220px;
+  max-width: 280px;
+  padding: 10px 11px;
   border: 0.5px solid var(--line);
   border-radius: 6px;
   color: var(--text);
@@ -1769,7 +1767,49 @@ html[data-color-scheme="light"] .settings-dialog {
   line-height: 1.35;
   pointer-events: none;
   transform: translate(-50%, calc(-100% - 5px));
+}
+
+.settings-usage-tooltip > strong {
+  display: block;
+  margin-bottom: 7px;
+  padding-bottom: 7px;
+  overflow: hidden;
+  border-bottom: 0.5px solid var(--line);
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 500;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-usage-tooltip-row {
+  display: grid;
+  min-height: 24px;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 16px;
+}
+
+.settings-usage-tooltip-row > span {
+  color: var(--muted);
+}
+
+.settings-usage-tooltip-row > b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.settings-usage-tooltip-row > small {
+  overflow: hidden;
+  color: var(--subtle);
+  font-size: calc(10px * var(--font-scale));
+  grid-column: 1 / -1;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-usage-tooltip-row.input {
+  padding-bottom: 4px;
 }
 
 .settings-usage-state {
@@ -1927,10 +1967,6 @@ html[data-color-scheme="light"] .settings-dialog {
 
   .settings-usage-metric:nth-child(even) {
     border-left: 0.5px solid var(--line);
-  }
-
-  .settings-usage-metric-placeholder {
-    display: block;
   }
 
   .settings-usage-activity-header {

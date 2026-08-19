@@ -3,12 +3,14 @@ import test from "node:test";
 
 import {
   buildHeatmap,
+  cacheHitRate,
   formatHeatmapDate,
   formatHeatmapTokenCount,
   formatTaskDuration,
   formatTokenCount,
   HEATMAP_WEEKS,
   heatmapTooltipDatum,
+  summarizeTokenUsage,
   usageStatisticsForModels,
 } from "../src/usageStatistics.ts";
 
@@ -44,10 +46,20 @@ test("weekly mode uses one total and tooltip period for the whole column", () =>
   assert.deepEqual(heatmapTooltipDatum(monday!, "weekly"), {
     date: "2026-08-10",
     tokens: 50,
+    usage: {
+      inputUncachedTokens: 50,
+      inputCachedTokens: 0,
+      outputTokens: 0,
+    },
   });
   assert.deepEqual(heatmapTooltipDatum(tuesday!, "weekly"), {
     date: "2026-08-10",
     tokens: 50,
+    usage: {
+      inputUncachedTokens: 50,
+      inputCachedTokens: 0,
+      outputTokens: 0,
+    },
   });
   const currentWeek = heatmap.weeks.at(-1);
   assert.equal(currentWeek?.weekStartDate, "2026-08-10");
@@ -99,6 +111,41 @@ test("cumulative mode includes usage before the visible grid", () => {
   assert.equal(heatmap.weeks[0]?.cumulativeFilledCells, 3);
 });
 
+test("preserves input cache and output breakdown across heatmap periods", () => {
+  const heatmap = buildHeatmap(
+    [
+      {
+        date: "2026-08-10",
+        totalTokens: 11,
+        inputUncachedTokens: 2,
+        inputCachedTokens: 8,
+        outputTokens: 1,
+      },
+      {
+        date: "2026-08-11",
+        totalTokens: 12,
+        inputUncachedTokens: 3,
+        inputCachedTokens: 7,
+        outputTokens: 2,
+      },
+    ],
+    "weekly",
+    today,
+    "en-US",
+  );
+  assert.deepEqual(heatmap.weeks.at(-1)?.usage, {
+    inputUncachedTokens: 5,
+    inputCachedTokens: 15,
+    outputTokens: 3,
+  });
+  assert.equal(cacheHitRate(heatmap.weeks.at(-1)!.usage), 0.75);
+  assert.deepEqual(heatmapTooltipDatum(heatmap.cells.at(-1)!, "weekly").usage, {
+    inputUncachedTokens: 5,
+    inputCachedTokens: 15,
+    outputTokens: 3,
+  });
+});
+
 test("formats compact tokens and localized task durations", () => {
   assert.equal(formatTokenCount(0, "zh-CN"), "0");
   assert.match(formatTokenCount(123_000_000, "zh-CN"), /1\.2亿|1\.23亿/);
@@ -134,17 +181,47 @@ test("combines any selected models into one usage series", () => {
         totalTokens: 35,
         peakDailyTokens: 30,
         days: [
-          { date: "2026-08-09", totalTokens: 5 },
-          { date: "2026-08-11", totalTokens: 30 },
+          {
+            date: "2026-08-09",
+            totalTokens: 5,
+            inputUncachedTokens: 1,
+            inputCachedTokens: 3,
+            outputTokens: 1,
+          },
+          {
+            date: "2026-08-11",
+            totalTokens: 30,
+            inputUncachedTokens: 5,
+            inputCachedTokens: 20,
+            outputTokens: 5,
+          },
         ],
       },
       b: {
         totalTokens: 30,
         peakDailyTokens: 20,
         days: [
-          { date: "2026-08-09", totalTokens: 5 },
-          { date: "2026-08-10", totalTokens: 20 },
-          { date: "2026-08-11", totalTokens: 5 },
+          {
+            date: "2026-08-09",
+            totalTokens: 5,
+            inputUncachedTokens: 2,
+            inputCachedTokens: 2,
+            outputTokens: 1,
+          },
+          {
+            date: "2026-08-10",
+            totalTokens: 20,
+            inputUncachedTokens: 4,
+            inputCachedTokens: 12,
+            outputTokens: 4,
+          },
+          {
+            date: "2026-08-11",
+            totalTokens: 5,
+            inputUncachedTokens: 1,
+            inputCachedTokens: 3,
+            outputTokens: 1,
+          },
         ],
       },
     },
@@ -156,6 +233,13 @@ test("combines any selected models into one usage series", () => {
   assert.equal(oneModel.currentStreakDays, 1);
   assert.equal(oneModel.longestStreakDays, 1);
   assert.equal(oneModel.longestTaskMs, 120_000);
+  const oneModelUsage = summarizeTokenUsage(oneModel.days);
+  assert.deepEqual(oneModelUsage, {
+    inputUncachedTokens: 6,
+    inputCachedTokens: 23,
+    outputTokens: 6,
+  });
+  assert.equal(cacheHitRate(oneModelUsage), 23 / 29);
 
   const allModels = usageStatisticsForModels(statistics, ["a", "b"], today);
   assert.equal(allModels, statistics);
